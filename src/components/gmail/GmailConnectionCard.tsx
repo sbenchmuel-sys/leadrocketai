@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Mail, MailCheck, Loader2, Unplug } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Mail, MailCheck, Loader2, Unplug, AlertCircle, RefreshCw } from "lucide-react";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
 interface GmailConnectionCardProps {
@@ -10,13 +12,16 @@ interface GmailConnectionCardProps {
 }
 
 export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardProps) {
-  const { connection, isConnected, isLoading, startOAuth, disconnect } = useGmailConnection();
+  const { connection, isConnected, isLoading, error, startOAuth, disconnect } = useGmailConnection();
+  const { toast } = useToast();
 
   const handleConnect = async () => {
     try {
+      toast({ title: "Starting Gmail connection...", description: "Redirecting to Google..." });
       await startOAuth();
-    } catch {
-      // Error is already handled in the hook
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to start OAuth";
+      toast({ title: "Connection failed", description: message, variant: "destructive" });
     }
   };
 
@@ -60,7 +65,19 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
             : "Connect your Gmail to sync emails and send messages"}
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="flex items-center justify-between">
+              <span>{error}</span>
+              <Button variant="ghost" size="sm" onClick={handleConnect} className="ml-2">
+                <RefreshCw className="h-3 w-3 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
         {isConnected && connection ? (
           <div className="space-y-4">
             <div className="text-sm space-y-1">
