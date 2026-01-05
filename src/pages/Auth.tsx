@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -12,20 +12,34 @@ export default function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, user, profile, isLoading } = useAuth();
   const navigate = useNavigate();
+
+  // If already authenticated, don't keep the user on /auth
+  useEffect(() => {
+    if (isLoading) return;
+    if (!user) return;
+
+    if (profile?.onboarding_done) {
+      navigate("/dashboard", { replace: true });
+    } else {
+      navigate("/onboarding", { replace: true });
+    }
+  }, [isLoading, user, profile?.onboarding_done, navigate]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     const { error } = await signIn(email, password);
     setIsSubmitting(false);
+
     if (error) {
       toast.error(error.message);
-    } else {
-      toast.success("Welcome back!");
-      navigate("/dashboard");
+      return;
     }
+
+    toast.success("Welcome back!");
+    // Navigation is handled by the effect once auth state updates.
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
@@ -33,12 +47,14 @@ export default function Auth() {
     setIsSubmitting(true);
     const { error } = await signUp(email, password);
     setIsSubmitting(false);
+
     if (error) {
       toast.error(error.message);
-    } else {
-      toast.success("Account created! Welcome aboard.");
-      navigate("/dashboard");
+      return;
     }
+
+    toast.success("Account created! Welcome aboard.");
+    // Navigation is handled by the effect once auth state updates.
   };
 
   return (
