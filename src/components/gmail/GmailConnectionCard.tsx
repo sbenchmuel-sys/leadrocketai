@@ -92,10 +92,22 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
                 <span>{format(new Date(connection.last_sync_at), "PPp")}</span>
               </div>
             )}
-            <Button variant="outline" size="sm" onClick={handleDisconnect} className="text-destructive">
-              <Unplug className="h-4 w-4 mr-2" />
-              Disconnect Gmail
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={async () => {
+                await disconnect();
+                await handleConnect();
+              }}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Reauthorize
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleDisconnect} className="text-destructive">
+                <Unplug className="h-4 w-4 mr-2" />
+                Disconnect
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              If sending emails fails, click "Reauthorize" to update permissions.
+            </p>
           </div>
         ) : authUrl ? (
           <div className="space-y-3">
