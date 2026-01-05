@@ -1,1 +1,4 @@
 project_id = "umqhdxjtgarwkdpwsxrm"
+
+[functions.ai_task]
+verify_jwt = true
