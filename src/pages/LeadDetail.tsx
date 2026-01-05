@@ -4,18 +4,20 @@ import { getLeadDetail, LeadDetail as LeadDetailType } from "@/lib/supabaseQueri
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Mail } from "lucide-react";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
+import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const [lead, setLead] = useState<LeadDetailType | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { isConnected } = useGmailConnection();
 
   const loadLead = async () => {
     if (!id) return;
@@ -91,11 +93,20 @@ export default function LeadDetail() {
             </p>
           )}
         </div>
-        <GmailSyncButton 
-          leadId={lead.id} 
-          leadEmail={lead.email} 
-          onSyncComplete={loadLead} 
-        />
+        {isConnected ? (
+          <GmailSyncButton 
+            leadId={lead.id} 
+            leadEmail={lead.email} 
+            onSyncComplete={loadLead} 
+          />
+        ) : (
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/dashboard/settings">
+              <Mail className="h-4 w-4 mr-2" />
+              Connect Gmail
+            </Link>
+          </Button>
+        )}
       </div>
 
       <Tabs defaultValue="timeline" className="w-full">
