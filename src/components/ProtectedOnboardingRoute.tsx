@@ -1,7 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
-export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
+export default function ProtectedOnboardingRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading, profile } = useAuth();
 
   if (isLoading) {
@@ -12,13 +12,14 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     );
   }
 
+  // Not logged in -> go to auth
   if (!user) {
     return <Navigate to="/auth" replace />;
   }
 
-  // Redirect to onboarding if not completed
-  if (profile && !profile.onboarding_done) {
-    return <Navigate to="/onboarding" replace />;
+  // Already completed onboarding -> go to dashboard
+  if (profile?.onboarding_done) {
+    return <Navigate to="/dashboard" replace />;
   }
 
   return <>{children}</>;
