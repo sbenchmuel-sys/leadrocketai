@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Upload, FileText, Loader2 } from "lucide-react";
 
 interface KBChunk {
   id: string;
@@ -31,6 +31,8 @@ export default function Knowledge() {
     source: "",
     allowed_customer_facing: true,
   });
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadChunks = async () => {
     try {
@@ -92,6 +94,56 @@ export default function Knowledge() {
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+    
+    if (!validTypes.includes(file.type) && !file.name.match(/\.(pdf|docx)$/i)) {
+      toast.error("Please upload a PDF or Word document (.docx)");
+      return;
+    }
+
+    if (file.size > 6 * 1024 * 1024) {
+      toast.error("File size must be under 6MB");
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const { data, error } = await supabase.functions.invoke("parse-document", {
+        body: formData,
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error || "Failed to parse document");
+
+      setNewChunk({
+        title: data.title || "",
+        content: data.text || "",
+        source: data.source || "",
+        allowed_customer_facing: true,
+      });
+      setIsAddOpen(true);
+      toast.success("Document parsed! Review the content below.");
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      toast.error(err.message || "Failed to parse document");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -101,13 +153,33 @@ export default function Knowledge() {
             Add approved content for AI-generated drafts
           </p>
         </div>
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Snippet
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+          >
+            {isUploading ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4 mr-2" />
+            )}
+            {isUploading ? "Parsing..." : "Upload Document"}
+          </Button>
+          <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Snippet
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Add Knowledge Snippet</DialogTitle>
@@ -153,7 +225,8 @@ export default function Knowledge() {
               </Button>
             </form>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       <Card>
