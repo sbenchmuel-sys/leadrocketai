@@ -11,6 +11,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   profile: { onboarding_done: boolean; role: string } | null;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -79,8 +80,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
   };
 
+  const refreshProfile = async () => {
+    try {
+      const prof = await getCurrentProfile();
+      setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
+    } catch (err) {
+      console.error("Failed to refresh profile:", err);
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, session, isLoading, signUp, signIn, signOut, profile }}>
+    <AuthContext.Provider value={{ user, session, isLoading, signUp, signIn, signOut, profile, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );
