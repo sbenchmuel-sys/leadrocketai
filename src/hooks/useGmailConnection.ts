@@ -65,10 +65,27 @@ export function useGmailConnection() {
         throw new Error(data.error || "Failed to start OAuth");
       }
 
-      // Redirect to Google's OAuth flow.
-      // In the Lovable preview the app runs inside an iframe, so we must redirect the top window.
-      const target = window.top ?? window;
-      target.location.href = data.authUrl;
+      // Open OAuth in a popup window to bypass iframe restrictions
+      const width = 600;
+      const height = 700;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      
+      const popup = window.open(
+        data.authUrl,
+        'gmail-oauth',
+        `width=${width},height=${height},left=${left},top=${top},scrollbars=yes`
+      );
+
+      // Poll for popup close and refresh connection status
+      if (popup) {
+        const checkPopup = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkPopup);
+            fetchConnection(); // Refresh connection status
+          }
+        }, 500);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start Gmail OAuth");
       throw err;
