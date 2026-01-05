@@ -97,17 +97,17 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
         ) : authUrl ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Click the link below to authorize Gmail access in a new window:
+              Click the button below to authorize Gmail access in a new window:
             </p>
-            <a
-              href={authUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-primary hover:underline font-medium"
+            <Button
+              variant="outline"
+              onClick={() => {
+                window.open(authUrl, "_blank", "noopener,noreferrer,width=600,height=700");
+              }}
             >
-              <ExternalLink className="h-4 w-4" />
+              <ExternalLink className="h-4 w-4 mr-2" />
               Open Google Authorization
-            </a>
+            </Button>
             <div>
               <Button variant="ghost" size="sm" onClick={clearAuthUrl}>
                 Cancel
