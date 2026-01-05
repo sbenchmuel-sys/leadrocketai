@@ -58,6 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
     } catch (err) {
       console.error("Failed to load profile:", err);
+      // Set a default profile state on error to prevent infinite loading
+      setProfile(null);
     } finally {
       setIsLoading(false);
     }
