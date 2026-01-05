@@ -14,16 +14,247 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      drafts: {
+        Row: {
+          body_text: string
+          channel: string
+          created_at: string
+          created_by: string | null
+          draft_type: string
+          id: string
+          lead_id: string
+          status: string
+          subject: string | null
+          to_recipient: string | null
+        }
+        Insert: {
+          body_text: string
+          channel: string
+          created_at?: string
+          created_by?: string | null
+          draft_type: string
+          id?: string
+          lead_id: string
+          status?: string
+          subject?: string | null
+          to_recipient?: string | null
+        }
+        Update: {
+          body_text?: string
+          channel?: string
+          created_at?: string
+          created_by?: string | null
+          draft_type?: string
+          id?: string
+          lead_id?: string
+          status?: string
+          subject?: string | null
+          to_recipient?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "drafts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      interactions: {
+        Row: {
+          ai_intent: string | null
+          ai_reply_worthy: boolean | null
+          ai_summary: string | null
+          body_text: string
+          from_email: string | null
+          id: string
+          lead_id: string
+          occurred_at: string
+          source: string
+          subject: string | null
+          to_email: string | null
+          type: string
+        }
+        Insert: {
+          ai_intent?: string | null
+          ai_reply_worthy?: boolean | null
+          ai_summary?: string | null
+          body_text: string
+          from_email?: string | null
+          id?: string
+          lead_id: string
+          occurred_at?: string
+          source?: string
+          subject?: string | null
+          to_email?: string | null
+          type: string
+        }
+        Update: {
+          ai_intent?: string | null
+          ai_reply_worthy?: boolean | null
+          ai_summary?: string | null
+          body_text?: string
+          from_email?: string | null
+          id?: string
+          lead_id?: string
+          occurred_at?: string
+          source?: string
+          subject?: string | null
+          to_email?: string | null
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interactions_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      kb_chunks: {
+        Row: {
+          allowed_customer_facing: boolean
+          content: string
+          created_at: string
+          id: string
+          source: string | null
+          title: string | null
+        }
+        Insert: {
+          allowed_customer_facing?: boolean
+          content: string
+          created_at?: string
+          id?: string
+          source?: string | null
+          title?: string | null
+        }
+        Update: {
+          allowed_customer_facing?: boolean
+          content?: string
+          created_at?: string
+          id?: string
+          source?: string | null
+          title?: string | null
+        }
+        Relationships: []
+      }
+      leads: {
+        Row: {
+          company: string
+          created_at: string
+          deal_factors_json: Json | null
+          deal_outlook: string | null
+          email: string
+          id: string
+          last_activity_at: string
+          last_ai_run_at: string | null
+          meeting_link: string | null
+          milestones_json: Json | null
+          name: string
+          next_step: string | null
+          next_step_reason: string | null
+          owner_user_id: string
+          personal_notes: string | null
+          pref_email_drafts: boolean
+          pref_linkedin_drafts: boolean
+          risks_json: Json | null
+          status: string
+          strategy: string
+        }
+        Insert: {
+          company: string
+          created_at?: string
+          deal_factors_json?: Json | null
+          deal_outlook?: string | null
+          email: string
+          id?: string
+          last_activity_at?: string
+          last_ai_run_at?: string | null
+          meeting_link?: string | null
+          milestones_json?: Json | null
+          name: string
+          next_step?: string | null
+          next_step_reason?: string | null
+          owner_user_id: string
+          personal_notes?: string | null
+          pref_email_drafts?: boolean
+          pref_linkedin_drafts?: boolean
+          risks_json?: Json | null
+          status?: string
+          strategy: string
+        }
+        Update: {
+          company?: string
+          created_at?: string
+          deal_factors_json?: Json | null
+          deal_outlook?: string | null
+          email?: string
+          id?: string
+          last_activity_at?: string
+          last_ai_run_at?: string | null
+          meeting_link?: string | null
+          milestones_json?: Json | null
+          name?: string
+          next_step?: string | null
+          next_step_reason?: string | null
+          owner_user_id?: string
+          personal_notes?: string | null
+          pref_email_drafts?: boolean
+          pref_linkedin_drafts?: boolean
+          risks_json?: Json | null
+          status?: string
+          strategy?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          id: string
+          onboarding_done: boolean
+          onboarding_step: number
+          role: Database["public"]["Enums"]["app_role"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          onboarding_done?: boolean
+          onboarding_step?: number
+          role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          onboarding_done?: boolean
+          onboarding_step?: number
+          role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "sales"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +381,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "sales"],
+    },
   },
 } as const
