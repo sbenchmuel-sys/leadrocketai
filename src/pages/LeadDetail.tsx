@@ -17,6 +17,7 @@ export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const [lead, setLead] = useState<LeadDetailType | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const { isConnected } = useGmailConnection();
 
   const loadLead = async () => {
@@ -29,6 +30,11 @@ export default function LeadDetail() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleUpdate = async () => {
+    await loadLead();
+    setRefreshKey(prev => prev + 1);
   };
 
   useEffect(() => {
@@ -122,15 +128,15 @@ export default function LeadDetail() {
         </TabsContent>
 
         <TabsContent value="drafts" className="mt-6">
-          <DraftsTab lead={lead} onUpdate={loadLead} />
+          <DraftsTab lead={lead} onUpdate={handleUpdate} />
         </TabsContent>
 
         <TabsContent value="upload" className="mt-6">
-          <UploadTab leadId={lead.id} onSuccess={loadLead} />
+          <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
         </TabsContent>
 
         <TabsContent value="recommendations" className="mt-6">
-          <RecommendationsTab lead={lead} onUpdate={loadLead} />
+          <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
         </TabsContent>
       </Tabs>
     </div>
