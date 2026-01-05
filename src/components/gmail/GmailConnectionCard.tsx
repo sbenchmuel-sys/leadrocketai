@@ -17,7 +17,7 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
 
   const handleConnect = async () => {
     try {
-      toast({ title: "Starting Gmail connection...", description: "Redirecting to Google..." });
+      toast({ title: "Opening Gmail authorization...", description: "Complete the sign-in in the popup window" });
       await startOAuth();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to start OAuth";
