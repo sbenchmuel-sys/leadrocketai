@@ -15,6 +15,7 @@ export function useGmailConnection() {
   const [connection, setConnection] = useState<GmailConnection | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
 
   const fetchConnection = useCallback(async () => {
     try {
@@ -50,11 +51,25 @@ export function useGmailConnection() {
     fetchConnection();
   }, [fetchConnection]);
 
-  const startOAuth = async (redirectUrl?: string) => {
+  // Listen for postMessage from OAuth popup
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === "GMAIL_CONNECTED") {
+        setAuthUrl(null);
+        fetchConnection();
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [fetchConnection]);
+
+  const prepareOAuth = async () => {
     try {
       setError(null);
+      setAuthUrl(null);
+      
       const { data, error: fnError } = await supabase.functions.invoke("gmail-auth", {
-        body: { redirectUrl: redirectUrl || window.location.href },
+        body: { redirectUrl: window.location.href },
       });
 
       if (fnError) {
@@ -65,32 +80,15 @@ export function useGmailConnection() {
         throw new Error(data.error || "Failed to start OAuth");
       }
 
-      // Open OAuth in a popup window to bypass iframe restrictions
-      const width = 600;
-      const height = 700;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
-      
-      const popup = window.open(
-        data.authUrl,
-        'gmail-oauth',
-        `width=${width},height=${height},left=${left},top=${top},scrollbars=yes`
-      );
-
-      // Poll for popup close and refresh connection status
-      if (popup) {
-        const checkPopup = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(checkPopup);
-            fetchConnection(); // Refresh connection status
-          }
-        }, 500);
-      }
+      // Store authUrl for user to click (anchor-based approach)
+      setAuthUrl(data.authUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start Gmail OAuth");
+      setError(err instanceof Error ? err.message : "Failed to prepare Gmail OAuth");
       throw err;
     }
   };
+
+  const clearAuthUrl = () => setAuthUrl(null);
 
   const disconnect = async () => {
     try {
@@ -119,7 +117,9 @@ export function useGmailConnection() {
     isConnected: !!connection,
     isLoading,
     error,
-    startOAuth,
+    authUrl,
+    prepareOAuth,
+    clearAuthUrl,
     disconnect,
     refetch: fetchConnection,
   };
