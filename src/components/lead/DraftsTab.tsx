@@ -10,6 +10,7 @@ import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDo
 import { format } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
+import { EmailTemplateSelector } from "@/components/lead/EmailTemplateSelector";
 
 interface DraftsTabProps {
   lead: LeadDetail;
@@ -40,6 +41,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [generatedContent, setGeneratedContent] = useState<string>("");
+  const [generatedSubject, setGeneratedSubject] = useState<string>("");
   const [generatedType, setGeneratedType] = useState<string>("");
   const [questionInput, setQuestionInput] = useState("");
   const { runTask, isLoading: isGenerating } = useAITask();
@@ -245,11 +247,13 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       await saveDraft(lead.id, {
         channel: isLinkedIn ? "linkedin" : "email",
         draft_type: generatedType,
+        subject: generatedSubject || undefined,
         body_text: generatedContent,
         to_recipient: lead.email,
       });
       toast.success("Draft saved");
       setGeneratedContent("");
+      setGeneratedSubject("");
       setGeneratedType("");
       loadDrafts();
     } catch {
@@ -267,6 +271,14 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
+            <EmailTemplateSelector 
+              lead={lead} 
+              onSelectTemplate={(subject, body) => {
+                setGeneratedSubject(subject);
+                setGeneratedContent(body);
+                setGeneratedType("template_email");
+              }}
+            />
             <Button onClick={generateIntroEmail} disabled={isGenerating}>
               {isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
               Intro Email ({lead.strategy})
@@ -486,7 +498,18 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            {generatedSubject && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground">Subject</label>
+                <input
+                  type="text"
+                  value={generatedSubject}
+                  onChange={(e) => setGeneratedSubject(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 text-sm border rounded-md bg-background"
+                />
+              </div>
+            )}
             <Textarea
               value={generatedContent}
               onChange={(e) => setGeneratedContent(e.target.value)}
