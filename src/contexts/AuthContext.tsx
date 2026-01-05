@@ -23,33 +23,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<{ onboarding_done: boolean; role: string } | null>(null);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Listen for auth changes FIRST (avoid missing events during init)
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Only do synchronous state updates here (avoid deadlocks)
       setSession(session);
       setUser(session?.user ?? null);
-      if (session?.user) {
-        loadProfile();
-      } else {
+
+      if (!session?.user) {
+        setProfile(null);
         setIsLoading(false);
       }
     });
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session?.user) {
-          await loadProfile();
-        } else {
-          setProfile(null);
-          setIsLoading(false);
-        }
+    // THEN get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      if (!session?.user) {
+        setProfile(null);
+        setIsLoading(false);
       }
-    );
+    });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Fetch profile when user becomes available
+  useEffect(() => {
+    if (!user) return;
+
+    setIsLoading(true);
+    // Defer supabase calls off the auth callback tick
+    setTimeout(() => {
+      loadProfile();
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const loadProfile = async () => {
     console.log("[AuthContext] loadProfile started");
@@ -60,7 +71,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
     } catch (err) {
       console.error("[AuthContext] Failed to load profile:", err);
-      // Set a default profile state on error to prevent infinite loading
       setProfile(null);
     } finally {
       setIsLoading(false);
@@ -68,7 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password });
+    const redirectUrl = `${window.location.origin}/`;
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: redirectUrl },
+    });
     return { error: error as Error | null };
   };
 
