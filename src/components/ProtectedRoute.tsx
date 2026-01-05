@@ -16,8 +16,8 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     return <Navigate to="/auth" replace />;
   }
 
-  // Redirect to onboarding if not completed
-  if (profile && !profile.onboarding_done) {
+  // Redirect to onboarding if profile not loaded or onboarding not completed
+  if (!profile || !profile.onboarding_done) {
     return <Navigate to="/onboarding" replace />;
   }
 
