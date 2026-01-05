@@ -2,12 +2,13 @@ import { Outlet, Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Users, BookOpen, LayoutDashboard, LogOut } from "lucide-react";
+import { Users, BookOpen, LayoutDashboard, LogOut, Settings } from "lucide-react";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/dashboard/leads", icon: Users, label: "Leads" },
   { to: "/dashboard/knowledge", icon: BookOpen, label: "Knowledge Base" },
+  { to: "/dashboard/settings", icon: Settings, label: "Settings" },
 ];
 
 export default function DashboardLayout() {

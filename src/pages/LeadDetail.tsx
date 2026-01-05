@@ -10,6 +10,7 @@ import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
+import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
@@ -90,6 +91,11 @@ export default function LeadDetail() {
             </p>
           )}
         </div>
+        <GmailSyncButton 
+          leadId={lead.id} 
+          leadEmail={lead.email} 
+          onSyncComplete={loadLead} 
+        />
       </div>
 
       <Tabs defaultValue="timeline" className="w-full">

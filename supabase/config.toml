@@ -2,3 +2,15 @@ project_id = "umqhdxjtgarwkdpwsxrm"
 
 [functions.ai_task]
 verify_jwt = true
+
+[functions.gmail-auth]
+verify_jwt = true
+
+[functions.gmail-callback]
+verify_jwt = false
+
+[functions.gmail-sync]
+verify_jwt = true
+
+[functions.gmail-send]
+verify_jwt = true

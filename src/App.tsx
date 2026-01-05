@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Leads from "./pages/Leads";
 import LeadDetail from "./pages/LeadDetail";
 import Knowledge from "./pages/Knowledge";
+import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
 
@@ -47,6 +48,7 @@ const App = () => (
               <Route path="leads" element={<Leads />} />
               <Route path="leads/:id" element={<LeadDetail />} />
               <Route path="knowledge" element={<Knowledge />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
