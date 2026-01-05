@@ -52,12 +52,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadProfile = async () => {
+    console.log("[AuthContext] loadProfile started");
     try {
       await createProfileIfMissing();
       const prof = await getCurrentProfile();
+      console.log("[AuthContext] profile loaded:", prof);
       setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
     } catch (err) {
-      console.error("Failed to load profile:", err);
+      console.error("[AuthContext] Failed to load profile:", err);
       // Set a default profile state on error to prevent infinite loading
       setProfile(null);
     } finally {
