@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { Json } from "@/integrations/supabase/types";
 import { LeadDetail, getLeadInteractions } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
@@ -51,6 +52,12 @@ interface NextStep {
   action: string;
 }
 
+function extractJsonFromAIContent(content: string): string {
+  const trimmed = content.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
 export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTabProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const { runTask } = useAITask();
@@ -83,12 +90,12 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         interactions_text: interactionsText,
       });
 
-      let parsedMilestones = { milestones: [], risks: [] };
+      let parsedMilestones: { milestones: Milestone[]; risks: Risk[] } = { milestones: [], risks: [] };
       if (milestonesResult.ok && milestonesResult.content) {
         try {
-          parsedMilestones = JSON.parse(milestonesResult.content);
-        } catch (e) {
-          console.error("Failed to parse milestones/risks");
+          parsedMilestones = JSON.parse(extractJsonFromAIContent(milestonesResult.content));
+        } catch {
+          toast.error("Couldn't parse milestones/risks result");
         }
       }
 
@@ -99,12 +106,12 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         interactions_text: interactionsText,
       });
 
-      let parsedFactors = null;
+      let parsedFactors: DealFactors | null = null;
       if (factorsResult.ok && factorsResult.content) {
         try {
-          parsedFactors = JSON.parse(factorsResult.content);
-        } catch (e) {
-          console.error("Failed to parse deal factors");
+          parsedFactors = JSON.parse(extractJsonFromAIContent(factorsResult.content));
+        } catch {
+          toast.error("Couldn't parse deal factors result");
         }
       }
 
@@ -116,12 +123,15 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         deal_factors_json: JSON.stringify(parsedFactors),
       });
 
-      let parsedRecs = { recommendations: [], best_next_step: null };
+      let parsedRecs: { recommendations: Recommendation[]; best_next_step: NextStep | null } = {
+        recommendations: [],
+        best_next_step: null,
+      };
       if (recsResult.ok && recsResult.content) {
         try {
-          parsedRecs = JSON.parse(recsResult.content);
-        } catch (e) {
-          console.error("Failed to parse recommendations");
+          parsedRecs = JSON.parse(extractJsonFromAIContent(recsResult.content));
+        } catch {
+          toast.error("Couldn't parse recommendations result");
         }
       }
 
@@ -129,9 +139,9 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       await supabase
         .from("leads")
         .update({
-          milestones_json: parsedMilestones.milestones,
-          risks_json: parsedMilestones.risks,
-          deal_factors_json: parsedFactors,
+          milestones_json: parsedMilestones.milestones as unknown as Json,
+          risks_json: parsedMilestones.risks as unknown as Json,
+          deal_factors_json: parsedFactors as unknown as Json,
           next_step: parsedRecs.best_next_step?.title || null,
           next_step_reason: parsedRecs.best_next_step?.why || null,
           deal_outlook: parsedFactors?.overall_outlook || null,
