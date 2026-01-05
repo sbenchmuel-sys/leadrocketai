@@ -412,3 +412,32 @@ export async function appendLeadMilestones(leadId: string, newMilestones: Milest
 
   if (updateErr) throw updateErr;
 }
+
+// ============================================
+// GMAIL QUERIES
+// ============================================
+
+export interface GmailConnectionRow {
+  id: string;
+  user_id: string;
+  gmail_email: string;
+  token_expires_at: string;
+  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getGmailConnection(): Promise<GmailConnectionRow | null> {
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  if (!user) throw new Error('Not logged in');
+
+  const { data, error } = await supabase
+    .from('gmail_connections')
+    .select('id, user_id, gmail_email, token_expires_at, last_sync_at, created_at, updated_at')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}

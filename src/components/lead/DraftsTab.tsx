@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle } from "lucide-react";
 import { format } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 
 interface DraftsTabProps {
   lead: LeadDetail;
@@ -519,18 +520,36 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
                   </div>
                   {draft.subject && <p className="text-sm font-medium mb-1">{draft.subject}</p>}
                   <p className="text-sm text-muted-foreground line-clamp-3">{draft.body_text}</p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mt-2"
-                    onClick={() => {
-                      navigator.clipboard.writeText(draft.body_text);
-                      toast.success("Copied to clipboard");
-                    }}
-                  >
-                    <Copy className="h-3 w-3 mr-1" />
-                    Copy
-                  </Button>
+                  <div className="flex gap-2 mt-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        navigator.clipboard.writeText(draft.body_text);
+                        toast.success("Copied to clipboard");
+                      }}
+                    >
+                      <Copy className="h-3 w-3 mr-1" />
+                      Copy
+                    </Button>
+                    {draft.channel === "email" && draft.status !== "sent" && (
+                      <SendEmailButton
+                        to={lead.email}
+                        subject={draft.subject || ""}
+                        body={draft.body_text}
+                        leadId={lead.id}
+                        draftId={draft.id}
+                        onSent={loadDrafts}
+                        variant="outline"
+                        size="sm"
+                      />
+                    )}
+                    {draft.status === "sent" && (
+                      <Badge variant="secondary" className="bg-green-500/10 text-green-600">
+                        Sent
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
