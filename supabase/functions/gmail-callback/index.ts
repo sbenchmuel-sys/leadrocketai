@@ -23,7 +23,7 @@ serve(async (req) => {
     }
 
     // Parse state
-    let stateData: { user_id: string; redirect_url: string };
+    let stateData: { user_id: string; redirect_url: string; csrf: string };
     try {
       stateData = JSON.parse(atob(state));
     } catch {
@@ -33,10 +33,51 @@ serve(async (req) => {
       });
     }
 
+    // Validate required state fields
+    if (!stateData.user_id || !stateData.csrf) {
+      console.error("[gmail-callback] Missing user_id or csrf in state");
+      return new Response(`<html><body><h1>Invalid State Data</h1></body></html>`, {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+
     const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
     const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Verify CSRF token from database
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    const { data: storedState, error: stateError } = await supabase
+      .from("oauth_states")
+      .select("*")
+      .eq("user_id", stateData.user_id)
+      .eq("csrf_token", stateData.csrf)
+      .single();
+
+    if (stateError || !storedState) {
+      console.error("[gmail-callback] Invalid or missing CSRF token");
+      return new Response(`<html><body><h1>Invalid State Token</h1><p>OAuth session expired or invalid. Please try again.</p></body></html>`, {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+
+    // Check if token has expired
+    if (new Date(storedState.expires_at) < new Date()) {
+      console.error("[gmail-callback] CSRF token expired");
+      // Clean up expired token
+      await supabase.from("oauth_states").delete().eq("id", storedState.id);
+      return new Response(`<html><body><h1>Session Expired</h1><p>OAuth session expired. Please try again.</p></body></html>`, {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+
+    // Delete the used CSRF token to prevent replay attacks
+    await supabase.from("oauth_states").delete().eq("id", storedState.id);
 
     const callbackUrl = `${supabaseUrl}/functions/v1/gmail-callback`;
 
@@ -93,8 +134,6 @@ serve(async (req) => {
     const tokenExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
 
     // Store connection using service role key (bypasses RLS for upsert)
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
     const { error: upsertError } = await supabase
       .from("gmail_connections")
       .upsert({

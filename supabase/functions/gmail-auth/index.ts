@@ -1,12 +1,24 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// Dynamic CORS based on allowed origins
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") || "";
+  const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
+  
+  // In development, allow localhost origins
+  const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || allowedOrigins.includes("*");
+  
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : "",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
+}
 
 serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -23,6 +35,7 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -46,6 +59,28 @@ serve(async (req) => {
       });
     }
 
+    // Generate CSRF token for state validation
+    const csrfToken = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Store the CSRF token in the database using service role
+    const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
+    const { error: insertError } = await serviceSupabase
+      .from("oauth_states")
+      .insert({
+        user_id: user.id,
+        csrf_token: csrfToken,
+        expires_at: expiresAt.toISOString(),
+      });
+
+    if (insertError) {
+      console.error("[gmail-auth] Failed to store CSRF token:", insertError);
+      return new Response(JSON.stringify({ ok: false, error: "Failed to initiate OAuth" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Build Google OAuth URL
     const scopes = [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -53,8 +88,12 @@ serve(async (req) => {
       "https://www.googleapis.com/auth/userinfo.email",
     ].join(" ");
 
-    // State includes user_id for verification in callback
-    const state = btoa(JSON.stringify({ user_id: user.id, redirect_url: redirectUrl }));
+    // State includes user_id, redirect_url, and CSRF token
+    const state = btoa(JSON.stringify({ 
+      user_id: user.id, 
+      redirect_url: redirectUrl,
+      csrf: csrfToken
+    }));
 
     const callbackUrl = `${supabaseUrl}/functions/v1/gmail-callback`;
 
@@ -77,7 +116,7 @@ serve(async (req) => {
     console.error("[gmail-auth] Error:", error);
     return new Response(
       JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });
