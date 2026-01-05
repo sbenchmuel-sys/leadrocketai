@@ -2,10 +2,20 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { resolvePDFJS } from "https://esm.sh/pdfjs-serverless@0.5.0";
 import { BlobReader, ZipReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+// Dynamic CORS based on allowed origins
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") || "";
+  const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
+  
+  // In development, allow localhost origins
+  const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || allowedOrigins.includes("*");
+  
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : "",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
+}
 
 async function extractPdfText(data: Uint8Array): Promise<string> {
   const pdfjs = await resolvePDFJS();
@@ -24,6 +34,8 @@ async function extractPdfText(data: Uint8Array): Promise<string> {
 }
 
 serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -101,7 +113,7 @@ serve(async (req) => {
     console.error("[parse-document] Error processing file:", error);
     return new Response(
       JSON.stringify({ error: `Failed to parse document: ${errorMessage}` }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });
