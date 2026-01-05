@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
-import { toast } from "@/components/ui/use-toast";
-import { Loader2, Mail, AlertCircle, ExternalLink, MailCheck, RefreshCw, Unplug } from "lucide-react";
+import { toast } from "sonner";
+import { Loader2, Mail, AlertCircle, ExternalLink, MailCheck, RefreshCw, Unplug, Copy } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -13,14 +14,16 @@ interface GmailConnectionCardProps {
 
 export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardProps) {
   const { connection, isConnected, isLoading, error, authUrl, prepareOAuth, clearAuthUrl, disconnect } = useGmailConnection();
+  const [popupBlocked, setPopupBlocked] = useState(false);
 
   const handleConnect = async () => {
     try {
-      toast({ title: "Preparing Gmail authorization...", description: "Click the link to sign in with Google" });
+      toast("Preparing Gmail authorization...", { description: "Click the button to sign in with Google" });
+      setPopupBlocked(false);
       await prepareOAuth();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to prepare OAuth";
-      toast({ title: "Connection failed", description: message, variant: "destructive" });
+      toast.error("Connection failed", { description: message });
     }
   };
 
@@ -99,17 +102,41 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
             <p className="text-sm text-muted-foreground">
               Click the button below to authorize Gmail access in a new window:
             </p>
-            <Button
-              variant="outline"
-              onClick={() => {
-                window.open(authUrl, "_blank", "noopener,noreferrer,width=600,height=700");
-              }}
-            >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open Google Authorization
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const popup = window.open(authUrl, "_blank", "noopener,noreferrer,width=600,height=700");
+                  if (!popup || popup.closed || typeof popup.closed === "undefined") {
+                    setPopupBlocked(true);
+                    toast.error("Popup blocked", { description: "Use the copy button to open the link manually" });
+                  }
+                }}
+              >
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Google Authorization
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  navigator.clipboard.writeText(authUrl);
+                  toast.success("Copied!", { description: "Paste the URL in a new browser tab" });
+                }}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy URL
+              </Button>
+            </div>
+            {popupBlocked && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Popup was blocked. Copy the URL and paste it in a new browser tab to continue.
+                </AlertDescription>
+              </Alert>
+            )}
             <div>
-              <Button variant="ghost" size="sm" onClick={clearAuthUrl}>
+              <Button variant="ghost" size="sm" onClick={() => { clearAuthUrl(); setPopupBlocked(false); }}>
                 Cancel
               </Button>
             </div>
