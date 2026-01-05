@@ -1,10 +1,10 @@
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Mail, MailCheck, Loader2, Unplug, AlertCircle, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "@/components/ui/use-toast";
+import { Loader2, Mail, AlertCircle, ExternalLink, MailCheck, RefreshCw, Unplug } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 
 interface GmailConnectionCardProps {
@@ -12,15 +12,14 @@ interface GmailConnectionCardProps {
 }
 
 export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardProps) {
-  const { connection, isConnected, isLoading, error, startOAuth, disconnect } = useGmailConnection();
-  const { toast } = useToast();
+  const { connection, isConnected, isLoading, error, authUrl, prepareOAuth, clearAuthUrl, disconnect } = useGmailConnection();
 
   const handleConnect = async () => {
     try {
-      toast({ title: "Opening Gmail authorization...", description: "Complete the sign-in in the popup window" });
-      await startOAuth();
+      toast({ title: "Preparing Gmail authorization...", description: "Click the link to sign in with Google" });
+      await prepareOAuth();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to start OAuth";
+      const message = err instanceof Error ? err.message : "Failed to prepare OAuth";
       toast({ title: "Connection failed", description: message, variant: "destructive" });
     }
   };
@@ -94,6 +93,26 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
               <Unplug className="h-4 w-4 mr-2" />
               Disconnect Gmail
             </Button>
+          </div>
+        ) : authUrl ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Click the link below to authorize Gmail access in a new window:
+            </p>
+            <a
+              href={authUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-primary hover:underline font-medium"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Open Google Authorization
+            </a>
+            <div>
+              <Button variant="ghost" size="sm" onClick={clearAuthUrl}>
+                Cancel
+              </Button>
+            </div>
           </div>
         ) : (
           <Button onClick={handleConnect}>

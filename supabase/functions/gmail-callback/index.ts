@@ -115,7 +115,7 @@ serve(async (req) => {
 
     console.log(`[gmail-callback] Successfully connected Gmail for user ${stateData.user_id}: ${gmailEmail}`);
 
-    // Show success and close the popup window
+    // Show success, notify opener via postMessage, and close the popup window
     return new Response(`
       <html>
         <head>
@@ -133,6 +133,10 @@ serve(async (req) => {
             <p>This window will close automatically...</p>
           </div>
           <script>
+            // Notify opener that connection succeeded
+            if (window.opener) {
+              window.opener.postMessage({ type: "GMAIL_CONNECTED" }, "*");
+            }
             // Close popup after brief delay
             setTimeout(() => window.close(), 1500);
           </script>
