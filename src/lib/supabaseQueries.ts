@@ -369,3 +369,46 @@ export async function searchKnowledgeBase(searchTerm: string, customerFacingOnly
   if (error) throw error;
   return data ?? [];
 }
+
+// ============================================
+// LEAD MILESTONES HELPER
+// ============================================
+
+export interface MilestoneItem {
+  description: string;
+  status: 'completed' | 'pending';
+  date: string | null;
+  evidence?: string;
+}
+
+export async function appendLeadMilestones(leadId: string, newMilestones: MilestoneItem[]): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+  if (!newMilestones.length) return;
+
+  // Fetch current milestones
+  const { data: lead, error: fetchErr } = await supabase
+    .from('leads')
+    .select('milestones_json')
+    .eq('id', leadId)
+    .single();
+
+  if (fetchErr) throw fetchErr;
+
+  const existing = (lead?.milestones_json as unknown as MilestoneItem[] | null) ?? [];
+  
+  // Merge avoiding duplicates by description
+  const existingDescriptions = new Set(existing.map(m => m.description.toLowerCase().trim()));
+  const toAdd = newMilestones.filter(m => !existingDescriptions.has(m.description.toLowerCase().trim()));
+  
+  const merged = [...existing, ...toAdd];
+
+  const { error: updateErr } = await supabase
+    .from('leads')
+    .update({ 
+      milestones_json: merged as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
+      last_activity_at: new Date().toISOString()
+    })
+    .eq('id', leadId);
+
+  if (updateErr) throw updateErr;
+}
