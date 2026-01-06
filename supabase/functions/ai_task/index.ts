@@ -1,6 +1,87 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
+// Tasks that require semantic knowledge search
+const KNOWLEDGE_SEARCH_TASKS = [
+  "email_intro_fast",
+  "email_intro_nurture",
+  "followup_sequence_4",
+  "post_meeting_recap",
+  "answer_questions",
+];
+
+// Function to get semantic knowledge context
+async function getSemanticKnowledgeContext(
+  queryText: string,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  lovableApiKey: string
+): Promise<string> {
+  try {
+    // Generate embedding for the query
+    const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lovableApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-004",
+        input: queryText.slice(0, 5000),
+      }),
+    });
+
+    if (!embResponse.ok) {
+      console.log("[ai_task] Embedding generation failed, falling back to basic search");
+      return "";
+    }
+
+    const embData = await embResponse.json();
+    const queryEmbedding = embData.data?.[0]?.embedding;
+
+    if (!queryEmbedding || !Array.isArray(queryEmbedding)) {
+      console.log("[ai_task] Invalid embedding response");
+      return "";
+    }
+
+    // Use service role to call the match function
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    
+    const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks", {
+      query_embedding: `[${queryEmbedding.join(",")}]`,
+      match_threshold: 0.4,
+      match_count: 5,
+      filter_customer_facing: true,
+    });
+
+    if (error) {
+      console.error("[ai_task] Semantic search failed:", error);
+      return "";
+    }
+
+    if (!matches || matches.length === 0) {
+      console.log("[ai_task] No semantic matches found");
+      return "";
+    }
+
+    console.log(`[ai_task] Found ${matches.length} semantic matches`);
+
+    // Format the matched chunks as context
+    const context = matches
+      .map((m: { title: string; content: string; similarity: number; source: string }) => {
+        const header = m.title ? `[${m.title}]` : "";
+        const score = `(relevance: ${(m.similarity * 100).toFixed(0)}%)`;
+        return `${header} ${score}\n${m.content}`;
+      })
+      .join("\n\n---\n\n");
+
+    return context;
+  } catch (err) {
+    console.error("[ai_task] Error in semantic search:", err);
+    return "";
+  }
+}
+
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("Origin") || "";
@@ -338,14 +419,6 @@ serve(async (req) => {
       });
     }
 
-    // Build the user prompt with template variables replaced
-    const userPrompt = replaceTemplateVars(taskPrompt, payload || {});
-
-    // Select model based on task
-    const model = PRO_MODEL_TASKS.includes(task)
-      ? "google/gemini-2.5-pro"
-      : "google/gemini-2.5-flash";
-
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       console.error("LOVABLE_API_KEY is not configured");
@@ -354,6 +427,43 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Enhance payload with semantic knowledge search for relevant tasks
+    let enhancedPayload = { ...payload };
+    
+    if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
+      // Build a query from the available context
+      const queryParts: string[] = [];
+      if (payload?.email_text) queryParts.push(String(payload.email_text));
+      if (payload?.questions_list) queryParts.push(String(payload.questions_list));
+      if (payload?.lead_context) queryParts.push(String(payload.lead_context).slice(0, 500));
+      if (payload?.meeting_summary) queryParts.push(String(payload.meeting_summary).slice(0, 500));
+      
+      const searchQuery = queryParts.join("\n").slice(0, 2000);
+      
+      if (searchQuery.length > 50) {
+        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const semanticContext = await getSemanticKnowledgeContext(
+          searchQuery,
+          supabaseUrl,
+          supabaseServiceKey,
+          LOVABLE_API_KEY
+        );
+        
+        if (semanticContext) {
+          enhancedPayload.knowledge_context = semanticContext;
+          console.log(`[ai_task] Added semantic knowledge context (${semanticContext.length} chars)`);
+        }
+      }
+    }
+
+    // Build the user prompt with template variables replaced
+    const userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
+
+    // Select model based on task
+    const model = PRO_MODEL_TASKS.includes(task)
+      ? "google/gemini-2.5-pro"
+      : "google/gemini-2.5-flash";
 
     console.log(`[ai_task] Task: ${task}, Model: ${model}, User: ${user.id}`);
 
