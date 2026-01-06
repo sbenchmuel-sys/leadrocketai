@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getLeadInteractions, InteractionItem } from "@/lib/supabaseQueries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,13 +9,43 @@ interface TimelineTabProps {
   leadId: string;
 }
 
+function dedupeTimelineItems(items: InteractionItem[]): InteractionItem[] {
+  const byKey = new Map<string, InteractionItem>();
+
+  for (const item of items) {
+    const occurredTs = new Date(item.occurred_at).getTime();
+    const occurredMinute = Math.floor(occurredTs / 60000); // minute bucket
+
+    const stableKey = item.gmail_message_id
+      ? `gmail:${item.gmail_message_id}`
+      : `${item.source}|${item.type}|${(item.subject || "").toLowerCase()}|${(item.from_email || "").toLowerCase()}|${(item.to_email || "").toLowerCase()}|${occurredMinute}`;
+
+    const existing = byKey.get(stableKey);
+    if (!existing) {
+      byKey.set(stableKey, item);
+      continue;
+    }
+
+    // Prefer the record that has a gmail_message_id (it dedupes correctly across syncs)
+    const existingHasId = !!existing.gmail_message_id;
+    const nextHasId = !!item.gmail_message_id;
+    if (!existingHasId && nextHasId) {
+      byKey.set(stableKey, item);
+    }
+  }
+
+  return Array.from(byKey.values()).sort(
+    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+  );
+}
+
 export default function TimelineTab({ leadId }: TimelineTabProps) {
   const [interactions, setInteractions] = useState<InteractionItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     getLeadInteractions(leadId)
-      .then(setInteractions)
+      .then((items) => setInteractions(dedupeTimelineItems(items)))
       .catch(console.error)
       .finally(() => setIsLoading(false));
   }, [leadId]);
