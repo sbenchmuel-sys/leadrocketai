@@ -63,11 +63,19 @@ export default function Knowledge() {
 
     setIsSubmitting(true);
     try {
+      // Get current user for owner_user_id
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("You must be logged in to add knowledge");
+        return;
+      }
+
       const { error } = await supabase.from("kb_chunks").insert({
         title: newChunk.title || null,
         content: newChunk.content,
         source: newChunk.source || null,
         allowed_customer_facing: newChunk.allowed_customer_facing,
+        owner_user_id: user.id,
       });
 
       if (error) throw error;
