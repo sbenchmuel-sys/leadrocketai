@@ -12,6 +12,7 @@ import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
@@ -138,20 +139,23 @@ export default function LeadDetail() {
             </p>
           )}
         </div>
-        {isConnected ? (
-          <GmailSyncButton 
-            leadId={lead.id} 
-            leadEmail={lead.email} 
-            onSyncComplete={loadLead} 
-          />
-        ) : (
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/dashboard/settings">
-              <Mail className="h-4 w-4 mr-2" />
-              Connect Gmail
-            </Link>
-          </Button>
-        )}
+        <div className="flex gap-2">
+          <EditLeadDialog lead={lead} onUpdate={handleUpdate} />
+          {isConnected ? (
+            <GmailSyncButton 
+              leadId={lead.id} 
+              leadEmail={lead.email} 
+              onSyncComplete={loadLead} 
+            />
+          ) : (
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/dashboard/settings">
+                <Mail className="h-4 w-4 mr-2" />
+                Connect Gmail
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       <Tabs defaultValue="timeline" className="w-full">
