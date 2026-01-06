@@ -135,48 +135,77 @@ serve(async (req) => {
     }
 
     let embeddingsGenerated = 0;
+    let embeddingsFailed = 0;
+    const DELAY_BETWEEN_CHUNKS_MS = 800; // Rate limiting protection
 
-    for (const chunk of insertedChunks || []) {
-      try {
-        // Generate embedding using chat model (Lovable AI doesn't support embedding models)
-        const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [
-              {
-                role: "system",
-                content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
+    console.log(`[process-knowledge-document] Starting embedding generation for ${insertedChunks?.length || 0} chunks`);
+
+    for (let i = 0; i < (insertedChunks?.length || 0); i++) {
+      const chunk = insertedChunks![i];
+      
+      // Add delay between calls to avoid rate limiting (skip first)
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_CHUNKS_MS));
+      }
+      
+      console.log(`[process-knowledge-document] Processing chunk ${i + 1}/${insertedChunks?.length}: ${chunk.id}`);
+      
+      // Retry logic with exponential backoff
+      let attempts = 0;
+      const maxAttempts = 3;
+      let success = false;
+      
+      while (attempts < maxAttempts && !success) {
+        attempts++;
+        try {
+          // Generate embedding using chat model (Lovable AI doesn't support embedding models)
+          const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [
+                {
+                  role: "system",
+                  content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
 Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
 The numbers should represent the semantic meaning of the input text.
 Similar texts should have similar vectors. No explanation, just the array.`
-              },
-              {
-                role: "user",
-                content: chunk.content.slice(0, 8000)
-              }
-            ],
-            temperature: 0,
-          }),
-        });
+                },
+                {
+                  role: "user",
+                  content: chunk.content.slice(0, 8000)
+                }
+              ],
+              temperature: 0,
+            }),
+          });
 
-        if (!embResponse.ok) {
-          console.error(`[process-knowledge-document] Embedding failed for chunk ${chunk.id}:`, embResponse.status);
-          await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
-          continue;
-        }
+          if (!embResponse.ok) {
+            const status = embResponse.status;
+            console.error(`[process-knowledge-document] Embedding API error for chunk ${chunk.id}: ${status}`);
+            
+            // Handle rate limiting with longer backoff
+            if (status === 429) {
+              const backoffMs = Math.pow(2, attempts) * 2000; // 4s, 8s, 16s
+              console.log(`[process-knowledge-document] Rate limited, waiting ${backoffMs}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              continue; // Retry
+            }
+            
+            // For other errors, mark as failed and continue
+            throw new Error(`API returned ${status}`);
+          }
 
-        const embData = await embResponse.json();
-        const content = embData.choices?.[0]?.message?.content || "";
-        
-        // Parse the embedding array from the response
-        try {
+          const embData = await embResponse.json();
+          const content = embData.choices?.[0]?.message?.content || "";
+          
+          // Parse the embedding array from the response
           const jsonMatch = content.match(/\[[\s\S]*\]/);
-          if (!jsonMatch) throw new Error("No array found");
+          if (!jsonMatch) throw new Error("No array found in response");
           
           let embedding: number[] = JSON.parse(jsonMatch[0]);
           
@@ -185,7 +214,7 @@ Similar texts should have similar vectors. No explanation, just the array.`
           embedding = embedding.slice(0, 384);
           
           // Update chunk with embedding
-          await supabaseAdmin
+          const { error: updateError } = await supabaseAdmin
             .from("kb_chunks")
             .update({
               embedding: `[${embedding.join(",")}]`,
@@ -193,18 +222,31 @@ Similar texts should have similar vectors. No explanation, just the array.`
             })
             .eq("id", chunk.id);
 
+          if (updateError) {
+            throw new Error(`DB update failed: ${updateError.message}`);
+          }
+
           embeddingsGenerated++;
-        } catch (parseError) {
-          console.error(`[process-knowledge-document] Failed to parse embedding for chunk ${chunk.id}:`, parseError);
-          await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
+          success = true;
+          console.log(`[process-knowledge-document] Successfully generated embedding for chunk ${chunk.id}`);
+          
+        } catch (err) {
+          console.error(`[process-knowledge-document] Attempt ${attempts}/${maxAttempts} failed for chunk ${chunk.id}:`, err);
+          
+          if (attempts >= maxAttempts) {
+            embeddingsFailed++;
+            await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
+            console.error(`[process-knowledge-document] Giving up on chunk ${chunk.id} after ${maxAttempts} attempts`);
+          } else {
+            // Backoff before retry
+            const backoffMs = Math.pow(2, attempts) * 1000;
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          }
         }
-      } catch (embError) {
-        console.error(`[process-knowledge-document] Error generating embedding for chunk ${chunk.id}:`, embError);
-        await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
       }
     }
 
-    console.log(`[process-knowledge-document] Generated ${embeddingsGenerated} embeddings`);
+    console.log(`[process-knowledge-document] Completed: ${embeddingsGenerated} succeeded, ${embeddingsFailed} failed`);
 
     return new Response(
       JSON.stringify({

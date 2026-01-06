@@ -56,80 +56,113 @@ serve(async (req) => {
 
     console.log(`[generate-embedding] Generating embedding for text length: ${text.length}, chunk_id: ${chunk_id || 'none'}`);
 
-    // Use Gemini chat model to generate a semantic hash/fingerprint for similarity matching
-    // Since Lovable AI gateway doesn't support embedding models, we use chat to create semantic representations
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
-        messages: [
-          {
-            role: "system",
-            content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
+    // Retry logic with exponential backoff
+    const maxAttempts = 3;
+    let lastError: Error | null = null;
+    let embedding: number[] | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        console.log(`[generate-embedding] Attempt ${attempt}/${maxAttempts}`);
+        
+        const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              {
+                role: "system",
+                content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
 Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
 The numbers should represent the semantic meaning of the input text.
 Similar texts should have similar vectors. No explanation, just the array.`
-          },
-          {
-            role: "user",
-            content: text.slice(0, 8000)
-          }
-        ],
-        temperature: 0,
-      }),
-    });
+              },
+              {
+                role: "user",
+                content: text.slice(0, 8000)
+              }
+            ],
+            temperature: 0,
+          }),
+        });
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ ok: false, error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        if (!response.ok) {
+          const status = response.status;
+          
+          if (status === 429) {
+            // Rate limited - exponential backoff
+            const backoffMs = Math.pow(2, attempt) * 2000;
+            console.log(`[generate-embedding] Rate limited (429), waiting ${backoffMs}ms before retry...`);
+            if (attempt < maxAttempts) {
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              continue;
+            }
+            return new Response(JSON.stringify({ ok: false, error: "Rate limit exceeded. Please try again later.", retryable: true }), {
+              status: 429,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+          if (status === 402) {
+            return new Response(JSON.stringify({ ok: false, error: "Payment required. Please add credits." }), {
+              status: 402,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+          
+          const errorText = await response.text();
+          console.error(`[generate-embedding] AI gateway error: ${status}`, errorText);
+          lastError = new Error(`API returned ${status}`);
+          
+          if (attempt < maxAttempts) {
+            const backoffMs = Math.pow(2, attempt) * 1000;
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            continue;
+          }
+        } else {
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content || "";
+          
+          // Parse the embedding array from the response
+          const jsonMatch = content.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) {
+            throw new Error("No array found in response");
+          }
+          
+          const parsed = JSON.parse(jsonMatch[0]);
+          
+          // Validate it's an array of numbers
+          if (!Array.isArray(parsed) || parsed.length === 0 || typeof parsed[0] !== "number") {
+            throw new Error("Invalid embedding format");
+          }
+          
+          // Normalize to 384 dimensions if needed
+          embedding = parsed;
+          while (embedding.length < 384) {
+            embedding.push(0);
+          }
+          embedding = embedding.slice(0, 384);
+          
+          console.log(`[generate-embedding] Successfully generated embedding on attempt ${attempt}`);
+          break; // Success!
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.error(`[generate-embedding] Attempt ${attempt} failed:`, lastError.message);
+        
+        if (attempt < maxAttempts) {
+          const backoffMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ ok: false, error: "Payment required. Please add credits." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error(`[generate-embedding] AI gateway error: ${response.status}`, errorText);
-      return new Response(JSON.stringify({ ok: false, error: "Failed to generate embedding" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
     }
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
-    
-    // Parse the embedding array from the response
-    let embedding: number[];
-    try {
-      // Extract JSON array from the response (handle markdown code blocks)
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        throw new Error("No array found in response");
-      }
-      embedding = JSON.parse(jsonMatch[0]);
-      
-      // Validate it's an array of numbers
-      if (!Array.isArray(embedding) || embedding.length === 0 || typeof embedding[0] !== "number") {
-        throw new Error("Invalid embedding format");
-      }
-      
-      // Normalize to 384 dimensions if needed
-      while (embedding.length < 384) {
-        embedding.push(0);
-      }
-      embedding = embedding.slice(0, 384);
-    } catch (parseError) {
-      console.error("[generate-embedding] Failed to parse embedding:", parseError, content.slice(0, 200));
-      return new Response(JSON.stringify({ ok: false, error: "Failed to parse embedding response" }), {
+    if (!embedding) {
+      console.error("[generate-embedding] All attempts failed:", lastError?.message);
+      return new Response(JSON.stringify({ ok: false, error: lastError?.message || "Failed to generate embedding" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
