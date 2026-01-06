@@ -4,7 +4,7 @@ import { getLeadDetail, LeadDetail as LeadDetailType } from "@/lib/supabaseQueri
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Mail } from "lucide-react";
+import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
@@ -93,8 +93,47 @@ export default function LeadDetail() {
           <p className="text-muted-foreground mt-1">
             {lead.company} • {lead.email}
           </p>
+          
+          {/* Lead Metadata */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
+            {lead.job_title && (
+              <span className="flex items-center gap-1">
+                <Briefcase className="h-3.5 w-3.5" />
+                {lead.job_title}
+              </span>
+            )}
+            {lead.phone && (
+              <span className="flex items-center gap-1">
+                <Phone className="h-3.5 w-3.5" />
+                {lead.phone}
+              </span>
+            )}
+            {lead.industry && (
+              <span className="flex items-center gap-1">
+                <Building2 className="h-3.5 w-3.5" />
+                {lead.industry}
+              </span>
+            )}
+            {lead.country && (
+              <span className="flex items-center gap-1">
+                <Globe className="h-3.5 w-3.5" />
+                {lead.country}
+              </span>
+            )}
+          </div>
+
+          {lead.initial_message && (
+            <div className="mt-3 p-3 bg-muted/50 rounded-md border">
+              <p className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                <MessageSquare className="h-3 w-3" />
+                Initial Message
+              </p>
+              <p className="text-sm text-foreground">{lead.initial_message}</p>
+            </div>
+          )}
+
           {lead.next_step && (
-            <p className="text-sm mt-2 text-foreground">
+            <p className="text-sm mt-3 text-foreground">
               <span className="font-medium">Next step:</span> {lead.next_step}
             </p>
           )}
