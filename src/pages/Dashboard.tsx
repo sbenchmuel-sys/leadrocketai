@@ -2,11 +2,10 @@ import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
-import { getLeadsList, LeadListItem } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  enrichLeadWithContext,
-  LeadWithContext,
+  enrichLead,
+  EnrichedLead,
   DealStage,
   STAGE_ORDER,
   getAIRecommendation,
@@ -18,10 +17,8 @@ import { LeadTable } from "@/components/dashboard/LeadTable";
 import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
 
 export default function Dashboard() {
-  const [leads, setLeads] = useState<LeadListItem[]>([]);
+  const [leads, setLeads] = useState<EnrichedLead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [interactionsMap, setInteractionsMap] = useState<Record<string, { type: string; source: string; ai_reply_worthy: boolean | null; body_text: string; occurred_at: string }[]>>({});
-  const [draftsMap, setDraftsMap] = useState<Record<string, { status: string }[]>>({});
 
   // Filters
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
@@ -33,37 +30,24 @@ export default function Dashboard() {
 
   async function loadData() {
     try {
-      const leadsList = await getLeadsList();
-      setLeads(leadsList);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      if (leadsList.length > 0) {
-        // Fetch interactions for all leads
-        const leadIds = leadsList.map((l) => l.id);
-        const { data: interactions } = await supabase
-          .from("interactions")
-          .select("lead_id, type, source, ai_reply_worthy, body_text, occurred_at")
-          .in("lead_id", leadIds);
+      // Fetch leads with new fields
+      const { data: leadsData, error } = await supabase
+        .from("leads")
+        .select(`
+          id, company, name, email, strategy, status, owner_user_id, 
+          created_at, last_activity_at, next_step, deal_outlook,
+          stage, needs_action, next_action_key, next_action_label, meeting_summary_count
+        `)
+        .order("last_activity_at", { ascending: false })
+        .limit(200);
 
-        const intMap: Record<string, typeof interactions> = {};
-        (interactions || []).forEach((i) => {
-          if (!intMap[i.lead_id]) intMap[i.lead_id] = [];
-          intMap[i.lead_id].push(i);
-        });
-        setInteractionsMap(intMap);
+      if (error) throw error;
 
-        // Fetch drafts for all leads
-        const { data: drafts } = await supabase
-          .from("drafts")
-          .select("lead_id, status")
-          .in("lead_id", leadIds);
-
-        const draftMap: Record<string, { status: string }[]> = {};
-        (drafts || []).forEach((d) => {
-          if (!draftMap[d.lead_id]) draftMap[d.lead_id] = [];
-          draftMap[d.lead_id].push({ status: d.status });
-        });
-        setDraftsMap(draftMap);
-      }
+      const enrichedLeads = (leadsData || []).map(enrichLead);
+      setLeads(enrichedLeads);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -71,39 +55,16 @@ export default function Dashboard() {
     }
   }
 
-  // Enrich leads with context
-  const enrichedLeads: LeadWithContext[] = useMemo(() => {
-    return leads.map((lead) => {
-      const interactions = (interactionsMap[lead.id] || []).map((i) => ({
-        id: "",
-        lead_id: lead.id,
-        type: i.type,
-        source: i.source,
-        ai_reply_worthy: i.ai_reply_worthy,
-        body_text: i.body_text,
-        occurred_at: i.occurred_at,
-        subject: null,
-        from_email: null,
-        to_email: null,
-        ai_summary: null,
-        ai_intent: null,
-        gmail_message_id: null,
-      }));
-      const drafts = draftsMap[lead.id] || [];
-      return enrichLeadWithContext(lead, interactions, drafts);
-    });
-  }, [leads, interactionsMap, draftsMap]);
-
   // Calculate summary stats
   const stats = useMemo(() => {
-    const total = enrichedLeads.length;
-    const active = enrichedLeads.filter(
-      (l) => l.status !== "closed_won" && l.status !== "closed_lost"
+    const total = leads.length;
+    const active = leads.filter(
+      (l) => l.stage !== "closed_won" && l.stage !== "closed_lost"
     ).length;
-    const needsAction = enrichedLeads.filter((l) => l.needsAction).length;
-    const meetings = enrichedLeads.filter((l) => l.hasMeeting).length;
+    const needsAction = leads.filter((l) => l.needs_action).length;
+    const meetings = leads.filter((l) => l.hasMeeting).length;
     return { total, active, needsAction, meetings };
-  }, [enrichedLeads]);
+  }, [leads]);
 
   // Calculate stage counts
   const stageCounts = useMemo(() => {
@@ -113,22 +74,26 @@ export default function Dashboard() {
       engaged: 0,
       post_meeting: 0,
       closing: 0,
+      closed_won: 0,
+      closed_lost: 0,
     };
-    enrichedLeads.forEach((l) => {
-      counts[l.stage]++;
+    leads.forEach((l) => {
+      if (counts[l.stage] !== undefined) {
+        counts[l.stage]++;
+      }
     });
     return counts;
-  }, [enrichedLeads]);
+  }, [leads]);
 
   // Filter leads based on active filters
   const filteredLeads = useMemo(() => {
-    let result = enrichedLeads;
+    let result = leads;
 
     // Apply summary card filter
     if (activeFilter === "active") {
-      result = result.filter((l) => l.status !== "closed_won" && l.status !== "closed_lost");
+      result = result.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
     } else if (activeFilter === "needs_action") {
-      result = result.filter((l) => l.needsAction);
+      result = result.filter((l) => l.needs_action);
     } else if (activeFilter === "meetings") {
       result = result.filter((l) => l.hasMeeting);
     }
@@ -139,16 +104,16 @@ export default function Dashboard() {
     }
 
     return result;
-  }, [enrichedLeads, activeFilter, activeStage]);
+  }, [leads, activeFilter, activeStage]);
 
   // AI recommendations
   const recommendations = useMemo(() => {
-    return getAIRecommendation(enrichedLeads);
-  }, [enrichedLeads]);
+    return getAIRecommendation(leads);
+  }, [leads]);
 
   const handleFilterChange = (filter: FilterType) => {
     setActiveFilter(filter);
-    setActiveStage(null); // Reset stage when changing card filter
+    setActiveStage(null);
   };
 
   const handleStageClick = (stage: DealStage | null) => {
@@ -192,7 +157,7 @@ export default function Dashboard() {
       {/* Two Column Layout for Action Panel and AI */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <ActionRequiredPanel leads={enrichedLeads} />
+          <ActionRequiredPanel leads={leads} />
         </div>
         <div>
           <AIRecommendation recommendations={recommendations} />
