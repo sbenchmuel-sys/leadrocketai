@@ -137,10 +137,10 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("[parse-document] Error processing file:", error);
+    const errorId = crypto.randomUUID();
+    console.error(`[parse-document] Error ${errorId} processing file:`, error);
     return new Response(
-      JSON.stringify({ error: `Failed to parse document: ${errorMessage}` }),
+      JSON.stringify({ error: "Failed to parse document. Please ensure the file is valid.", error_id: errorId }),
       { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }

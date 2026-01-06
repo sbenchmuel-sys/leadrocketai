@@ -402,9 +402,10 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("[ai_task] Error:", error);
+    const errorId = crypto.randomUUID();
+    console.error(`[ai_task] Error ${errorId}:`, error);
     return new Response(
-      JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ ok: false, error: "An error occurred while processing your request", error_id: errorId }),
       { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
