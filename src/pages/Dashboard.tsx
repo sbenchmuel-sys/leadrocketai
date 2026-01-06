@@ -38,7 +38,7 @@ export default function Dashboard() {
         .from("leads")
         .select(`
           id, company, name, email, strategy, status, owner_user_id, 
-          created_at, last_activity_at, next_step, deal_outlook,
+          created_at, last_activity_at, next_step, deal_outlook, country,
           stage, needs_action, next_action_key, next_action_label, meeting_summary_count
         `)
         .order("last_activity_at", { ascending: false })

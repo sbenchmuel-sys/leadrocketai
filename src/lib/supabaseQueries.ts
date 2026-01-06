@@ -90,7 +90,7 @@ export async function finishOnboarding(): Promise<{ user_id: string; onboarding_
 
 export type LeadListItem = Pick<Lead, 
   'id' | 'company' | 'name' | 'email' | 'strategy' | 'status' | 
-  'owner_user_id' | 'created_at' | 'last_activity_at' | 'next_step' | 'deal_outlook'
+  'owner_user_id' | 'created_at' | 'last_activity_at' | 'next_step' | 'deal_outlook' | 'country'
 >;
 
 export async function getLeadsList(): Promise<LeadListItem[]> {
@@ -107,7 +107,7 @@ export async function getLeadsList(): Promise<LeadListItem[]> {
 
   let query = supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, owner_user_id, created_at, last_activity_at, next_step, deal_outlook')
+    .select('id, company, name, email, strategy, status, owner_user_id, created_at, last_activity_at, next_step, deal_outlook, country')
     .order('last_activity_at', { ascending: false })
     .limit(200);
 
