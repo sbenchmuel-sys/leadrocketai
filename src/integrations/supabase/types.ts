@@ -112,8 +112,10 @@ export type Database = {
           ai_reply_worthy: boolean | null
           ai_summary: string | null
           body_text: string
+          direction: string | null
           from_email: string | null
           gmail_message_id: string | null
+          gmail_thread_id: string | null
           id: string
           lead_id: string
           occurred_at: string
@@ -127,8 +129,10 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text: string
+          direction?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
+          gmail_thread_id?: string | null
           id?: string
           lead_id: string
           occurred_at?: string
@@ -142,8 +146,10 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text?: string
+          direction?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
+          gmail_thread_id?: string | null
           id?: string
           lead_id?: string
           occurred_at?: string
@@ -212,23 +218,33 @@ export type Database = {
           deal_factors_json: Json | null
           deal_outlook: string | null
           email: string
+          first_outbound_at: string | null
           id: string
           industry: string | null
           initial_message: string | null
           job_title: string | null
           last_activity_at: string
           last_ai_run_at: string | null
+          last_inbound_at: string | null
+          last_nurture_outbound_at: string | null
+          last_outbound_at: string | null
           meeting_link: string | null
+          meeting_summary_count: number
           milestones_json: Json | null
           name: string
+          needs_action: boolean
+          next_action_key: string | null
+          next_action_label: string | null
           next_step: string | null
           next_step_reason: string | null
+          nurture_outbound_count: number
           owner_user_id: string
           personal_notes: string | null
           phone: string | null
           pref_email_drafts: boolean
           pref_linkedin_drafts: boolean
           risks_json: Json | null
+          stage: string
           status: string
           strategy: string
         }
@@ -239,23 +255,33 @@ export type Database = {
           deal_factors_json?: Json | null
           deal_outlook?: string | null
           email: string
+          first_outbound_at?: string | null
           id?: string
           industry?: string | null
           initial_message?: string | null
           job_title?: string | null
           last_activity_at?: string
           last_ai_run_at?: string | null
+          last_inbound_at?: string | null
+          last_nurture_outbound_at?: string | null
+          last_outbound_at?: string | null
           meeting_link?: string | null
+          meeting_summary_count?: number
           milestones_json?: Json | null
           name: string
+          needs_action?: boolean
+          next_action_key?: string | null
+          next_action_label?: string | null
           next_step?: string | null
           next_step_reason?: string | null
+          nurture_outbound_count?: number
           owner_user_id: string
           personal_notes?: string | null
           phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null
+          stage?: string
           status?: string
           strategy: string
         }
@@ -266,23 +292,33 @@ export type Database = {
           deal_factors_json?: Json | null
           deal_outlook?: string | null
           email?: string
+          first_outbound_at?: string | null
           id?: string
           industry?: string | null
           initial_message?: string | null
           job_title?: string | null
           last_activity_at?: string
           last_ai_run_at?: string | null
+          last_inbound_at?: string | null
+          last_nurture_outbound_at?: string | null
+          last_outbound_at?: string | null
           meeting_link?: string | null
+          meeting_summary_count?: number
           milestones_json?: Json | null
           name?: string
+          needs_action?: boolean
+          next_action_key?: string | null
+          next_action_label?: string | null
           next_step?: string | null
           next_step_reason?: string | null
+          nurture_outbound_count?: number
           owner_user_id?: string
           personal_notes?: string | null
           phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null
+          stage?: string
           status?: string
           strategy?: string
         }

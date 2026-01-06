@@ -6,7 +6,6 @@ function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("Origin") || "";
   const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
   
-  // In development, allow localhost origins; in production, allow Lovable project domains
   const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
   const isLovableProject = origin.endsWith(".lovableproject.com");
   const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || allowedOrigins.includes("*");
@@ -29,6 +28,29 @@ interface GmailMessage {
   internalDate: string;
 }
 
+interface LeadMetrics {
+  first_outbound_at: string | null;
+  last_outbound_at: string | null;
+  last_inbound_at: string | null;
+  meeting_summary_count: number;
+  nurture_outbound_count: number;
+  last_nurture_outbound_at: string | null;
+}
+
+interface LeadUpdate {
+  stage: string;
+  needs_action: boolean;
+  next_action_key: string | null;
+  next_action_label: string | null;
+  first_outbound_at: string | null;
+  last_outbound_at: string | null;
+  last_inbound_at: string | null;
+  meeting_summary_count: number;
+  nurture_outbound_count: number;
+  last_nurture_outbound_at: string | null;
+  last_activity_at: string;
+}
+
 function decodeBase64Url(data: string): string {
   const base64 = data.replace(/-/g, "+").replace(/_/g, "/");
   try {
@@ -43,12 +65,10 @@ function getHeader(headers: Array<{ name: string; value: string }>, name: string
 }
 
 function getMessageBody(message: GmailMessage): string {
-  // Try plain text body first
   if (message.payload.body?.data) {
     return decodeBase64Url(message.payload.body.data);
   }
   
-  // Try parts
   if (message.payload.parts) {
     const textPart = message.payload.parts.find(p => p.mimeType === "text/plain");
     if (textPart?.body?.data) {
@@ -56,7 +76,6 @@ function getMessageBody(message: GmailMessage): string {
     }
     const htmlPart = message.payload.parts.find(p => p.mimeType === "text/html");
     if (htmlPart?.body?.data) {
-      // Strip HTML tags for plain text
       const html = decodeBase64Url(htmlPart.body.data);
       return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
     }
@@ -73,7 +92,6 @@ async function refreshTokenIfNeeded(
   const expiresAt = new Date(connection.token_expires_at);
   const now = new Date();
   
-  // If token expires in less than 5 minutes, refresh it
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-sync] Refreshing expired token");
     
@@ -98,7 +116,6 @@ async function refreshTokenIfNeeded(
     const tokens = await response.json();
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     
-    // Update stored token
     await supabase
       .from("gmail_connections")
       .update({
@@ -111,6 +128,146 @@ async function refreshTokenIfNeeded(
   }
   
   return connection.access_token;
+}
+
+// Check if email body contains closing-stage keywords
+function containsClosingKeywords(text: string): boolean {
+  const keywords = ["pricing", "contract", "procurement", "security review", "legal", "proposal", "quote", "budget"];
+  const lowerText = text.toLowerCase();
+  return keywords.some(kw => lowerText.includes(kw));
+}
+
+// Determine stage based on metrics
+function deriveStage(
+  currentStage: string,
+  metrics: LeadMetrics,
+  hasClosingKeywords: boolean
+): string {
+  // Manual overrides are preserved
+  if (currentStage === "closed_won" || currentStage === "closed_lost") {
+    return currentStage;
+  }
+
+  // Priority order (highest to lowest)
+  // 1. Closing - suggested when inbound has closing keywords
+  if (hasClosingKeywords && metrics.last_inbound_at) {
+    return "closing";
+  }
+
+  // 2. Post-Meeting - has meeting summaries
+  if (metrics.meeting_summary_count > 0) {
+    return "post_meeting";
+  }
+
+  // 3. Engaged - has inbound after any outbound
+  if (metrics.last_inbound_at && metrics.first_outbound_at) {
+    const inboundTime = new Date(metrics.last_inbound_at).getTime();
+    const firstOutTime = new Date(metrics.first_outbound_at).getTime();
+    if (inboundTime > firstOutTime) {
+      return "engaged";
+    }
+  }
+
+  // 4. Contacted - has sent at least one outbound
+  if (metrics.first_outbound_at) {
+    return "contacted";
+  }
+
+  // 5. New - default
+  return "new";
+}
+
+// Determine needs_action and next_action
+function deriveAction(
+  metrics: LeadMetrics,
+  pendingDraftCount: number,
+  nurtureCadence: string | null
+): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
+  const now = Date.now();
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+
+  // A) Reply Pending - inbound exists and is newer than last outbound, elapsed > 6 hours
+  if (metrics.last_inbound_at) {
+    const inboundTime = new Date(metrics.last_inbound_at).getTime();
+    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    
+    if (inboundTime > outboundTime) {
+      const elapsed = now - inboundTime;
+      if (elapsed > 6 * HOUR) {
+        return {
+          needs_action: true,
+          next_action_key: "reply_now",
+          next_action_label: "Reply to customer",
+        };
+      }
+    }
+  }
+
+  // B) Pre-Meeting Follow-up Overdue (no inbound yet)
+  if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
+    const firstOutTime = new Date(metrics.first_outbound_at).getTime();
+    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : firstOutTime;
+    const daysSinceFirst = (now - firstOutTime) / DAY;
+    const daysSinceLast = (now - lastOutTime) / DAY;
+
+    // Count outbound emails to determine which follow-up is due
+    // Rough heuristic: use time elapsed since first outbound
+    if (daysSinceFirst >= 14 && daysSinceLast >= 7) {
+      return {
+        needs_action: true,
+        next_action_key: "send_pre_4",
+        next_action_label: "Send breakup email",
+      };
+    } else if (daysSinceFirst >= 7 && daysSinceLast >= 4) {
+      return {
+        needs_action: true,
+        next_action_key: "send_pre_3",
+        next_action_label: "Send follow-up Email 3",
+      };
+    } else if (daysSinceFirst >= 4 && daysSinceLast >= 3) {
+      return {
+        needs_action: true,
+        next_action_key: "send_pre_2",
+        next_action_label: "Send follow-up Email 2",
+      };
+    }
+  }
+
+  // C) Post-Meeting Recap Missing - has meeting but no recent outbound within 48h
+  if (metrics.meeting_summary_count > 0) {
+    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    // If no outbound in last 48 hours after having meetings
+    if (now - lastOutTime > 48 * HOUR) {
+      return {
+        needs_action: true,
+        next_action_key: "generate_post_meeting_recap",
+        next_action_label: "Send post-meeting recap",
+      };
+    }
+  }
+
+  // D) Nurture Cadence Due
+  if (metrics.nurture_outbound_count > 0 && nurtureCadence) {
+    const lastNurtureTime = metrics.last_nurture_outbound_at 
+      ? new Date(metrics.last_nurture_outbound_at).getTime() 
+      : 0;
+    
+    let intervalDays = 7; // default weekly
+    if (nurtureCadence === "biweekly") intervalDays = 14;
+    else if (nurtureCadence === "monthly") intervalDays = 30;
+
+    if (now - lastNurtureTime >= intervalDays * DAY) {
+      return {
+        needs_action: true,
+        next_action_key: `send_nurture_${metrics.nurture_outbound_count + 1}`,
+        next_action_label: "Send nurture email",
+      };
+    }
+  }
+
+  // No action needed
+  return { needs_action: false, next_action_key: null, next_action_label: null };
 }
 
 serve(async (req) => {
@@ -145,7 +302,7 @@ serve(async (req) => {
       });
     }
 
-    const { leadId, leadEmail, maxResults = 10 } = await req.json();
+    const { leadId, leadEmail, maxResults = 20 } = await req.json();
     
     if (!leadId || !leadEmail) {
       return new Response(JSON.stringify({ ok: false, error: "Missing leadId or leadEmail" }), {
@@ -168,11 +325,29 @@ serve(async (req) => {
       });
     }
 
-    // Use service role for database operations
+    // Get current lead data for strategy/cadence info
+    const { data: leadData } = await supabase
+      .from("leads")
+      .select("stage, strategy")
+      .eq("id", leadId)
+      .single();
+
+    const currentStage = leadData?.stage || "new";
+    const strategy = leadData?.strategy || "fast";
+
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
-    
-    // Refresh token if needed
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
+
+    // Get existing thread IDs locked to this lead
+    const { data: existingThreads } = await serviceSupabase
+      .from("interactions")
+      .select("gmail_thread_id")
+      .eq("lead_id", leadId)
+      .not("gmail_thread_id", "is", null);
+
+    const lockedThreadIds = new Set<string>(
+      (existingThreads || []).map(i => i.gmail_thread_id).filter(Boolean)
+    );
 
     // Search for emails from/to this lead
     const query = `from:${leadEmail} OR to:${leadEmail}`;
@@ -201,7 +376,6 @@ serve(async (req) => {
       .from("interactions")
       .select("gmail_message_id")
       .eq("lead_id", leadId)
-      .eq("source", "gmail")
       .not("gmail_message_id", "is", null);
 
     const existingMessageIds = new Set(
@@ -210,10 +384,10 @@ serve(async (req) => {
 
     let synced = 0;
     const errors: string[] = [];
+    let hasClosingKeywords = false;
 
     // Fetch and process each message
     for (const { id: gmailMessageId } of messageIds) {
-      // Skip if already synced
       if (existingMessageIds.has(gmailMessageId)) {
         continue;
       }
@@ -228,6 +402,10 @@ serve(async (req) => {
 
         const message: GmailMessage = await msgResponse.json();
         const headers = message.payload.headers;
+        const threadId = message.threadId;
+        
+        // Lock this thread to this lead
+        lockedThreadIds.add(threadId);
         
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
@@ -235,13 +413,18 @@ serve(async (req) => {
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-        // Determine if inbound or outbound
+        // Determine direction based on whether from contains lead email
         const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+        const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
         
         const bodyText = getMessageBody(message);
 
-        // Insert interaction with gmail_message_id for deduplication
+        // Check for closing keywords in inbound emails
+        if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
+          hasClosingKeywords = true;
+        }
+
         const { error: insertError } = await serviceSupabase
           .from("interactions")
           .insert({
@@ -254,10 +437,11 @@ serve(async (req) => {
             to_email: to,
             body_text: bodyText.substring(0, 10000),
             gmail_message_id: gmailMessageId,
+            gmail_thread_id: threadId,
+            direction,
           });
 
         if (insertError) {
-          // Skip duplicate key errors silently (race condition protection)
           if (!insertError.message.includes("duplicate")) {
             errors.push(`Failed to insert message ${gmailMessageId}: ${insertError.message}`);
           }
@@ -270,27 +454,165 @@ serve(async (req) => {
       }
     }
 
+    // Also fetch messages from locked threads (thread lock rule)
+    for (const threadId of lockedThreadIds) {
+      try {
+        const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;
+        const threadResponse = await fetch(threadUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        if (!threadResponse.ok) continue;
+
+        const threadData = await threadResponse.json();
+        const threadMessages = threadData.messages || [];
+
+        for (const message of threadMessages) {
+          const gmailMessageId = message.id;
+          if (existingMessageIds.has(gmailMessageId)) continue;
+
+          const headers = message.payload?.headers || [];
+          const from = getHeader(headers, "From") || "";
+          const to = getHeader(headers, "To") || "";
+          const subject = getHeader(headers, "Subject") || "(no subject)";
+          const date = getHeader(headers, "Date");
+          const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
+
+          const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+          const direction = isFromLead ? "inbound" : "outbound";
+          const type = isFromLead ? "email_inbound" : "email_outbound";
+          
+          const bodyText = getMessageBody(message);
+
+          if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
+            hasClosingKeywords = true;
+          }
+
+          const { error: insertError } = await serviceSupabase
+            .from("interactions")
+            .insert({
+              lead_id: leadId,
+              type,
+              source: "gmail",
+              occurred_at: occurredAt,
+              subject,
+              from_email: from,
+              to_email: to,
+              body_text: bodyText.substring(0, 10000),
+              gmail_message_id: gmailMessageId,
+              gmail_thread_id: threadId,
+              direction,
+            });
+
+          if (!insertError) {
+            synced++;
+            existingMessageIds.add(gmailMessageId);
+          }
+        }
+      } catch (err) {
+        console.error(`[gmail-sync] Error fetching thread ${threadId}:`, err);
+      }
+    }
+
+    // Now compute derived metrics from all interactions for this lead
+    const { data: allInteractions } = await serviceSupabase
+      .from("interactions")
+      .select("type, direction, occurred_at, body_text")
+      .eq("lead_id", leadId)
+      .order("occurred_at", { ascending: true });
+
+    const metrics: LeadMetrics = {
+      first_outbound_at: null,
+      last_outbound_at: null,
+      last_inbound_at: null,
+      meeting_summary_count: 0,
+      nurture_outbound_count: 0,
+      last_nurture_outbound_at: null,
+    };
+
+    for (const interaction of allInteractions || []) {
+      const dir = interaction.direction || (interaction.type?.includes("inbound") ? "inbound" : "outbound");
+      const occurredAt = interaction.occurred_at;
+      const bodyLower = (interaction.body_text || "").toLowerCase();
+
+      if (dir === "outbound") {
+        if (!metrics.first_outbound_at) {
+          metrics.first_outbound_at = occurredAt;
+        }
+        metrics.last_outbound_at = occurredAt;
+
+        // Check if this is a nurture email (heuristic: contains nurture-related content)
+        if (bodyLower.includes("nurture") || interaction.type === "nurture_email") {
+          metrics.nurture_outbound_count++;
+          metrics.last_nurture_outbound_at = occurredAt;
+        }
+      } else if (dir === "inbound") {
+        metrics.last_inbound_at = occurredAt;
+
+        // Check for closing keywords in historical inbound
+        if (containsClosingKeywords(interaction.body_text || "")) {
+          hasClosingKeywords = true;
+        }
+      }
+
+      // Count meeting summaries
+      if (interaction.type === "meeting" || interaction.type === "meeting_summary" || 
+          bodyLower.includes("meeting summary") || bodyLower.includes("call summary")) {
+        metrics.meeting_summary_count++;
+      }
+    }
+
+    // Get pending draft count for action logic
+    const { data: pendingDrafts } = await serviceSupabase
+      .from("drafts")
+      .select("id, nurture_cadence")
+      .eq("lead_id", leadId)
+      .in("status", ["pending", "saved"]);
+
+    const pendingDraftCount = pendingDrafts?.length || 0;
+    const nurtureCadence = pendingDrafts?.find(d => d.nurture_cadence)?.nurture_cadence || 
+                           (strategy === "nurture" ? "weekly" : null);
+
+    // Derive stage and action
+    const stage = deriveStage(currentStage, metrics, hasClosingKeywords);
+    const { needs_action, next_action_key, next_action_label } = deriveAction(metrics, pendingDraftCount, nurtureCadence);
+
+    // Update lead with computed values
+    const leadUpdate: LeadUpdate = {
+      stage,
+      needs_action,
+      next_action_key,
+      next_action_label,
+      first_outbound_at: metrics.first_outbound_at,
+      last_outbound_at: metrics.last_outbound_at,
+      last_inbound_at: metrics.last_inbound_at,
+      meeting_summary_count: metrics.meeting_summary_count,
+      nurture_outbound_count: metrics.nurture_outbound_count,
+      last_nurture_outbound_at: metrics.last_nurture_outbound_at,
+      last_activity_at: new Date().toISOString(),
+    };
+
+    await serviceSupabase
+      .from("leads")
+      .update(leadUpdate)
+      .eq("id", leadId);
+
     // Update last_sync_at
     await serviceSupabase
       .from("gmail_connections")
       .update({ last_sync_at: new Date().toISOString() })
       .eq("user_id", user.id);
 
-    // Update lead's last_activity_at if we synced any messages
-    if (synced > 0) {
-      await serviceSupabase
-        .from("leads")
-        .update({ last_activity_at: new Date().toISOString() })
-        .eq("id", leadId);
-    }
-
-    console.log(`[gmail-sync] Synced ${synced} messages for lead ${leadId}`);
+    console.log(`[gmail-sync] Synced ${synced} messages, stage=${stage}, needs_action=${needs_action}`);
 
     return new Response(
       JSON.stringify({ 
         ok: true, 
         synced, 
         total: messageIds.length,
+        stage,
+        needs_action,
+        next_action_key,
         errors: errors.length > 0 ? errors : undefined 
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

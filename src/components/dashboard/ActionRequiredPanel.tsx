@@ -1,15 +1,15 @@
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, Mail, FileText, Eye } from "lucide-react";
-import { LeadWithContext } from "@/lib/dashboardUtils";
+import { AlertCircle, Mail, FileText, Eye, Send } from "lucide-react";
+import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 
 interface ActionRequiredPanelProps {
-  leads: LeadWithContext[];
+  leads: EnrichedLead[];
 }
 
 export function ActionRequiredPanel({ leads }: ActionRequiredPanelProps) {
-  const actionLeads = leads.filter((l) => l.needsAction).slice(0, 5);
+  const actionLeads = leads.filter((l) => l.needs_action).slice(0, 5);
 
   if (actionLeads.length === 0) {
     return (
@@ -29,10 +29,11 @@ export function ActionRequiredPanel({ leads }: ActionRequiredPanelProps) {
     );
   }
 
-  const getActionButton = (lead: LeadWithContext) => {
+  const getActionButton = (lead: EnrichedLead) => {
     const basePath = `/dashboard/leads/${lead.id}`;
+    const actionType = getActionType(lead.next_action_key);
 
-    switch (lead.actionType) {
+    switch (actionType) {
       case "reply":
         return (
           <Button size="sm" asChild>
@@ -57,6 +58,15 @@ export function ActionRequiredPanel({ leads }: ActionRequiredPanelProps) {
             <Link to={`${basePath}?tab=drafts`}>
               <FileText className="h-4 w-4 mr-1" />
               Recap
+            </Link>
+          </Button>
+        );
+      case "nurture":
+        return (
+          <Button size="sm" asChild>
+            <Link to={`${basePath}?tab=drafts`}>
+              <Send className="h-4 w-4 mr-1" />
+              Send
             </Link>
           </Button>
         );
@@ -91,7 +101,9 @@ export function ActionRequiredPanel({ leads }: ActionRequiredPanelProps) {
                 {lead.name}
                 <span className="text-muted-foreground font-normal"> · {lead.company}</span>
               </p>
-              <p className="text-sm text-muted-foreground truncate">{lead.actionReason}</p>
+              <p className="text-sm text-muted-foreground truncate">
+                {lead.next_action_label || "Action needed"}
+              </p>
             </div>
             <div className="ml-3 flex-shrink-0">{getActionButton(lead)}</div>
           </div>

@@ -10,11 +10,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Mail, FileText, Eye, Plus } from "lucide-react";
-import { LeadWithContext, STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
+import { Mail, FileText, Eye, Plus, Send } from "lucide-react";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType } from "@/lib/dashboardUtils";
 
 interface LeadTableProps {
-  leads: LeadWithContext[];
+  leads: EnrichedLead[];
   isLoading: boolean;
 }
 
@@ -24,6 +24,8 @@ const stageBadgeVariants: Record<DealStage, string> = {
   engaged: "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300",
   post_meeting: "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300",
   closing: "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300",
+  closed_won: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300",
+  closed_lost: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300",
 };
 
 export function LeadTable({ leads, isLoading }: LeadTableProps) {
@@ -61,11 +63,12 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
     );
   }
 
-  const getActionButton = (lead: LeadWithContext) => {
+  const getActionButton = (lead: EnrichedLead) => {
     const basePath = `/dashboard/leads/${lead.id}`;
+    const actionType = getActionType(lead.next_action_key);
 
-    if (lead.needsAction) {
-      switch (lead.actionType) {
+    if (lead.needs_action) {
+      switch (actionType) {
         case "reply":
           return (
             <Button size="sm" variant="default" asChild>
@@ -82,6 +85,15 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
               <Link to={`${basePath}?tab=drafts`}>
                 <FileText className="h-4 w-4 mr-1" />
                 Draft
+              </Link>
+            </Button>
+          );
+        case "nurture":
+          return (
+            <Button size="sm" variant="default" asChild>
+              <Link to={`${basePath}?tab=drafts`}>
+                <Send className="h-4 w-4 mr-1" />
+                Send
               </Link>
             </Button>
           );
@@ -119,7 +131,6 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
                 key={lead.id}
                 className="cursor-pointer"
                 onClick={(e) => {
-                  // Don't navigate if clicking a button
                   if ((e.target as HTMLElement).closest("button, a")) return;
                   window.location.href = `/dashboard/leads/${lead.id}`;
                 }}
@@ -137,7 +148,7 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
                 </TableCell>
                 <TableCell className="hidden md:table-cell">
                   <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                    {lead.actionReason || "—"}
+                    {lead.next_action_label || "—"}
                   </p>
                 </TableCell>
                 <TableCell className="text-right">{getActionButton(lead)}</TableCell>
