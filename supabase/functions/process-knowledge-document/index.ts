@@ -138,28 +138,52 @@ serve(async (req) => {
 
     for (const chunk of insertedChunks || []) {
       try {
-        // Generate embedding
-        const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+        // Generate embedding using chat model (Lovable AI doesn't support embedding models)
+        const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${LOVABLE_API_KEY}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "text-embedding-004",
-            input: chunk.content.slice(0, 10000),
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              {
+                role: "system",
+                content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
+Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
+The numbers should represent the semantic meaning of the input text.
+Similar texts should have similar vectors. No explanation, just the array.`
+              },
+              {
+                role: "user",
+                content: chunk.content.slice(0, 8000)
+              }
+            ],
+            temperature: 0,
           }),
         });
 
         if (!embResponse.ok) {
           console.error(`[process-knowledge-document] Embedding failed for chunk ${chunk.id}:`, embResponse.status);
+          await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
           continue;
         }
 
         const embData = await embResponse.json();
-        const embedding = embData.data?.[0]?.embedding;
-
-        if (embedding && Array.isArray(embedding)) {
+        const content = embData.choices?.[0]?.message?.content || "";
+        
+        // Parse the embedding array from the response
+        try {
+          const jsonMatch = content.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) throw new Error("No array found");
+          
+          let embedding: number[] = JSON.parse(jsonMatch[0]);
+          
+          // Normalize to 384 dimensions
+          while (embedding.length < 384) embedding.push(0);
+          embedding = embedding.slice(0, 384);
+          
           // Update chunk with embedding
           await supabaseAdmin
             .from("kb_chunks")
@@ -170,9 +194,13 @@ serve(async (req) => {
             .eq("id", chunk.id);
 
           embeddingsGenerated++;
+        } catch (parseError) {
+          console.error(`[process-knowledge-document] Failed to parse embedding for chunk ${chunk.id}:`, parseError);
+          await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
         }
       } catch (embError) {
         console.error(`[process-knowledge-document] Error generating embedding for chunk ${chunk.id}:`, embError);
+        await supabaseAdmin.from("kb_chunks").update({ processing_status: "failed" }).eq("id", chunk.id);
       }
     }
 
