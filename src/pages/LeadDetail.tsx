@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import { getLeadDetail, LeadDetail as LeadDetailType } from "@/lib/supabaseQueries";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
@@ -13,14 +24,28 @@ import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
-
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [lead, setLead] = useState<LeadDetailType | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { isConnected } = useGmailConnection();
 
+  const handleDelete = async () => {
+    if (!id) return;
+    setIsDeleting(true);
+    try {
+      await deleteLead(id);
+      toast.success("Lead deleted successfully");
+      navigate("/dashboard/leads");
+    } catch (err) {
+      toast.error("Failed to delete lead");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
   const loadLead = async () => {
     if (!id) return;
     try {
@@ -155,6 +180,32 @@ export default function LeadDetail() {
               </Link>
             </Button>
           )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" size="sm" className="text-destructive hover:text-destructive">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete Lead</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to delete <strong>{lead.name}</strong> from <strong>{lead.company}</strong>? 
+                  This will permanently remove all associated interactions, drafts, and data. This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {isDeleting ? "Deleting..." : "Delete Lead"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
