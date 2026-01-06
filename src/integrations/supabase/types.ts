@@ -104,6 +104,7 @@ export type Database = {
           ai_summary: string | null
           body_text: string
           from_email: string | null
+          gmail_message_id: string | null
           id: string
           lead_id: string
           occurred_at: string
@@ -118,6 +119,7 @@ export type Database = {
           ai_summary?: string | null
           body_text: string
           from_email?: string | null
+          gmail_message_id?: string | null
           id?: string
           lead_id: string
           occurred_at?: string
@@ -132,6 +134,7 @@ export type Database = {
           ai_summary?: string | null
           body_text?: string
           from_email?: string | null
+          gmail_message_id?: string | null
           id?: string
           lead_id?: string
           occurred_at?: string

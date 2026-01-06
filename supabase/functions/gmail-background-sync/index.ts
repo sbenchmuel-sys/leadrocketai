@@ -129,21 +129,27 @@ async function syncLeadEmails(
     const searchData = await searchResponse.json();
     const messageIds = searchData.messages || [];
 
-    // Get existing interactions for deduplication
+    // Get existing Gmail message IDs for deduplication
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("subject, occurred_at")
+      .select("gmail_message_id")
       .eq("lead_id", leadId)
-      .eq("source", "gmail");
+      .eq("source", "gmail")
+      .not("gmail_message_id", "is", null);
 
-    const existingKeys = new Set(
-      (existingInteractions || []).map((i: { subject: string; occurred_at: string }) => `${i.subject}|${i.occurred_at}`)
+    const existingMessageIds = new Set(
+      (existingInteractions || []).map((i: { gmail_message_id: string }) => i.gmail_message_id)
     );
 
-    for (const { id } of messageIds) {
+    for (const { id: gmailMessageId } of messageIds) {
+      // Skip if already synced
+      if (existingMessageIds.has(gmailMessageId)) {
+        continue;
+      }
+
       try {
         const msgResponse = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
 
@@ -157,9 +163,6 @@ async function syncLeadEmails(
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
-        
-        const key = `${subject}|${occurredAt}`;
-        if (existingKeys.has(key)) continue;
 
         const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
         const type = isFromLead ? "email_inbound" : "email_outbound";
@@ -176,13 +179,17 @@ async function syncLeadEmails(
             from_email: from,
             to_email: to,
             body_text: bodyText.substring(0, 10000),
+            gmail_message_id: gmailMessageId,
           });
 
         if (insertError) {
-          errors.push(`Insert failed: ${insertError.message}`);
+          // Skip duplicate key errors silently
+          if (!insertError.message.includes("duplicate")) {
+            errors.push(`Insert failed: ${insertError.message}`);
+          }
         } else {
           synced++;
-          existingKeys.add(key);
+          existingMessageIds.add(gmailMessageId);
         }
       } catch (err) {
         errors.push(`Message error: ${err instanceof Error ? err.message : "Unknown"}`);

@@ -196,25 +196,31 @@ serve(async (req) => {
     
     console.log(`[gmail-sync] Found ${messageIds.length} messages for ${leadEmail}`);
 
-    // Get existing interaction IDs for deduplication (by subject + occurred_at combo)
+    // Get existing Gmail message IDs for deduplication
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("subject, occurred_at")
+      .select("gmail_message_id")
       .eq("lead_id", leadId)
-      .eq("source", "gmail");
+      .eq("source", "gmail")
+      .not("gmail_message_id", "is", null);
 
-    const existingKeys = new Set(
-      (existingInteractions || []).map(i => `${i.subject}|${i.occurred_at}`)
+    const existingMessageIds = new Set(
+      (existingInteractions || []).map(i => i.gmail_message_id)
     );
 
     let synced = 0;
     const errors: string[] = [];
 
     // Fetch and process each message
-    for (const { id } of messageIds) {
+    for (const { id: gmailMessageId } of messageIds) {
+      // Skip if already synced
+      if (existingMessageIds.has(gmailMessageId)) {
+        continue;
+      }
+
       try {
         const msgResponse = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
 
@@ -228,12 +234,6 @@ serve(async (req) => {
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
-        
-        // Deduplication check
-        const key = `${subject}|${occurredAt}`;
-        if (existingKeys.has(key)) {
-          continue;
-        }
 
         // Determine if inbound or outbound
         const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
@@ -241,7 +241,7 @@ serve(async (req) => {
         
         const bodyText = getMessageBody(message);
 
-        // Insert interaction
+        // Insert interaction with gmail_message_id for deduplication
         const { error: insertError } = await serviceSupabase
           .from("interactions")
           .insert({
@@ -252,17 +252,21 @@ serve(async (req) => {
             subject,
             from_email: from,
             to_email: to,
-            body_text: bodyText.substring(0, 10000), // Limit body size
+            body_text: bodyText.substring(0, 10000),
+            gmail_message_id: gmailMessageId,
           });
 
         if (insertError) {
-          errors.push(`Failed to insert message ${id}: ${insertError.message}`);
+          // Skip duplicate key errors silently (race condition protection)
+          if (!insertError.message.includes("duplicate")) {
+            errors.push(`Failed to insert message ${gmailMessageId}: ${insertError.message}`);
+          }
         } else {
           synced++;
-          existingKeys.add(key);
+          existingMessageIds.add(gmailMessageId);
         }
       } catch (err) {
-        errors.push(`Error processing message ${id}: ${err instanceof Error ? err.message : "Unknown"}`);
+        errors.push(`Error processing message ${gmailMessageId}: ${err instanceof Error ? err.message : "Unknown"}`);
       }
     }
 
