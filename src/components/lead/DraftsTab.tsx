@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle } from "lucide-react";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle, RefreshCw } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
@@ -362,6 +362,34 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     setGeneratedContent("");
     setGeneratedType("");
     setCurrentNurtureSubject("");
+  };
+
+  // Regenerate current nurture email (same email number, fresh content)
+  const regenerateCurrentNurtureEmail = async () => {
+    if (!generatedType.startsWith("nurture_")) return;
+    
+    const emailNumber = parseInt(generatedType.replace("nurture_", ""), 10);
+    const kb = await getKnowledgeChunks(true);
+    
+    // Use existing generated emails for context (not including the one being regenerated)
+    const previousSummary = nurtureEmailsGenerated.length > 0
+      ? nurtureEmailsGenerated
+          .map((e, i) => `Email ${i + 1}:\nSubject: "${e.subject}"\nBody: ${e.body}`)
+          .join("\n\n---\n\n")
+      : "None - this is the first email in the sequence.";
+
+    const result = await runTask("nurture_email_single", {
+      lead_context: buildLeadContext(),
+      theme: nurtureTheme,
+      email_number: emailNumber,
+      previous_emails: previousSummary,
+      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
+    });
+
+    if (result.ok && result.content) {
+      setGeneratedContent(result.content);
+      // Keep the same subject (user may have customized it)
+    }
   };
 
   // Shorten Draft
@@ -889,6 +917,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                   <Copy className="h-4 w-4 mr-1" />
                   Copy
                 </Button>
+                {generatedType.startsWith("nurture_") && (
+                  <Button variant="outline" size="sm" onClick={regenerateCurrentNurtureEmail} disabled={isGenerating}>
+                    {isGenerating ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                    Regenerate
+                  </Button>
+                )}
                 {generatedType.startsWith("nurture_") ? (
                   <Button size="sm" onClick={saveNurtureEmailAndContinue}>
                     <Save className="h-4 w-4 mr-1" />
