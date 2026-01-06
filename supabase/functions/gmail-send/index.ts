@@ -172,6 +172,7 @@ serve(async (req) => {
           from_email: connection.gmail_email,
           to_email: to,
           body_text: body,
+          gmail_message_id: sendData.id,
         });
 
       // Update lead's last_activity_at

@@ -224,7 +224,7 @@ export async function updateLeadPrefs(leadId: string, form: UpdateLeadPrefsInput
 
 export type InteractionItem = Pick<Interaction,
   'id' | 'lead_id' | 'type' | 'source' | 'occurred_at' | 'subject' |
-  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy'
+  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id'
 >;
 
 export async function getLeadInteractions(leadId: string): Promise<InteractionItem[]> {
@@ -232,7 +232,7 @@ export async function getLeadInteractions(leadId: string): Promise<InteractionIt
 
   const { data, error } = await supabase
     .from('interactions')
-    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy')
+    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false })
     .limit(100);
