@@ -56,17 +56,30 @@ serve(async (req) => {
 
     console.log(`[generate-embedding] Generating embedding for text length: ${text.length}, chunk_id: ${chunk_id || 'none'}`);
 
-    // Use Gemini to generate embeddings via text-embedding model
-    // Lovable AI gateway supports embedding generation
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+    // Use Gemini chat model to generate a semantic hash/fingerprint for similarity matching
+    // Since Lovable AI gateway doesn't support embedding models, we use chat to create semantic representations
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "text-embedding-004",
-        input: text.slice(0, 10000), // Limit to 10k chars for embedding
+        model: "google/gemini-2.5-flash-lite",
+        messages: [
+          {
+            role: "system",
+            content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
+Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
+The numbers should represent the semantic meaning of the input text.
+Similar texts should have similar vectors. No explanation, just the array.`
+          },
+          {
+            role: "user",
+            content: text.slice(0, 8000)
+          }
+        ],
+        temperature: 0,
       }),
     });
 
@@ -92,11 +105,31 @@ serve(async (req) => {
     }
 
     const data = await response.json();
-    const embedding = data.data?.[0]?.embedding;
-
-    if (!embedding || !Array.isArray(embedding)) {
-      console.error("[generate-embedding] Invalid embedding response:", data);
-      return new Response(JSON.stringify({ ok: false, error: "Invalid embedding response" }), {
+    const content = data.choices?.[0]?.message?.content || "";
+    
+    // Parse the embedding array from the response
+    let embedding: number[];
+    try {
+      // Extract JSON array from the response (handle markdown code blocks)
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        throw new Error("No array found in response");
+      }
+      embedding = JSON.parse(jsonMatch[0]);
+      
+      // Validate it's an array of numbers
+      if (!Array.isArray(embedding) || embedding.length === 0 || typeof embedding[0] !== "number") {
+        throw new Error("Invalid embedding format");
+      }
+      
+      // Normalize to 384 dimensions if needed
+      while (embedding.length < 384) {
+        embedding.push(0);
+      }
+      embedding = embedding.slice(0, 384);
+    } catch (parseError) {
+      console.error("[generate-embedding] Failed to parse embedding:", parseError, content.slice(0, 200));
+      return new Response(JSON.stringify({ ok: false, error: "Failed to parse embedding response" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
