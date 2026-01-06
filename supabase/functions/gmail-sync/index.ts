@@ -6,9 +6,10 @@ function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("Origin") || "";
   const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
   
-  // In development, allow localhost origins
+  // In development, allow localhost origins; in production, allow Lovable project domains
   const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
-  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || allowedOrigins.includes("*");
+  const isLovableProject = origin.endsWith(".lovableproject.com");
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || allowedOrigins.includes("*");
   
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "",
