@@ -41,16 +41,34 @@ export function useAITask() {
     setError(null);
 
     try {
-      const { data, error: fnError } = await supabase.functions.invoke("ai_task", {
-        body: { task, payload },
-      });
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
 
-      if (fnError) {
-        const errorMsg = fnError.message || "Failed to run AI task";
+      if (!accessToken) {
+        const errorMsg = "Not authenticated";
         setError(errorMsg);
         toast.error(errorMsg);
         return { ok: false, error: errorMsg };
       }
+
+      const response = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ task, payload }),
+      });
+
+      if (!response.ok) {
+        const errorMsg = `Failed to run AI task: ${response.status}`;
+        setError(errorMsg);
+        toast.error(errorMsg);
+        return { ok: false, error: errorMsg };
+      }
+
+      const data = await response.json();
 
       if (!data.ok) {
         const errorMsg = data.error || "AI task failed";
