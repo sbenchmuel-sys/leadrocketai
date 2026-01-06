@@ -40,13 +40,15 @@ serve(async (req) => {
     );
   }
 
+  // Extract the JWT token from the Authorization header
+  const jwt = authHeader.replace("Bearer ", "");
+  
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
+  const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  // Pass the JWT directly to getUser for proper validation
+  const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
   if (authError || !user) {
     console.error("[parse-document] Unauthorized:", authError?.message);
     return new Response(
