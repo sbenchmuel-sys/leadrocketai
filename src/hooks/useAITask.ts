@@ -20,6 +20,7 @@ export type AITaskType =
   | "pre_email_4_breakup"
   | "post_meeting_followup_personalized"
   | "nurture_sequence"
+  | "nurture_email_single"
   | "shorten_draft";
 
 export interface AITaskResponse {

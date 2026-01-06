@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LeadDetail, getLeadDrafts, saveDraft, getKnowledgeChunks, getLeadInteractions, appendLeadMilestones, MilestoneItem, saveNurtureSequenceDrafts, updateDraftStatus } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadDrafts, saveDraft, getKnowledgeChunks, getLeadInteractions, appendLeadMilestones, MilestoneItem, updateDraftStatus } from "@/lib/supabaseQueries";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { EmailTemplateSelector } from "@/components/lead/EmailTemplateSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { NurtureSequenceOutput } from "@/schemas/llmOutputSchemas";
 
 interface DraftsTabProps {
   lead: LeadDetail;
@@ -64,10 +63,11 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [editableCustomerEmail, setEditableCustomerEmail] = useState("");
   const [isSavingMilestones, setIsSavingMilestones] = useState(false);
 
-  // Nurture sequence state
+  // Nurture sequence state - progressive generation
   const [nurtureTheme, setNurtureTheme] = useState<NurtureTheme>("use_case");
   const [nurtureCadence, setNurtureCadence] = useState<NurtureCadence>("biweekly");
-  const [nurtureResult, setNurtureResult] = useState<NurtureSequenceOutput | null>(null);
+  const [nurtureEmailsGenerated, setNurtureEmailsGenerated] = useState<{ subject: string; body: string }[]>([]);
+  const [currentNurtureSubject, setCurrentNurtureSubject] = useState("");
 
   // Shorten draft state
   const [shortenInput, setShortenInput] = useState("");
@@ -282,42 +282,86 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
   };
 
-  // Nurture Sequence - saves as individual drafts
-  const generateNurtureSequence = async () => {
+  // Nurture Sequence - Progressive single email generation
+  const generateNextNurtureEmail = async () => {
+    const emailNumber = nurtureEmailsGenerated.length + 1;
+    
+    if (emailNumber > 3) {
+      toast.error("Maximum 3 emails in sequence");
+      return;
+    }
+
     const kb = await getKnowledgeChunks(true);
-    const result = await runTask("nurture_sequence", {
+    
+    // Build previous emails summary for context
+    const previousSummary = nurtureEmailsGenerated.length > 0
+      ? nurtureEmailsGenerated
+          .map((e, i) => `Email ${i + 1}:\nSubject: "${e.subject}"\nBody: ${e.body}`)
+          .join("\n\n---\n\n")
+      : "None - this is the first email in the sequence.";
+
+    const result = await runTask("nurture_email_single", {
       lead_context: buildLeadContext(),
       theme: nurtureTheme,
-      cadence: nurtureCadence,
+      email_number: emailNumber,
+      previous_emails: previousSummary,
       knowledge_context: kb.map((k) => k.content).join("\n---\n"),
     });
 
     if (result.ok && result.content) {
-      try {
-        const parsed = JSON.parse(result.content) as NurtureSequenceOutput;
-        
-        // Map to required format
-        const emails = parsed.emails.map(e => ({
-          email_number: e.email_number!,
-          subject: e.subject!,
-          body: e.body!,
-        }));
-        
-        // Save each email as individual draft
-        await saveNurtureSequenceDrafts(
-          lead.id,
-          emails,
-          nurtureTheme,
-          nurtureCadence
-        );
-        
-        toast.success(`Nurture sequence created as ${emails.length} individual drafts.`);
-        setNurtureResult(null); // Clear any previous result
-        loadDrafts(); // Reload to show new drafts
-      } catch {
-        toast.error("Failed to parse nurture sequence");
-      }
+      setGeneratedContent(result.content);
+      setGeneratedType(`nurture_${emailNumber}`);
+      // Default subject
+      const themeLabel = {
+        technical: "Technical Deep Dive",
+        use_case: "Use Case",
+        roi: "Business Value",
+        compliance: "Compliance Update",
+      }[nurtureTheme];
+      setCurrentNurtureSubject(`${themeLabel} ${emailNumber}/3 - ${lead.company}`);
     }
+  };
+
+  // Save current nurture email and add to sequence
+  const saveNurtureEmailAndContinue = async () => {
+    if (!generatedContent || !generatedType.startsWith("nurture_")) return;
+    
+    const emailNumber = parseInt(generatedType.replace("nurture_", ""), 10);
+    
+    try {
+      await saveDraft(lead.id, {
+        channel: "email",
+        draft_type: "nurture",
+        subject: currentNurtureSubject,
+        body_text: generatedContent,
+        to_recipient: lead.email,
+        step_key: `nurture_${emailNumber}`,
+        nurture_theme: nurtureTheme,
+        nurture_cadence: nurtureCadence,
+      });
+      
+      // Add to generated emails for context
+      setNurtureEmailsGenerated([
+        ...nurtureEmailsGenerated,
+        { subject: currentNurtureSubject, body: generatedContent },
+      ]);
+      
+      toast.success(`Email ${emailNumber} saved!`);
+      setGeneratedContent("");
+      setGeneratedType("");
+      setCurrentNurtureSubject("");
+      loadDrafts();
+    } catch {
+      toast.error("Failed to save email");
+    }
+  };
+
+  // Reset nurture sequence
+  const resetNurtureSequence = () => {
+    setNurtureEmailsGenerated([]);
+    setGeneratedContent("");
+    setGeneratedType("");
+    setCurrentNurtureSubject("");
   };
 
   // Shorten Draft
@@ -686,13 +730,43 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
             {/* Nurture Tab */}
             <TabsContent value="nurture" className="space-y-4">
               <div className="border rounded-lg p-4 space-y-4">
-                <h4 className="text-sm font-medium">Nurture Email Sequence</h4>
-                <p className="text-xs text-muted-foreground">Generate a value-driven email sequence to maintain engagement over time</p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium">Nurture Email Sequence</h4>
+                    <p className="text-xs text-muted-foreground">Generate 3 value-driven emails, one at a time</p>
+                  </div>
+                  {nurtureEmailsGenerated.length > 0 && (
+                    <Button variant="ghost" size="sm" onClick={resetNurtureSequence}>
+                      Reset
+                    </Button>
+                  )}
+                </div>
                 
+                {/* Progress indicator */}
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3].map((num) => (
+                    <div
+                      key={num}
+                      className={`flex-1 h-2 rounded-full ${
+                        num <= nurtureEmailsGenerated.length
+                          ? "bg-primary"
+                          : "bg-muted"
+                      }`}
+                    />
+                  ))}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {nurtureEmailsGenerated.length}/3 emails
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Theme</label>
-                    <Select value={nurtureTheme} onValueChange={(v) => setNurtureTheme(v as NurtureTheme)}>
+                    <Select 
+                      value={nurtureTheme} 
+                      onValueChange={(v) => setNurtureTheme(v as NurtureTheme)}
+                      disabled={nurtureEmailsGenerated.length > 0}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -706,7 +780,11 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Cadence</label>
-                    <Select value={nurtureCadence} onValueChange={(v) => setNurtureCadence(v as NurtureCadence)}>
+                    <Select 
+                      value={nurtureCadence} 
+                      onValueChange={(v) => setNurtureCadence(v as NurtureCadence)}
+                      disabled={nurtureEmailsGenerated.length > 0}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -719,20 +797,46 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                   </div>
                 </div>
 
-                <Button onClick={generateNurtureSequence} disabled={isGenerating} className="w-full">
-                  {isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
-                  Generate 3-6 Email Nurture Sequence
-                </Button>
-              </div>
+                {nurtureEmailsGenerated.length < 3 && (
+                  <Button 
+                    onClick={generateNextNurtureEmail} 
+                    disabled={isGenerating || generatedType.startsWith("nurture_")} 
+                    className="w-full"
+                  >
+                    {isGenerating ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 mr-2" />
+                    )}
+                    Generate Email {nurtureEmailsGenerated.length + 1}
+                    {nurtureEmailsGenerated.length === 0 && " (Intro)"}
+                    {nurtureEmailsGenerated.length === 1 && " (Follow-up)"}
+                    {nurtureEmailsGenerated.length === 2 && " (Final)"}
+                  </Button>
+                )}
 
-              {/* Nurture Results - no longer shown inline, saved as drafts */}
-              {nurtureResult && (
-                <div className="border rounded-lg p-4 bg-muted/30">
-                  <p className="text-sm text-muted-foreground">
-                    Nurture sequence saved! Check the "Saved Drafts" section below.
-                  </p>
-                </div>
-              )}
+                {nurtureEmailsGenerated.length === 3 && (
+                  <div className="text-center py-2">
+                    <Badge variant="outline" className="text-primary">
+                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                      Sequence Complete
+                    </Badge>
+                  </div>
+                )}
+
+                {/* Show generated emails in sequence */}
+                {nurtureEmailsGenerated.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t">
+                    <h5 className="text-xs font-medium text-muted-foreground">Saved in sequence:</h5>
+                    {nurtureEmailsGenerated.map((email, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm p-2 bg-muted/30 rounded">
+                        <Badge variant="secondary" className="text-xs">{i + 1}</Badge>
+                        <span className="truncate">{email.subject}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </TabsContent>
 
             {/* Utility Tab */}
@@ -785,15 +889,35 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                   <Copy className="h-4 w-4 mr-1" />
                   Copy
                 </Button>
-                <Button size="sm" onClick={() => saveAsDraft()}>
-                  <Save className="h-4 w-4 mr-1" />
-                  Save Draft
-                </Button>
+                {generatedType.startsWith("nurture_") ? (
+                  <Button size="sm" onClick={saveNurtureEmailAndContinue}>
+                    <Save className="h-4 w-4 mr-1" />
+                    Save & Continue
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => saveAsDraft()}>
+                    <Save className="h-4 w-4 mr-1" />
+                    Save Draft
+                  </Button>
+                )}
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {generatedSubject && (
+            {/* Show subject input for nurture emails */}
+            {generatedType.startsWith("nurture_") && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground">Subject</label>
+                <Input
+                  type="text"
+                  value={currentNurtureSubject}
+                  onChange={(e) => setCurrentNurtureSubject(e.target.value)}
+                  className="mt-1"
+                  placeholder="Enter email subject..."
+                />
+              </div>
+            )}
+            {generatedSubject && !generatedType.startsWith("nurture_") && (
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Subject</label>
                 <Input

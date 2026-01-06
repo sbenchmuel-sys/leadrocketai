@@ -12,6 +12,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "pre_email_2_followup",
   "post_meeting_followup_personalized",
   "nurture_sequence",
+  "nurture_email_single",
 ];
 
 // Function to get semantic knowledge context
@@ -540,6 +541,38 @@ Target Length:
 
 OUTPUT
 Return shortened draft text only.`,
+
+  // Single Nurture Email (progressive generation)
+  nurture_email_single: `ROLE
+Generate the next email in a nurture sequence.
+
+GOAL
+Create one value-driven follow-up email that builds on previous emails in the sequence.
+
+CONSTRAINTS
+- 100–180 words
+- Educational, credibility-building
+- No pressure, no hard sell
+- ONE value point and ONE soft CTA
+- Must feel connected to the previous emails (not repetitive)
+- Do NOT repeat talking points from previous emails
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Theme: {{THEME}} (technical|use_case|roi|compliance)
+
+Email Number: {{EMAIL_NUMBER}} (1, 2, or 3)
+
+Previous Emails in Sequence:
+{{PREVIOUS_EMAILS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return ONLY the email body text. No JSON. No markdown. No subject line.`,
 };
 
 // Tasks that require the pro model
@@ -549,6 +582,7 @@ const PRO_MODEL_TASKS = [
   "extract_deal_factors",
   "recommend_next_steps",
   "nurture_sequence",
+  "nurture_email_single",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
