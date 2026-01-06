@@ -71,30 +71,32 @@ export function GmailSyncButton({
       <div className="flex items-center gap-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant={variant}
-              size={size}
-              onClick={handleSync}
-              disabled={isSyncing}
-              className={justSynced ? "border-green-500/50 text-green-600" : ""}
-            >
-              {isSyncing ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Syncing...
-                </>
-              ) : justSynced ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                  Synced!
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Sync Gmail
-                </>
-              )}
-            </Button>
+            <span className="inline-flex">
+              <Button
+                variant={variant}
+                size={size}
+                onClick={handleSync}
+                disabled={isSyncing}
+                className={justSynced ? "border-green-500/50 text-green-600" : ""}
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Syncing...
+                  </>
+                ) : justSynced ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Synced!
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Sync Gmail
+                  </>
+                )}
+              </Button>
+            </span>
           </TooltipTrigger>
           <TooltipContent>
             <p>{lastSyncText}</p>
