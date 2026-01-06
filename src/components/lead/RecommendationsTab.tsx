@@ -77,8 +77,17 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
 
   const analyzeDeal = async () => {
     setIsAnalyzing(true);
+    let hasAnyData = false;
+    
     try {
       const interactions = await getLeadInteractions(lead.id);
+      
+      if (interactions.length === 0) {
+        toast.warning("No interactions found. Add emails or notes before analyzing.");
+        setIsAnalyzing(false);
+        return;
+      }
+      
       const interactionsText = interactions
         .map((i) => `[${i.type}] ${i.subject || ""}: ${i.body_text.slice(0, 500)}`)
         .join("\n---\n");
@@ -93,10 +102,16 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let parsedMilestones: { milestones: Milestone[]; risks: Risk[] } = { milestones: [], risks: [] };
       if (milestonesResult.ok && milestonesResult.content) {
         try {
-          parsedMilestones = JSON.parse(extractJsonFromAIContent(milestonesResult.content));
-        } catch {
+          const extracted = extractJsonFromAIContent(milestonesResult.content);
+          console.log("[AI Analysis] Milestones raw:", extracted);
+          parsedMilestones = JSON.parse(extracted);
+          hasAnyData = true;
+        } catch (e) {
+          console.error("[AI Analysis] Milestones parse error:", e, milestonesResult.content);
           toast.error("Couldn't parse milestones/risks result");
         }
+      } else if (!milestonesResult.ok) {
+        toast.error(milestonesResult.error || "Failed to extract milestones");
       }
 
       // Step 2: Extract deal factors
@@ -109,10 +124,16 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let parsedFactors: DealFactors | null = null;
       if (factorsResult.ok && factorsResult.content) {
         try {
-          parsedFactors = JSON.parse(extractJsonFromAIContent(factorsResult.content));
-        } catch {
+          const extracted = extractJsonFromAIContent(factorsResult.content);
+          console.log("[AI Analysis] Deal factors raw:", extracted);
+          parsedFactors = JSON.parse(extracted);
+          hasAnyData = true;
+        } catch (e) {
+          console.error("[AI Analysis] Deal factors parse error:", e, factorsResult.content);
           toast.error("Couldn't parse deal factors result");
         }
+      } else if (!factorsResult.ok) {
+        toast.error(factorsResult.error || "Failed to extract deal factors");
       }
 
       // Step 3: Get recommendations
@@ -129,14 +150,27 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       };
       if (recsResult.ok && recsResult.content) {
         try {
-          parsedRecs = JSON.parse(extractJsonFromAIContent(recsResult.content));
-        } catch {
+          const extracted = extractJsonFromAIContent(recsResult.content);
+          console.log("[AI Analysis] Recommendations raw:", extracted);
+          parsedRecs = JSON.parse(extracted);
+          hasAnyData = true;
+        } catch (e) {
+          console.error("[AI Analysis] Recommendations parse error:", e, recsResult.content);
           toast.error("Couldn't parse recommendations result");
         }
+      } else if (!recsResult.ok) {
+        toast.error(recsResult.error || "Failed to get recommendations");
+      }
+
+      // Only update lead if we have at least some valid data
+      if (!hasAnyData) {
+        toast.error("Analysis failed - no valid data received from AI");
+        setIsAnalyzing(false);
+        return;
       }
 
       // Update lead with all analysis
-      await supabase
+      const { error: updateError } = await supabase
         .from("leads")
         .update({
           milestones_json: parsedMilestones.milestones as unknown as Json,
@@ -149,11 +183,16 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         })
         .eq("id", lead.id);
 
-      toast.success("Analysis complete!");
-      onUpdate();
+      if (updateError) {
+        console.error("[AI Analysis] DB update error:", updateError);
+        toast.error("Failed to save analysis results");
+      } else {
+        toast.success("Analysis complete!");
+        onUpdate();
+      }
     } catch (err) {
       toast.error("Analysis failed");
-      console.error(err);
+      console.error("[AI Analysis] Error:", err);
     } finally {
       setIsAnalyzing(false);
     }
