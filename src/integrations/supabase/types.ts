@@ -198,11 +198,15 @@ export type Database = {
       leads: {
         Row: {
           company: string
+          country: string | null
           created_at: string
           deal_factors_json: Json | null
           deal_outlook: string | null
           email: string
           id: string
+          industry: string | null
+          initial_message: string | null
+          job_title: string | null
           last_activity_at: string
           last_ai_run_at: string | null
           meeting_link: string | null
@@ -212,6 +216,7 @@ export type Database = {
           next_step_reason: string | null
           owner_user_id: string
           personal_notes: string | null
+          phone: string | null
           pref_email_drafts: boolean
           pref_linkedin_drafts: boolean
           risks_json: Json | null
@@ -220,11 +225,15 @@ export type Database = {
         }
         Insert: {
           company: string
+          country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
           deal_outlook?: string | null
           email: string
           id?: string
+          industry?: string | null
+          initial_message?: string | null
+          job_title?: string | null
           last_activity_at?: string
           last_ai_run_at?: string | null
           meeting_link?: string | null
@@ -234,6 +243,7 @@ export type Database = {
           next_step_reason?: string | null
           owner_user_id: string
           personal_notes?: string | null
+          phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null
@@ -242,11 +252,15 @@ export type Database = {
         }
         Update: {
           company?: string
+          country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
           deal_outlook?: string | null
           email?: string
           id?: string
+          industry?: string | null
+          initial_message?: string | null
+          job_title?: string | null
           last_activity_at?: string
           last_ai_run_at?: string | null
           meeting_link?: string | null
@@ -256,6 +270,7 @@ export type Database = {
           next_step_reason?: string | null
           owner_user_id?: string
           personal_notes?: string | null
+          phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null

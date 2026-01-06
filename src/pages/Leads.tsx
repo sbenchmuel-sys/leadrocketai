@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Plus, Search } from "lucide-react";
 import { format } from "date-fns";
+import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 
 export default function Leads() {
   const [leads, setLeads] = useState<LeadListItem[]>([]);
@@ -79,13 +80,15 @@ export default function Leads() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-foreground">Leads</h1>
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Lead
-            </Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2">
+          <LeadImportDialog onImportComplete={loadLeads} />
+          <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Lead
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add New Lead</DialogTitle>
@@ -145,6 +148,7 @@ export default function Leads() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <Card>
