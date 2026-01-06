@@ -247,15 +247,33 @@ export default function Knowledge() {
 
     setIsUploading(true);
     try {
-      // Step 1: Parse the document
+      // Get current session for auth header
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      
+      if (!accessToken) {
+        throw new Error("You must be logged in to upload documents");
+      }
+
+      // Step 1: Parse the document using direct fetch (supabase.functions.invoke doesn't handle FormData correctly)
       const formData = new FormData();
       formData.append("file", file);
 
-      const { data: parseData, error: parseError } = await supabase.functions.invoke("parse-document", {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const parseResponse = await fetch(`${supabaseUrl}/functions/v1/parse-document`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: formData,
       });
 
-      if (parseError) throw parseError;
+      if (!parseResponse.ok) {
+        const errorData = await parseResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to parse document: ${parseResponse.status}`);
+      }
+
+      const parseData = await parseResponse.json();
       if (!parseData.ok) throw new Error(parseData.error || "Failed to parse document");
 
       // Step 2: Process the document with smart chunking and embeddings
