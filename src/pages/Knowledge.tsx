@@ -47,6 +47,7 @@ export default function Knowledge() {
   const [isUploading, setIsUploading] = useState(false);
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
   const [reprocessingDocs, setReprocessingDocs] = useState<Set<string>>(new Set());
+  const [isReindexingAll, setIsReindexingAll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadChunks = async () => {
@@ -166,15 +167,17 @@ export default function Knowledge() {
     }
   };
 
-  const handleReprocess = async (documentId: string) => {
-    setReprocessingDocs(prev => new Set(prev).add(documentId));
+  const handleReprocess = async (documentId: string | null, chunkId?: string) => {
+    const key = documentId || chunkId || "";
+    setReprocessingDocs(prev => new Set(prev).add(key));
     
     try {
-      // Get all chunks for this document
-      const docChunks = chunks.filter(c => c.document_id === documentId);
+      // Get chunks to process - by document_id or by individual chunk id
+      const docChunks = documentId 
+        ? chunks.filter(c => c.document_id === documentId)
+        : chunks.filter(c => c.id === chunkId);
       
       for (const chunk of docChunks) {
-        // Generate embedding for each chunk
         await supabase.functions.invoke("generate-embedding", {
           body: {
             text: chunk.content,
@@ -190,11 +193,38 @@ export default function Knowledge() {
     } finally {
       setReprocessingDocs(prev => {
         const next = new Set(prev);
-        next.delete(documentId);
+        next.delete(key);
         return next;
       });
     }
   };
+
+  const handleReindexAll = async () => {
+    setIsReindexingAll(true);
+    try {
+      const unprocessedChunks = chunks.filter(c => c.processing_status !== "completed");
+      
+      let processed = 0;
+      for (const chunk of unprocessedChunks) {
+        await supabase.functions.invoke("generate-embedding", {
+          body: {
+            text: chunk.content,
+            chunk_id: chunk.id,
+          },
+        });
+        processed++;
+      }
+      
+      toast.success(`Re-indexed ${processed} chunks`);
+      loadChunks();
+    } catch (err) {
+      toast.error("Failed to re-index all documents");
+    } finally {
+      setIsReindexingAll(false);
+    }
+  };
+
+  const unprocessedCount = documentGroups.filter(g => g.processedChunks < g.totalChunks).length;
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -283,6 +313,20 @@ export default function Knowledge() {
             onChange={handleFileUpload}
             className="hidden"
           />
+          {unprocessedCount > 0 && (
+            <Button
+              variant="outline"
+              onClick={handleReindexAll}
+              disabled={isReindexingAll}
+            >
+              {isReindexingAll ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Re-index All ({unprocessedCount})
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
@@ -454,11 +498,11 @@ export default function Knowledge() {
                         </div>
                         
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          {group.document_id && !isFullyProcessed && (
+                          {!isFullyProcessed && (
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => handleReprocess(group.document_id!)}
+                              onClick={() => handleReprocess(group.document_id, group.chunks[0]?.id)}
                               disabled={isReprocessing}
                               title="Reprocess embeddings"
                             >
