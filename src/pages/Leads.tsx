@@ -212,6 +212,7 @@ export default function Leads() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
+                    <TableHead>Country</TableHead>
                     <TableHead>Company</TableHead>
                     <TableHead>Strategy</TableHead>
                     <TableHead>Status</TableHead>
@@ -231,6 +232,7 @@ export default function Leads() {
                           {lead.name}
                         </Link>
                       </TableCell>
+                      <TableCell className="text-muted-foreground">{lead.country || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{lead.company}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{lead.strategy}</Badge>
