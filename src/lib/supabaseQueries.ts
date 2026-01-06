@@ -218,6 +218,17 @@ export async function updateLeadPrefs(leadId: string, form: UpdateLeadPrefsInput
   return data;
 }
 
+export async function deleteLead(leadId: string): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { error } = await supabase
+    .from('leads')
+    .delete()
+    .eq('id', leadId);
+
+  if (error) throw error;
+}
+
 // ============================================
 // INTERACTIONS QUERIES
 // ============================================
