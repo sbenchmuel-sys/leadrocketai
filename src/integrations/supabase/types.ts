@@ -153,28 +153,40 @@ export type Database = {
       kb_chunks: {
         Row: {
           allowed_customer_facing: boolean
+          chunk_index: number | null
           content: string
           created_at: string
+          document_id: string | null
+          embedding: string | null
           id: string
           owner_user_id: string | null
+          processing_status: string | null
           source: string | null
           title: string | null
         }
         Insert: {
           allowed_customer_facing?: boolean
+          chunk_index?: number | null
           content: string
           created_at?: string
+          document_id?: string | null
+          embedding?: string | null
           id?: string
           owner_user_id?: string | null
+          processing_status?: string | null
           source?: string | null
           title?: string | null
         }
         Update: {
           allowed_customer_facing?: boolean
+          chunk_index?: number | null
           content?: string
           created_at?: string
+          document_id?: string | null
+          embedding?: string | null
           id?: string
           owner_user_id?: string | null
+          processing_status?: string | null
           source?: string | null
           title?: string | null
         }
@@ -314,6 +326,21 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      match_knowledge_chunks: {
+        Args: {
+          filter_customer_facing?: boolean
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          id: string
+          similarity: number
+          source: string
+          title: string
+        }[]
       }
     }
     Enums: {
