@@ -15,5 +15,8 @@ verify_jwt = false
 [functions.gmail-send]
 verify_jwt = false
 
+[functions.gmail-background-sync]
+verify_jwt = false
+
 [functions.parse-document]
 verify_jwt = false
