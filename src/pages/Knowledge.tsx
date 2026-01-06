@@ -199,28 +199,71 @@ export default function Knowledge() {
     }
   };
 
+  const [reindexProgress, setReindexProgress] = useState<{ current: number; total: number } | null>(null);
+
   const handleReindexAll = async () => {
     setIsReindexingAll(true);
     try {
       const unprocessedChunks = chunks.filter(c => c.processing_status !== "completed");
+      const total = unprocessedChunks.length;
       
-      let processed = 0;
-      for (const chunk of unprocessedChunks) {
-        await supabase.functions.invoke("generate-embedding", {
-          body: {
-            text: chunk.content,
-            chunk_id: chunk.id,
-          },
-        });
-        processed++;
+      if (total === 0) {
+        toast.info("All chunks are already indexed");
+        return;
       }
       
-      toast.success(`Re-indexed ${processed} chunks`);
+      setReindexProgress({ current: 0, total });
+      
+      let processed = 0;
+      let failed = 0;
+      const DELAY_BETWEEN_CHUNKS_MS = 1000; // Rate limiting protection
+      
+      for (let i = 0; i < unprocessedChunks.length; i++) {
+        const chunk = unprocessedChunks[i];
+        
+        // Add delay between calls to avoid rate limiting (skip first)
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_CHUNKS_MS));
+        }
+        
+        setReindexProgress({ current: i + 1, total });
+        
+        try {
+          const { data, error } = await supabase.functions.invoke("generate-embedding", {
+            body: {
+              text: chunk.content,
+              chunk_id: chunk.id,
+            },
+          });
+          
+          if (error || !data?.ok) {
+            console.error(`Failed to index chunk ${chunk.id}:`, error || data?.error);
+            failed++;
+            
+            // If rate limited, add extra delay
+            if (data?.error?.includes("Rate limit")) {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+          } else {
+            processed++;
+          }
+        } catch (err) {
+          console.error(`Error indexing chunk ${chunk.id}:`, err);
+          failed++;
+        }
+      }
+      
+      if (failed > 0) {
+        toast.warning(`Re-indexed ${processed} chunks, ${failed} failed`);
+      } else {
+        toast.success(`Re-indexed ${processed} chunks`);
+      }
       loadChunks();
     } catch (err) {
-      toast.error("Failed to re-index all documents");
+      toast.error("Failed to re-index documents");
     } finally {
       setIsReindexingAll(false);
+      setReindexProgress(null);
     }
   };
 
@@ -338,11 +381,18 @@ export default function Knowledge() {
               disabled={isReindexingAll}
             >
               {isReindexingAll ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {reindexProgress 
+                    ? `${reindexProgress.current}/${reindexProgress.total}` 
+                    : "Processing..."}
+                </>
               ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Re-index All ({unprocessedCount})
+                </>
               )}
-              Re-index All ({unprocessedCount})
             </Button>
           )}
           <Button
