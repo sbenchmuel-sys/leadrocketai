@@ -27,7 +27,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Plus, Search, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 
@@ -42,6 +43,7 @@ export default function Leads() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [newLead, setNewLead] = useState<CreateLeadInput>({
     name: "",
     company: "",
@@ -96,6 +98,30 @@ export default function Leads() {
       newSet.add(id);
     }
     setSelectedIds(newSet);
+  };
+
+  const handleBulkSync = async () => {
+    if (selectedIds.size === 0) return;
+    setIsSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("gmail-bulk-sync", {
+        body: { leadIds: Array.from(selectedIds) },
+      });
+
+      if (error) throw error;
+
+      if (data?.ok) {
+        toast.success(`Synced ${data.totalSynced} emails for ${data.leadsProcessed} lead(s)`);
+        setSelectedIds(new Set());
+        loadLeads();
+      } else {
+        toast.error(data?.error || "Sync failed");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to sync emails");
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const loadLeads = async () => {
@@ -235,14 +261,25 @@ export default function Leads() {
               />
             </div>
             {selectedIds.size > 0 && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setShowBulkDeleteDialog(true)}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete ({selectedIds.size})
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBulkSync}
+                  disabled={isSyncing}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
+                  {isSyncing ? "Syncing..." : `Sync Gmail (${selectedIds.size})`}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowBulkDeleteDialog(true)}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete ({selectedIds.size})
+                </Button>
+              </>
             )}
           </div>
         </CardHeader>
