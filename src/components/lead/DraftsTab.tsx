@@ -69,12 +69,20 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   }, [lead.id]);
 
   const buildLeadContext = () => {
-    return `Name: ${lead.name}
-Company: ${lead.company}
-Email: ${lead.email}
-Strategy: ${lead.strategy}
-Status: ${lead.status}
-${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
+    const parts = [
+      `Name: ${lead.name}`,
+      `Company: ${lead.company}`,
+      `Email: ${lead.email}`,
+      lead.job_title && `Job Title: ${lead.job_title}`,
+      lead.industry && `Industry: ${lead.industry}`,
+      lead.country && `Country: ${lead.country}`,
+      lead.phone && `Phone: ${lead.phone}`,
+      `Strategy: ${lead.strategy}`,
+      `Status: ${lead.status}`,
+      lead.initial_message && `Initial Message from Lead: ${lead.initial_message}`,
+      lead.personal_notes && `Notes: ${lead.personal_notes}`,
+    ].filter(Boolean);
+    return parts.join("\n");
   };
 
   const generateIntroEmail = async () => {
@@ -115,9 +123,14 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
   const generateLinkedInConnect = async () => {
     const result = await runTask("linkedin_connect", {
       prospect_name: lead.name,
-      title: "",
+      title: lead.job_title || "",
       company: lead.company,
-      context: lead.personal_notes || `B2B sales outreach for ${lead.company}`,
+      context: [
+        lead.industry && `Industry: ${lead.industry}`,
+        lead.country && `Location: ${lead.country}`,
+        lead.initial_message && `Their message: ${lead.initial_message}`,
+        lead.personal_notes && `Notes: ${lead.personal_notes}`,
+      ].filter(Boolean).join(". ") || `B2B sales outreach for ${lead.company}`,
     });
 
     if (result.ok && result.content) {
@@ -130,9 +143,14 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
     const kb = await getKnowledgeChunks(true);
     const result = await runTask("linkedin_followup", {
       prospect_name: lead.name,
-      title: "",
+      title: lead.job_title || "",
       company: lead.company,
-      context: lead.personal_notes || `B2B sales outreach for ${lead.company}`,
+      context: [
+        lead.industry && `Industry: ${lead.industry}`,
+        lead.country && `Location: ${lead.country}`,
+        lead.initial_message && `Their message: ${lead.initial_message}`,
+        lead.personal_notes && `Notes: ${lead.personal_notes}`,
+      ].filter(Boolean).join(". ") || `B2B sales outreach for ${lead.company}`,
       knowledge_context: kb.map((k) => k.content).join("\n---\n"),
     });
 
