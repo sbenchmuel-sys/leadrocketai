@@ -1,6 +1,31 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
+// HTML escape function to prevent XSS
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Security headers for HTML responses
+function getSecureHtmlHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "text/html",
+    "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline';",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+  };
+}
+
+// Generic error page that doesn't leak details
+function errorPage(title: string, message: string): string {
+  return `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5;}.container{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}h1{color:#ef4444;margin-bottom:1rem;}p{color:#666;}</style></head><body><div class="container"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><p>This window will close automatically...</p></div><script>setTimeout(() => window.close(), 3000);</script></body></html>`;
+}
+
 serve(async (req) => {
   try {
     const url = new URL(req.url);
@@ -9,36 +34,38 @@ serve(async (req) => {
     const error = url.searchParams.get("error");
 
     if (error) {
-      console.error("[gmail-callback] OAuth error:", error);
-      return new Response(`<html><body><h1>Authentication Failed</h1><p>${error}</p><script>setTimeout(() => window.close(), 3000);</script></body></html>`, {
-        headers: { "Content-Type": "text/html" },
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] OAuth error ${errorId}:`, error);
+      return new Response(errorPage("Authentication Failed", "Unable to connect to Gmail. Please try again."), {
+        headers: getSecureHtmlHeaders(),
       });
     }
 
     if (!code || !state) {
-      return new Response(`<html><body><h1>Invalid Request</h1><p>Missing code or state</p></body></html>`, {
+      return new Response(errorPage("Invalid Request", "Missing required parameters."), {
         status: 400,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
     // Parse state
-    let stateData: { user_id: string; redirect_url: string; csrf: string };
+    let stateData: { user_id: string; redirect_url: string; csrf: string; origin?: string };
     try {
       stateData = JSON.parse(atob(state));
     } catch {
-      return new Response(`<html><body><h1>Invalid State</h1></body></html>`, {
+      return new Response(errorPage("Invalid Request", "Invalid state parameter."), {
         status: 400,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
     // Validate required state fields
     if (!stateData.user_id || !stateData.csrf) {
-      console.error("[gmail-callback] Missing user_id or csrf in state");
-      return new Response(`<html><body><h1>Invalid State Data</h1></body></html>`, {
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] Missing user_id or csrf in state, errorId: ${errorId}`);
+      return new Response(errorPage("Invalid Request", "Invalid state data."), {
         status: 400,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
@@ -58,21 +85,23 @@ serve(async (req) => {
       .single();
 
     if (stateError || !storedState) {
-      console.error("[gmail-callback] Invalid or missing CSRF token");
-      return new Response(`<html><body><h1>Invalid State Token</h1><p>OAuth session expired or invalid. Please try again.</p></body></html>`, {
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] Invalid or missing CSRF token, errorId: ${errorId}`);
+      return new Response(errorPage("Session Invalid", "OAuth session expired or invalid. Please try again."), {
         status: 400,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
     // Check if token has expired
     if (new Date(storedState.expires_at) < new Date()) {
-      console.error("[gmail-callback] CSRF token expired");
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] CSRF token expired, errorId: ${errorId}`);
       // Clean up expired token
       await supabase.from("oauth_states").delete().eq("id", storedState.id);
-      return new Response(`<html><body><h1>Session Expired</h1><p>OAuth session expired. Please try again.</p></body></html>`, {
+      return new Response(errorPage("Session Expired", "OAuth session expired. Please try again."), {
         status: 400,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
@@ -95,11 +124,12 @@ serve(async (req) => {
     });
 
     if (!tokenResponse.ok) {
+      const errorId = crypto.randomUUID();
       const errorText = await tokenResponse.text();
-      console.error("[gmail-callback] Token exchange failed:", errorText);
-      return new Response(`<html><body><h1>Token Exchange Failed</h1><p>${errorText}</p></body></html>`, {
+      console.error(`[gmail-callback] Token exchange failed, errorId: ${errorId}:`, errorText);
+      return new Response(errorPage("Connection Failed", "Failed to complete Gmail connection. Please try again."), {
         status: 500,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
@@ -107,10 +137,11 @@ serve(async (req) => {
     const { access_token, refresh_token, expires_in } = tokens;
 
     if (!access_token || !refresh_token) {
-      console.error("[gmail-callback] Missing tokens in response:", tokens);
-      return new Response(`<html><body><h1>Invalid Token Response</h1><p>Missing access or refresh token</p></body></html>`, {
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] Missing tokens in response, errorId: ${errorId}:`, tokens);
+      return new Response(errorPage("Connection Failed", "Invalid response from Gmail. Please try again."), {
         status: 500,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
@@ -120,10 +151,11 @@ serve(async (req) => {
     });
 
     if (!userInfoResponse.ok) {
-      console.error("[gmail-callback] Failed to get user info");
-      return new Response(`<html><body><h1>Failed to Get User Info</h1></body></html>`, {
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] Failed to get user info, errorId: ${errorId}`);
+      return new Response(errorPage("Connection Failed", "Failed to retrieve Gmail information. Please try again."), {
         status: 500,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
@@ -145,16 +177,33 @@ serve(async (req) => {
       }, { onConflict: "user_id" });
 
     if (upsertError) {
-      console.error("[gmail-callback] Failed to save connection:", upsertError);
-      return new Response(`<html><body><h1>Database Error</h1><p>${upsertError.message}</p></body></html>`, {
+      const errorId = crypto.randomUUID();
+      console.error(`[gmail-callback] Failed to save connection, errorId: ${errorId}:`, upsertError);
+      return new Response(errorPage("Connection Failed", "Failed to save Gmail connection. Please try again."), {
         status: 500,
-        headers: { "Content-Type": "text/html" },
+        headers: getSecureHtmlHeaders(),
       });
     }
 
     console.log(`[gmail-callback] Successfully connected Gmail for user ${stateData.user_id}: ${gmailEmail}`);
 
-    // Show success, notify opener via postMessage, and close the popup window
+    // Determine the allowed origin for postMessage
+    // Use the origin from state, or derive from redirect_url
+    let allowedOrigin = stateData.origin || "";
+    if (!allowedOrigin && stateData.redirect_url) {
+      try {
+        allowedOrigin = new URL(stateData.redirect_url).origin;
+      } catch {
+        // If redirect_url is not a valid URL, leave origin empty
+        allowedOrigin = "";
+      }
+    }
+
+    // Escape the email for safe display
+    const safeEmail = escapeHtml(gmailEmail);
+    const safeOrigin = escapeHtml(allowedOrigin);
+
+    // Show success, notify opener via postMessage with specific origin, and close the popup window
     return new Response(`
       <html>
         <head>
@@ -168,27 +217,34 @@ serve(async (req) => {
         <body>
           <div class="container">
             <h1>✓ Gmail Connected!</h1>
-            <p>Connected: ${gmailEmail}</p>
+            <p>Connected: ${safeEmail}</p>
             <p>This window will close automatically...</p>
           </div>
           <script>
-            // Notify opener that connection succeeded
+            // Notify opener that connection succeeded using specific origin
             if (window.opener) {
-              window.opener.postMessage({ type: "GMAIL_CONNECTED" }, "*");
+              var allowedOrigin = "${safeOrigin}";
+              if (allowedOrigin) {
+                window.opener.postMessage({ type: "GMAIL_CONNECTED" }, allowedOrigin);
+              } else {
+                // Fallback: Only post to same origin
+                window.opener.postMessage({ type: "GMAIL_CONNECTED" }, window.location.origin);
+              }
             }
             // Close popup after brief delay
-            setTimeout(() => window.close(), 1500);
+            setTimeout(function() { window.close(); }, 1500);
           </script>
         </body>
       </html>
     `, {
-      headers: { "Content-Type": "text/html" },
+      headers: getSecureHtmlHeaders(),
     });
   } catch (error) {
-    console.error("[gmail-callback] Error:", error);
-    return new Response(`<html><body><h1>Error</h1><p>${error instanceof Error ? error.message : "Unknown error"}</p></body></html>`, {
+    const errorId = crypto.randomUUID();
+    console.error(`[gmail-callback] Unexpected error, errorId: ${errorId}:`, error);
+    return new Response(`<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5;}.container{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}h1{color:#ef4444;margin-bottom:1rem;}p{color:#666;}</style></head><body><div class="container"><h1>Error</h1><p>An unexpected error occurred. Please try again.</p><p>Error ID: ${errorId}</p></div></body></html>`, {
       status: 500,
-      headers: { "Content-Type": "text/html" },
+      headers: getSecureHtmlHeaders(),
     });
   }
 });

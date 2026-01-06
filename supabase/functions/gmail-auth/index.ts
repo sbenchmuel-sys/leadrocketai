@@ -88,11 +88,20 @@ serve(async (req) => {
       "https://www.googleapis.com/auth/userinfo.email",
     ].join(" ");
 
-    // State includes user_id, redirect_url, and CSRF token
+    // Extract origin from redirectUrl for secure postMessage
+    let origin = "";
+    try {
+      origin = new URL(redirectUrl).origin;
+    } catch {
+      // If redirectUrl is invalid, leave origin empty
+    }
+
+    // State includes user_id, redirect_url, CSRF token, and origin for postMessage
     const state = btoa(JSON.stringify({ 
       user_id: user.id, 
       redirect_url: redirectUrl,
-      csrf: csrfToken
+      csrf: csrfToken,
+      origin: origin
     }));
 
     const callbackUrl = `${supabaseUrl}/functions/v1/gmail-callback`;
@@ -113,9 +122,10 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("[gmail-auth] Error:", error);
+    const errorId = crypto.randomUUID();
+    console.error(`[gmail-auth] Error ${errorId}:`, error);
     return new Response(
-      JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ ok: false, error: "An error occurred while initiating authentication", error_id: errorId }),
       { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }

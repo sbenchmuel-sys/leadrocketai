@@ -193,9 +193,10 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("[gmail-send] Error:", error);
+    const errorId = crypto.randomUUID();
+    console.error(`[gmail-send] Error ${errorId}:`, error);
     return new Response(
-      JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ ok: false, error: "An error occurred while sending the email", error_id: errorId }),
       { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
