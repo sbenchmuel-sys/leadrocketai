@@ -13,7 +13,14 @@ export type AITaskType =
   | "extract_deal_factors"
   | "recommend_next_steps"
   | "linkedin_connect"
-  | "linkedin_followup";
+  | "linkedin_followup"
+  | "pre_email_1_intro"
+  | "pre_email_2_followup"
+  | "pre_email_3_followup"
+  | "pre_email_4_breakup"
+  | "post_meeting_followup_personalized"
+  | "nurture_sequence"
+  | "shorten_draft";
 
 export interface AITaskResponse {
   ok: boolean;

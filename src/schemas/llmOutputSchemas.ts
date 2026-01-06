@@ -131,6 +131,23 @@ export const NextStepsSchema = z.object({
 export type NextStepsOutput = z.infer<typeof NextStepsSchema>;
 
 // ============================================
+// NURTURE SEQUENCE
+// ============================================
+export const NurtureEmailSchema = z.object({
+  email_number: z.number().int().min(1).max(10),
+  subject: z.string().min(1).max(140),
+  body: z.string().min(1).max(5000),
+}).strict();
+
+export const NurtureSequenceSchema = z.object({
+  theme: z.enum(['technical', 'use_case', 'roi', 'compliance']),
+  cadence: z.enum(['weekly', 'biweekly', 'monthly']),
+  emails: z.array(NurtureEmailSchema).min(3).max(6),
+}).strict();
+
+export type NurtureSequenceOutput = z.infer<typeof NurtureSequenceSchema>;
+
+// ============================================
 // VALIDATION UTILITIES
 // ============================================
 
@@ -140,7 +157,8 @@ export type SchemaType =
   | 'post_meeting_recap'
   | 'milestones_risks'
   | 'deal_factors'
-  | 'next_steps';
+  | 'next_steps'
+  | 'nurture_sequence';
 
 const schemaMap = {
   intent_router: IntentRouterSchema,
@@ -149,6 +167,7 @@ const schemaMap = {
   milestones_risks: MilestonesRisksSchema,
   deal_factors: DealFactorsSchema,
   next_steps: NextStepsSchema,
+  nurture_sequence: NurtureSequenceSchema,
 } as const;
 
 export interface ValidationResult<T> {

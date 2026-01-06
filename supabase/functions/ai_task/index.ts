@@ -8,6 +8,10 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "followup_sequence_4",
   "post_meeting_recap",
   "answer_questions",
+  "pre_email_1_intro",
+  "pre_email_2_followup",
+  "post_meeting_followup_personalized",
+  "nurture_sequence",
 ];
 
 // Function to get semantic knowledge context
@@ -349,6 +353,193 @@ Return TEXT ONLY.
 Prospect: {{PROSPECT_NAME}}, {{TITLE}} at {{COMPANY}}
 Context: {{CONTEXT}}
 Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`,
+
+  // Pre-Meeting Email Cadence
+  pre_email_1_intro: `ROLE
+You are generating Email 1 (Intro) in a pre-meeting outreach cadence for a regulated B2B deal.
+
+GOAL
+Introduce the company clearly, personalize to the lead, and encourage booking the first meeting.
+
+CONSTRAINTS
+- 120–180 words
+- Professional, confident, non-pushy
+- One clear CTA (book a call)
+- No medical or performance claims
+- Use only approved Knowledge Context
+- If information is missing, stay high-level
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  pre_email_2_followup: `ROLE
+You are generating Email 2 in a pre-meeting outreach cadence.
+
+GOAL
+Politely follow up after no response, add one value point, and reduce friction to reply.
+
+CONSTRAINTS
+- 90–140 words
+- Friendly, respectful of time
+- Briefly reference previous email
+- One clear CTA (book a call)
+- No hype or guarantees
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Previous Outreach Summary:
+{{PREVIOUS_EMAIL_SUMMARY}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  pre_email_3_followup: `ROLE
+You are generating Email 3 in a pre-meeting outreach cadence.
+
+GOAL
+Check relevance, prompt a yes/no response, and keep tone professional.
+
+CONSTRAINTS
+- 70–120 words
+- More direct, still polite
+- Explicitly acknowledge silence without pressure
+- One clear CTA (call, redirect, or deprioritize)
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Previous Outreach Summary:
+{{PREVIOUS_EMAIL_SUMMARY}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  pre_email_4_breakup: `ROLE
+You are generating Email 4 (Breakup) in a pre-meeting outreach cadence.
+
+GOAL
+Close the loop respectfully and leave the door open.
+
+CONSTRAINTS
+- 50–90 words
+- Calm, polite, non-defensive
+- No CTA except soft invitation to reconnect
+- No claims
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  // Post-Meeting Personalized Follow-up
+  post_meeting_followup_personalized: `ROLE
+Generate a single personalized post-meeting follow-up email.
+
+GOAL
+Move the deal forward based on a specific objective.
+
+CONSTRAINTS
+- 100–200 words
+- One clear CTA based on the goal
+- Use Knowledge Context to answer questions or provide resources
+- No medical or performance claims
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Goal:
+{{GOAL}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  // Nurture Sequence
+  nurture_sequence: `ROLE
+Generate a nurture email sequence.
+
+GOAL
+Maintain engagement over time with value-driven messaging.
+
+CONSTRAINTS
+- 3–6 emails depending on theme complexity
+- Educational, credibility-building
+- No pressure, no hard sell
+- Each email 100–180 words
+- Each email has ONE value point and ONE soft CTA
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Cadence:
+{{CADENCE}}
+
+Theme:
+{{THEME}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return JSON ONLY:
+{
+  "theme": "technical|use_case|roi|compliance",
+  "cadence": "weekly|biweekly|monthly",
+  "emails": [
+    {"email_number": 1, "subject": "...", "body": "..."},
+    {"email_number": 2, "subject": "...", "body": "..."}
+  ]
+}`,
+
+  // Utility: Shorten Draft
+  shorten_draft: `ROLE
+Shorten an existing draft while preserving meaning and CTA.
+
+CONSTRAINTS
+- Maintain the core message and CTA
+- Remove filler words and redundant phrases
+- Keep professional tone
+
+INPUTS
+Draft Text:
+{{DRAFT_TEXT}}
+
+Target Length:
+{{TARGET}}
+
+OUTPUT
+Return shortened draft text only.`,
 };
 
 // Tasks that require the pro model
@@ -357,6 +548,7 @@ const PRO_MODEL_TASKS = [
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
+  "nurture_sequence",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
