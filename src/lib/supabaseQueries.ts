@@ -296,6 +296,10 @@ export interface SaveDraftInput {
   to_recipient?: string;
   subject?: string;
   body_text: string;
+  step_key?: string;
+  nurture_theme?: string;
+  nurture_cadence?: string;
+  status?: 'pending' | 'saved' | 'sent' | 'skipped';
 }
 
 export async function saveDraft(leadId: string, form: SaveDraftInput): Promise<{ id: string }> {
@@ -309,6 +313,10 @@ export async function saveDraft(leadId: string, form: SaveDraftInput): Promise<{
     subject: form.subject || null,
     body_text: form.body_text,
     created_by: user?.id || null,
+    step_key: form.step_key || null,
+    nurture_theme: form.nurture_theme || null,
+    nurture_cadence: form.nurture_cadence || null,
+    status: form.status || 'pending',
   };
 
   if (!payload.lead_id || !payload.channel || !payload.draft_type || !payload.body_text) {
@@ -317,12 +325,51 @@ export async function saveDraft(leadId: string, form: SaveDraftInput): Promise<{
 
   const { data, error } = await supabase
     .from('drafts')
-    .insert(payload)
+    .insert(payload as Database['public']['Tables']['drafts']['Insert'])
     .select('id')
     .single();
 
   if (error) throw error;
   return data;
+}
+
+export async function saveNurtureSequenceDrafts(
+  leadId: string, 
+  emails: { email_number: number; subject: string; body: string }[],
+  theme: string,
+  cadence: string
+): Promise<{ id: string }[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+
+  const payloads = emails.map((email) => ({
+    lead_id: leadId,
+    channel: 'email',
+    draft_type: 'nurture',
+    step_key: `nurture_${email.email_number}`,
+    subject: email.subject,
+    body_text: email.body,
+    created_by: user?.id || null,
+    nurture_theme: theme,
+    nurture_cadence: cadence,
+    status: 'saved',
+  }));
+
+  const { data, error } = await supabase
+    .from('drafts')
+    .insert(payloads as Database['public']['Tables']['drafts']['Insert'][])
+    .select('id');
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function updateDraftStatus(draftId: string, status: 'pending' | 'saved' | 'sent' | 'skipped'): Promise<void> {
+  const { error } = await supabase
+    .from('drafts')
+    .update({ status })
+    .eq('id', draftId);
+
+  if (error) throw error;
 }
 
 export async function getLeadDrafts(leadId: string): Promise<Draft[]> {

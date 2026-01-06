@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LeadDetail, getLeadDrafts, saveDraft, getKnowledgeChunks, getLeadInteractions, appendLeadMilestones, MilestoneItem } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadDrafts, saveDraft, getKnowledgeChunks, getLeadInteractions, appendLeadMilestones, MilestoneItem, saveNurtureSequenceDrafts, updateDraftStatus } from "@/lib/supabaseQueries";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send } from "lucide-react";
-import { format } from "date-fns";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle } from "lucide-react";
+import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { EmailTemplateSelector } from "@/components/lead/EmailTemplateSelector";
@@ -29,6 +29,9 @@ interface Draft {
   body_text: string;
   status: string;
   created_at: string;
+  step_key?: string | null;
+  nurture_theme?: string | null;
+  nurture_cadence?: string | null;
 }
 
 interface PostMeetingRecapResult {
@@ -279,7 +282,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
   };
 
-  // Nurture Sequence
+  // Nurture Sequence - saves as individual drafts
   const generateNurtureSequence = async () => {
     const kb = await getKnowledgeChunks(true);
     const result = await runTask("nurture_sequence", {
@@ -292,11 +295,27 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       try {
         const parsed = JSON.parse(result.content) as NurtureSequenceOutput;
-        setNurtureResult(parsed);
-        toast.success(`Generated ${parsed.emails.length} nurture emails`);
+        
+        // Map to required format
+        const emails = parsed.emails.map(e => ({
+          email_number: e.email_number!,
+          subject: e.subject!,
+          body: e.body!,
+        }));
+        
+        // Save each email as individual draft
+        await saveNurtureSequenceDrafts(
+          lead.id,
+          emails,
+          nurtureTheme,
+          nurtureCadence
+        );
+        
+        toast.success(`Nurture sequence created as ${emails.length} individual drafts.`);
+        setNurtureResult(null); // Clear any previous result
+        loadDrafts(); // Reload to show new drafts
       } catch {
-        setGeneratedContent(result.content);
-        setGeneratedType("nurture_sequence");
+        toast.error("Failed to parse nurture sequence");
       }
     }
   };
@@ -706,35 +725,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                 </Button>
               </div>
 
-              {/* Nurture Results */}
+              {/* Nurture Results - no longer shown inline, saved as drafts */}
               {nurtureResult && (
-                <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium">Generated Sequence: {nurtureResult.theme}</h4>
-                    <Badge>{nurtureResult.cadence}</Badge>
-                  </div>
-                  <div className="space-y-3">
-                    {nurtureResult.emails.map((email, i) => (
-                      <div key={i} className="bg-background rounded-lg p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <Badge variant="outline">Email {email.email_number}</Badge>
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => {
-                              navigator.clipboard.writeText(email.body);
-                              toast.success("Copied");
-                            }}>
-                              <Copy className="h-3 w-3" />
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => saveAsDraft(email.body, `nurture_${email.email_number}`, email.subject)}>
-                              <Save className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                        <p className="text-sm font-medium">{email.subject}</p>
-                        <p className="text-sm text-muted-foreground line-clamp-3">{email.body}</p>
-                      </div>
-                    ))}
-                  </div>
+                <div className="border rounded-lg p-4 bg-muted/30">
+                  <p className="text-sm text-muted-foreground">
+                    Nurture sequence saved! Check the "Saved Drafts" section below.
+                  </p>
                 </div>
               )}
             </TabsContent>
@@ -829,54 +825,325 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
           ) : drafts.length === 0 ? (
             <p className="text-muted-foreground text-center py-4">No drafts saved yet</p>
           ) : (
-            <div className="space-y-3">
-              {drafts.map((draft) => (
-                <div key={draft.id} className="p-3 border rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="outline">{draft.channel}</Badge>
-                    <Badge variant="secondary">{draft.draft_type}</Badge>
-                    <span className="text-xs text-muted-foreground ml-auto">
-                      {format(new Date(draft.created_at), "MMM d, h:mm a")}
-                    </span>
-                  </div>
-                  {draft.subject && <p className="text-sm font-medium mb-1">{draft.subject}</p>}
-                  <p className="text-sm text-muted-foreground line-clamp-3">{draft.body_text}</p>
-                  <div className="flex gap-2 mt-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(draft.body_text);
-                        toast.success("Copied to clipboard");
-                      }}
-                    >
-                      <Copy className="h-3 w-3 mr-1" />
-                      Copy
-                    </Button>
-                    {draft.channel === "email" && draft.status !== "sent" && (
-                      <SendEmailButton
-                        to={lead.email}
-                        subject={draft.subject || ""}
-                        body={draft.body_text}
-                        leadId={lead.id}
-                        draftId={draft.id}
-                        onSent={loadDrafts}
-                        variant="outline"
-                        size="sm"
-                      />
-                    )}
-                    {draft.status === "sent" && (
-                      <Badge variant="secondary" className="bg-green-500/10 text-green-600">
-                        Sent
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <SavedDraftsList 
+              drafts={drafts} 
+              lead={lead} 
+              onDraftUpdate={loadDrafts}
+              onEditDraft={(draft) => {
+                setGeneratedContent(draft.body_text);
+                setGeneratedSubject(draft.subject || "");
+                setGeneratedType(draft.draft_type);
+              }}
+              onShortenDraft={(text) => {
+                setShortenInput(text);
+              }}
+            />
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// Helper component for saved drafts with nurture sequence grouping
+interface SavedDraftsListProps {
+  drafts: Draft[];
+  lead: LeadDetail;
+  onDraftUpdate: () => void;
+  onEditDraft: (draft: Draft) => void;
+  onShortenDraft: (text: string) => void;
+}
+
+function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft, onShortenDraft }: SavedDraftsListProps) {
+  const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [editSubject, setEditSubject] = useState("");
+
+  // Check for recent lead reply (for hiding "Suggested now" badges)
+  const hasRecentReply = false; // This would come from interactions - simplified for now
+
+  // Group nurture drafts by theme+cadence, keep others separate
+  const nurtureDrafts = drafts.filter(d => d.draft_type === 'nurture' && d.step_key);
+  const otherDrafts = drafts.filter(d => d.draft_type !== 'nurture' || !d.step_key);
+
+  // Group nurture drafts by theme+cadence combo
+  const nurtureGroups = nurtureDrafts.reduce<Record<string, Draft[]>>((acc, draft) => {
+    const key = `${draft.nurture_theme || 'general'}_${draft.nurture_cadence || 'biweekly'}`;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(draft);
+    return acc;
+  }, {});
+
+  // Sort nurture emails within each group by step_key
+  Object.values(nurtureGroups).forEach(group => {
+    group.sort((a, b) => {
+      const aNum = parseInt(a.step_key?.replace('nurture_', '') || '0');
+      const bNum = parseInt(b.step_key?.replace('nurture_', '') || '0');
+      return aNum - bNum;
+    });
+  });
+
+  const getCadenceDays = (cadence: string | null | undefined): number => {
+    switch (cadence) {
+      case 'weekly': return 7;
+      case 'biweekly': return 14;
+      case 'monthly': return 30;
+      default: return 14;
+    }
+  };
+
+  const isSuggestedNow = (draft: Draft, index: number, groupDrafts: Draft[]): boolean => {
+    if (hasRecentReply) return false;
+    if (draft.status === 'sent' || draft.status === 'skipped') return false;
+    
+    // Find the last sent email in the sequence
+    const lastSentIndex = groupDrafts.reduce((lastIdx, d, idx) => 
+      d.status === 'sent' ? idx : lastIdx, -1);
+    
+    // This draft should be suggested if it's the next one after last sent
+    if (index !== lastSentIndex + 1) return false;
+    
+    // Check cadence timing
+    const cadenceDays = getCadenceDays(draft.nurture_cadence);
+    const daysSinceActivity = differenceInDays(new Date(), new Date(lead.last_activity_at));
+    
+    // If first email and no sent emails yet, or if enough days have passed
+    if (lastSentIndex === -1 && index === 0) return true;
+    
+    const lastSent = groupDrafts[lastSentIndex];
+    if (lastSent) {
+      const daysSinceSent = differenceInDays(new Date(), new Date(lastSent.created_at));
+      return daysSinceSent >= cadenceDays;
+    }
+    
+    return daysSinceActivity >= cadenceDays;
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'sent':
+        return <Badge className="bg-green-500/10 text-green-600">Sent</Badge>;
+      case 'skipped':
+        return <Badge variant="outline" className="text-muted-foreground">Skipped</Badge>;
+      case 'saved':
+        return <Badge variant="secondary">Saved</Badge>;
+      default:
+        return <Badge variant="outline">Draft</Badge>;
+    }
+  };
+
+  const handleMarkAsSent = async (draftId: string) => {
+    try {
+      await updateDraftStatus(draftId, 'sent');
+      toast.success("Marked as sent");
+      onDraftUpdate();
+    } catch {
+      toast.error("Failed to update status");
+    }
+  };
+
+  const handleSkip = async (draftId: string) => {
+    try {
+      await updateDraftStatus(draftId, 'skipped');
+      toast.success("Email skipped");
+      onDraftUpdate();
+    } catch {
+      toast.error("Failed to update status");
+    }
+  };
+
+  const toggleSequence = (key: string) => {
+    setExpandedSequences(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const renderDraftRow = (draft: Draft, showSuggestedBadge = false, suggestedNow = false, cadence?: string) => (
+    <div key={draft.id} className="p-3 border rounded-lg bg-background">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <Badge variant="outline">{draft.channel}</Badge>
+        {draft.step_key && (
+          <Badge variant="secondary">
+            Email {draft.step_key.replace('nurture_', '')}
+          </Badge>
+        )}
+        {!draft.step_key && <Badge variant="secondary">{draft.draft_type}</Badge>}
+        {getStatusBadge(draft.status)}
+        {showSuggestedBadge && suggestedNow && !hasRecentReply && (
+          <Badge className="bg-primary/10 text-primary">
+            <AlertCircle className="h-3 w-3 mr-1" />
+            Suggested now
+          </Badge>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {format(new Date(draft.created_at), "MMM d, h:mm a")}
+        </span>
+      </div>
+      
+      {draft.subject && <p className="text-sm font-medium mb-1">{draft.subject}</p>}
+      
+      {editingDraftId === draft.id ? (
+        <div className="space-y-2">
+          <Input
+            value={editSubject}
+            onChange={(e) => setEditSubject(e.target.value)}
+            placeholder="Subject"
+            className="text-sm"
+          />
+          <Textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            rows={4}
+            className="font-mono text-sm"
+          />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => setEditingDraftId(null)}>
+              Done
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setEditingDraftId(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground line-clamp-3">{draft.body_text}</p>
+      )}
+      
+      {cadence && suggestedNow && (
+        <p className="text-xs text-muted-foreground mt-1 italic">
+          Recommended based on {cadence} cadence
+        </p>
+      )}
+      
+      <div className="flex gap-2 mt-2 flex-wrap">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            navigator.clipboard.writeText(draft.body_text);
+            toast.success("Copied to clipboard");
+          }}
+        >
+          <Copy className="h-3 w-3 mr-1" />
+          Copy
+        </Button>
+        
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            onEditDraft(draft);
+          }}
+        >
+          <Edit2 className="h-3 w-3 mr-1" />
+          Edit
+        </Button>
+        
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onShortenDraft(draft.body_text)}
+        >
+          <Scissors className="h-3 w-3 mr-1" />
+          Shorten
+        </Button>
+        
+        {draft.channel === "email" && draft.status !== "sent" && (
+          <SendEmailButton
+            to={lead.email}
+            subject={draft.subject || ""}
+            body={draft.body_text}
+            leadId={lead.id}
+            draftId={draft.id}
+            onSent={onDraftUpdate}
+            variant="outline"
+            size="sm"
+          />
+        )}
+        
+        {draft.status !== "sent" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleMarkAsSent(draft.id)}
+          >
+            <CheckCircle2 className="h-3 w-3 mr-1" />
+            Mark Sent
+          </Button>
+        )}
+        
+        {draft.draft_type === 'nurture' && draft.status !== 'sent' && draft.status !== 'skipped' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleSkip(draft.id)}
+          >
+            Skip
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Nurture Sequences - Grouped */}
+      {Object.entries(nurtureGroups).map(([key, groupDrafts]) => {
+        const [theme, cadence] = key.split('_');
+        const isExpanded = expandedSequences.has(key);
+        const sentCount = groupDrafts.filter(d => d.status === 'sent').length;
+        const totalCount = groupDrafts.length;
+        
+        return (
+          <Collapsible key={key} open={isExpanded} onOpenChange={() => toggleSequence(key)}>
+            <CollapsibleTrigger asChild>
+              <div className="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <span className="font-medium">
+                    Nurture Sequence – {theme.charAt(0).toUpperCase() + theme.slice(1).replace('_', ' ')} ({cadence})
+                  </span>
+                  <Badge variant="secondary">{sentCount}/{totalCount} sent</Badge>
+                </div>
+                {isExpanded ? (
+                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                )}
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 space-y-2 pl-4 border-l-2 border-primary/20">
+              {groupDrafts.map((draft, index) => 
+                renderDraftRow(
+                  draft, 
+                  true, 
+                  isSuggestedNow(draft, index, groupDrafts),
+                  cadence
+                )
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+        );
+      })}
+
+      {/* Other Drafts */}
+      {otherDrafts.length > 0 && (
+        <>
+          {Object.keys(nurtureGroups).length > 0 && (
+            <h4 className="text-sm font-medium text-muted-foreground pt-2">Other Drafts</h4>
+          )}
+          <div className="space-y-3">
+            {otherDrafts.map(draft => renderDraftRow(draft))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
