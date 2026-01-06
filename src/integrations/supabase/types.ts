@@ -23,7 +23,10 @@ export type Database = {
           draft_type: string
           id: string
           lead_id: string
+          nurture_cadence: string | null
+          nurture_theme: string | null
           status: string
+          step_key: string | null
           subject: string | null
           to_recipient: string | null
         }
@@ -35,7 +38,10 @@ export type Database = {
           draft_type: string
           id?: string
           lead_id: string
+          nurture_cadence?: string | null
+          nurture_theme?: string | null
           status?: string
+          step_key?: string | null
           subject?: string | null
           to_recipient?: string | null
         }
@@ -47,7 +53,10 @@ export type Database = {
           draft_type?: string
           id?: string
           lead_id?: string
+          nurture_cadence?: string | null
+          nurture_theme?: string | null
           status?: string
+          step_key?: string | null
           subject?: string | null
           to_recipient?: string | null
         }
