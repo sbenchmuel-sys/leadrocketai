@@ -21,9 +21,12 @@ import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
+import MeetingsTab from "@/components/lead/MeetingsTab";
+import MeetingPackHeader from "@/components/lead/MeetingPackHeader";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
+
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -31,6 +34,7 @@ export default function LeadDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState("timeline");
   const { isConnected } = useGmailConnection();
 
   const handleDelete = async () => {
@@ -46,6 +50,7 @@ export default function LeadDetail() {
       setIsDeleting(false);
     }
   };
+
   const loadLead = async () => {
     if (!id) return;
     try {
@@ -209,10 +214,18 @@ export default function LeadDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="timeline" className="w-full">
+      {/* Meeting Pack Summary Header */}
+      <MeetingPackHeader 
+        leadId={lead.id} 
+        leadName={lead.name} 
+        onNavigateToMeetings={() => setActiveTab("meetings")} 
+      />
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="w-full justify-start">
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="drafts">Drafts</TabsTrigger>
+          <TabsTrigger value="meetings">Meetings</TabsTrigger>
           <TabsTrigger value="upload">Upload</TabsTrigger>
           <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
         </TabsList>
@@ -223,6 +236,15 @@ export default function LeadDetail() {
 
         <TabsContent value="drafts" className="mt-6">
           <DraftsTab lead={lead} onUpdate={handleUpdate} />
+        </TabsContent>
+
+        <TabsContent value="meetings" className="mt-6">
+          <MeetingsTab 
+            leadId={lead.id} 
+            leadEmail={lead.email} 
+            leadName={lead.name}
+            onMilestonesAdded={handleUpdate}
+          />
         </TabsContent>
 
         <TabsContent value="upload" className="mt-6">

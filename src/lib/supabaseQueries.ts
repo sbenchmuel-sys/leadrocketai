@@ -500,3 +500,139 @@ export async function getGmailConnection(): Promise<GmailConnectionRow | null> {
   if (error) throw error;
   return data;
 }
+
+// ============================================
+// MEETING PACKS QUERIES
+// ============================================
+
+export interface MeetingPackItem {
+  id: string;
+  lead_id: string;
+  owner_user_id: string;
+  created_at: string;
+  meeting_date: string | null;
+  title: string | null;
+  raw_notes: string | null;
+  internal_recap_bullets: string[];
+  open_questions: string[];
+  milestones: MilestoneItem[];
+  follow_up_email_subject: string | null;
+  follow_up_email_body: string | null;
+  milestones_saved_to_lead: boolean;
+  email_saved_as_draft: boolean;
+}
+
+export async function getLeadMeetingPacks(leadId: string): Promise<MeetingPackItem[]> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { data, error } = await supabase
+    .from('meeting_packs')
+    .select('*')
+    .eq('lead_id', leadId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  
+  return (data ?? []).map(row => ({
+    id: row.id,
+    lead_id: row.lead_id,
+    owner_user_id: row.owner_user_id,
+    created_at: row.created_at,
+    meeting_date: row.meeting_date,
+    title: row.title,
+    raw_notes: row.raw_notes,
+    internal_recap_bullets: (row.internal_recap_bullets as unknown as string[]) || [],
+    open_questions: (row.open_questions as unknown as string[]) || [],
+    milestones: (row.milestones as unknown as MilestoneItem[]) || [],
+    follow_up_email_subject: row.follow_up_email_subject,
+    follow_up_email_body: row.follow_up_email_body,
+    milestones_saved_to_lead: row.milestones_saved_to_lead,
+    email_saved_as_draft: row.email_saved_as_draft,
+  }));
+}
+
+export interface CreateMeetingPackInput {
+  lead_id: string;
+  meeting_date?: string;
+  title?: string;
+  raw_notes?: string;
+  internal_recap_bullets?: string[];
+  open_questions?: string[];
+  milestones?: MilestoneItem[];
+  follow_up_email_subject?: string;
+  follow_up_email_body?: string;
+}
+
+export async function createMeetingPack(input: CreateMeetingPackInput): Promise<{ id: string }> {
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  if (!user) throw new Error('Not logged in');
+
+  const { data, error } = await supabase
+    .from('meeting_packs')
+    .insert({
+      lead_id: input.lead_id,
+      owner_user_id: user.id,
+      meeting_date: input.meeting_date || new Date().toISOString().split('T')[0],
+      title: input.title || null,
+      raw_notes: input.raw_notes || null,
+      internal_recap_bullets: (input.internal_recap_bullets || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['internal_recap_bullets'],
+      open_questions: (input.open_questions || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['open_questions'],
+      milestones: (input.milestones || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['milestones'],
+      follow_up_email_subject: input.follow_up_email_subject || null,
+      follow_up_email_body: input.follow_up_email_body || null,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export interface UpdateMeetingPackInput {
+  meeting_date?: string;
+  title?: string;
+  raw_notes?: string;
+  internal_recap_bullets?: string[];
+  open_questions?: string[];
+  milestones?: MilestoneItem[];
+  follow_up_email_subject?: string;
+  follow_up_email_body?: string;
+  milestones_saved_to_lead?: boolean;
+  email_saved_as_draft?: boolean;
+}
+
+export async function updateMeetingPack(id: string, input: UpdateMeetingPackInput): Promise<void> {
+  if (!id) throw new Error('Missing meeting pack id');
+
+  const updateData: Record<string, unknown> = {};
+  
+  if (input.meeting_date !== undefined) updateData.meeting_date = input.meeting_date;
+  if (input.title !== undefined) updateData.title = input.title;
+  if (input.raw_notes !== undefined) updateData.raw_notes = input.raw_notes;
+  if (input.internal_recap_bullets !== undefined) updateData.internal_recap_bullets = input.internal_recap_bullets;
+  if (input.open_questions !== undefined) updateData.open_questions = input.open_questions;
+  if (input.milestones !== undefined) updateData.milestones = input.milestones;
+  if (input.follow_up_email_subject !== undefined) updateData.follow_up_email_subject = input.follow_up_email_subject;
+  if (input.follow_up_email_body !== undefined) updateData.follow_up_email_body = input.follow_up_email_body;
+  if (input.milestones_saved_to_lead !== undefined) updateData.milestones_saved_to_lead = input.milestones_saved_to_lead;
+  if (input.email_saved_as_draft !== undefined) updateData.email_saved_as_draft = input.email_saved_as_draft;
+
+  const { error } = await supabase
+    .from('meeting_packs')
+    .update(updateData)
+    .eq('id', id);
+
+  if (error) throw error;
+}
+
+export async function deleteMeetingPack(id: string): Promise<void> {
+  if (!id) throw new Error('Missing meeting pack id');
+
+  const { error } = await supabase
+    .from('meeting_packs')
+    .delete()
+    .eq('id', id);
+
+  if (error) throw error;
+}
