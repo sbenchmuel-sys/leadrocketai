@@ -58,6 +58,25 @@ function extractJsonFromAIContent(content: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
+// Clean email body by removing signatures and quoted replies
+function cleanEmailBody(body: string): string {
+  return body
+    .split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0] // Stop at signature/quote markers
+    .slice(0, 300) // Limit to 300 chars
+    .trim();
+}
+
+// Build interaction text with limited data to reduce payload size
+function buildInteractionsText(
+  interactions: { type: string; subject: string | null; body_text: string }[],
+  limit: number = 15
+): string {
+  return interactions
+    .slice(0, limit) // Take most recent interactions
+    .map((i) => `[${i.type}] ${i.subject || ""}: ${cleanEmailBody(i.body_text)}`)
+    .join("\n---\n");
+}
+
 export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTabProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const { runTask } = useAITask();
@@ -88,9 +107,9 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         return;
       }
       
-      const interactionsText = interactions
-        .map((i) => `[${i.type}] ${i.subject || ""}: ${i.body_text.slice(0, 500)}`)
-        .join("\n---\n");
+      // Limit to 15 most recent interactions with cleaned body text
+      const interactionsText = buildInteractionsText(interactions, 15);
+      console.log("[AI Analysis] Payload size:", interactionsText.length, "chars");
 
       // Step 1: Extract milestones and risks
       toast.info("Extracting milestones and risks...");

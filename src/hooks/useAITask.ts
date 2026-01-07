@@ -41,12 +41,16 @@ export function useAITask() {
     setIsLoading(true);
     setError(null);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
 
       if (!accessToken) {
+        clearTimeout(timeoutId);
         const errorMsg = "Not authenticated";
         setError(errorMsg);
         toast.error(errorMsg);
@@ -60,7 +64,10 @@ export function useAITask() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ task, payload }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorMsg = `Failed to run AI task: ${response.status}`;
@@ -88,6 +95,13 @@ export function useAITask() {
 
       return data as AITaskResponse;
     } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === "AbortError") {
+        const errorMsg = "Request timed out - try with fewer interactions";
+        setError(errorMsg);
+        toast.error(errorMsg);
+        return { ok: false, error: errorMsg };
+      }
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
       setError(errorMsg);
       toast.error(errorMsg);
