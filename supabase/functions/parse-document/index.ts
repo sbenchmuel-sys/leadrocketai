@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { resolvePDFJS } from "https://esm.sh/pdfjs-serverless@0.5.0";
-import { BlobReader, ZipReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { resolvePDFJS } from "https://cdn.jsdelivr.net/npm/pdfjs-serverless@0.5.0/+esm";
+import { BlobReader, ZipReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.52/index.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
