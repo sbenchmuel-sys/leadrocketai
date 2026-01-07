@@ -41,6 +41,13 @@ Status: ${lead.status}
 ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
   };
 
+  // Helper to extract JSON from AI response (may be wrapped in markdown fences)
+  const extractJson = (content: string): string => {
+    const trimmed = content.trim();
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    return (fenced?.[1] ?? trimmed).trim();
+  };
+
   // Helper to clean and limit text for AI payloads
   const cleanTextForPayload = (text: string, maxChars: number = 2000): string => {
     return text
@@ -79,7 +86,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let recapData = null;
       if (recapResult.ok && recapResult.content) {
         try {
-          recapData = JSON.parse(recapResult.content);
+          recapData = JSON.parse(extractJson(recapResult.content));
           // Save the customer email as a draft
           if (recapData.customer_email) {
             await supabase.from("drafts").insert({
@@ -106,7 +113,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let milestonesData = { milestones: [], risks: [] };
       if (milestonesResult.ok && milestonesResult.content) {
         try {
-          milestonesData = JSON.parse(milestonesResult.content);
+          milestonesData = JSON.parse(extractJson(milestonesResult.content));
         } catch (e) {
           console.error("Failed to parse milestones/risks:", e);
         }
@@ -122,7 +129,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let factorsData = null;
       if (factorsResult.ok && factorsResult.content) {
         try {
-          factorsData = JSON.parse(factorsResult.content);
+          factorsData = JSON.parse(extractJson(factorsResult.content));
         } catch (e) {
           console.error("Failed to parse deal factors:", e);
         }
@@ -139,7 +146,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let recsData = { recommendations: [], best_next_step: null };
       if (recsResult.ok && recsResult.content) {
         try {
-          recsData = JSON.parse(recsResult.content);
+          recsData = JSON.parse(extractJson(recsResult.content));
         } catch (e) {
           console.error("Failed to parse recommendations:", e);
         }
