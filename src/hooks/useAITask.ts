@@ -22,7 +22,9 @@ export type AITaskType =
   | "nurture_sequence"
   | "nurture_email_single"
   | "shorten_draft"
-  | "post_meeting_followup_email";
+  | "post_meeting_followup_email"
+  | "match_email_to_milestones"
+  | "dedupe_milestones";
 
 export interface AITaskResponse {
   ok: boolean;

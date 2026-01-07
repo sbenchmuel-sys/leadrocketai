@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Loader2, Brain, CheckCircle, AlertTriangle, Target } from "lucide-react";
+import { Loader2, Brain, CheckCircle, AlertTriangle, Target, Trash2, Sparkles } from "lucide-react";
 
 interface RecommendationsTabProps {
   lead: LeadDetail;
@@ -81,6 +81,7 @@ function buildInteractionsText(
 
 export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTabProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
   const { runTask } = useAITask();
 
   const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
@@ -193,17 +194,34 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         return;
       }
 
-      // Merge milestones: keep existing + add new (deduplicate by description)
+      // Merge milestones with AI-powered semantic deduplication
       const existingMilestones: Milestone[] = lead.milestones_json
         ? (lead.milestones_json as unknown as Milestone[])
         : [];
-      const mergedMilestones = [...existingMilestones];
-      for (const newMs of parsedMilestones.milestones) {
-        const exists = mergedMilestones.some(
-          (m) => m.description.toLowerCase() === newMs.description.toLowerCase()
-        );
-        if (!exists) {
-          mergedMilestones.push(newMs);
+      
+      // Combine existing + new milestones
+      const allMilestones = [...existingMilestones, ...parsedMilestones.milestones];
+      
+      // Use AI to deduplicate semantically
+      let mergedMilestones = allMilestones;
+      if (allMilestones.length > 1) {
+        const dedupeResult = await runTask("dedupe_milestones", {
+          milestones_json: JSON.stringify(allMilestones),
+        });
+        
+        if (dedupeResult.ok && dedupeResult.content) {
+          try {
+            const deduped = JSON.parse(extractJsonFromAIContent(dedupeResult.content));
+            if (deduped.unique_milestones?.length > 0) {
+              mergedMilestones = deduped.unique_milestones;
+              if (deduped.duplicates_removed > 0) {
+                toast.info(`Merged ${deduped.duplicates_removed} duplicate milestones`);
+              }
+            }
+          } catch (e) {
+            console.error("[AI Analysis] Dedupe parse error:", e);
+            // Fall back to simple merge
+          }
         }
       }
 
@@ -269,6 +287,61 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
       default:
         return "bg-secondary text-secondary-foreground";
+    }
+  };
+
+  const handleDeleteMilestone = async (index: number) => {
+    const updated = milestones.filter((_, i) => i !== index);
+    const { error } = await supabase
+      .from("leads")
+      .update({ milestones_json: updated as unknown as Json })
+      .eq("id", lead.id);
+    
+    if (error) {
+      toast.error("Failed to delete milestone");
+    } else {
+      toast.success("Milestone deleted");
+      onUpdate();
+    }
+  };
+
+  const handleCleanupDuplicates = async () => {
+    if (milestones.length < 2) {
+      toast.info("Not enough milestones to deduplicate");
+      return;
+    }
+
+    setIsCleaning(true);
+    try {
+      const result = await runTask("dedupe_milestones", {
+        milestones_json: JSON.stringify(milestones),
+      });
+
+      if (result.ok && result.content) {
+        const deduped = JSON.parse(extractJsonFromAIContent(result.content));
+        if (deduped.unique_milestones?.length > 0) {
+          const { error } = await supabase
+            .from("leads")
+            .update({ milestones_json: deduped.unique_milestones as unknown as Json })
+            .eq("id", lead.id);
+
+          if (error) {
+            toast.error("Failed to save cleaned milestones");
+          } else {
+            toast.success(`Removed ${deduped.duplicates_removed} duplicate${deduped.duplicates_removed !== 1 ? "s" : ""}`);
+            onUpdate();
+          }
+        } else {
+          toast.info("No duplicates found");
+        }
+      } else {
+        toast.error(result.error || "Failed to clean duplicates");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Cleanup failed");
+    } finally {
+      setIsCleaning(false);
     }
   };
 
@@ -380,11 +453,27 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       <div className="grid md:grid-cols-2 gap-6">
         {/* Milestones */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="flex items-center gap-2">
               <CheckCircle className="h-5 w-5 text-green-600" />
               Milestones
             </CardTitle>
+            {milestones.length >= 2 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCleanupDuplicates}
+                disabled={isCleaning}
+                className="h-8 text-xs"
+              >
+                {isCleaning ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3 mr-1" />
+                )}
+                Clean duplicates
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {milestones.length === 0 ? (
@@ -392,7 +481,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
             ) : (
               <div className="space-y-3">
                 {milestones.map((m, i) => (
-                  <div key={i} className="flex items-start gap-3 p-2 rounded border bg-muted/30">
+                  <div key={i} className="flex items-start gap-3 p-2 rounded border bg-muted/30 group">
                     <Checkbox
                       id={`rec-milestone-${i}`}
                       checked={m.status === "completed"}
@@ -425,6 +514,14 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
                         Pending
                       </Badge>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => handleDeleteMilestone(i)}
+                    >
+                      <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                    </Button>
                   </div>
                 ))}
               </div>

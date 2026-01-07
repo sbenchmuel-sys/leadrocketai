@@ -651,6 +651,43 @@ RULES
 - If unsure, do NOT include the milestone (be conservative)
 - If no milestones are addressed, return {"completed_indices": [], "reasoning": "Email does not address any pending milestones"}
 - Keep reasoning to 1-2 sentences`,
+
+  // Deduplicate milestones semantically
+  dedupe_milestones: `Analyze existing milestones and identify semantic duplicates.
+
+TASK
+Given a list of milestones, identify groups that describe the same event/action.
+
+INPUTS
+Milestones:
+{{MILESTONES_JSON}}
+
+OUTPUT
+Return JSON ONLY:
+{
+  "unique_milestones": [
+    {
+      "description": "Best description for this milestone",
+      "status": "completed|pending",
+      "date": "YYYY-MM-DD or null",
+      "evidence": "...",
+      "completedAt": "ISO timestamp or null",
+      "merged_from": ["original desc 1", "original desc 2"]
+    }
+  ],
+  "duplicates_removed": 3
+}
+
+RULES
+- Group semantically similar milestones (e.g., "Initial meeting scheduled" and "First discovery call" are the same milestone)
+- Keep the BEST description (most specific/clear)
+- If ANY milestone in a group is "completed", the merged result is "completed"
+- Keep the earliest date if multiple dates exist
+- Keep completedAt from any completed milestone
+- Merge evidence from all duplicates
+- "merged_from" lists ALL original descriptions that were merged
+- Single milestones with no duplicates should still appear in unique_milestones
+- Be aggressive about deduplication - if milestones describe the same event, merge them`,
 };
 
 // Tasks that require the pro model
