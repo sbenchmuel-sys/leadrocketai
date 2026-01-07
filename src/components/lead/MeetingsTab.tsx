@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
 import { 
   getLeadMeetingPacks, 
@@ -11,7 +11,8 @@ import {
   updateMeetingPackMilestoneStatus,
   updateLeadMilestoneStatus,
   getLeadMeetingSummaries,
-  MeetingSummaryItem
+  MeetingSummaryItem,
+  createMeetingPack
 } from "@/lib/supabaseQueries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,9 +48,12 @@ import {
   Loader2,
   FileText,
   Video,
-  Users
+  Users,
+  Sparkles
 } from "lucide-react";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
+import { useAITask } from "@/hooks/useAITask";
+import { supabase } from "@/integrations/supabase/client";
 
 interface MeetingsTabProps {
   leadId: string;
@@ -68,6 +72,19 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
   const [editedEmailBody, setEditedEmailBody] = useState("");
+  const [generatingRecapId, setGeneratingRecapId] = useState<string | null>(null);
+  const { runTask } = useAITask();
+
+  // Map to quickly find meeting pack for a processed zoom summary
+  const zoomSummaryToPackMap = useMemo(() => {
+    const map = new Map<string, MeetingPackItem>();
+    meetingPacks.forEach(pack => {
+      if (pack.source_meeting_summary_id) {
+        map.set(pack.source_meeting_summary_id, pack);
+      }
+    });
+    return map;
+  }, [meetingPacks]);
 
   const loadData = async () => {
     try {
@@ -117,6 +134,63 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
       newSet.add(id);
     }
     setExpandedZoomIds(newSet);
+  };
+
+  const generateRecapFromZoomSummary = async (summary: MeetingSummaryItem) => {
+    if (!summary.summary_text) {
+      toast.error("No summary text to process");
+      return;
+    }
+
+    setGeneratingRecapId(summary.id);
+    try {
+      const result = await runTask("post_meeting_recap", {
+        mode: "fast",
+        lead_name: leadName,
+        lead_email: leadEmail,
+        meeting_summary: summary.summary_text,
+        lead_id: leadId,
+      });
+
+      if (!result.ok || !result.content) {
+        throw new Error(result.error || "AI processing failed");
+      }
+
+      // Parse the AI response
+      const parsed = JSON.parse(result.content);
+      
+      // Create meeting pack with structured data
+      await createMeetingPack({
+        lead_id: leadId,
+        title: summary.meeting_title || `Zoom Meeting — ${format(parseISO(summary.sent_at), "MMM d, yyyy")}`,
+        meeting_date: summary.sent_at.split("T")[0],
+        raw_notes: summary.summary_text,
+        internal_recap_bullets: parsed.internal_recap_bullets || [],
+        open_questions: parsed.open_questions || [],
+        milestones: (parsed.milestones_from_meeting || []).map((m: { description: string; status?: string; date?: string }) => ({
+          description: m.description,
+          status: m.status || "pending",
+          date: m.date || null,
+        })),
+        follow_up_email_subject: parsed.customer_email?.subject || null,
+        follow_up_email_body: parsed.customer_email?.body || null,
+        source_meeting_summary_id: summary.id,
+      });
+
+      // Mark the meeting summary as processed
+      await supabase
+        .from("meeting_summaries")
+        .update({ followup_generated: true })
+        .eq("id", summary.id);
+
+      toast.success("Recap & follow-up generated!");
+      loadData();
+    } catch (err) {
+      console.error("Failed to generate recap:", err);
+      toast.error("Failed to generate recap & follow-up");
+    } finally {
+      setGeneratingRecapId(null);
+    }
   };
 
   const handleAddMilestones = async (pack: MeetingPackItem) => {
@@ -238,6 +312,9 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
           {zoomSummaries.map((summary) => {
             const isExpanded = expandedZoomIds.has(summary.id);
             const sentDate = format(parseISO(summary.sent_at), "MMM d, yyyy 'at' h:mm a");
+            const linkedPack = zoomSummaryToPackMap.get(summary.id);
+            const isProcessed = !!linkedPack;
+            const isGenerating = generatingRecapId === summary.id;
 
             return (
               <Card key={summary.id} className="overflow-hidden border-blue-200 dark:border-blue-900">
@@ -264,10 +341,10 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                             <Video className="h-3 w-3 mr-1" />
                             Zoom AI
                           </Badge>
-                          {summary.followup_generated && (
-                            <Badge variant="secondary" className="text-xs">
-                              <Mail className="h-3 w-3 mr-1" />
-                              Follow-up Draft
+                          {isProcessed && (
+                            <Badge variant="secondary" className="text-xs bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300">
+                              <CheckCircle2 className="h-3 w-3 mr-1" />
+                              Processed
                             </Badge>
                           )}
                           {isExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
@@ -295,30 +372,208 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                         </div>
                       )}
 
-                      {/* Summary Text */}
-                      {summary.summary_text && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-sm font-medium flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-primary" />
-                              Meeting Summary
-                            </h4>
+                      {/* Show structured content if processed, otherwise show raw summary with generate button */}
+                      {isProcessed && linkedPack ? (
+                        <>
+                          {/* Internal Recap */}
+                          {linkedPack.internal_recap_bullets.length > 0 && (
+                            <div className="space-y-2">
+                              <h4 className="text-sm font-medium flex items-center gap-2">
+                                <FileText className="h-4 w-4 text-primary" />
+                                Internal Recap
+                              </h4>
+                              <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                                {linkedPack.internal_recap_bullets.map((bullet, i) => (
+                                  <p key={i} className="text-sm flex gap-2">
+                                    <span className="text-primary">•</span>
+                                    {bullet}
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Open Questions */}
+                          {linkedPack.open_questions.length > 0 && (
+                            <div className="space-y-2">
+                              <h4 className="text-sm font-medium flex items-center gap-2">
+                                <HelpCircle className="h-4 w-4 text-amber-500" />
+                                Open Questions
+                              </h4>
+                              <div className="bg-amber-500/10 rounded-lg p-3 space-y-1">
+                                {linkedPack.open_questions.map((q, i) => (
+                                  <p key={i} className="text-sm flex gap-2">
+                                    <span className="text-amber-500">?</span>
+                                    {q}
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Milestones */}
+                          {linkedPack.milestones.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-medium flex items-center gap-2">
+                                  <Clock className="h-4 w-4 text-blue-500" />
+                                  Milestones
+                                </h4>
+                                {!linkedPack.milestones_saved_to_lead && (
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => handleAddMilestones(linkedPack)}
+                                    disabled={savingMilestonesId === linkedPack.id}
+                                  >
+                                    {savingMilestonesId === linkedPack.id ? (
+                                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                    ) : (
+                                      <PlusCircle className="h-3 w-3 mr-1" />
+                                    )}
+                                    Add to Lead
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                {linkedPack.milestones.map((m, i) => (
+                                  <div key={i} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
+                                    <Checkbox
+                                      id={`zoom-milestone-${linkedPack.id}-${i}`}
+                                      checked={m.status === "completed"}
+                                      onCheckedChange={async (checked) => {
+                                        try {
+                                          await updateMeetingPackMilestoneStatus(linkedPack.id, i, !!checked);
+                                          if (linkedPack.milestones_saved_to_lead) {
+                                            await updateLeadMilestoneStatus(leadId, i, !!checked);
+                                          }
+                                          loadMeetingPacks();
+                                          onMilestonesAdded?.();
+                                        } catch (err) {
+                                          console.error(err);
+                                          toast.error("Failed to update milestone");
+                                        }
+                                      }}
+                                    />
+                                    <span className={`text-sm flex-1 ${m.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
+                                      {m.description}
+                                    </span>
+                                    {m.status === "completed" ? (
+                                      <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200">
+                                        Done
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="text-xs">
+                                        Pending
+                                      </Badge>
+                                    )}
+                                    {m.date && <span className="text-xs text-muted-foreground">{m.date}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Follow-up Email */}
+                          {linkedPack.follow_up_email_body && (
+                            <div className="space-y-2 pt-2 border-t">
+                              <h4 className="text-sm font-medium flex items-center gap-2">
+                                <Mail className="h-4 w-4 text-primary" />
+                                Follow-up Email
+                              </h4>
+                              {linkedPack.follow_up_email_subject && (
+                                <div className="flex items-center gap-2 text-sm">
+                                  <span className="font-medium text-muted-foreground">Subject:</span>
+                                  <span>{linkedPack.follow_up_email_subject}</span>
+                                </div>
+                              )}
+                              <div className="bg-muted/50 rounded-lg p-3">
+                                <pre className="text-sm whitespace-pre-wrap font-sans">{linkedPack.follow_up_email_body}</pre>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button 
+                                  variant="outline" 
+                                  size="sm" 
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(linkedPack.follow_up_email_body || "");
+                                    toast.success("Email copied");
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3 mr-1" />
+                                  Copy
+                                </Button>
+                                {!linkedPack.email_saved_as_draft && (
+                                  <Button 
+                                    size="sm" 
+                                    onClick={() => handleSaveEmailAsDraft(linkedPack)}
+                                    disabled={savingDraftId === linkedPack.id}
+                                  >
+                                    {savingDraftId === linkedPack.id ? (
+                                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                    ) : (
+                                      <Save className="h-3 w-3 mr-1" />
+                                    )}
+                                    Save as Draft
+                                  </Button>
+                                )}
+                                <SendEmailButton
+                                  to={leadEmail}
+                                  subject={linkedPack.follow_up_email_subject || `Follow-up: Meeting with ${leadName}`}
+                                  body={linkedPack.follow_up_email_body || ""}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {/* Raw Summary Text */}
+                          {summary.summary_text && (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-medium flex items-center gap-2">
+                                  <FileText className="h-4 w-4 text-primary" />
+                                  Meeting Summary
+                                </h4>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(summary.summary_text || "");
+                                    toast.success("Summary copied to clipboard");
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3 mr-1" />
+                                  Copy
+                                </Button>
+                              </div>
+                              <div className="bg-muted/50 rounded-lg p-3 max-h-80 overflow-y-auto">
+                                <pre className="text-sm whitespace-pre-wrap font-sans">{summary.summary_text}</pre>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Generate Recap & Follow-up Button */}
+                          <div className="pt-2 border-t">
                             <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                navigator.clipboard.writeText(summary.summary_text || "");
-                                toast.success("Summary copied to clipboard");
-                              }}
+                              onClick={() => generateRecapFromZoomSummary(summary)}
+                              disabled={isGenerating}
+                              className="w-full"
                             >
-                              <Copy className="h-3 w-3 mr-1" />
-                              Copy
+                              {isGenerating ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Generating Recap & Follow-up...
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-4 w-4 mr-2" />
+                                  Generate Recap & Follow-up
+                                </>
+                              )}
                             </Button>
                           </div>
-                          <div className="bg-muted/50 rounded-lg p-3 max-h-80 overflow-y-auto">
-                            <pre className="text-sm whitespace-pre-wrap font-sans">{summary.summary_text}</pre>
-                          </div>
-                        </div>
+                        </>
                       )}
                     </CardContent>
                   </CollapsibleContent>
@@ -329,18 +584,22 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
         </div>
       )}
 
-      {/* Manual Meeting Packs Section */}
-      {meetingPacks.length > 0 && (
+      {/* Manual Meeting Packs Section - exclude packs generated from Zoom summaries */}
+      {(() => {
+        const manualPacks = meetingPacks.filter(p => !p.source_meeting_summary_id);
+        if (manualPacks.length === 0) return null;
+        
+        return (
         <div className="space-y-3">
           {zoomSummaries.length > 0 && (
             <div className="flex items-center gap-2">
               <Calendar className="h-5 w-5 text-primary" />
               <h3 className="font-medium">Meeting Notes & Follow-ups</h3>
-              <Badge variant="secondary" className="text-xs">{meetingPacks.length}</Badge>
+              <Badge variant="secondary" className="text-xs">{manualPacks.length}</Badge>
             </div>
           )}
           
-      {meetingPacks.map((pack) => {
+      {manualPacks.map((pack) => {
         const isExpanded = expandedIds.has(pack.id);
         const meetingDate = pack.meeting_date 
           ? format(parseISO(pack.meeting_date), "MMM d, yyyy")
@@ -605,7 +864,8 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
         );
       })}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

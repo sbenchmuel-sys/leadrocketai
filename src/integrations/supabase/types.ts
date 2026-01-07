@@ -350,6 +350,7 @@ export type Database = {
           open_questions: Json | null
           owner_user_id: string
           raw_notes: string | null
+          source_meeting_summary_id: string | null
           title: string | null
         }
         Insert: {
@@ -366,6 +367,7 @@ export type Database = {
           open_questions?: Json | null
           owner_user_id: string
           raw_notes?: string | null
+          source_meeting_summary_id?: string | null
           title?: string | null
         }
         Update: {
@@ -382,6 +384,7 @@ export type Database = {
           open_questions?: Json | null
           owner_user_id?: string
           raw_notes?: string | null
+          source_meeting_summary_id?: string | null
           title?: string | null
         }
         Relationships: [
@@ -390,6 +393,13 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_packs_source_meeting_summary_id_fkey"
+            columns: ["source_meeting_summary_id"]
+            isOneToOne: false
+            referencedRelation: "meeting_summaries"
             referencedColumns: ["id"]
           },
         ]
