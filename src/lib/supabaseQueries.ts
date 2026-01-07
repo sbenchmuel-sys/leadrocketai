@@ -732,3 +732,45 @@ export async function updateMeetingPackMilestoneStatus(
 
   if (updateErr) throw updateErr;
 }
+
+// ============================================
+// MEETING SUMMARIES QUERIES (Zoom)
+// ============================================
+
+export interface MeetingSummaryItem {
+  id: string;
+  lead_id: string | null;
+  user_id: string;
+  meeting_title: string | null;
+  summary_text: string | null;
+  participants_emails: string[];
+  sent_at: string;
+  created_at: string;
+  source: string;
+  followup_generated: boolean;
+}
+
+export async function getLeadMeetingSummaries(leadId: string): Promise<MeetingSummaryItem[]> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { data, error } = await supabase
+    .from('meeting_summaries')
+    .select('*')
+    .eq('lead_id', leadId)
+    .order('sent_at', { ascending: false });
+
+  if (error) throw error;
+
+  return (data ?? []).map(row => ({
+    id: row.id,
+    lead_id: row.lead_id,
+    user_id: row.user_id,
+    meeting_title: row.meeting_title,
+    summary_text: row.summary_text,
+    participants_emails: row.participants_emails || [],
+    sent_at: row.sent_at,
+    created_at: row.created_at,
+    source: row.source,
+    followup_generated: row.followup_generated,
+  }));
+}
