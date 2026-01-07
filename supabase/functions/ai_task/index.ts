@@ -14,6 +14,9 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "nurture_sequence",
   "nurture_email_single",
   "post_meeting_followup_email",
+  "extract_milestones_risks",
+  "extract_deal_factors",
+  "recommend_next_steps",
 ];
 
 // Function to get semantic knowledge context with optional lead-scoping
@@ -275,7 +278,7 @@ Knowledge Context (approved snippets):
 Meeting link (optional):
 {{MEETING_LINK}}`,
 
-  extract_milestones_risks: `Extract deal milestones and risks from the provided interactions.
+  extract_milestones_risks: `Extract deal milestones and risks from the provided interactions and any meeting summaries in the knowledge context.
 Return JSON ONLY:
 {
   "milestones": [
@@ -287,15 +290,19 @@ Return JSON ONLY:
 }
 
 Rules:
-- Only include items supported by evidence from the interactions
-- Evidence must be a short snippet from the interactions (<=200 chars)
+- Only include items supported by evidence from the interactions or knowledge context
+- Evidence must be a short snippet from the interactions or knowledge (<=200 chars)
 - If no items, return empty arrays
+- Prioritize information from meeting summaries in knowledge context
 
 Lead Context:
 {{LEAD_CONTEXT}}
 
 Interactions (most recent first):
-{{INTERACTIONS_TEXT}}`,
+{{INTERACTIONS_TEXT}}
+
+Knowledge Context (includes meeting summaries):
+{{KNOWLEDGE_CONTEXT}}`,
 
   extract_deal_factors: `Return JSON ONLY:
 {
@@ -311,15 +318,19 @@ Interactions (most recent first):
 }
 
 Rules:
-- Use only provided interactions + meeting notes
+- Use provided interactions, meeting notes, and knowledge context
 - If uncertain, use unknown
 - Keep reasoning short and fact-based
+- Prioritize information from meeting summaries in knowledge context
 
 Lead Context:
 {{LEAD_CONTEXT}}
 
 Interactions:
-{{INTERACTIONS_TEXT}}`,
+{{INTERACTIONS_TEXT}}
+
+Knowledge Context (includes meeting summaries):
+{{KNOWLEDGE_CONTEXT}}`,
 
   recommend_next_steps: `Return JSON ONLY:
 {
@@ -333,6 +344,7 @@ Rules:
 - Must be specific, actionable, tied to what's missing
 - Keep "why" to 1–2 sentences
 - Prefer P0 actions that unblock the next gate (security, decision maker, meeting, etc.)
+- Consider meeting summaries and lead-specific knowledge context
 
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -341,7 +353,10 @@ Current milestones/risks:
 {{MILESTONES_RISKS_JSON}}
 
 Deal factors:
-{{DEAL_FACTORS_JSON}}`,
+{{DEAL_FACTORS_JSON}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}`,
 
   linkedin_connect: `Write a LinkedIn connection note under 300 characters.
 No selling. Mention a real reason to connect (context given).
