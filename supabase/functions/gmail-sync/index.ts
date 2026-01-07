@@ -617,27 +617,38 @@ serve(async (req) => {
       .update({ last_sync_at: new Date().toISOString() })
       .eq("user_id", user.id);
 
-    // Process any Zoom meeting summary emails (non-blocking)
+    // Process Zoom meeting summary emails with DEDICATED SEARCH (not just lead-specific emails)
     try {
-      const zoomMessages = [];
-      for (const { id: gmailMessageId } of messageIds) {
-        // Collect message data for Zoom processing
-        const msgResponse = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (!msgResponse.ok) continue;
+      // Search specifically for Zoom summary emails across entire inbox
+      const zoomQuery = 'from:zoom.us (subject:"Meeting assets" OR subject:"Meeting Summary")';
+      const zoomSearchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(zoomQuery)}&maxResults=50`;
+      
+      const zoomSearchResponse = await fetch(zoomSearchUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (zoomSearchResponse.ok) {
+        const zoomSearchData = await zoomSearchResponse.json();
+        const zoomMessageIds = zoomSearchData.messages || [];
         
-        const message = await msgResponse.json();
-        const headers = message.payload?.headers || [];
-        const from = getHeader(headers, "From") || "";
-        const subject = getHeader(headers, "Subject") || "";
-        const date = getHeader(headers, "Date");
-        const to = getHeader(headers, "To") || "";
-        const cc = getHeader(headers, "Cc") || "";
-        
-        // Quick check if it might be from Zoom
-        if (from.toLowerCase().includes("zoom")) {
+        console.log(`[gmail-sync] Found ${zoomMessageIds.length} Zoom summary emails via dedicated search`);
+
+        const zoomMessages = [];
+        for (const { id: gmailMessageId } of zoomMessageIds) {
+          const msgResponse = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!msgResponse.ok) continue;
+          
+          const message = await msgResponse.json();
+          const headers = message.payload?.headers || [];
+          const from = getHeader(headers, "From") || "";
+          const subject = getHeader(headers, "Subject") || "";
+          const date = getHeader(headers, "Date");
+          const to = getHeader(headers, "To") || "";
+          const cc = getHeader(headers, "Cc") || "";
+          
           zoomMessages.push({
             user_id: user.id,
             gmail_message_id: gmailMessageId,
@@ -650,13 +661,15 @@ serve(async (req) => {
             raw_text: getMessageBody(message),
           });
         }
-      }
 
-      if (zoomMessages.length > 0) {
-        console.log(`[gmail-sync] Found ${zoomMessages.length} potential Zoom emails, processing...`);
-        await serviceSupabase.functions.invoke("process-zoom-summary", {
-          body: { messages: zoomMessages, user_id: user.id },
-        });
+        if (zoomMessages.length > 0) {
+          console.log(`[gmail-sync] Processing ${zoomMessages.length} Zoom summary emails...`);
+          await serviceSupabase.functions.invoke("process-zoom-summary", {
+            body: { messages: zoomMessages, user_id: user.id },
+          });
+        }
+      } else {
+        console.error("[gmail-sync] Zoom search failed:", await zoomSearchResponse.text());
       }
     } catch (zoomErr) {
       console.error("[gmail-sync] Zoom processing error (non-blocking):", zoomErr);
