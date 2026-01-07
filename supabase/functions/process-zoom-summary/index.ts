@@ -119,6 +119,47 @@ function extractParticipantEmails(body: string, toEmail: string, ccEmail: string
   return filtered.slice(0, 200);
 }
 
+// Extract participant names from Zoom summary text
+function extractParticipantNames(body: string): string[] {
+  const names = new Set<string>();
+  
+  // Pattern 1: "[Name] discussed/mentioned/emphasized/noted/said/explained/asked..."
+  const actionPatterns = [
+    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:discussed|mentioned|emphasized|noted|said|explained|presented|shared|suggested|asked|added|agreed|confirmed|talked|stated|raised|pointed|highlighted|addressed|covered|reviewed|proposed|recommended|indicated|expressed|focused|described|outlined|summarized|reported|clarified)\b/g
+  ];
+  
+  for (const pattern of actionPatterns) {
+    let match;
+    while ((match = pattern.exec(body)) !== null) {
+      names.add(match[1].trim());
+    }
+  }
+  
+  // Pattern 2: Names in action items (e.g., "Shai: Prepare a draft")
+  const actionItemPattern = /^\s*[-•*]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?):\s+[A-Z]/gm;
+  let match;
+  while ((match = actionItemPattern.exec(body)) !== null) {
+    names.add(match[1].trim());
+  }
+  
+  // Pattern 3: Next steps format - "Name will..." or "Name to..."
+  const nextStepsPattern = /\b([A-Z][a-z]+)\s+(?:will|to|should|needs to|is going to)\s+/g;
+  while ((match = nextStepsPattern.exec(body)) !== null) {
+    names.add(match[1].trim());
+  }
+  
+  // Filter out common false positives
+  const exclude = new Set([
+    'Meeting', 'Summary', 'Quick', 'Next', 'Action', 'Topics', 'Key', 'The', 'This', 
+    'Zoom', 'Call', 'Discussion', 'Team', 'Project', 'Update', 'Review', 'Session',
+    'Agenda', 'Notes', 'Items', 'Steps', 'Takeaways', 'Overview', 'Welcome', 'Thanks',
+    'Please', 'Hello', 'Regards', 'Best', 'Sincerely', 'From', 'Date', 'Subject',
+    'Attendees', 'Participants', 'Recording', 'Transcript'
+  ]);
+  
+  return Array.from(names).filter(n => !exclude.has(n) && n.length > 2);
+}
+
 // Clean summary text (remove boilerplate/signatures)
 function cleanSummaryText(body: string): string {
   let cleaned = body;
@@ -319,8 +360,37 @@ serve(async (req) => {
           }
         }
 
-        // 3. Recency + domain fallback scoring
-        if (!matchedLeadId && leads && participantEmails.length > 0) {
+        // 3. Participant name match
+        const participantNames = extractParticipantNames(msg.raw_text);
+        console.log(`[process-zoom-summary] Extracted names: ${participantNames.join(", ")}`);
+        
+        if (!matchedLeadId && leads && participantNames.length > 0) {
+          const nameMatchedLeads = leads.filter(lead => {
+            const leadNameLower = lead.name.toLowerCase();
+            const leadFirstName = leadNameLower.split(' ')[0];
+            const leadLastName = leadNameLower.split(' ').slice(-1)[0];
+            
+            return participantNames.some(name => {
+              const nameLower = name.toLowerCase();
+              const nameFirst = nameLower.split(' ')[0];
+              // Match on first name OR full name contains
+              return leadFirstName === nameFirst || 
+                     leadNameLower.includes(nameLower) ||
+                     nameLower.includes(leadFirstName);
+            });
+          });
+          
+          if (nameMatchedLeads.length === 1) {
+            matchedLeadId = nameMatchedLeads[0].id;
+            matchReason = `name_match: ${participantNames.join(', ')}`;
+            console.log(`[process-zoom-summary] Matched via name: ${nameMatchedLeads[0].name}`);
+          } else if (nameMatchedLeads.length > 1) {
+            console.log(`[process-zoom-summary] Multiple name matches (${nameMatchedLeads.length}), continuing to scoring`);
+          }
+        }
+
+        // 4. Recency + domain + name scoring fallback
+        if (!matchedLeadId && leads) {
           const participantDomains = new Set(
             participantEmails.map(e => e.split("@")[1]).filter(Boolean)
           );
@@ -334,14 +404,27 @@ serve(async (req) => {
             let score = 0;
             const reasons: string[] = [];
 
-            // Domain match
+            // Name match scoring (+40)
+            if (participantNames.length > 0) {
+              const leadNameLower = lead.name.toLowerCase();
+              const leadFirstName = leadNameLower.split(' ')[0];
+              if (participantNames.some(n => {
+                const nameLower = n.toLowerCase();
+                return leadFirstName === nameLower.split(' ')[0] || leadNameLower.includes(nameLower);
+              })) {
+                score += 40;
+                reasons.push("name_match");
+              }
+            }
+
+            // Domain match (+50)
             const leadDomain = lead.email.split("@")[1]?.toLowerCase();
             if (leadDomain && participantDomains.has(leadDomain)) {
               score += 50;
               reasons.push("domain_match");
             }
 
-            // Recent activity
+            // Recent activity (+30)
             const lastActivity = lead.last_activity_at ? new Date(lead.last_activity_at).getTime() : 0;
             const lastInbound = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
             const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
