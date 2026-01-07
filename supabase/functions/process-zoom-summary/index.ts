@@ -119,9 +119,41 @@ function extractParticipantEmails(body: string, toEmail: string, ccEmail: string
   return filtered.slice(0, 200);
 }
 
-// Extract participant names from Zoom summary text
-function extractParticipantNames(body: string): string[] {
+// Extract participant names from Zoom summary text AND subject
+function extractParticipantNames(body: string, subject?: string): string[] {
   const names = new Set<string>();
+  
+  // Pattern 0: Extract names from subject line (e.g., "Meeting assets for Jithen Paramanund: 30 Minute Intro...")
+  if (subject) {
+    // "Meeting assets for [Name]'s Zoom Meeting" or "Meeting assets for [Name]: [Meeting Title]"
+    const subjectNamePatterns = [
+      /Meeting assets for ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/i,
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)'s (?:Zoom )?Meeting/i,
+      /Meeting (?:with|for) ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+):\s*\d+\s*(?:Min|Hour)/i,
+      /Intro (?:to|with) .+? with ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+    ];
+    
+    for (const pattern of subjectNamePatterns) {
+      const match = subject.match(pattern);
+      if (match && match[1]) {
+        // This could be a full name, add it
+        names.add(match[1].trim());
+      }
+    }
+    
+    // Also try to extract any capitalized multi-word names from subject
+    const subjectFullNamePattern = /\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g;
+    let match;
+    while ((match = subjectFullNamePattern.exec(subject)) !== null) {
+      const potentialName = match[1].trim();
+      // Filter out common non-name phrases
+      const subjectExclude = ['Meeting Summary', 'Zoom Meeting', 'Meeting Assets', 'Quick Recap', 'Action Items', 'Next Steps'];
+      if (!subjectExclude.some(ex => potentialName.includes(ex))) {
+        names.add(potentialName);
+      }
+    }
+  }
   
   // Pattern 1: "[Name] discussed/mentioned/emphasized/noted/said/explained/asked..."
   const actionPatterns = [
@@ -154,7 +186,7 @@ function extractParticipantNames(body: string): string[] {
     'Zoom', 'Call', 'Discussion', 'Team', 'Project', 'Update', 'Review', 'Session',
     'Agenda', 'Notes', 'Items', 'Steps', 'Takeaways', 'Overview', 'Welcome', 'Thanks',
     'Please', 'Hello', 'Regards', 'Best', 'Sincerely', 'From', 'Date', 'Subject',
-    'Attendees', 'Participants', 'Recording', 'Transcript'
+    'Attendees', 'Participants', 'Recording', 'Transcript', 'Minute', 'Intro', 'Assets'
   ]);
   
   return Array.from(names).filter(n => !exclude.has(n) && n.length > 2);
@@ -360,9 +392,9 @@ serve(async (req) => {
           }
         }
 
-        // 3. Participant name match
-        const participantNames = extractParticipantNames(msg.raw_text);
-        console.log(`[process-zoom-summary] Extracted names: ${participantNames.join(", ")}`);
+        // 3. Participant name match (now also extracts from subject line)
+        const participantNames = extractParticipantNames(msg.raw_text, msg.subject);
+        console.log(`[process-zoom-summary] Extracted names from body+subject: ${participantNames.join(", ")}`);
         
         if (!matchedLeadId && leads && participantNames.length > 0) {
           const nameMatchedLeads = leads.filter(lead => {

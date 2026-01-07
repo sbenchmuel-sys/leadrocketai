@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Loader2, Video } from "lucide-react";
+import { Loader2, Video, RefreshCw } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface OrgSettings {
@@ -19,6 +20,7 @@ export function ZoomMeetingSyncCard() {
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -88,6 +90,39 @@ export function ZoomMeetingSyncCard() {
     }
   };
 
+  const syncZoomSummaries = async () => {
+    setIsSyncing(true);
+    try {
+      // Get a lead to trigger sync (the gmail-sync will search for Zoom emails regardless)
+      const { data: leads } = await supabase
+        .from("leads")
+        .select("id, email")
+        .eq("owner_user_id", user!.id)
+        .limit(1);
+
+      if (!leads || leads.length === 0) {
+        toast.error("No leads found. Create a lead first to enable Zoom sync.");
+        return;
+      }
+
+      const lead = leads[0];
+      const { data: session } = await supabase.auth.getSession();
+      
+      const { error } = await supabase.functions.invoke("gmail-sync", {
+        body: { leadId: lead.id, leadEmail: lead.email, maxResults: 1 },
+        headers: { Authorization: `Bearer ${session?.session?.access_token}` },
+      });
+
+      if (error) throw error;
+      toast.success("Zoom summaries synced successfully!");
+    } catch (err) {
+      console.error("Zoom sync error:", err);
+      toast.error("Failed to sync Zoom summaries");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -149,6 +184,30 @@ export function ZoomMeetingSyncCard() {
             Enable Zoom meeting sync to configure follow-up generation.
           </p>
         )}
+
+        <div className="pt-2 border-t">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={syncZoomSummaries}
+            disabled={isSyncing || !settings?.zoom_meeting_sync_enabled}
+          >
+            {isSyncing ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Syncing...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Sync Zoom Summaries Now
+              </>
+            )}
+          </Button>
+          <p className="text-xs text-muted-foreground mt-2">
+            Manually search Gmail for Zoom Meeting Summary emails and match them to leads.
+          </p>
+        </div>
       </CardContent>
     </Card>
   );
