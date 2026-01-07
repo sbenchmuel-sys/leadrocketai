@@ -41,20 +41,37 @@ Status: ${lead.status}
 ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
   };
 
+  // Helper to clean and limit text for AI payloads
+  const cleanTextForPayload = (text: string, maxChars: number = 2000): string => {
+    return text
+      .split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0] // Remove quoted text
+      .slice(0, maxChars)
+      .trim();
+  };
+
   const runMeetingPipeline = async (meetingNotes: string) => {
     setIsRunningPipeline(true);
     try {
       const leadContext = await buildLeadContext();
       const kb = await getKnowledgeChunks(true);
-      const knowledgeContext = kb.map((k) => k.content).join("\n---\n");
+      // Limit knowledge context to first 5 chunks, 500 chars each
+      const knowledgeContext = kb
+        .slice(0, 5)
+        .map((k) => k.content.slice(0, 500))
+        .join("\n---\n");
       const lead = await getLeadDetail(leadId);
+      
+      // Clean meeting notes to reduce payload size
+      const cleanedMeetingNotes = cleanTextForPayload(meetingNotes, 3000);
+      console.log("[Meeting Pipeline] Meeting notes size:", cleanedMeetingNotes.length, "chars");
+      console.log("[Meeting Pipeline] Knowledge context size:", knowledgeContext.length, "chars");
 
       // Step 1: Post meeting recap
       toast.info("Step 1/4: Generating meeting recap...");
       const recapResult = await runTask("post_meeting_recap", {
         mode: lead.strategy,
         lead_context: leadContext,
-        meeting_summary: meetingNotes,
+        meeting_summary: cleanedMeetingNotes,
         knowledge_context: knowledgeContext,
         meeting_link: lead.meeting_link || "",
       });
@@ -83,7 +100,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       toast.info("Step 2/4: Extracting milestones and risks...");
       const milestonesResult = await runTask("extract_milestones_risks", {
         lead_context: leadContext,
-        interactions_text: meetingNotes,
+        interactions_text: cleanedMeetingNotes,
       });
 
       let milestonesData = { milestones: [], risks: [] };
@@ -99,7 +116,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       toast.info("Step 3/4: Analyzing deal factors...");
       const factorsResult = await runTask("extract_deal_factors", {
         lead_context: leadContext,
-        interactions_text: meetingNotes,
+        interactions_text: cleanedMeetingNotes,
       });
 
       let factorsData = null;
