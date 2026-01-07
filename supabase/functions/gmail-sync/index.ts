@@ -65,20 +65,74 @@ function getHeader(headers: Array<{ name: string; value: string }>, name: string
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
-function getMessageBody(message: GmailMessage): string {
-  if (message.payload.body?.data) {
-    return decodeBase64Url(message.payload.body.data);
-  }
+// Convert HTML to readable plain text
+function htmlToPlainText(html: string): string {
+  let text = html;
   
+  // Replace common block elements with newlines
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/p>/gi, "\n\n");
+  text = text.replace(/<\/div>/gi, "\n");
+  text = text.replace(/<\/tr>/gi, "\n");
+  text = text.replace(/<\/li>/gi, "\n");
+  text = text.replace(/<\/h[1-6]>/gi, "\n\n");
+  
+  // Remove script and style content
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  
+  // Remove all remaining HTML tags
+  text = text.replace(/<[^>]+>/g, "");
+  
+  // Decode common HTML entities
+  text = text.replace(/&nbsp;/gi, " ");
+  text = text.replace(/&amp;/gi, "&");
+  text = text.replace(/&lt;/gi, "<");
+  text = text.replace(/&gt;/gi, ">");
+  text = text.replace(/&quot;/gi, '"');
+  text = text.replace(/&#39;/gi, "'");
+  text = text.replace(/&rsquo;/gi, "'");
+  text = text.replace(/&lsquo;/gi, "'");
+  text = text.replace(/&rdquo;/gi, '"');
+  text = text.replace(/&ldquo;/gi, '"');
+  text = text.replace(/&mdash;/gi, "—");
+  text = text.replace(/&ndash;/gi, "–");
+  text = text.replace(/&#\d+;/g, ""); // Remove other numeric entities
+  
+  // Normalize whitespace
+  text = text.replace(/[ \t]+/g, " "); // Multiple spaces/tabs to single space
+  text = text.replace(/\n[ \t]+/g, "\n"); // Remove leading whitespace on lines
+  text = text.replace(/[ \t]+\n/g, "\n"); // Remove trailing whitespace on lines
+  text = text.replace(/\n{3,}/g, "\n\n"); // Max 2 consecutive newlines
+  
+  return text.trim();
+}
+
+function getMessageBody(message: GmailMessage): string {
+  // First try to get plain text
   if (message.payload.parts) {
     const textPart = message.payload.parts.find(p => p.mimeType === "text/plain");
     if (textPart?.body?.data) {
       return decodeBase64Url(textPart.body.data);
     }
+  }
+  
+  // Fall back to direct body if it's plain text
+  if (message.payload.body?.data) {
+    const decoded = decodeBase64Url(message.payload.body.data);
+    // Check if it's HTML
+    if (decoded.includes("<html") || decoded.includes("<!DOCTYPE")) {
+      return htmlToPlainText(decoded);
+    }
+    return decoded;
+  }
+  
+  // Convert HTML to plain text
+  if (message.payload.parts) {
     const htmlPart = message.payload.parts.find(p => p.mimeType === "text/html");
     if (htmlPart?.body?.data) {
       const html = decodeBase64Url(htmlPart.body.data);
-      return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      return htmlToPlainText(html);
     }
   }
   
