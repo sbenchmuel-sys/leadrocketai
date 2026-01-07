@@ -438,6 +438,7 @@ export interface MilestoneItem {
   status: 'completed' | 'pending';
   date: string | null;
   evidence?: string;
+  completedAt?: string;
 }
 
 export async function appendLeadMilestones(leadId: string, newMilestones: MilestoneItem[]): Promise<void> {
@@ -635,4 +636,99 @@ export async function deleteMeetingPack(id: string): Promise<void> {
     .eq('id', id);
 
   if (error) throw error;
+}
+
+// ============================================
+// MILESTONE STATUS UPDATES
+// ============================================
+
+export async function updateLeadMilestoneStatus(
+  leadId: string, 
+  milestoneIndex: number, 
+  completed: boolean
+): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  // Fetch current milestones
+  const { data: lead, error: fetchErr } = await supabase
+    .from('leads')
+    .select('milestones_json')
+    .eq('id', leadId)
+    .single();
+
+  if (fetchErr) throw fetchErr;
+
+  const milestones = (lead?.milestones_json as unknown as MilestoneItem[] | null) ?? [];
+  
+  if (milestoneIndex < 0 || milestoneIndex >= milestones.length) {
+    throw new Error('Invalid milestone index');
+  }
+
+  const now = new Date().toISOString();
+  const updatedMilestones = milestones.map((m, i) => {
+    if (i === milestoneIndex) {
+      return {
+        ...m,
+        status: completed ? 'completed' as const : 'pending' as const,
+        date: completed ? now.split('T')[0] : null,
+        completedAt: completed ? now : undefined,
+      };
+    }
+    return m;
+  });
+
+  const { error: updateErr } = await supabase
+    .from('leads')
+    .update({ 
+      milestones_json: updatedMilestones as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
+      last_activity_at: now
+    })
+    .eq('id', leadId);
+
+  if (updateErr) throw updateErr;
+}
+
+export async function updateMeetingPackMilestoneStatus(
+  packId: string, 
+  milestoneIndex: number, 
+  completed: boolean
+): Promise<void> {
+  if (!packId) throw new Error('Missing pack id');
+
+  // Fetch current milestones
+  const { data: pack, error: fetchErr } = await supabase
+    .from('meeting_packs')
+    .select('milestones')
+    .eq('id', packId)
+    .single();
+
+  if (fetchErr) throw fetchErr;
+
+  const milestones = (pack?.milestones as unknown as MilestoneItem[] | null) ?? [];
+  
+  if (milestoneIndex < 0 || milestoneIndex >= milestones.length) {
+    throw new Error('Invalid milestone index');
+  }
+
+  const now = new Date().toISOString();
+  const updatedMilestones = milestones.map((m, i) => {
+    if (i === milestoneIndex) {
+      return {
+        ...m,
+        status: completed ? 'completed' as const : 'pending' as const,
+        date: completed ? now.split('T')[0] : null,
+        completedAt: completed ? now : undefined,
+      };
+    }
+    return m;
+  });
+
+  const { error: updateErr } = await supabase
+    .from('meeting_packs')
+    .update({ 
+      milestones: updatedMilestones as unknown as Database['public']['Tables']['meeting_packs']['Update']['milestones']
+    })
+    .eq('id', packId);
+
+  if (updateErr) throw updateErr;
 }

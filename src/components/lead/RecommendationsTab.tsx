@@ -1,11 +1,12 @@
 import { useState } from "react";
 import type { Json } from "@/integrations/supabase/types";
-import { LeadDetail, getLeadInteractions } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadInteractions, updateLeadMilestoneStatus } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2, Brain, CheckCircle, AlertTriangle, Target } from "lucide-react";
 
@@ -19,6 +20,7 @@ interface Milestone {
   status: "completed" | "pending";
   date: string | null;
   evidence: string;
+  completedAt?: string;
 }
 
 interface Risk {
@@ -390,16 +392,39 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
             ) : (
               <div className="space-y-3">
                 {milestones.map((m, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <Badge variant={m.status === "completed" ? "default" : "secondary"}>
-                      {m.status}
-                    </Badge>
-                    <div>
-                      <p className="text-sm">{m.description}</p>
+                  <div key={i} className="flex items-start gap-3 p-2 rounded border bg-muted/30">
+                    <Checkbox
+                      id={`rec-milestone-${i}`}
+                      checked={m.status === "completed"}
+                      onCheckedChange={async (checked) => {
+                        try {
+                          await updateLeadMilestoneStatus(lead.id, i, !!checked);
+                          toast.success(`Milestone ${checked ? "completed" : "reopened"}`);
+                          onUpdate();
+                        } catch (err) {
+                          console.error(err);
+                          toast.error("Failed to update milestone");
+                        }
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className={`text-sm ${m.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
+                        {m.description}
+                      </p>
                       {m.date && (
-                        <p className="text-xs text-muted-foreground">{m.date}</p>
+                        <p className="text-xs text-muted-foreground mt-1">{m.date}</p>
                       )}
                     </div>
+                    {m.status === "completed" ? (
+                      <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200">
+                        Done
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-xs">
+                        Pending
+                      </Badge>
+                    )}
                   </div>
                 ))}
               </div>
