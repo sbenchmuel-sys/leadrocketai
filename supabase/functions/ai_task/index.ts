@@ -101,7 +101,8 @@ function getCorsHeaders(req: Request): Record<string, string> {
   // In development, allow localhost origins; in production, allow Lovable project domains
   const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
   const isLovableProject = origin.endsWith(".lovableproject.com");
-  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || allowedOrigins.includes("*");
+  const isLovableApp = origin.endsWith(".lovable.app");
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || isLovableApp || allowedOrigins.includes("*");
   
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "",
