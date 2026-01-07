@@ -111,6 +111,13 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     return parts.join("\n");
   };
 
+  // Helper to extract JSON from AI response (may be wrapped in markdown fences)
+  const extractJson = (content: string): string => {
+    const trimmed = content.trim();
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    return (fenced?.[1] ?? trimmed).trim();
+  };
+
   // Pre-Meeting Cadence Emails
   const generatePreMeetingEmail = async (emailNum: 1 | 2 | 3 | 4) => {
     const taskMap: Record<number, AITaskType> = {
@@ -256,7 +263,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
 
     if (result.ok && result.content) {
       try {
-        const parsed = JSON.parse(result.content) as PostMeetingRecapResult;
+        const parsed = JSON.parse(extractJson(result.content)) as PostMeetingRecapResult;
         setRecapResult(parsed);
         setEditableCustomerEmail(parsed.customer_email.body);
         toast.success("Recap generated successfully");
