@@ -65,28 +65,16 @@ serve(async (req) => {
       try {
         console.log(`[generate-embedding] Attempt ${attempt}/${maxAttempts}`);
         
-        const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        // Use proper embedding API
+        const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${LOVABLE_API_KEY}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [
-              {
-                role: "system",
-                content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
-Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
-The numbers should represent the semantic meaning of the input text.
-Similar texts should have similar vectors. No explanation, just the array.`
-              },
-              {
-                role: "user",
-                content: text.slice(0, 8000)
-              }
-            ],
-            temperature: 0,
+            model: "google/text-embedding-004",
+            input: text.slice(0, 8000),
           }),
         });
 
@@ -115,7 +103,7 @@ Similar texts should have similar vectors. No explanation, just the array.`
           
           const errorText = await response.text();
           console.error(`[generate-embedding] AI gateway error: ${status}`, errorText);
-          lastError = new Error(`API returned ${status}`);
+          lastError = new Error(`API returned ${status}: ${errorText}`);
           
           if (attempt < maxAttempts) {
             const backoffMs = Math.pow(2, attempt) * 1000;
@@ -124,29 +112,13 @@ Similar texts should have similar vectors. No explanation, just the array.`
           }
         } else {
           const data = await response.json();
-          const content = data.choices?.[0]?.message?.content || "";
+          embedding = data.data?.[0]?.embedding;
           
-          // Parse the embedding array from the response
-          const jsonMatch = content.match(/\[[\s\S]*\]/);
-          if (!jsonMatch) {
-            throw new Error("No array found in response");
+          if (!embedding || !Array.isArray(embedding)) {
+            throw new Error("Invalid embedding response format");
           }
           
-          const parsed = JSON.parse(jsonMatch[0]);
-          
-          // Validate it's an array of numbers
-          if (!Array.isArray(parsed) || parsed.length === 0 || typeof parsed[0] !== "number") {
-            throw new Error("Invalid embedding format");
-          }
-          
-          // Normalize to 384 dimensions if needed
-          embedding = parsed;
-          while (embedding.length < 384) {
-            embedding.push(0);
-          }
-          embedding = embedding.slice(0, 384);
-          
-          console.log(`[generate-embedding] Successfully generated embedding on attempt ${attempt}`);
+          console.log(`[generate-embedding] Successfully generated embedding on attempt ${attempt}, dimensions: ${embedding.length}`);
           break; // Success!
         }
       } catch (err) {

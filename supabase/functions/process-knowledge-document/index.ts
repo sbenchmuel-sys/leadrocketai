@@ -159,35 +159,23 @@ serve(async (req) => {
       while (attempts < maxAttempts && !success) {
         attempts++;
         try {
-          // Generate embedding using chat model (Lovable AI doesn't support embedding models)
-          const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          // Use proper embedding API
+          const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
             method: "POST",
             headers: {
               Authorization: `Bearer ${LOVABLE_API_KEY}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "google/gemini-2.5-flash-lite",
-              messages: [
-                {
-                  role: "system",
-                  content: `You are a text embedding generator. Generate a 384-dimensional embedding vector for semantic similarity search.
-Output ONLY a JSON array of exactly 384 floating point numbers between -1 and 1.
-The numbers should represent the semantic meaning of the input text.
-Similar texts should have similar vectors. No explanation, just the array.`
-                },
-                {
-                  role: "user",
-                  content: chunk.content.slice(0, 8000)
-                }
-              ],
-              temperature: 0,
+              model: "google/text-embedding-004",
+              input: chunk.content.slice(0, 8000),
             }),
           });
 
           if (!embResponse.ok) {
             const status = embResponse.status;
-            console.error(`[process-knowledge-document] Embedding API error for chunk ${chunk.id}: ${status}`);
+            const errorText = await embResponse.text();
+            console.error(`[process-knowledge-document] Embedding API error for chunk ${chunk.id}: ${status}`, errorText);
             
             // Handle rate limiting with longer backoff
             if (status === 429) {
@@ -198,21 +186,15 @@ Similar texts should have similar vectors. No explanation, just the array.`
             }
             
             // For other errors, mark as failed and continue
-            throw new Error(`API returned ${status}`);
+            throw new Error(`API returned ${status}: ${errorText}`);
           }
 
           const embData = await embResponse.json();
-          const content = embData.choices?.[0]?.message?.content || "";
+          const embedding: number[] = embData.data?.[0]?.embedding;
           
-          // Parse the embedding array from the response
-          const jsonMatch = content.match(/\[[\s\S]*\]/);
-          if (!jsonMatch) throw new Error("No array found in response");
-          
-          let embedding: number[] = JSON.parse(jsonMatch[0]);
-          
-          // Normalize to 384 dimensions
-          while (embedding.length < 384) embedding.push(0);
-          embedding = embedding.slice(0, 384);
+          if (!embedding || !Array.isArray(embedding)) {
+            throw new Error("Invalid embedding response format");
+          }
           
           // Update chunk with embedding
           const { error: updateError } = await supabaseAdmin
@@ -229,7 +211,7 @@ Similar texts should have similar vectors. No explanation, just the array.`
 
           embeddingsGenerated++;
           success = true;
-          console.log(`[process-knowledge-document] Successfully generated embedding for chunk ${chunk.id}`);
+          console.log(`[process-knowledge-document] Successfully generated embedding for chunk ${chunk.id}, dimensions: ${embedding.length}`);
           
         } catch (err) {
           console.error(`[process-knowledge-document] Attempt ${attempts}/${maxAttempts} failed for chunk ${chunk.id}:`, err);
