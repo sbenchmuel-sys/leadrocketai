@@ -9,7 +9,9 @@ import {
   saveDraft,
   MilestoneItem,
   updateMeetingPackMilestoneStatus,
-  updateLeadMilestoneStatus
+  updateLeadMilestoneStatus,
+  getLeadMeetingSummaries,
+  MeetingSummaryItem
 } from "@/lib/supabaseQueries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,7 +45,9 @@ import {
   Trash2,
   PlusCircle,
   Loader2,
-  FileText
+  FileText,
+  Video,
+  Users
 } from "lucide-react";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 
@@ -56,31 +60,43 @@ interface MeetingsTabProps {
 
 export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesAdded }: MeetingsTabProps) {
   const [meetingPacks, setMeetingPacks] = useState<MeetingPackItem[]>([]);
+  const [zoomSummaries, setZoomSummaries] = useState<MeetingSummaryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [expandedZoomIds, setExpandedZoomIds] = useState<Set<string>>(new Set());
   const [savingMilestonesId, setSavingMilestonesId] = useState<string | null>(null);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
   const [editedEmailBody, setEditedEmailBody] = useState("");
 
-  const loadMeetingPacks = async () => {
+  const loadData = async () => {
     try {
-      const data = await getLeadMeetingPacks(leadId);
-      setMeetingPacks(data);
+      const [packs, summaries] = await Promise.all([
+        getLeadMeetingPacks(leadId),
+        getLeadMeetingSummaries(leadId)
+      ]);
+      setMeetingPacks(packs);
+      setZoomSummaries(summaries);
       // Auto-expand the first/most recent meeting
-      if (data.length > 0 && expandedIds.size === 0) {
-        setExpandedIds(new Set([data[0].id]));
+      if (packs.length > 0 && expandedIds.size === 0) {
+        setExpandedIds(new Set([packs[0].id]));
+      }
+      if (summaries.length > 0 && expandedZoomIds.size === 0) {
+        setExpandedZoomIds(new Set([summaries[0].id]));
       }
     } catch (err) {
-      console.error("Failed to load meeting packs:", err);
+      console.error("Failed to load meetings:", err);
       toast.error("Failed to load meetings");
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Keep the old function name for compatibility with existing calls
+  const loadMeetingPacks = loadData;
+
   useEffect(() => {
-    loadMeetingPacks();
+    loadData();
   }, [leadId]);
 
   const toggleExpanded = (id: string) => {
@@ -91,6 +107,16 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
       newSet.add(id);
     }
     setExpandedIds(newSet);
+  };
+
+  const toggleZoomExpanded = (id: string) => {
+    const newSet = new Set(expandedZoomIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setExpandedZoomIds(newSet);
   };
 
   const handleAddMilestones = async (pack: MeetingPackItem) => {
@@ -183,15 +209,15 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     );
   }
 
-  if (meetingPacks.length === 0) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0) {
     return (
       <Card>
         <CardContent className="py-12 text-center">
           <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
           <h3 className="font-medium text-lg mb-2">No Meetings Yet</h3>
           <p className="text-muted-foreground text-sm max-w-md mx-auto">
-            When you generate a follow-up email or recap from meeting notes in the Drafts tab, 
-            it will be saved here for future reference.
+            When you generate a follow-up email or recap from meeting notes, or when Zoom meeting 
+            summaries are synced from Gmail, they will appear here.
           </p>
         </CardContent>
       </Card>
@@ -199,7 +225,121 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Zoom Meeting Summaries Section */}
+      {zoomSummaries.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Video className="h-5 w-5 text-blue-500" />
+            <h3 className="font-medium">Zoom Meeting Summaries</h3>
+            <Badge variant="secondary" className="text-xs">{zoomSummaries.length}</Badge>
+          </div>
+          
+          {zoomSummaries.map((summary) => {
+            const isExpanded = expandedZoomIds.has(summary.id);
+            const sentDate = format(parseISO(summary.sent_at), "MMM d, yyyy 'at' h:mm a");
+
+            return (
+              <Card key={summary.id} className="overflow-hidden border-blue-200 dark:border-blue-900">
+                <Collapsible open={isExpanded} onOpenChange={() => toggleZoomExpanded(summary.id)}>
+                  <CollapsibleTrigger asChild>
+                    <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Video className="h-5 w-5 text-blue-500" />
+                          <div>
+                            <CardTitle className="text-base">
+                              {summary.meeting_title || "Zoom Meeting"}
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground mt-0.5">
+                              {sentDate}
+                              {summary.participants_emails.length > 0 && (
+                                <span> • {summary.participants_emails.length} participant{summary.participants_emails.length !== 1 ? 's' : ''}</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                            <Video className="h-3 w-3 mr-1" />
+                            Zoom AI
+                          </Badge>
+                          {summary.followup_generated && (
+                            <Badge variant="secondary" className="text-xs">
+                              <Mail className="h-3 w-3 mr-1" />
+                              Follow-up Draft
+                            </Badge>
+                          )}
+                          {isExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                        </div>
+                      </div>
+                    </CardHeader>
+                  </CollapsibleTrigger>
+
+                  <CollapsibleContent>
+                    <CardContent className="space-y-4 pt-0">
+                      {/* Participants */}
+                      {summary.participants_emails.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="text-sm font-medium flex items-center gap-2">
+                            <Users className="h-4 w-4 text-muted-foreground" />
+                            Participants
+                          </h4>
+                          <div className="flex flex-wrap gap-1">
+                            {summary.participants_emails.map((email, i) => (
+                              <Badge key={i} variant="secondary" className="text-xs font-normal">
+                                {email}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Summary Text */}
+                      {summary.summary_text && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-medium flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-primary" />
+                              Meeting Summary
+                            </h4>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                navigator.clipboard.writeText(summary.summary_text || "");
+                                toast.success("Summary copied to clipboard");
+                              }}
+                            >
+                              <Copy className="h-3 w-3 mr-1" />
+                              Copy
+                            </Button>
+                          </div>
+                          <div className="bg-muted/50 rounded-lg p-3 max-h-80 overflow-y-auto">
+                            <pre className="text-sm whitespace-pre-wrap font-sans">{summary.summary_text}</pre>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </CollapsibleContent>
+                </Collapsible>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Manual Meeting Packs Section */}
+      {meetingPacks.length > 0 && (
+        <div className="space-y-3">
+          {zoomSummaries.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Calendar className="h-5 w-5 text-primary" />
+              <h3 className="font-medium">Meeting Notes & Follow-ups</h3>
+              <Badge variant="secondary" className="text-xs">{meetingPacks.length}</Badge>
+            </div>
+          )}
+          
       {meetingPacks.map((pack) => {
         const isExpanded = expandedIds.has(pack.id);
         const meetingDate = pack.meeting_date 
@@ -464,6 +604,8 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
           </Card>
         );
       })}
+        </div>
+      )}
     </div>
   );
 }
