@@ -45,12 +45,13 @@ export function enrichLead(lead: LeadListItem & {
 }
 
 // Get action type from action key for button rendering
-export function getActionType(actionKey: string | null): "reply" | "follow_up" | "recap" | "nurture" | "view" {
+export function getActionType(actionKey: string | null): "reply" | "follow_up" | "recap" | "nurture" | "closing" | "view" {
   if (!actionKey) return "view";
   if (actionKey === "reply_now") return "reply";
   if (actionKey.startsWith("send_pre_")) return "follow_up";
   if (actionKey === "generate_post_meeting_recap") return "recap";
   if (actionKey.startsWith("send_nurture_")) return "nurture";
+  if (actionKey === "send_proposal" || actionKey === "closing_followup") return "closing";
   return "view";
 }
 
@@ -59,13 +60,15 @@ export function getAIRecommendation(leads: EnrichedLead[]): string[] {
   const actionable = leads
     .filter((l) => l.needs_action && l.next_action_label)
     .sort((a, b) => {
-      // Prioritize replies > recaps > follow-ups > nurture
+      // Prioritize replies > recaps > closing > follow-ups > nurture
       const priority: Record<string, number> = { 
         reply_now: 1, 
         generate_post_meeting_recap: 2,
-        send_pre_2: 3,
-        send_pre_3: 4,
-        send_pre_4: 5,
+        send_proposal: 3,
+        closing_followup: 3,
+        send_pre_2: 4,
+        send_pre_3: 5,
+        send_pre_4: 6,
       };
       const aPriority = priority[a.next_action_key || ""] || 10;
       const bPriority = priority[b.next_action_key || ""] || 10;
@@ -81,6 +84,9 @@ export function getAIRecommendation(leads: EnrichedLead[]): string[] {
     }
     if (actionType === "recap") {
       return `Send ${l.name} a post-meeting follow-up to keep momentum.`;
+    }
+    if (actionType === "closing") {
+      return `${l.name} at ${l.company} is in closing — ${l.next_action_label}.`;
     }
     if (actionType === "follow_up") {
       return `Follow up with ${l.name} at ${l.company} — ${l.next_action_label}.`;

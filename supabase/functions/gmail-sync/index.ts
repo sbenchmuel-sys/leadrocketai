@@ -182,7 +182,8 @@ function deriveStage(
 function deriveAction(
   metrics: LeadMetrics,
   pendingDraftCount: number,
-  nurtureCadence: string | null
+  nurtureCadence: string | null,
+  stage: string
 ): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
@@ -205,7 +206,19 @@ function deriveAction(
     }
   }
 
-  // B) Pre-Meeting Follow-up Overdue (no inbound yet)
+  // B) Closing stage - follow up if no outbound in 3 days
+  if (stage === "closing") {
+    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    if (now - lastOutTime > 3 * DAY) {
+      return {
+        needs_action: true,
+        next_action_key: "closing_followup",
+        next_action_label: "Follow up on proposal/contract",
+      };
+    }
+  }
+
+  // C) Pre-Meeting Follow-up Overdue (no inbound yet)
   if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
     const firstOutTime = new Date(metrics.first_outbound_at).getTime();
     const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : firstOutTime;
@@ -235,7 +248,7 @@ function deriveAction(
     }
   }
 
-  // C) Post-Meeting Recap Missing - has meeting but no recent outbound within 48h
+  // D) Post-Meeting Recap Missing - has meeting but no recent outbound within 48h
   if (metrics.meeting_summary_count > 0) {
     const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
     // If no outbound in last 48 hours after having meetings
@@ -248,7 +261,7 @@ function deriveAction(
     }
   }
 
-  // D) Nurture Cadence Due
+  // E) Nurture Cadence Due
   if (metrics.nurture_outbound_count > 0 && nurtureCadence) {
     const lastNurtureTime = metrics.last_nurture_outbound_at 
       ? new Date(metrics.last_nurture_outbound_at).getTime() 
@@ -576,7 +589,7 @@ serve(async (req) => {
 
     // Derive stage and action
     const stage = deriveStage(currentStage, metrics, hasClosingKeywords);
-    const { needs_action, next_action_key, next_action_label } = deriveAction(metrics, pendingDraftCount, nurtureCadence);
+    const { needs_action, next_action_key, next_action_label } = deriveAction(metrics, pendingDraftCount, nurtureCadence, stage);
 
     // Update lead with computed values
     const leadUpdate: LeadUpdate = {
