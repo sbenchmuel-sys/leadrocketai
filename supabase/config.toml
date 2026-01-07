@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.process-knowledge-document]
 verify_jwt = false
+
+[functions.process-zoom-summary]
+verify_jwt = false

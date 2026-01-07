@@ -617,6 +617,51 @@ serve(async (req) => {
       .update({ last_sync_at: new Date().toISOString() })
       .eq("user_id", user.id);
 
+    // Process any Zoom meeting summary emails (non-blocking)
+    try {
+      const zoomMessages = [];
+      for (const { id: gmailMessageId } of messageIds) {
+        // Collect message data for Zoom processing
+        const msgResponse = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (!msgResponse.ok) continue;
+        
+        const message = await msgResponse.json();
+        const headers = message.payload?.headers || [];
+        const from = getHeader(headers, "From") || "";
+        const subject = getHeader(headers, "Subject") || "";
+        const date = getHeader(headers, "Date");
+        const to = getHeader(headers, "To") || "";
+        const cc = getHeader(headers, "Cc") || "";
+        
+        // Quick check if it might be from Zoom
+        if (from.toLowerCase().includes("zoom")) {
+          zoomMessages.push({
+            user_id: user.id,
+            gmail_message_id: gmailMessageId,
+            gmail_thread_id: message.threadId,
+            sent_at: date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString(),
+            subject,
+            from_email: from,
+            to_email: to,
+            cc_email: cc,
+            raw_text: getMessageBody(message),
+          });
+        }
+      }
+
+      if (zoomMessages.length > 0) {
+        console.log(`[gmail-sync] Found ${zoomMessages.length} potential Zoom emails, processing...`);
+        await serviceSupabase.functions.invoke("process-zoom-summary", {
+          body: { messages: zoomMessages, user_id: user.id },
+        });
+      }
+    } catch (zoomErr) {
+      console.error("[gmail-sync] Zoom processing error (non-blocking):", zoomErr);
+    }
+
     console.log(`[gmail-sync] Synced ${synced} messages, stage=${stage}, needs_action=${needs_action}`);
 
     return new Response(

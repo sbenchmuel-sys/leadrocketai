@@ -394,6 +394,62 @@ export type Database = {
           },
         ]
       }
+      meeting_summaries: {
+        Row: {
+          created_at: string
+          followup_generated: boolean
+          gmail_message_id: string | null
+          gmail_thread_id: string | null
+          id: string
+          lead_id: string | null
+          meeting_title: string | null
+          participants_emails: string[] | null
+          processed_at: string | null
+          sent_at: string
+          source: string
+          summary_text: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          followup_generated?: boolean
+          gmail_message_id?: string | null
+          gmail_thread_id?: string | null
+          id?: string
+          lead_id?: string | null
+          meeting_title?: string | null
+          participants_emails?: string[] | null
+          processed_at?: string | null
+          sent_at: string
+          source?: string
+          summary_text?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          followup_generated?: boolean
+          gmail_message_id?: string | null
+          gmail_thread_id?: string | null
+          id?: string
+          lead_id?: string | null
+          meeting_title?: string | null
+          participants_emails?: string[] | null
+          processed_at?: string | null
+          sent_at?: string
+          source?: string
+          summary_text?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_summaries_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       oauth_states: {
         Row: {
           created_at: string
@@ -415,6 +471,36 @@ export type Database = {
           expires_at?: string
           id?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      org_settings: {
+        Row: {
+          created_at: string
+          id: string
+          internal_email_domains: string[] | null
+          updated_at: string
+          user_id: string
+          zoom_auto_generate_followups_enabled: boolean
+          zoom_meeting_sync_enabled: boolean
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          internal_email_domains?: string[] | null
+          updated_at?: string
+          user_id: string
+          zoom_auto_generate_followups_enabled?: boolean
+          zoom_meeting_sync_enabled?: boolean
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          internal_email_domains?: string[] | null
+          updated_at?: string
+          user_id?: string
+          zoom_auto_generate_followups_enabled?: boolean
+          zoom_meeting_sync_enabled?: boolean
         }
         Relationships: []
       }
@@ -447,6 +533,59 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      unmatched_meeting_summaries: {
+        Row: {
+          created_at: string
+          gmail_message_id: string
+          gmail_thread_id: string | null
+          id: string
+          meeting_title: string | null
+          participants_emails: string[] | null
+          resolved_at: string | null
+          resolved_lead_id: string | null
+          sent_at: string
+          suggested_leads: Json | null
+          summary_text: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          gmail_message_id: string
+          gmail_thread_id?: string | null
+          id?: string
+          meeting_title?: string | null
+          participants_emails?: string[] | null
+          resolved_at?: string | null
+          resolved_lead_id?: string | null
+          sent_at: string
+          suggested_leads?: Json | null
+          summary_text?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          gmail_message_id?: string
+          gmail_thread_id?: string | null
+          id?: string
+          meeting_title?: string | null
+          participants_emails?: string[] | null
+          resolved_at?: string | null
+          resolved_lead_id?: string | null
+          sent_at?: string
+          suggested_leads?: Json | null
+          summary_text?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "unmatched_meeting_summaries_resolved_lead_id_fkey"
+            columns: ["resolved_lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
