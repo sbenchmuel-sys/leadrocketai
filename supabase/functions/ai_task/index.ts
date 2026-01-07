@@ -10,6 +10,8 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "answer_questions",
   "pre_email_1_intro",
   "pre_email_2_followup",
+  "pre_email_3_followup",
+  "pre_email_4_breakup",
   "post_meeting_followup_personalized",
   "nurture_sequence",
   "nurture_email_single",
@@ -17,6 +19,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
+  "linkedin_followup",
 ];
 
 // Function to get semantic knowledge context with optional lead-scoping
@@ -36,13 +39,14 @@ async function getSemanticKnowledgeContext(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "text-embedding-004",
+        model: "google/text-embedding-004",
         input: queryText.slice(0, 5000),
       }),
     });
 
     if (!embResponse.ok) {
-      console.log("[ai_task] Embedding generation failed, falling back to basic search");
+      const errorText = await embResponse.text();
+      console.error("[ai_task] Embedding generation failed:", embResponse.status, errorText);
       return "";
     }
 
