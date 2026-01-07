@@ -438,9 +438,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       setGeneratedContent(result.content);
     }
   };
-      // Keep the same subject (user may have customized it)
-    }
-  };
 
   // Shorten Draft
   const shortenDraft = async () => {

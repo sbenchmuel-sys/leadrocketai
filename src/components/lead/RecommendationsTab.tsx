@@ -116,6 +116,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       const milestonesResult = await runTask("extract_milestones_risks", {
         lead_context: buildLeadContext(),
         interactions_text: interactionsText,
+        lead_id: lead.id,
       });
 
       let parsedMilestones: { milestones: Milestone[]; risks: Risk[] } = { milestones: [], risks: [] };
@@ -138,6 +139,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       const factorsResult = await runTask("extract_deal_factors", {
         lead_context: buildLeadContext(),
         interactions_text: interactionsText,
+        lead_id: lead.id,
       });
 
       let parsedFactors: DealFactors | null = null;
@@ -161,6 +163,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         lead_context: buildLeadContext(),
         milestones_risks_json: JSON.stringify(parsedMilestones),
         deal_factors_json: JSON.stringify(parsedFactors),
+        lead_id: lead.id,
       });
 
       let parsedRecs: { recommendations: Recommendation[]; best_next_step: NextStep | null } = {
@@ -188,12 +191,40 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         return;
       }
 
-      // Update lead with all analysis
+      // Merge milestones: keep existing + add new (deduplicate by description)
+      const existingMilestones: Milestone[] = lead.milestones_json
+        ? (lead.milestones_json as unknown as Milestone[])
+        : [];
+      const mergedMilestones = [...existingMilestones];
+      for (const newMs of parsedMilestones.milestones) {
+        const exists = mergedMilestones.some(
+          (m) => m.description.toLowerCase() === newMs.description.toLowerCase()
+        );
+        if (!exists) {
+          mergedMilestones.push(newMs);
+        }
+      }
+
+      // Merge risks: keep existing + add new (deduplicate by issue)
+      const existingRisks: Risk[] = lead.risks_json
+        ? (lead.risks_json as unknown as Risk[])
+        : [];
+      const mergedRisks = [...existingRisks];
+      for (const newRisk of parsedMilestones.risks) {
+        const exists = mergedRisks.some(
+          (r) => r.issue.toLowerCase() === newRisk.issue.toLowerCase()
+        );
+        if (!exists) {
+          mergedRisks.push(newRisk);
+        }
+      }
+
+      // Update lead with merged analysis
       const { error: updateError } = await supabase
         .from("leads")
         .update({
-          milestones_json: parsedMilestones.milestones as unknown as Json,
-          risks_json: parsedMilestones.risks as unknown as Json,
+          milestones_json: mergedMilestones as unknown as Json,
+          risks_json: mergedRisks as unknown as Json,
           deal_factors_json: parsedFactors as unknown as Json,
           next_step: parsedRecs.best_next_step?.title || null,
           next_step_reason: parsedRecs.best_next_step?.why || null,
