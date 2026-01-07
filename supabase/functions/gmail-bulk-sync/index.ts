@@ -413,11 +413,17 @@ async function syncLeadEmails(
     .eq("lead_id", leadId)
     .order("occurred_at", { ascending: true });
 
+  // Meeting count is derived from meeting_packs (source of truth)
+  const { count: meetingCount } = await serviceSupabase
+    .from("meeting_packs")
+    .select("id", { count: "exact", head: true })
+    .eq("lead_id", leadId);
+
   const metrics: LeadMetrics = {
     first_outbound_at: null,
     last_outbound_at: null,
     last_inbound_at: null,
-    meeting_summary_count: 0,
+    meeting_summary_count: meetingCount || 0,
     nurture_outbound_count: 0,
     last_nurture_outbound_at: null,
   };
@@ -425,7 +431,6 @@ async function syncLeadEmails(
   for (const interaction of allInteractions || []) {
     const isOutbound = interaction.direction === "outbound" || interaction.type === "email_outbound";
     const isInbound = interaction.direction === "inbound" || interaction.type === "email_inbound";
-    const isMeeting = interaction.type === "meeting_summary";
 
     if (isOutbound) {
       if (!metrics.first_outbound_at) metrics.first_outbound_at = interaction.occurred_at;
@@ -433,9 +438,6 @@ async function syncLeadEmails(
     }
     if (isInbound) {
       metrics.last_inbound_at = interaction.occurred_at;
-    }
-    if (isMeeting) {
-      metrics.meeting_summary_count++;
     }
   }
 
