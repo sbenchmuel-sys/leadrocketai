@@ -522,11 +522,17 @@ serve(async (req) => {
       .eq("lead_id", leadId)
       .order("occurred_at", { ascending: true });
 
+    // Meeting count is derived from meeting_packs (source of truth)
+    const { count: meetingCount } = await serviceSupabase
+      .from("meeting_packs")
+      .select("id", { count: "exact", head: true })
+      .eq("lead_id", leadId);
+
     const metrics: LeadMetrics = {
       first_outbound_at: null,
       last_outbound_at: null,
       last_inbound_at: null,
-      meeting_summary_count: 0,
+      meeting_summary_count: meetingCount || 0,
       nurture_outbound_count: 0,
       last_nurture_outbound_at: null,
     };
@@ -554,12 +560,6 @@ serve(async (req) => {
         if (containsClosingKeywords(interaction.body_text || "")) {
           hasClosingKeywords = true;
         }
-      }
-
-      // Count meeting summaries
-      if (interaction.type === "meeting" || interaction.type === "meeting_summary" || 
-          bodyLower.includes("meeting summary") || bodyLower.includes("call summary")) {
-        metrics.meeting_summary_count++;
       }
     }
 
