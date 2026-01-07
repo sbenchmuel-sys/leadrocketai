@@ -7,12 +7,15 @@ import {
   deleteMeetingPack,
   appendLeadMilestones,
   saveDraft,
-  MilestoneItem
+  MilestoneItem,
+  updateMeetingPackMilestoneStatus,
+  updateLeadMilestoneStatus
 } from "@/lib/supabaseQueries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
@@ -309,14 +312,37 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                       </div>
                       <div className="space-y-1">
                         {pack.milestones.map((m, i) => (
-                          <div key={i} className="flex items-center gap-2 p-2 bg-muted/50 rounded">
-                            <Badge 
-                              variant={m.status === "completed" ? "default" : "secondary"} 
-                              className="text-xs"
-                            >
-                              {m.status}
-                            </Badge>
-                            <span className="text-sm flex-1">{m.description}</span>
+                          <div key={i} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
+                            <Checkbox
+                              id={`milestone-${pack.id}-${i}`}
+                              checked={m.status === "completed"}
+                              onCheckedChange={async (checked) => {
+                                try {
+                                  await updateMeetingPackMilestoneStatus(pack.id, i, !!checked);
+                                  // Also update lead milestones if synced
+                                  if (pack.milestones_saved_to_lead) {
+                                    await updateLeadMilestoneStatus(leadId, i, !!checked);
+                                  }
+                                  loadMeetingPacks();
+                                  onMilestonesAdded?.();
+                                } catch (err) {
+                                  console.error(err);
+                                  toast.error("Failed to update milestone");
+                                }
+                              }}
+                            />
+                            <span className={`text-sm flex-1 ${m.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
+                              {m.description}
+                            </span>
+                            {m.status === "completed" ? (
+                              <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200">
+                                Done
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs">
+                                Pending
+                              </Badge>
+                            )}
                             {m.date && <span className="text-xs text-muted-foreground">{m.date}</span>}
                           </div>
                         ))}

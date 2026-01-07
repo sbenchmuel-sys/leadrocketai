@@ -624,6 +624,33 @@ Meeting Link:
 
 OUTPUT
 Return ONLY the email body text.`,
+  // Match sent email to pending milestones
+  match_email_to_milestones: `Analyze a sent email and determine which pending milestones it addresses.
+
+TASK
+Match the email content to pending milestones that it fulfills or completes.
+
+INPUTS
+Email Subject: {{EMAIL_SUBJECT}}
+Email Body: {{EMAIL_BODY}}
+
+Pending Milestones:
+{{PENDING_MILESTONES}}
+
+OUTPUT
+Return JSON ONLY:
+{
+  "completed_indices": [0, 2],
+  "reasoning": "Email addresses milestone #0 by sending the security documentation, and milestone #2 by sharing pricing."
+}
+
+RULES
+- "completed_indices" is an array of milestone indices (0-based) that the email addresses
+- Only include milestones where the email CLEARLY addresses or fulfills them
+- Look for: attached documents mentioned, answers to questions, pricing info, proposals, scheduling confirmations
+- If unsure, do NOT include the milestone (be conservative)
+- If no milestones are addressed, return {"completed_indices": [], "reasoning": "Email does not address any pending milestones"}
+- Keep reasoning to 1-2 sentences`,
 };
 
 // Tasks that require the pro model

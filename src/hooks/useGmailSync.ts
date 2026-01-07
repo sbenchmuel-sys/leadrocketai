@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import type { Json } from "@/integrations/supabase/types";
 
 export interface SyncResult {
   ok: boolean;
@@ -8,6 +9,14 @@ export interface SyncResult {
   total?: number;
   errors?: string[];
   error?: string;
+}
+
+interface MilestoneItem {
+  description: string;
+  status: "completed" | "pending";
+  date: string | null;
+  evidence?: string;
+  completedAt?: string;
 }
 
 export function useGmailSync() {
@@ -57,6 +66,17 @@ export function useGmailSync() {
 
       if (data.synced > 0) {
         toast.success(`Synced ${data.synced} email${data.synced > 1 ? 's' : ''} from Gmail`);
+        
+        // After syncing, check for milestone matches on outbound emails
+        try {
+          const completedCount = await matchEmailsToMilestones(leadId);
+          if (completedCount > 0) {
+            toast.success(`${completedCount} milestone${completedCount > 1 ? 's' : ''} auto-completed!`);
+          }
+        } catch (matchErr) {
+          console.error("Milestone matching failed:", matchErr);
+          // Don't fail the sync if matching fails
+        }
       } else {
         toast.info("No new emails found");
       }
@@ -131,9 +151,130 @@ export function useGmailSync() {
     }
   };
 
+  // Match recent outbound emails against pending milestones
+  const matchEmailsToMilestones = async (leadId: string): Promise<number> => {
+    // Get lead's pending milestones
+    const { data: lead, error: leadErr } = await supabase
+      .from("leads")
+      .select("milestones_json")
+      .eq("id", leadId)
+      .single();
+
+    if (leadErr || !lead) return 0;
+
+    const milestones: MilestoneItem[] = (lead.milestones_json as unknown as MilestoneItem[]) || [];
+    const pendingMilestones = milestones.filter((m) => m.status === "pending");
+
+    if (pendingMilestones.length === 0) return 0;
+
+    // Get recent outbound interactions (last 24 hours)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: recentEmails, error: emailsErr } = await supabase
+      .from("interactions")
+      .select("subject, body_text, direction")
+      .eq("lead_id", leadId)
+      .eq("direction", "outbound")
+      .gte("occurred_at", oneDayAgo)
+      .order("occurred_at", { ascending: false })
+      .limit(5);
+
+    if (emailsErr || !recentEmails || recentEmails.length === 0) return 0;
+
+    // Combine recent outbound emails for analysis
+    const emailsText = recentEmails
+      .map((e) => `Subject: ${e.subject || "No subject"}\nBody: ${e.body_text?.slice(0, 500) || ""}`)
+      .join("\n---\n");
+
+    const pendingMilestonesText = pendingMilestones
+      .map((m, i) => `[${i}] ${m.description}`)
+      .join("\n");
+
+    // Call AI to match emails to milestones
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+
+    if (!accessToken) return 0;
+
+    const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        task: "match_email_to_milestones",
+        payload: {
+          email_subject: recentEmails[0]?.subject || "",
+          email_body: emailsText,
+          pending_milestones: pendingMilestonesText,
+        },
+      }),
+    });
+
+    if (!aiResponse.ok) return 0;
+
+    const aiData = await aiResponse.json();
+    if (!aiData.ok || !aiData.content) return 0;
+
+    // Parse AI response
+    let parsedResult: { completed_indices: number[]; reasoning: string };
+    try {
+      const content = aiData.content.trim();
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      const jsonStr = (jsonMatch?.[1] ?? content).trim();
+      parsedResult = JSON.parse(jsonStr);
+    } catch {
+      console.error("Failed to parse AI milestone match result");
+      return 0;
+    }
+
+    if (!parsedResult.completed_indices || parsedResult.completed_indices.length === 0) {
+      return 0;
+    }
+
+    // Update milestones
+    const now = new Date().toISOString();
+    const updatedMilestones = milestones.map((m) => {
+      if (m.status !== "pending") return m;
+
+      // Find if this pending milestone's index was completed
+      const pendingIndex = pendingMilestones.findIndex(
+        (pm) => pm.description === m.description
+      );
+      if (parsedResult.completed_indices.includes(pendingIndex)) {
+        return {
+          ...m,
+          status: "completed" as const,
+          date: now.split("T")[0],
+          completedAt: now,
+        };
+      }
+      return m;
+    });
+
+    // Save updated milestones
+    const { error: updateErr } = await supabase
+      .from("leads")
+      .update({
+        milestones_json: updatedMilestones as unknown as Json,
+        last_activity_at: now,
+      })
+      .eq("id", leadId);
+
+    if (updateErr) {
+      console.error("Failed to update milestones:", updateErr);
+      return 0;
+    }
+
+    console.log(`[Gmail Sync] Auto-completed ${parsedResult.completed_indices.length} milestones`);
+    return parsedResult.completed_indices.length;
+  };
+
   return {
     syncLead,
     sendEmail,
+    matchEmailsToMilestones,
     isSyncing,
     error,
   };
