@@ -521,6 +521,7 @@ export interface MeetingPackItem {
   follow_up_email_body: string | null;
   milestones_saved_to_lead: boolean;
   email_saved_as_draft: boolean;
+  source_meeting_summary_id: string | null;
 }
 
 export async function getLeadMeetingPacks(leadId: string): Promise<MeetingPackItem[]> {
@@ -549,6 +550,7 @@ export async function getLeadMeetingPacks(leadId: string): Promise<MeetingPackIt
     follow_up_email_body: row.follow_up_email_body,
     milestones_saved_to_lead: row.milestones_saved_to_lead,
     email_saved_as_draft: row.email_saved_as_draft,
+    source_meeting_summary_id: (row as Record<string, unknown>).source_meeting_summary_id as string | null,
   }));
 }
 
@@ -562,6 +564,7 @@ export interface CreateMeetingPackInput {
   milestones?: MilestoneItem[];
   follow_up_email_subject?: string;
   follow_up_email_body?: string;
+  source_meeting_summary_id?: string;
 }
 
 export async function createMeetingPack(input: CreateMeetingPackInput): Promise<{ id: string }> {
@@ -569,20 +572,26 @@ export async function createMeetingPack(input: CreateMeetingPackInput): Promise<
   if (authErr) throw authErr;
   if (!user) throw new Error('Not logged in');
 
+  const insertData: Record<string, unknown> = {
+    lead_id: input.lead_id,
+    owner_user_id: user.id,
+    meeting_date: input.meeting_date || new Date().toISOString().split('T')[0],
+    title: input.title || null,
+    raw_notes: input.raw_notes || null,
+    internal_recap_bullets: input.internal_recap_bullets || [],
+    open_questions: input.open_questions || [],
+    milestones: input.milestones || [],
+    follow_up_email_subject: input.follow_up_email_subject || null,
+    follow_up_email_body: input.follow_up_email_body || null,
+  };
+  
+  if (input.source_meeting_summary_id) {
+    insertData.source_meeting_summary_id = input.source_meeting_summary_id;
+  }
+
   const { data, error } = await supabase
     .from('meeting_packs')
-    .insert({
-      lead_id: input.lead_id,
-      owner_user_id: user.id,
-      meeting_date: input.meeting_date || new Date().toISOString().split('T')[0],
-      title: input.title || null,
-      raw_notes: input.raw_notes || null,
-      internal_recap_bullets: (input.internal_recap_bullets || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['internal_recap_bullets'],
-      open_questions: (input.open_questions || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['open_questions'],
-      milestones: (input.milestones || []) as unknown as Database['public']['Tables']['meeting_packs']['Insert']['milestones'],
-      follow_up_email_subject: input.follow_up_email_subject || null,
-      follow_up_email_body: input.follow_up_email_body || null,
-    })
+    .insert(insertData as Database['public']['Tables']['meeting_packs']['Insert'])
     .select('id')
     .single();
 
