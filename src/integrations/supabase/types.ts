@@ -177,6 +177,7 @@ export type Database = {
           document_id: string | null
           embedding: string | null
           id: string
+          lead_id: string | null
           owner_user_id: string | null
           processing_status: string | null
           source: string | null
@@ -190,6 +191,7 @@ export type Database = {
           document_id?: string | null
           embedding?: string | null
           id?: string
+          lead_id?: string | null
           owner_user_id?: string | null
           processing_status?: string | null
           source?: string | null
@@ -203,12 +205,21 @@ export type Database = {
           document_id?: string | null
           embedding?: string | null
           id?: string
+          lead_id?: string | null
           owner_user_id?: string | null
           processing_status?: string | null
           source?: string | null
           title?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "kb_chunks_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       leads: {
         Row: {
@@ -390,21 +401,38 @@ export type Database = {
         }
         Returns: boolean
       }
-      match_knowledge_chunks: {
-        Args: {
-          filter_customer_facing?: boolean
-          match_count?: number
-          match_threshold?: number
-          query_embedding: string
-        }
-        Returns: {
-          content: string
-          id: string
-          similarity: number
-          source: string
-          title: string
-        }[]
-      }
+      match_knowledge_chunks:
+        | {
+            Args: {
+              filter_customer_facing?: boolean
+              match_count?: number
+              match_threshold?: number
+              query_embedding: string
+            }
+            Returns: {
+              content: string
+              id: string
+              similarity: number
+              source: string
+              title: string
+            }[]
+          }
+        | {
+            Args: {
+              filter_customer_facing?: boolean
+              filter_lead_id?: string
+              match_count?: number
+              match_threshold?: number
+              query_embedding: string
+            }
+            Returns: {
+              content: string
+              id: string
+              similarity: number
+              source: string
+              title: string
+            }[]
+          }
     }
     Enums: {
       app_role: "admin" | "sales"

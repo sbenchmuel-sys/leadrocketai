@@ -13,14 +13,16 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "post_meeting_followup_personalized",
   "nurture_sequence",
   "nurture_email_single",
+  "post_meeting_followup_email",
 ];
 
-// Function to get semantic knowledge context
+// Function to get semantic knowledge context with optional lead-scoping
 async function getSemanticKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
-  lovableApiKey: string
+  lovableApiKey: string,
+  leadId?: string
 ): Promise<string> {
   try {
     // Generate embedding for the query
@@ -49,7 +51,7 @@ async function getSemanticKnowledgeContext(
       return "";
     }
 
-    // Use service role to call the match function
+    // Use service role to call the match function with lead-scoping
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks", {
@@ -57,6 +59,7 @@ async function getSemanticKnowledgeContext(
       match_threshold: 0.4,
       match_count: 5,
       filter_customer_facing: true,
+      filter_lead_id: leadId || null,
     });
 
     if (error) {
@@ -69,7 +72,7 @@ async function getSemanticKnowledgeContext(
       return "";
     }
 
-    console.log(`[ai_task] Found ${matches.length} semantic matches`);
+    console.log(`[ai_task] Found ${matches.length} semantic matches${leadId ? ` for lead ${leadId}` : ""}`);
 
     // Format the matched chunks as context
     const context = matches
@@ -574,6 +577,38 @@ Knowledge Context:
 
 OUTPUT
 Return ONLY the email body text. No JSON. No markdown. No subject line.`,
+
+  // New: Plain-text post-meeting follow-up email (no JSON)
+  post_meeting_followup_email: `ROLE
+Generate a personalized post-meeting follow-up email using all available knowledge about this lead.
+
+GOAL
+Thank them for the meeting, summarize key points, and propose clear next steps.
+
+CONSTRAINTS
+- 120–200 words
+- Professional and warm
+- Reference specific topics discussed if meeting context is available
+- Use knowledge context to add relevant details
+- ONE clear CTA (e.g., confirm next meeting, review materials, connect on specific item)
+- No medical or performance claims
+- Return EMAIL BODY ONLY (no subject line, no JSON, no markdown)
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Meeting Summary (optional brief notes):
+{{MEETING_SUMMARY_BRIEF}}
+
+Knowledge Context (relevant to this lead):
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+OUTPUT
+Return ONLY the email body text.`,
 };
 
 // Tasks that require the pro model
@@ -584,6 +619,7 @@ const PRO_MODEL_TASKS = [
   "recommend_next_steps",
   "nurture_sequence",
   "nurture_email_single",
+  "post_meeting_followup_email",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
@@ -670,16 +706,19 @@ serve(async (req) => {
       
       if (searchQuery.length > 50) {
         const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        // Pass lead_id for lead-scoped knowledge if available
+        const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         const semanticContext = await getSemanticKnowledgeContext(
           searchQuery,
           supabaseUrl,
           supabaseServiceKey,
-          LOVABLE_API_KEY
+          LOVABLE_API_KEY,
+          leadId
         );
         
         if (semanticContext) {
           enhancedPayload.knowledge_context = semanticContext;
-          console.log(`[ai_task] Added semantic knowledge context (${semanticContext.length} chars)`);
+          console.log(`[ai_task] Added semantic knowledge context (${semanticContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
         }
       }
     }

@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
-import { LeadDetail, getLeadDrafts, saveDraft, getKnowledgeChunks, getLeadInteractions, appendLeadMilestones, MilestoneItem, updateDraftStatus } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, appendLeadMilestones, MilestoneItem, updateDraftStatus } from "@/lib/supabaseQueries";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
+import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle, RefreshCw } from "lucide-react";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle, RefreshCw, Database } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
@@ -57,8 +58,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [questionInput, setQuestionInput] = useState("");
   const { runTask, isLoading: isGenerating } = useAITask();
 
-  // Post-meeting recap state
+  // Post-meeting state (simplified)
   const [meetingNotes, setMeetingNotes] = useState("");
+  const [isSavingMeetingKnowledge, setIsSavingMeetingKnowledge] = useState(false);
+  const [meetingKnowledgeSaved, setMeetingKnowledgeSaved] = useState(false);
+  
+  // Legacy recap state (kept for backward compatibility)
   const [recapResult, setRecapResult] = useState<PostMeetingRecapResult | null>(null);
   const [editableCustomerEmail, setEditableCustomerEmail] = useState("");
   const [isSavingMilestones, setIsSavingMilestones] = useState(false);
@@ -118,7 +123,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     return (fenced?.[1] ?? trimmed).trim();
   };
 
-  // Pre-Meeting Cadence Emails
+  // Pre-Meeting Cadence Emails (now using semantic search via lead_id)
   const generatePreMeetingEmail = async (emailNum: 1 | 2 | 3 | 4) => {
     const taskMap: Record<number, AITaskType> = {
       1: "pre_email_1_intro",
@@ -127,15 +132,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       4: "pre_email_4_breakup",
     };
     
-    const kb = await getKnowledgeChunks(true);
     const payload: Record<string, unknown> = {
       lead_context: buildLeadContext(),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id, // For lead-scoped knowledge
     };
 
-    if (emailNum === 1 || emailNum === 2) {
-      payload.knowledge_context = kb.map((k) => k.content).join("\n---\n");
-    }
     if (emailNum === 2 || emailNum === 3) {
       payload.previous_email_summary = previousEmailSummary || "Previous outreach introducing our solution.";
     }
@@ -150,15 +152,14 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   // Legacy intro email (strategy-based)
   const generateIntroEmail = async () => {
     const task = lead.strategy === "fast" ? "email_intro_fast" : "email_intro_nurture";
-    const kb = await getKnowledgeChunks(true);
     const interactions = await getLeadInteractions(lead.id);
     const lastInbound = interactions.find((i) => i.type === "email_inbound");
 
     const result = await runTask(task, {
       lead_context: buildLeadContext(),
       email_text: lastInbound?.body_text || "",
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -168,13 +169,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   };
 
   const generateFollowupSequence = async () => {
-    const kb = await getKnowledgeChunks(true);
     const result = await runTask("followup_sequence_4", {
       mode: lead.strategy,
       lead_context: buildLeadContext(),
       sent_so_far: "",
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -204,7 +204,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   };
 
   const generateLinkedInFollowup = async () => {
-    const kb = await getKnowledgeChunks(true);
     const result = await runTask("linkedin_followup", {
       prospect_name: lead.name,
       title: lead.job_title || "",
@@ -215,7 +214,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         lead.initial_message && `Their message: ${lead.initial_message}`,
         lead.personal_notes && `Notes: ${lead.personal_notes}`,
       ].filter(Boolean).join(". ") || `B2B sales outreach for ${lead.company}`,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -230,12 +229,11 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       toast.error("Please enter a question");
       return;
     }
-    const kb = await getKnowledgeChunks(true);
     const result = await runTask("answer_questions", {
       lead_context: buildLeadContext(),
       questions_list: questionInput,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -245,20 +243,70 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
   };
 
-  // Post-Meeting Recap
+  // Save meeting notes to lead-specific knowledge
+  const saveMeetingToKnowledge = async () => {
+    if (!meetingNotes.trim()) {
+      toast.error("Please enter meeting notes first");
+      return;
+    }
+
+    setIsSavingMeetingKnowledge(true);
+    try {
+      const title = `Meeting Summary — ${lead.name} — ${format(new Date(), "yyyy-MM-dd")}`;
+      
+      const { data, error } = await supabase.functions.invoke("process-knowledge-document", {
+        body: {
+          text: meetingNotes,
+          title,
+          source: "zoom",
+          allowed_customer_facing: true,
+          lead_id: lead.id,
+        },
+      });
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "Failed to save meeting knowledge");
+
+      setMeetingKnowledgeSaved(true);
+      toast.success(`Meeting summary saved to lead knowledge (${data.chunks_created} chunks)`);
+    } catch (err) {
+      console.error("Failed to save meeting knowledge:", err);
+      toast.error("Failed to save meeting notes to knowledge base");
+    } finally {
+      setIsSavingMeetingKnowledge(false);
+    }
+  };
+
+  // Generate plain-text post-meeting follow-up email (no JSON parsing)
+  const generatePostMeetingFollowupEmail = async () => {
+    const result = await runTask("post_meeting_followup_email", {
+      lead_context: buildLeadContext(),
+      meeting_summary_brief: meetingNotes.slice(0, 500), // Just a brief snippet
+      meeting_link: lead.meeting_link || "",
+      lead_id: lead.id, // For lead-scoped knowledge retrieval
+    });
+
+    if (result.ok && result.content) {
+      setGeneratedContent(result.content);
+      setGeneratedSubject(`Great speaking today — ${lead.company}`);
+      setGeneratedType("post_meeting_followup");
+      toast.success("Follow-up email generated");
+    }
+  };
+
+  // Legacy: Post-Meeting Recap (kept for backward compatibility)
   const generatePostMeetingRecap = async () => {
     if (!meetingNotes.trim()) {
       toast.error("Please enter meeting notes");
       return;
     }
 
-    const kb = await getKnowledgeChunks(true);
     const result = await runTask("post_meeting_recap", {
       mode: lead.strategy,
       lead_context: buildLeadContext(),
       meeting_summary: meetingNotes,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -275,12 +323,11 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
 
   // Post-Meeting Personalized Follow-up
   const generatePersonalizedFollowup = async () => {
-    const kb = await getKnowledgeChunks(true);
     const result = await runTask("post_meeting_followup_personalized", {
       lead_context: buildLeadContext(),
       goal: postMeetingGoal,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
       meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
@@ -298,9 +345,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       return;
     }
 
-    const kb = await getKnowledgeChunks(true);
-    
-    // Build previous emails summary for context
     const previousSummary = nurtureEmailsGenerated.length > 0
       ? nurtureEmailsGenerated
           .map((e, i) => `Email ${i + 1}:\nSubject: "${e.subject}"\nBody: ${e.body}`)
@@ -312,13 +356,12 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       theme: nurtureTheme,
       email_number: emailNumber,
       previous_emails: previousSummary,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType(`nurture_${emailNumber}`);
-      // Default subject
       const themeLabel = {
         technical: "Technical Deep Dive",
         use_case: "Use Case",
@@ -376,9 +419,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (!generatedType.startsWith("nurture_")) return;
     
     const emailNumber = parseInt(generatedType.replace("nurture_", ""), 10);
-    const kb = await getKnowledgeChunks(true);
     
-    // Use existing generated emails for context (not including the one being regenerated)
     const previousSummary = nurtureEmailsGenerated.length > 0
       ? nurtureEmailsGenerated
           .map((e, i) => `Email ${i + 1}:\nSubject: "${e.subject}"\nBody: ${e.body}`)
@@ -390,11 +431,13 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       theme: nurtureTheme,
       email_number: emailNumber,
       previous_emails: previousSummary,
-      knowledge_context: kb.map((k) => k.content).join("\n---\n"),
+      lead_id: lead.id,
     });
 
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
+    }
+  };
       // Keep the same subject (user may have customized it)
     }
   };

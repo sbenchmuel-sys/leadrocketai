@@ -69,7 +69,7 @@ serve(async (req) => {
       });
     }
 
-    const { text, title, source, allowed_customer_facing = true } = await req.json();
+    const { text, title, source, allowed_customer_facing = true, lead_id = null } = await req.json();
 
     if (!text || typeof text !== "string") {
       return new Response(JSON.stringify({ ok: false, error: "Missing or invalid text" }), {
@@ -78,7 +78,7 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[process-knowledge-document] Processing document: ${title || 'Untitled'}, text length: ${text.length}`);
+    console.log(`[process-knowledge-document] Processing document: ${title || 'Untitled'}, text length: ${text.length}, lead_id: ${lead_id || 'global'}`);
 
     // Generate a unique document ID to group chunks
     const documentId = crypto.randomUUID();
@@ -101,6 +101,7 @@ serve(async (req) => {
       document_id: documentId,
       chunk_index: index,
       processing_status: "pending",
+      lead_id: lead_id || null, // New: associate with lead if provided
     }));
 
     const { data: insertedChunks, error: insertError } = await supabaseAdmin
@@ -254,6 +255,7 @@ Similar texts should have similar vectors. No explanation, just the array.`
         document_id: documentId,
         chunks_created: insertedChunks?.length || 0,
         embeddings_generated: embeddingsGenerated,
+        lead_id: lead_id || null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
