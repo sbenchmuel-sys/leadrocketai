@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, appendLeadMilestones, MilestoneItem, updateDraftStatus } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, appendLeadMilestones, MilestoneItem, updateDraftStatus, createMeetingPack } from "@/lib/supabaseQueries";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -294,7 +294,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
   };
 
-  // Legacy: Post-Meeting Recap (kept for backward compatibility)
+  // Legacy: Post-Meeting Recap (now saves to meeting_packs)
   const generatePostMeetingRecap = async () => {
     if (!meetingNotes.trim()) {
       toast.error("Please enter meeting notes");
@@ -314,7 +314,20 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         const parsed = JSON.parse(extractJson(result.content)) as PostMeetingRecapResult;
         setRecapResult(parsed);
         setEditableCustomerEmail(parsed.customer_email.body);
-        toast.success("Recap generated successfully");
+        
+        // Auto-save to meeting_packs table
+        await createMeetingPack({
+          lead_id: lead.id,
+          title: `Meeting with ${lead.name} — ${format(new Date(), "MMM d, yyyy")}`,
+          raw_notes: meetingNotes,
+          internal_recap_bullets: parsed.internal_recap_bullets,
+          open_questions: parsed.open_questions,
+          milestones: parsed.milestones_from_meeting,
+          follow_up_email_subject: parsed.customer_email.subject,
+          follow_up_email_body: parsed.customer_email.body,
+        });
+        
+        toast.success("Recap generated and saved to Meetings tab");
       } catch {
         toast.error("Failed to parse recap result");
       }

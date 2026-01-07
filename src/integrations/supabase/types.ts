@@ -335,6 +335,65 @@ export type Database = {
         }
         Relationships: []
       }
+      meeting_packs: {
+        Row: {
+          created_at: string
+          email_saved_as_draft: boolean
+          follow_up_email_body: string | null
+          follow_up_email_subject: string | null
+          id: string
+          internal_recap_bullets: Json | null
+          lead_id: string
+          meeting_date: string | null
+          milestones: Json | null
+          milestones_saved_to_lead: boolean
+          open_questions: Json | null
+          owner_user_id: string
+          raw_notes: string | null
+          title: string | null
+        }
+        Insert: {
+          created_at?: string
+          email_saved_as_draft?: boolean
+          follow_up_email_body?: string | null
+          follow_up_email_subject?: string | null
+          id?: string
+          internal_recap_bullets?: Json | null
+          lead_id: string
+          meeting_date?: string | null
+          milestones?: Json | null
+          milestones_saved_to_lead?: boolean
+          open_questions?: Json | null
+          owner_user_id: string
+          raw_notes?: string | null
+          title?: string | null
+        }
+        Update: {
+          created_at?: string
+          email_saved_as_draft?: boolean
+          follow_up_email_body?: string | null
+          follow_up_email_subject?: string | null
+          id?: string
+          internal_recap_bullets?: Json | null
+          lead_id?: string
+          meeting_date?: string | null
+          milestones?: Json | null
+          milestones_saved_to_lead?: boolean
+          open_questions?: Json | null
+          owner_user_id?: string
+          raw_notes?: string | null
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_packs_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       oauth_states: {
         Row: {
           created_at: string
