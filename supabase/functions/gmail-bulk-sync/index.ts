@@ -147,7 +147,8 @@ function deriveStage(
 function deriveAction(
   metrics: LeadMetrics,
   pendingDraftCount: number,
-  nurtureCadence: string | null
+  nurtureCadence: string | null,
+  stage: string
 ): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
@@ -166,6 +167,18 @@ function deriveAction(
           next_action_label: "Reply to customer",
         };
       }
+    }
+  }
+
+  // Closing stage - follow up if no outbound in 3 days
+  if (stage === "closing") {
+    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    if (now - lastOutTime > 3 * DAY) {
+      return {
+        needs_action: true,
+        next_action_key: "closing_followup",
+        next_action_label: "Follow up on proposal/contract",
+      };
     }
   }
 
@@ -450,7 +463,7 @@ async function syncLeadEmails(
 
   // Derive stage and action
   const newStage = deriveStage(currentStage, metrics, hasClosingKeywords);
-  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null);
+  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null, newStage);
 
   // Determine last_activity_at
   const activityDates = [

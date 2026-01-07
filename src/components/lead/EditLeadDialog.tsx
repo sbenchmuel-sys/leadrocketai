@@ -22,7 +22,7 @@ const editLeadSchema = z.object({
   industry: z.string().trim().max(100).optional().or(z.literal("")),
   country: z.string().trim().max(100).optional().or(z.literal("")),
   strategy: z.enum(["fast", "nurture"]),
-  status: z.enum(["new", "contacted", "qualified", "proposal", "negotiation", "won", "lost"]),
+  stage: z.enum(["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"]),
   meeting_link: z.string().trim().max(500).optional().or(z.literal("")),
   personal_notes: z.string().trim().max(2000).optional().or(z.literal("")),
   initial_message: z.string().trim().max(5000).optional().or(z.literal("")),
@@ -50,7 +50,7 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
       industry: lead.industry || "",
       country: lead.country || "",
       strategy: lead.strategy as "fast" | "nurture",
-      status: lead.status as "new" | "contacted" | "qualified" | "proposal" | "negotiation" | "won" | "lost",
+      stage: (lead.stage as "new" | "contacted" | "engaged" | "post_meeting" | "closing" | "closed_won" | "closed_lost") || "new",
       meeting_link: lead.meeting_link || "",
       personal_notes: lead.personal_notes || "",
       initial_message: lead.initial_message || "",
@@ -71,7 +71,7 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
           industry: data.industry || null,
           country: data.country || null,
           strategy: data.strategy,
-          status: data.status,
+          stage: data.stage,
           meeting_link: data.meeting_link || null,
           personal_notes: data.personal_notes || null,
           initial_message: data.initial_message || null,
@@ -245,10 +245,10 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
               />
               <FormField
                 control={form.control}
-                name="status"
+                name="stage"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Status</FormLabel>
+                    <FormLabel>Deal Stage</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
@@ -258,11 +258,11 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
                       <SelectContent>
                         <SelectItem value="new">New</SelectItem>
                         <SelectItem value="contacted">Contacted</SelectItem>
-                        <SelectItem value="qualified">Qualified</SelectItem>
-                        <SelectItem value="proposal">Proposal</SelectItem>
-                        <SelectItem value="negotiation">Negotiation</SelectItem>
-                        <SelectItem value="won">Won</SelectItem>
-                        <SelectItem value="lost">Lost</SelectItem>
+                        <SelectItem value="engaged">Engaged</SelectItem>
+                        <SelectItem value="post_meeting">Post-Meeting</SelectItem>
+                        <SelectItem value="closing">Closing</SelectItem>
+                        <SelectItem value="closed_won">Won</SelectItem>
+                        <SelectItem value="closed_lost">Lost</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

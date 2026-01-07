@@ -121,7 +121,7 @@ export async function getLeadsList(): Promise<LeadListItem[]> {
 }
 
 export type LeadDetail = Pick<Lead,
-  'id' | 'company' | 'name' | 'email' | 'strategy' | 'status' | 'owner_user_id' |
+  'id' | 'company' | 'name' | 'email' | 'strategy' | 'status' | 'stage' | 'owner_user_id' |
   'created_at' | 'last_activity_at' | 'meeting_link' | 'personal_notes' |
   'pref_email_drafts' | 'pref_linkedin_drafts' | 'milestones_json' | 'risks_json' |
   'next_step' | 'next_step_reason' | 'deal_outlook' | 'deal_factors_json' | 'last_ai_run_at' |
@@ -144,7 +144,7 @@ export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
 
   const { data: lead, error: leadErr } = await supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message')
+    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message')
     .eq('id', leadId)
     .single();
   if (leadErr) throw leadErr;
