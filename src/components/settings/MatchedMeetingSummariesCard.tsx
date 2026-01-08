@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Check, ArrowRightLeft } from "lucide-react";
+import { Loader2, RefreshCw, Check, ArrowRightLeft, Trash2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import {
@@ -130,6 +130,27 @@ export function MatchedMeetingSummariesCard() {
     }
   };
 
+  const handleDelete = async (summaryId: string) => {
+    if (!confirm("Are you sure you want to delete this meeting summary? This cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("meeting_summaries")
+        .delete()
+        .eq("id", summaryId);
+
+      if (error) throw error;
+
+      toast.success("Meeting summary deleted");
+      loadData();
+    } catch (err) {
+      console.error("Failed to delete:", err);
+      toast.error("Failed to delete meeting summary");
+    }
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -194,17 +215,26 @@ export function MatchedMeetingSummariesCard() {
                   )}
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="ml-2"
-                onClick={() => {
-                  setSelectedSummary(summary);
-                  setSelectedLeadId(summary.lead_id || "");
-                }}
-              >
-                <RefreshCw className="h-4 w-4 mr-1" />
-                Reassign
+              <div className="flex items-center gap-1 ml-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedSummary(summary);
+                    setSelectedLeadId(summary.lead_id || "");
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  Reassign
+                </Button>
+              </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDelete(summary.id)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
               </Button>
             </div>
           ))}
