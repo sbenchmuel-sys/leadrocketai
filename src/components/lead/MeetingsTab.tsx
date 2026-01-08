@@ -31,6 +31,20 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { 
@@ -49,7 +63,9 @@ import {
   FileText,
   Video,
   Users,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  AlertTriangle
 } from "lucide-react";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { useAITask } from "@/hooks/useAITask";
@@ -62,9 +78,17 @@ interface MeetingsTabProps {
   onMilestonesAdded?: () => void;
 }
 
+interface Lead {
+  id: string;
+  name: string;
+  company: string;
+  email: string;
+}
+
 export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesAdded }: MeetingsTabProps) {
   const [meetingPacks, setMeetingPacks] = useState<MeetingPackItem[]>([]);
   const [zoomSummaries, setZoomSummaries] = useState<MeetingSummaryItem[]>([]);
+  const [allLeads, setAllLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [expandedZoomIds, setExpandedZoomIds] = useState<Set<string>>(new Set());
@@ -73,6 +97,9 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
   const [editedEmailBody, setEditedEmailBody] = useState("");
   const [generatingRecapId, setGeneratingRecapId] = useState<string | null>(null);
+  const [reassignSummary, setReassignSummary] = useState<MeetingSummaryItem | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<string>("");
+  const [isReassigning, setIsReassigning] = useState(false);
   const { runTask } = useAITask();
 
   // Map to quickly find meeting pack for a processed zoom summary
@@ -88,12 +115,18 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
   const loadData = async () => {
     try {
-      const [packs, summaries] = await Promise.all([
+      const [packs, summaries, leadsResult] = await Promise.all([
         getLeadMeetingPacks(leadId),
-        getLeadMeetingSummaries(leadId)
+        getLeadMeetingSummaries(leadId),
+        supabase
+          .from("leads")
+          .select("id, name, company, email")
+          .order("last_activity_at", { ascending: false })
+          .limit(100)
       ]);
       setMeetingPacks(packs);
       setZoomSummaries(summaries);
+      setAllLeads(leadsResult.data || []);
       // Auto-expand the first/most recent meeting
       if (packs.length > 0 && expandedIds.size === 0) {
         setExpandedIds(new Set([packs[0].id]));
@@ -115,6 +148,51 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   useEffect(() => {
     loadData();
   }, [leadId]);
+
+  const handleDeleteSummary = async (summaryId: string) => {
+    if (!confirm("Are you sure you want to remove this meeting summary from this lead? This cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("meeting_summaries")
+        .delete()
+        .eq("id", summaryId);
+
+      if (error) throw error;
+
+      toast.success("Meeting summary removed");
+      loadData();
+    } catch (err) {
+      console.error("Failed to delete:", err);
+      toast.error("Failed to remove meeting summary");
+    }
+  };
+
+  const handleReassignSummary = async () => {
+    if (!reassignSummary || !selectedLeadId) return;
+
+    setIsReassigning(true);
+    try {
+      const { error } = await supabase
+        .from("meeting_summaries")
+        .update({ lead_id: selectedLeadId })
+        .eq("id", reassignSummary.id);
+
+      if (error) throw error;
+
+      toast.success("Meeting summary reassigned to another lead");
+      setReassignSummary(null);
+      setSelectedLeadId("");
+      loadData();
+    } catch (err) {
+      console.error("Failed to reassign:", err);
+      toast.error("Failed to reassign meeting summary");
+    } finally {
+      setIsReassigning(false);
+    }
+  };
 
   const toggleExpanded = (id: string) => {
     const newSet = new Set(expandedIds);
@@ -575,6 +653,40 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                           </div>
                         </>
                       )}
+
+                      {/* Delete/Reassign Actions for Zoom Summary */}
+                      <div className="pt-3 border-t flex items-center justify-between">
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <AlertTriangle className="h-3 w-3" />
+                          Wrong lead?
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setReassignSummary(summary);
+                              setSelectedLeadId("");
+                            }}
+                          >
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            Reassign
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSummary(summary.id);
+                            }}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3 mr-1" />
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
                     </CardContent>
                   </CollapsibleContent>
                 </Collapsible>
@@ -866,6 +978,66 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
         </div>
         );
       })()}
+
+      {/* Reassign Dialog for Zoom Summaries */}
+      <Dialog open={!!reassignSummary} onOpenChange={() => setReassignSummary(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reassign Meeting Summary</DialogTitle>
+            <DialogDescription>
+              Move this meeting summary to a different lead
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-muted/50">
+              <p className="font-medium">{reassignSummary?.meeting_title || "Untitled Meeting"}</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {reassignSummary && format(parseISO(reassignSummary.sent_at), "PPp")}
+              </p>
+              {reassignSummary?.participants_emails && reassignSummary.participants_emails.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-xs text-muted-foreground">Participants:</p>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {reassignSummary.participants_emails.map((email, i) => (
+                      <Badge key={i} variant="secondary" className="text-xs">{email}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Select new lead:</p>
+              <Select value={selectedLeadId} onValueChange={setSelectedLeadId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a lead..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {allLeads.filter(l => l.id !== leadId).map((lead) => (
+                    <SelectItem key={lead.id} value={lead.id}>
+                      {lead.name} - {lead.company}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setReassignSummary(null)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleReassignSummary} 
+                disabled={!selectedLeadId || isReassigning}
+              >
+                {isReassigning && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Reassign
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
