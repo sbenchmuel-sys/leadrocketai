@@ -227,7 +227,6 @@ export function MatchedMeetingSummariesCard() {
                   <RefreshCw className="h-4 w-4 mr-1" />
                   Reassign
                 </Button>
-              </div>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -235,7 +234,8 @@ export function MatchedMeetingSummariesCard() {
                   className="text-destructive hover:text-destructive"
                 >
                   <Trash2 className="h-4 w-4" />
-              </Button>
+                </Button>
+              </div>
             </div>
           ))}
         </CardContent>
