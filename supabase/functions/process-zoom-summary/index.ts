@@ -192,6 +192,47 @@ function extractParticipantNames(body: string, subject?: string): string[] {
   return Array.from(names).filter(n => !exclude.has(n) && n.length > 2);
 }
 
+// Extract company identifiers from subject line for matching
+function extractCompanyIdentifiers(subject: string): string[] {
+  const identifiers: string[] = [];
+  
+  // Pattern 1: "Meeting assets for [Company] : [Your Company]" or "[Company] : [Your Company]"
+  const pattern1 = /Meeting assets for ([A-Za-z0-9-]+(?:\s+[A-Za-z0-9-]+)*)\s*[:\-]/i;
+  const match1 = subject.match(pattern1);
+  if (match1) {
+    const extracted = match1[1].trim();
+    // Don't add if it looks like a person's name followed by "'s Zoom Meeting"
+    if (!subject.includes(`${extracted}'s Zoom Meeting`)) {
+      identifiers.push(extracted);
+    }
+  }
+  
+  // Pattern 2: "Meeting with [Company] - [description]"
+  const pattern2 = /Meeting (?:with|for)\s+([A-Za-z0-9-]+(?:\s+[A-Za-z0-9-]+)*)\s*[\-:]/i;
+  const match2 = subject.match(pattern2);
+  if (match2) identifiers.push(match2[1].trim());
+  
+  // Pattern 3: All-caps abbreviations (e.g., XMLENZ, ABC, ACME) - likely company names
+  const allCapsPattern = /\b([A-Z][A-Z0-9]{2,}(?:[A-Z0-9]+)?)\b/g;
+  let match;
+  while ((match = allCapsPattern.exec(subject)) !== null) {
+    // Exclude common non-company words
+    const excludeWords = ['ZOOM', 'AI', 'MEETING', 'SUMMARY', 'FWD', 'RE', 'THE', 'AND', 'FOR', 'WITH'];
+    if (!excludeWords.includes(match[1])) {
+      identifiers.push(match[1]);
+    }
+  }
+  
+  // Deduplicate (case-insensitive)
+  const seen = new Set<string>();
+  return identifiers.filter(id => {
+    const lower = id.toLowerCase();
+    if (seen.has(lower)) return false;
+    seen.add(lower);
+    return true;
+  });
+}
+
 // Clean summary text (remove boilerplate/signatures)
 function cleanSummaryText(body: string): string {
   let cleaned = body;
@@ -392,6 +433,40 @@ serve(async (req) => {
           }
         }
 
+        // 2.5 Company name/domain match from subject
+        if (!matchedLeadId && leads) {
+          const companyIdentifiers = extractCompanyIdentifiers(msg.subject);
+          console.log(`[process-zoom-summary] Extracted company identifiers: ${companyIdentifiers.join(", ") || "(none)"}`);
+          
+          if (companyIdentifiers.length > 0) {
+            const companyMatchedLeads = leads.filter(lead => {
+              const leadCompanyLower = lead.company?.toLowerCase() || '';
+              const leadEmailDomain = lead.email.split("@")[1]?.toLowerCase().split('.')[0] || '';
+              
+              return companyIdentifiers.some(id => {
+                const idLower = id.toLowerCase();
+                // Match company name (contains or starts with)
+                if (leadCompanyLower.includes(idLower) || idLower.includes(leadCompanyLower.split(' ')[0])) {
+                  return true;
+                }
+                // Match email domain (e.g., XMLENZ → xmlenz.com)
+                if (leadEmailDomain === idLower || leadEmailDomain.startsWith(idLower) || idLower.startsWith(leadEmailDomain)) {
+                  return true;
+                }
+                return false;
+              });
+            });
+            
+            if (companyMatchedLeads.length === 1) {
+              matchedLeadId = companyMatchedLeads[0].id;
+              matchReason = `company_match: ${companyIdentifiers.join(', ')}`;
+              console.log(`[process-zoom-summary] Matched via company: ${companyMatchedLeads[0].company} (email: ${companyMatchedLeads[0].email})`);
+            } else if (companyMatchedLeads.length > 1) {
+              console.log(`[process-zoom-summary] Multiple company matches (${companyMatchedLeads.length}), continuing to name match`);
+            }
+          }
+        }
+
         // 3. Participant name match (now also extracts from subject line)
         const participantNames = extractParticipantNames(msg.raw_text, msg.subject);
         console.log(`[process-zoom-summary] Extracted names from body+subject: ${participantNames.join(", ")}`);
@@ -446,6 +521,23 @@ serve(async (req) => {
               })) {
                 score += 40;
                 reasons.push("name_match");
+              }
+            }
+
+            // Company name match scoring (+50)
+            const companyIdentifiers = extractCompanyIdentifiers(msg.subject);
+            if (companyIdentifiers.length > 0) {
+              const leadCompanyLower = lead.company?.toLowerCase() || '';
+              const leadEmailDomain = lead.email.split("@")[1]?.toLowerCase().split('.')[0] || '';
+              
+              if (companyIdentifiers.some(id => {
+                const idLower = id.toLowerCase();
+                return leadCompanyLower.includes(idLower) || 
+                       leadEmailDomain === idLower || 
+                       leadEmailDomain.startsWith(idLower);
+              })) {
+                score += 50;
+                reasons.push("company_match");
               }
             }
 
