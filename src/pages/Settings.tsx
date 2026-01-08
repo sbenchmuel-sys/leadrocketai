@@ -1,6 +1,7 @@
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
 import { UnmatchedMeetingSummariesCard } from "@/components/settings/UnmatchedMeetingSummariesCard";
+import { MatchedMeetingSummariesCard } from "@/components/settings/MatchedMeetingSummariesCard";
 
 export default function Settings() {
   return (
@@ -14,6 +15,7 @@ export default function Settings() {
         <GmailConnectionCard />
         <ZoomMeetingSyncCard />
         <UnmatchedMeetingSummariesCard />
+        <MatchedMeetingSummariesCard />
       </div>
     </div>
   );
