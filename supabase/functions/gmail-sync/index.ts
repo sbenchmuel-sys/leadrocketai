@@ -150,9 +150,19 @@ async function refreshTokenIfNeeded(
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-sync] Refreshing expired token");
     
-    const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
-    const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
+    const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
+    const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
     
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      console.error("[gmail-sync] Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET");
+      throw new Error("Missing Google OAuth credentials");
+    }
+
+    if (!connection.refresh_token) {
+      console.error("[gmail-sync] No refresh token available - user needs to reconnect Gmail");
+      throw new Error("No refresh token - please reconnect Gmail");
+    }
+
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -165,7 +175,13 @@ async function refreshTokenIfNeeded(
     });
     
     if (!response.ok) {
-      throw new Error("Failed to refresh token");
+      const errorBody = await response.text();
+      console.error("[gmail-sync] Token refresh failed:", response.status, errorBody);
+      
+      if (errorBody.includes("invalid_grant")) {
+        throw new Error("Gmail access revoked - please reconnect Gmail in Settings");
+      }
+      throw new Error(`Failed to refresh token: ${response.status}`);
     }
     
     const tokens = await response.json();
