@@ -9,6 +9,21 @@ export interface SyncResult {
   total?: number;
   errors?: string[];
   error?: string;
+  needsReconnect?: boolean;
+}
+
+// Helper to detect token/auth errors that require Gmail reconnection
+function isReconnectError(error: string): boolean {
+  const reconnectPhrases = [
+    "invalid_grant",
+    "revoked",
+    "reconnect gmail",
+    "refresh token",
+    "token expired",
+    "no refresh token",
+  ];
+  const lowerError = error.toLowerCase();
+  return reconnectPhrases.some(phrase => lowerError.includes(phrase));
 }
 
 interface MilestoneItem {
@@ -49,19 +64,45 @@ export function useGmailSync() {
       });
 
       if (!response.ok) {
-        const errorMsg = `Failed to sync Gmail: ${response.status}`;
+        const errorText = await response.text();
+        let errorMsg = `Failed to sync Gmail: ${response.status}`;
+        let needsReconnect = false;
+        
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = errorJson.error;
+            needsReconnect = isReconnectError(errorJson.error);
+          }
+        } catch {
+          // Use default error message
+        }
+        
         setError(errorMsg);
-        toast.error(errorMsg);
-        return { ok: false, error: errorMsg };
+        if (needsReconnect) {
+          toast.error("Gmail needs reconnection", { 
+            description: "Go to Settings to reconnect your Gmail account" 
+          });
+        } else {
+          toast.error(errorMsg);
+        }
+        return { ok: false, error: errorMsg, needsReconnect };
       }
 
       const data = await response.json();
 
       if (!data.ok) {
         const errorMsg = data.error || "Gmail sync failed";
+        const needsReconnect = isReconnectError(errorMsg);
         setError(errorMsg);
-        toast.error(errorMsg);
-        return { ok: false, error: errorMsg };
+        if (needsReconnect) {
+          toast.error("Gmail needs reconnection", { 
+            description: "Go to Settings to reconnect your Gmail account" 
+          });
+        } else {
+          toast.error(errorMsg);
+        }
+        return { ok: false, error: errorMsg, needsReconnect };
       }
 
       if (data.synced > 0) {

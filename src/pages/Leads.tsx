@@ -27,7 +27,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw, AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
@@ -44,6 +45,7 @@ export default function Leads() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showReconnectPrompt, setShowReconnectPrompt] = useState(false);
   const [newLead, setNewLead] = useState<CreateLeadInput>({
     name: "",
     company: "",
@@ -100,9 +102,24 @@ export default function Leads() {
     setSelectedIds(newSet);
   };
 
+  // Helper to detect token/auth errors that require Gmail reconnection
+  const isReconnectError = (error: string): boolean => {
+    const reconnectPhrases = [
+      "invalid_grant",
+      "revoked",
+      "reconnect gmail",
+      "refresh token",
+      "token expired",
+      "no refresh token",
+    ];
+    const lowerError = error.toLowerCase();
+    return reconnectPhrases.some(phrase => lowerError.includes(phrase));
+  };
+
   const handleBulkSync = async () => {
     if (selectedIds.size === 0) return;
     setIsSyncing(true);
+    setShowReconnectPrompt(false);
     try {
       const { data, error } = await supabase.functions.invoke("gmail-bulk-sync", {
         body: { leadIds: Array.from(selectedIds) },
@@ -115,10 +132,26 @@ export default function Leads() {
         setSelectedIds(new Set());
         loadLeads();
       } else {
-        toast.error(data?.error || "Sync failed");
+        const errorMsg = data?.error || "Sync failed";
+        if (isReconnectError(errorMsg)) {
+          setShowReconnectPrompt(true);
+          toast.error("Gmail needs reconnection", { 
+            description: "Go to Settings to reconnect your Gmail account" 
+          });
+        } else {
+          toast.error(errorMsg);
+        }
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to sync emails");
+      const errorMsg = err instanceof Error ? err.message : "Failed to sync emails";
+      if (isReconnectError(errorMsg)) {
+        setShowReconnectPrompt(true);
+        toast.error("Gmail needs reconnection", { 
+          description: "Go to Settings to reconnect your Gmail account" 
+        });
+      } else {
+        toast.error(errorMsg);
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -282,6 +315,22 @@ export default function Leads() {
               </>
             )}
           </div>
+          {showReconnectPrompt && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>Gmail access has expired. Please reconnect to continue syncing emails.</span>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => navigate("/dashboard/settings")}
+                  className="ml-4"
+                >
+                  Go to Settings
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
         </CardHeader>
         <CardContent>
           {isLoading ? (
