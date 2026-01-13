@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Loader2 } from "lucide-react";
 import { useGmailSync } from "@/hooks/useGmailSync";
+import { toast } from "sonner";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import {
   Dialog,
@@ -53,10 +54,24 @@ export function SendEmailButton({
   };
 
   const handleSend = async () => {
+    // Validate before sending
+    if (!editedTo.trim()) {
+      toast.error("Recipient email is required");
+      return;
+    }
+    if (!editedSubject.trim()) {
+      toast.error("Subject is required");
+      return;
+    }
+    if (!editedBody.trim()) {
+      toast.error("Message body is required");
+      return;
+    }
+    
     const result = await sendEmail(
-      editedTo,
-      editedSubject,
-      editedBody,
+      editedTo.trim(),
+      editedSubject.trim(),
+      editedBody.trim(),
       leadId,
       draftId
     );
@@ -67,7 +82,21 @@ export function SendEmailButton({
   };
 
   const handleDirectSend = async () => {
-    const result = await sendEmail(to, subject, body, leadId, draftId);
+    // Validate before sending
+    if (!to.trim()) {
+      toast.error("Recipient email is required");
+      return;
+    }
+    if (!subject.trim()) {
+      toast.error("Subject is required");
+      return;
+    }
+    if (!body.trim()) {
+      toast.error("Message body is required");
+      return;
+    }
+    
+    const result = await sendEmail(to.trim(), subject.trim(), body.trim(), leadId, draftId);
     if (result.ok) {
       onSent?.();
     }
