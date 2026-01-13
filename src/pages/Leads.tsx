@@ -27,14 +27,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw, AlertTriangle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw, AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
+import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 export default function Leads() {
   const navigate = useNavigate();
+  const { authUrl, prepareOAuth, clearAuthUrl } = useGmailConnection();
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -46,12 +48,36 @@ export default function Leads() {
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [showReconnectPrompt, setShowReconnectPrompt] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [newLead, setNewLead] = useState<CreateLeadInput>({
     name: "",
     company: "",
     email: "",
     strategy: "fast",
   });
+
+  // Handle authUrl changes - open popup when ready
+  useEffect(() => {
+    if (authUrl && isReconnecting) {
+      const popup = window.open(authUrl, "gmail-auth", "width=500,height=600,scrollbars=yes");
+      if (!popup || popup.closed) {
+        toast.error("Popup blocked", { description: "Please allow popups and try again" });
+      }
+      clearAuthUrl();
+      setIsReconnecting(false);
+      setShowReconnectPrompt(false);
+    }
+  }, [authUrl, isReconnecting, clearAuthUrl]);
+
+  const handleReconnectGmail = async () => {
+    setIsReconnecting(true);
+    try {
+      await prepareOAuth();
+    } catch (err) {
+      toast.error("Failed to start Gmail reconnection");
+      setIsReconnecting(false);
+    }
+  };
 
   const handleDeleteLead = async () => {
     if (!deleteTarget) return;
@@ -323,10 +349,21 @@ export default function Leads() {
                 <Button 
                   variant="outline" 
                   size="sm" 
-                  onClick={() => navigate("/dashboard/settings")}
+                  onClick={handleReconnectGmail}
+                  disabled={isReconnecting}
                   className="ml-4"
                 >
-                  Go to Settings
+                  {isReconnecting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Reconnecting...
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      Reconnect Gmail
+                    </>
+                  )}
                 </Button>
               </AlertDescription>
             </Alert>

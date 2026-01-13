@@ -1,10 +1,9 @@
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Loader2, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
+import { RefreshCw, Loader2, CheckCircle2, Clock, AlertTriangle, ExternalLink } from "lucide-react";
 import { useGmailSync } from "@/hooks/useGmailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { formatDistanceToNow } from "date-fns";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -15,6 +14,7 @@ import {
   Alert,
   AlertDescription,
 } from "@/components/ui/alert";
+import { toast } from "sonner";
 
 interface GmailSyncButtonProps {
   leadId: string;
@@ -33,11 +33,11 @@ export function GmailSyncButton({
   size = "sm",
   showLastSync = true
 }: GmailSyncButtonProps) {
-  const { connection, isConnected, isLoading: isLoadingConnection, refetch } = useGmailConnection();
+  const { connection, isConnected, isLoading: isLoadingConnection, authUrl, prepareOAuth, clearAuthUrl, refetch } = useGmailConnection();
   const { syncLead, isSyncing } = useGmailSync();
   const [justSynced, setJustSynced] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
-  const navigate = useNavigate();
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Reset "just synced" indicator after 3 seconds
   useEffect(() => {
@@ -46,6 +46,18 @@ export function GmailSyncButton({
       return () => clearTimeout(timer);
     }
   }, [justSynced]);
+
+  // Handle authUrl changes - open popup when ready
+  useEffect(() => {
+    if (authUrl && isReconnecting) {
+      const popup = window.open(authUrl, "gmail-auth", "width=500,height=600,scrollbars=yes");
+      if (!popup || popup.closed) {
+        toast.error("Popup blocked", { description: "Please allow popups and try again" });
+      }
+      clearAuthUrl();
+      setIsReconnecting(false);
+    }
+  }, [authUrl, isReconnecting, clearAuthUrl]);
 
   const handleSync = async () => {
     setNeedsReconnect(false);
@@ -59,8 +71,14 @@ export function GmailSyncButton({
     }
   };
 
-  const handleGoToSettings = () => {
-    navigate("/dashboard/settings");
+  const handleReconnect = async () => {
+    setIsReconnecting(true);
+    try {
+      await prepareOAuth();
+    } catch (err) {
+      toast.error("Failed to start reconnection");
+      setIsReconnecting(false);
+    }
   };
 
   if (isLoadingConnection) {
@@ -88,8 +106,24 @@ export function GmailSyncButton({
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="flex items-center justify-between gap-2 text-xs">
               <span>Gmail access expired</span>
-              <Button variant="outline" size="sm" onClick={handleGoToSettings} className="h-6 text-xs">
-                Reconnect
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={handleReconnect} 
+                disabled={isReconnecting}
+                className="h-6 text-xs"
+              >
+                {isReconnecting ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    Reconnecting...
+                  </>
+                ) : (
+                  <>
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    Reconnect Gmail
+                  </>
+                )}
               </Button>
             </AlertDescription>
           </Alert>
