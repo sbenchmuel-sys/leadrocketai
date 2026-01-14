@@ -783,3 +783,71 @@ export async function getLeadMeetingSummaries(leadId: string): Promise<MeetingSu
     followup_generated: row.followup_generated,
   }));
 }
+
+// ============================================
+// EMAIL THREAD QUERIES
+// ============================================
+
+export interface EmailThreadItem {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  from_email: string | null;
+  to_email: string | null;
+  subject: string | null;
+  body_text: string;
+  occurred_at: string;
+}
+
+export async function getLeadEmailThread(
+  leadId: string, 
+  limit = 10
+): Promise<{ emails: EmailThreadItem[]; threadSummary: string }> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { data, error } = await supabase
+    .from('interactions')
+    .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction')
+    .eq('lead_id', leadId)
+    .in('type', ['email_inbound', 'email_outbound'])
+    .order('occurred_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+
+  const emails: EmailThreadItem[] = (data ?? []).map(row => ({
+    id: row.id,
+    direction: row.type === 'email_inbound' ? 'inbound' : 'outbound',
+    from_email: row.from_email,
+    to_email: row.to_email,
+    subject: row.subject,
+    body_text: row.body_text,
+    occurred_at: row.occurred_at,
+  }));
+
+  // Build thread summary for AI context
+  const threadSummary = emails
+    .map(e => `[${e.direction.toUpperCase()}] ${e.from_email} → ${e.to_email}\nSubject: ${e.subject || 'No subject'}\n${e.body_text?.slice(0, 500) || ''}`)
+    .join('\n\n---\n\n');
+
+  return { emails, threadSummary };
+}
+
+// ============================================
+// LEAD ACTION MANAGEMENT
+// ============================================
+
+export async function dismissLeadAction(leadId: string): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { error } = await supabase
+    .from('leads')
+    .update({
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      last_activity_at: new Date().toISOString(),
+    })
+    .eq('id', leadId);
+
+  if (error) throw error;
+}

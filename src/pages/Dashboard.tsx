@@ -157,7 +157,7 @@ export default function Dashboard() {
       {/* Two Column Layout for Action Panel and AI */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <ActionRequiredPanel leads={leads} />
+          <ActionRequiredPanel leads={leads} onLeadUpdated={loadData} />
         </div>
         <div>
           <AIRecommendation recommendations={recommendations} />
@@ -165,7 +165,7 @@ export default function Dashboard() {
       </div>
 
       {/* Lead Table */}
-      <LeadTable leads={filteredLeads} isLoading={isLoading} />
+      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
     </div>
   );
 }

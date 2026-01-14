@@ -1,4 +1,5 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Table,
   TableBody,
@@ -12,10 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Mail, FileText, Eye, Plus, Send } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType } from "@/lib/dashboardUtils";
+import { EmailActionDialog } from "./EmailActionDialog";
 
 interface LeadTableProps {
   leads: EnrichedLead[];
   isLoading: boolean;
+  onLeadUpdated?: () => void;
 }
 
 const stageBadgeVariants: Record<DealStage, string> = {
@@ -28,7 +31,11 @@ const stageBadgeVariants: Record<DealStage, string> = {
   closed_lost: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300",
 };
 
-export function LeadTable({ leads, isLoading }: LeadTableProps) {
+export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
+  const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const navigate = useNavigate();
+
   if (isLoading) {
     return (
       <Card>
@@ -63,6 +70,12 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
     );
   }
 
+  const handleOpenEmailDialog = (lead: EnrichedLead, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedLead(lead);
+    setDialogOpen(true);
+  };
+
   const getActionButton = (lead: EnrichedLead) => {
     const basePath = `/dashboard/leads/${lead.id}`;
     const actionType = getActionType(lead.next_action_key);
@@ -71,31 +84,46 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
       switch (actionType) {
         case "reply":
           return (
-            <Button size="sm" variant="default" asChild>
-              <Link to={`${basePath}?tab=drafts`}>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
                 <Mail className="h-4 w-4 mr-1" />
                 Reply
-              </Link>
-            </Button>
+              </Button>
+              <Button size="sm" variant="ghost" asChild>
+                <Link to={basePath}>
+                  <Eye className="h-4 w-4" />
+                </Link>
+              </Button>
+            </div>
           );
         case "follow_up":
         case "recap":
           return (
-            <Button size="sm" variant="default" asChild>
-              <Link to={`${basePath}?tab=drafts`}>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
                 <FileText className="h-4 w-4 mr-1" />
                 Draft
-              </Link>
-            </Button>
+              </Button>
+              <Button size="sm" variant="ghost" asChild>
+                <Link to={basePath}>
+                  <Eye className="h-4 w-4" />
+                </Link>
+              </Button>
+            </div>
           );
         case "nurture":
           return (
-            <Button size="sm" variant="default" asChild>
-              <Link to={`${basePath}?tab=drafts`}>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
                 <Send className="h-4 w-4 mr-1" />
                 Send
-              </Link>
-            </Button>
+              </Button>
+              <Button size="sm" variant="ghost" asChild>
+                <Link to={basePath}>
+                  <Eye className="h-4 w-4" />
+                </Link>
+              </Button>
+            </div>
           );
       }
     }
@@ -111,52 +139,68 @@ export function LeadTable({ leads, isLoading }: LeadTableProps) {
   };
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle>Leads</CardTitle>
-      </CardHeader>
-      <CardContent className="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Lead</TableHead>
-              <TableHead>Stage</TableHead>
-              <TableHead className="hidden md:table-cell">Next Action</TableHead>
-              <TableHead className="text-right">Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {leads.map((lead) => (
-              <TableRow
-                key={lead.id}
-                className="cursor-pointer"
-                onClick={(e) => {
-                  if ((e.target as HTMLElement).closest("button, a")) return;
-                  window.location.href = `/dashboard/leads/${lead.id}`;
-                }}
-              >
-                <TableCell>
-                  <div>
-                    <p className="font-medium text-foreground">{lead.name}</p>
-                    <p className="text-sm text-muted-foreground">{lead.company}</p>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Badge className={stageBadgeVariants[lead.stage]}>
-                    {STAGE_LABELS[lead.stage]}
-                  </Badge>
-                </TableCell>
-                <TableCell className="hidden md:table-cell">
-                  <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                    {lead.next_action_label || "—"}
-                  </p>
-                </TableCell>
-                <TableCell className="text-right">{getActionButton(lead)}</TableCell>
+    <>
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle>Leads</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Lead</TableHead>
+                <TableHead>Stage</TableHead>
+                <TableHead className="hidden md:table-cell">Next Action</TableHead>
+                <TableHead className="text-right">Action</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+            </TableHeader>
+            <TableBody>
+              {leads.map((lead) => (
+                <TableRow
+                  key={lead.id}
+                  className="cursor-pointer"
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest("button, a")) return;
+                    navigate(`/dashboard/leads/${lead.id}`);
+                  }}
+                >
+                  <TableCell>
+                    <div>
+                      <p className="font-medium text-foreground">{lead.name}</p>
+                      <p className="text-sm text-muted-foreground">{lead.company}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={stageBadgeVariants[lead.stage]}>
+                      {STAGE_LABELS[lead.stage]}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                      {lead.next_action_label || "—"}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-right">{getActionButton(lead)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {selectedLead && (
+        <EmailActionDialog
+          lead={selectedLead}
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) {
+              setSelectedLead(null);
+              onLeadUpdated?.();
+            }
+          }}
+        />
+      )}
+    </>
   );
 }
