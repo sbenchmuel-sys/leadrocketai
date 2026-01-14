@@ -777,6 +777,7 @@ serve(async (req) => {
 
     // Enhance payload with semantic knowledge search for relevant tasks
     let enhancedPayload = { ...payload };
+    let knowledgeContextUsed = false;
     
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       // Build a query from the available context
@@ -792,6 +793,8 @@ serve(async (req) => {
         const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         // Pass lead_id for lead-scoped knowledge if available
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
+        
         const semanticContext = await getSemanticKnowledgeContext(
           searchQuery,
           supabaseUrl,
@@ -802,8 +805,13 @@ serve(async (req) => {
         
         if (semanticContext) {
           enhancedPayload.knowledge_context = semanticContext;
-          console.log(`[ai_task] Added semantic knowledge context (${semanticContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
+          knowledgeContextUsed = true;
+          console.log(`[ai_task] ✅ Added semantic knowledge context (${semanticContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
+        } else {
+          console.log(`[ai_task] ⚠️ No semantic matches found for task ${task}`);
         }
+      } else {
+        console.log(`[ai_task] Skipping knowledge search - query too short (${searchQuery.length} chars)`);
       }
     }
 
@@ -856,10 +864,10 @@ serve(async (req) => {
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "";
 
-    console.log(`[ai_task] Success. Response length: ${content.length}`);
+    console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
 
     return new Response(
-      JSON.stringify({ ok: true, content, raw: data }),
+      JSON.stringify({ ok: true, content, raw: data, knowledge_context_used: knowledgeContextUsed }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

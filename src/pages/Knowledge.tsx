@@ -236,31 +236,48 @@ export default function Knowledge() {
             },
           });
           
-          if (error || !data?.ok) {
-            console.error(`Failed to index chunk ${chunk.id}:`, error || data?.error);
+          if (error) {
+            console.error(`[Reindex] Edge function error for chunk ${chunk.id}:`, error);
+            toast.error(`Chunk failed: ${error.message || 'Unknown error'}`);
             failed++;
+          } else if (!data?.ok) {
+            console.error(`[Reindex] Embedding failed for chunk ${chunk.id}:`, data?.error);
             
-            // If rate limited, add extra delay
-            if (data?.error?.includes("Rate limit")) {
-              await new Promise(resolve => setTimeout(resolve, 3000));
+            // Show specific error message
+            const errMsg = data?.error || 'Unknown error';
+            if (errMsg.includes("Rate limit")) {
+              toast.warning("Rate limited - adding delay...");
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            } else if (errMsg.includes("Payment")) {
+              toast.error("AI credits depleted. Please add credits to continue.");
+              break; // Stop processing
+            } else {
+              toast.error(`Chunk failed: ${errMsg}`);
             }
+            failed++;
           } else {
             processed++;
+            // Show progress every 5 chunks
+            if (processed % 5 === 0) {
+              toast.success(`Indexed ${processed} chunks...`);
+            }
           }
         } catch (err) {
-          console.error(`Error indexing chunk ${chunk.id}:`, err);
+          console.error(`[Reindex] Exception for chunk ${chunk.id}:`, err);
+          toast.error(`Exception: ${err instanceof Error ? err.message : 'Unknown'}`);
           failed++;
         }
       }
       
       if (failed > 0) {
-        toast.warning(`Re-indexed ${processed} chunks, ${failed} failed`);
+        toast.warning(`Re-indexed ${processed} chunks, ${failed} failed. Check console for details.`);
       } else {
-        toast.success(`Re-indexed ${processed} chunks`);
+        toast.success(`Successfully indexed all ${processed} chunks!`);
       }
       loadChunks();
     } catch (err) {
-      toast.error("Failed to re-index documents");
+      console.error("[Reindex] Fatal error:", err);
+      toast.error(`Re-index failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setIsReindexingAll(false);
       setReindexProgress(null);

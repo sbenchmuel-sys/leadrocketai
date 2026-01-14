@@ -56,6 +56,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [generatedSubject, setGeneratedSubject] = useState<string>("");
   const [generatedType, setGeneratedType] = useState<string>("");
   const [questionInput, setQuestionInput] = useState("");
+  const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   const { runTask, isLoading: isGenerating } = useAITask();
 
   // Post-meeting state (simplified)
@@ -146,6 +147,8 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType(`pre_email_${emailNum}`);
+      // Check if knowledge context was used (raw response contains it)
+      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
     }
   };
 
@@ -165,6 +168,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType("intro_email");
+      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
     }
   };
 
@@ -180,6 +184,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType("followup_sequence");
+      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
     }
   };
 
@@ -200,6 +205,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType("linkedin_connect");
+      setKnowledgeUsed(false); // LinkedIn connect doesn't use knowledge
     }
   };
 
@@ -220,6 +226,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType("linkedin_followup");
+      setKnowledgeUsed(!!(result as any).knowledge_context_used);
     }
   };
 
@@ -239,6 +246,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     if (result.ok && result.content) {
       setGeneratedContent(result.content);
       setGeneratedType("answer");
+      setKnowledgeUsed(!!(result as any).knowledge_context_used);
       setQuestionInput("");
     }
   };
@@ -290,6 +298,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       setGeneratedContent(result.content);
       setGeneratedSubject(`Great speaking today — ${lead.company}`);
       setGeneratedType("post_meeting_followup");
+      setKnowledgeUsed(!!(result as any).knowledge_context_used);
       toast.success("Follow-up email generated");
     }
   };
@@ -971,7 +980,20 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Generated: {generatedType.replace(/_/g, ' ')}</CardTitle>
+              <div className="flex items-center gap-3">
+                <CardTitle className="text-base">Generated: {generatedType.replace(/_/g, ' ')}</CardTitle>
+                {knowledgeUsed ? (
+                  <Badge variant="outline" className="flex items-center gap-1 text-primary border-primary/30">
+                    <Database className="h-3 w-3" />
+                    Knowledge Base Used
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground">
+                    <AlertCircle className="h-3 w-3" />
+                    No Knowledge Context
+                  </Badge>
+                )}
+              </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={copyToClipboard}>
                   <Copy className="h-4 w-4 mr-1" />

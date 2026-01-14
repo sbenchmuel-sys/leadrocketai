@@ -117,23 +117,25 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[process-knowledge-document] Inserted ${insertedChunks?.length || 0} chunks`);
+    console.log(`[process-knowledge-document] Inserted ${insertedChunks?.length || 0} chunks with IDs:`, insertedChunks?.map(c => c.id));
 
     // Generate embeddings for each chunk
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY is not configured");
-      // Still return success but mark as pending
+      console.error("[process-knowledge-document] CRITICAL: LOVABLE_API_KEY is not configured - chunks will remain unindexed");
       return new Response(JSON.stringify({ 
         ok: true, 
         document_id: documentId,
         chunks_created: insertedChunks?.length || 0,
         embeddings_generated: 0,
-        message: "Chunks created but embeddings pending - AI gateway not configured"
+        embeddings_failed: insertedChunks?.length || 0,
+        error_details: "LOVABLE_API_KEY not configured - embeddings cannot be generated"
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    console.log(`[process-knowledge-document] LOVABLE_API_KEY is configured. Starting embedding generation...`);
 
     let embeddingsGenerated = 0;
     let embeddingsFailed = 0;
@@ -229,15 +231,19 @@ serve(async (req) => {
       }
     }
 
-    console.log(`[process-knowledge-document] Completed: ${embeddingsGenerated} succeeded, ${embeddingsFailed} failed`);
+    console.log(`[process-knowledge-document] FINAL RESULT: ${embeddingsGenerated} succeeded, ${embeddingsFailed} failed out of ${insertedChunks?.length || 0} chunks`);
 
     return new Response(
       JSON.stringify({
-        ok: true,
+        ok: embeddingsFailed === 0, // Only true if all succeeded
         document_id: documentId,
         chunks_created: insertedChunks?.length || 0,
         embeddings_generated: embeddingsGenerated,
+        embeddings_failed: embeddingsFailed,
         lead_id: lead_id || null,
+        message: embeddingsFailed > 0 
+          ? `${embeddingsFailed} chunks failed to index. Try re-indexing later.`
+          : "All chunks indexed successfully"
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
