@@ -20,6 +20,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "extract_deal_factors",
   "recommend_next_steps",
   "linkedin_followup",
+  "reply_to_thread",
 ];
 
 // Function to get knowledge context using text-based search (no embeddings required)
@@ -696,6 +697,42 @@ RULES
 - "merged_from" lists ALL original descriptions that were merged
 - Single milestones with no duplicates should still appear in unique_milestones
 - Be aggressive about deduplication - if milestones describe the same event, merge them`,
+
+  // Reply to email thread
+  reply_to_thread: `ROLE
+You are generating a reply to an ongoing email thread in a regulated B2B sales context.
+
+GOAL
+Write a relevant, professional reply that directly addresses the latest inbound email while considering the full thread context.
+
+CONSTRAINTS
+- 80–180 words
+- Directly address questions or points from the latest inbound email
+- Reference previous thread context naturally if relevant
+- One clear CTA (next step, meeting, or answer)
+- Use Knowledge Context to provide accurate information
+- No medical or performance claims
+- Keep tone professional but warm
+- Return EMAIL BODY ONLY (no subject line, no greetings like "Dear X,", start with content)
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Email Thread (most recent first):
+{{EMAIL_THREAD}}
+
+Latest Inbound Email:
+{{LATEST_INBOUND}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link (optional):
+{{MEETING_LINK}}
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
 };
 
 // Tasks that require the pro model
