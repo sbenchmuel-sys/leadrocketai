@@ -22,77 +22,80 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "linkedin_followup",
 ];
 
-// Function to get semantic knowledge context with optional lead-scoping
-async function getSemanticKnowledgeContext(
+// Function to get knowledge context using text-based search (no embeddings required)
+async function getTextBasedKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
-  lovableApiKey: string,
   leadId?: string
 ): Promise<string> {
   try {
-    // Generate embedding for the query
-    const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/text-embedding-004",
-        input: queryText.slice(0, 5000),
-      }),
-    });
-
-    if (!embResponse.ok) {
-      const errorText = await embResponse.text();
-      console.error("[ai_task] Embedding generation failed:", embResponse.status, errorText);
-      return "";
-    }
-
-    const embData = await embResponse.json();
-    const queryEmbedding = embData.data?.[0]?.embedding;
-
-    if (!queryEmbedding || !Array.isArray(queryEmbedding)) {
-      console.log("[ai_task] Invalid embedding response");
-      return "";
-    }
-
-    // Use service role to call the match function with lead-scoping
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
-    const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks", {
-      query_embedding: `[${queryEmbedding.join(",")}]`,
-      match_threshold: 0.4,
-      match_count: 5,
-      filter_customer_facing: true,
-      filter_lead_id: leadId || null,
-    });
+    // Extract key terms from the query for text search
+    const searchTerms = queryText
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(term => term.length > 3)
+      .slice(0, 10)
+      .join(' | '); // OR search
+    
+    console.log(`[ai_task] Text search terms: "${searchTerms.slice(0, 100)}..."`);
+    
+    // Build query for text-based search
+    let query = supabaseAdmin
+      .from("kb_chunks")
+      .select("id, title, content, source")
+      .eq("allowed_customer_facing", true)
+      .eq("processing_status", "completed")
+      .limit(5);
+    
+    // Filter by lead_id if provided (include both lead-specific and global knowledge)
+    if (leadId) {
+      query = query.or(`lead_id.eq.${leadId},lead_id.is.null`);
+    }
+    
+    // Use ilike for flexible text matching on multiple terms
+    // Search in content for any of the key terms
+    const keyTerms = queryText
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(term => term.length > 4)
+      .slice(0, 5);
+    
+    if (keyTerms.length > 0) {
+      // Create an OR condition for content matching
+      const contentFilters = keyTerms.map(term => `content.ilike.%${term}%`).join(',');
+      query = query.or(contentFilters);
+    }
+    
+    const { data: matches, error } = await query;
 
     if (error) {
-      console.error("[ai_task] Semantic search failed:", error);
+      console.error("[ai_task] Text search failed:", error);
       return "";
     }
 
     if (!matches || matches.length === 0) {
-      console.log("[ai_task] No semantic matches found");
+      console.log("[ai_task] No text matches found");
       return "";
     }
 
-    console.log(`[ai_task] Found ${matches.length} semantic matches${leadId ? ` for lead ${leadId}` : ""}`);
+    console.log(`[ai_task] Found ${matches.length} text matches${leadId ? ` for lead ${leadId}` : ""}`);
 
     // Format the matched chunks as context
     const context = matches
-      .map((m: { title: string; content: string; similarity: number; source: string }) => {
+      .map((m: { title: string | null; content: string; source: string | null }) => {
         const header = m.title ? `[${m.title}]` : "";
-        const score = `(relevance: ${(m.similarity * 100).toFixed(0)}%)`;
-        return `${header} ${score}\n${m.content}`;
+        return `${header}\n${m.content}`;
       })
       .join("\n\n---\n\n");
 
     return context;
   } catch (err) {
-    console.error("[ai_task] Error in semantic search:", err);
+    console.error("[ai_task] Error in text search:", err);
     return "";
   }
 }
@@ -795,20 +798,19 @@ serve(async (req) => {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
         
-        const semanticContext = await getSemanticKnowledgeContext(
+        const textContext = await getTextBasedKnowledgeContext(
           searchQuery,
           supabaseUrl,
           supabaseServiceKey,
-          LOVABLE_API_KEY,
           leadId
         );
         
-        if (semanticContext) {
-          enhancedPayload.knowledge_context = semanticContext;
+        if (textContext) {
+          enhancedPayload.knowledge_context = textContext;
           knowledgeContextUsed = true;
-          console.log(`[ai_task] ✅ Added semantic knowledge context (${semanticContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
+          console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
         } else {
-          console.log(`[ai_task] ⚠️ No semantic matches found for task ${task}`);
+          console.log(`[ai_task] ⚠️ No text matches found for task ${task}`);
         }
       } else {
         console.log(`[ai_task] Skipping knowledge search - query too short (${searchQuery.length} chars)`);
