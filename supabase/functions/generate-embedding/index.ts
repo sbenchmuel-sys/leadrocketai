@@ -47,14 +47,14 @@ serve(async (req) => {
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY is not configured");
-      return new Response(JSON.stringify({ ok: false, error: "AI gateway not configured" }), {
+      console.error("[generate-embedding] CRITICAL: LOVABLE_API_KEY is not configured");
+      return new Response(JSON.stringify({ ok: false, error: "AI gateway not configured - LOVABLE_API_KEY missing" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[generate-embedding] Generating embedding for text length: ${text.length}, chunk_id: ${chunk_id || 'none'}`);
+    console.log(`[generate-embedding] Starting embedding generation. Text length: ${text.length} chars, chunk_id: ${chunk_id || 'none'}, truncated preview: "${text.slice(0, 100)}..."`);
 
     // Retry logic with exponential backoff
     const maxAttempts = 3;
