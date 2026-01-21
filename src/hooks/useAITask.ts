@@ -25,7 +25,8 @@ export type AITaskType =
   | "post_meeting_followup_email"
   | "match_email_to_milestones"
   | "dedupe_milestones"
-  | "reply_to_thread";
+  | "reply_to_thread"
+  | "analyze_outgoing_email";
 
 export interface AITaskResponse {
   ok: boolean;

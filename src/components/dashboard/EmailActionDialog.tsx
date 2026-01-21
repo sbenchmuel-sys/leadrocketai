@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   Loader2, 
   Send, 
@@ -21,12 +22,17 @@ import {
   RefreshCw, 
   ChevronDown,
   ChevronRight,
-  BookOpen 
+  BookOpen,
+  Mail,
+  Paperclip,
+  Lightbulb,
+  PenLine
 } from "lucide-react";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useGmailSync } from "@/hooks/useGmailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
-import { getLeadEmailThread, getLeadDetail } from "@/lib/supabaseQueries";
+import { getLeadEmailThread, getLeadDetail, saveDraft } from "@/lib/supabaseQueries";
+import { getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile } from "@/lib/repProfileQueries";
 import { toast } from "sonner";
 import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 
@@ -35,6 +41,7 @@ interface EmailActionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDismiss?: () => void;
+  initialInstructions?: string;
 }
 
 // Map action types to AI tasks
@@ -58,30 +65,95 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
   }
 }
 
+// Build Gmail compose URL
+function buildGmailComposeUrl(to: string, subject: string, body: string): string {
+  const params = new URLSearchParams();
+  params.set("to", to);
+  params.set("su", subject);
+  params.set("body", body);
+  return `https://mail.google.com/mail/?view=cm&fs=1&${params.toString()}`;
+}
+
 export function EmailActionDialog({
   lead,
   open,
   onOpenChange,
   onDismiss,
+  initialInstructions = "",
 }: EmailActionDialogProps) {
   const [to, setTo] = useState(lead.email);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [instructions, setInstructions] = useState(initialInstructions);
   const [isGenerating, setIsGenerating] = useState(false);
   const [threadContext, setThreadContext] = useState<string[]>([]);
   const [showThread, setShowThread] = useState(false);
   const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   
+  // Signature state
+  const [signatures, setSignatures] = useState<RepSignature[]>([]);
+  const [selectedSignatureId, setSelectedSignatureId] = useState<string>("");
+  const [signatureText, setSignatureText] = useState("");
+  
+  // Attachments state
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
+  const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
+  
   const { runTask } = useAITask();
   const { sendEmail, isSyncing } = useGmailSync();
   const { isConnected } = useGmailConnection();
 
+  // Load signatures and knowledge docs on mount
+  useEffect(() => {
+    loadSignaturesAndDocs();
+  }, []);
+
   // Generate email when dialog opens
   useEffect(() => {
     if (open) {
+      setInstructions(initialInstructions);
       generateEmail();
     }
   }, [open, lead.id]);
+
+  async function loadSignaturesAndDocs() {
+    try {
+      const [sigs, docs] = await Promise.all([
+        getSignatures(),
+        getKnowledgeDocuments(),
+      ]);
+      setSignatures(sigs);
+      setKnowledgeDocs(docs);
+      
+      // Set default signature
+      const defaultSig = sigs.find(s => s.is_default);
+      if (defaultSig) {
+        setSelectedSignatureId(defaultSig.id);
+        setSignatureText(defaultSig.signature_text);
+      } else if (sigs.length > 0) {
+        setSelectedSignatureId(sigs[0].id);
+        setSignatureText(sigs[0].signature_text);
+      }
+    } catch (err) {
+      console.error("Failed to load signatures/docs:", err);
+    }
+  }
+
+  function handleSignatureChange(sigId: string) {
+    setSelectedSignatureId(sigId);
+    const sig = signatures.find(s => s.id === sigId);
+    if (sig) {
+      setSignatureText(sig.signature_text);
+    }
+  }
+
+  function toggleAttachment(docId: string) {
+    setSelectedAttachments(prev => 
+      prev.includes(docId) 
+        ? prev.filter(id => id !== docId)
+        : [...prev, docId]
+    );
+  }
 
   async function generateEmail() {
     setIsGenerating(true);
@@ -99,12 +171,20 @@ export function EmailActionDialog({
       const hasThread = emails.length > 0;
       const taskType = getAITaskForAction(lead.next_action_key, hasThread);
       
-      // Get full lead details for better context
+      // Get full lead details and rep profile for better context
       let leadDetail;
       try {
         leadDetail = await getLeadDetail(lead.id);
       } catch {
         leadDetail = lead;
+      }
+
+      // Get rep profile for personalization
+      let repProfile;
+      try {
+        repProfile = await getRepProfile();
+      } catch {
+        repProfile = null;
       }
 
       // Build lead context
@@ -119,11 +199,21 @@ ${leadDetail.industry ? `Industry: ${leadDetail.industry}` : ''}
 ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
 `.trim();
 
+      // Build rep context
+      const repContext = repProfile ? `
+Sender Name: ${repProfile.full_name || 'Sales Rep'}
+Sender Title: ${repProfile.job_title || ''}
+Sender Company: ${repProfile.company_name || ''}
+Calendar Link: ${repProfile.calendar_link || ''}
+`.trim() : '';
+
       // Prepare payload based on task type
       const payload: Record<string, unknown> = {
         lead_id: lead.id,
         lead_context: leadContext,
-        meeting_link: leadDetail.meeting_link || '',
+        rep_context: repContext,
+        meeting_link: leadDetail.meeting_link || repProfile?.calendar_link || '',
+        custom_instructions: instructions.trim() || undefined,
       };
 
       // Add thread context for replies
@@ -175,17 +265,66 @@ ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
     }
   }
 
+  // Get full email body with signature
+  function getFullEmailBody(): string {
+    if (signatureText) {
+      return `${body}\n\n${signatureText}`;
+    }
+    return body;
+  }
+
   async function handleSend() {
     if (!to.trim() || !subject.trim() || !body.trim()) {
       toast.error("Please fill in all fields");
       return;
     }
 
-    const result = await sendEmail(to.trim(), subject.trim(), body.trim(), lead.id);
+    const fullBody = getFullEmailBody();
+    const result = await sendEmail(to.trim(), subject.trim(), fullBody, lead.id);
     if (result.ok) {
       onOpenChange(false);
       toast.success("Email sent successfully!");
     }
+  }
+
+  async function handleOpenInGmail() {
+    if (!to.trim() || !subject.trim() || !body.trim()) {
+      toast.error("Please fill in all fields first");
+      return;
+    }
+
+    // Save as draft before opening Gmail
+    try {
+      await saveDraft(lead.id, {
+        channel: 'email',
+        draft_type: 'gmail_compose',
+        to_recipient: to.trim(),
+        subject: subject.trim(),
+        body_text: getFullEmailBody(),
+        status: 'pending',
+      });
+    } catch (err) {
+      console.error("Failed to save draft:", err);
+      // Continue anyway - not critical
+    }
+
+    // Build Gmail compose URL
+    const fullBody = getFullEmailBody();
+    
+    // Add attachment reminder if any selected
+    let bodyWithAttachments = fullBody;
+    if (selectedAttachments.length > 0) {
+      const attachmentNames = selectedAttachments
+        .map(id => knowledgeDocs.find(d => d.id === id)?.title || 'Document')
+        .join(', ');
+      bodyWithAttachments += `\n\n---\n[Remember to attach: ${attachmentNames}]`;
+    }
+
+    const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments);
+    window.open(gmailUrl, '_blank');
+    
+    toast.success("Opening Gmail compose...");
+    onOpenChange(false);
   }
 
   const actionType = getActionType(lead.next_action_key);
@@ -200,13 +339,40 @@ ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Send className="h-5 w-5" />
+            <Mail className="h-5 w-5" />
             {dialogTitle}
           </DialogTitle>
           <DialogDescription>
             {lead.next_action_label || "Prepare and send an email"}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Instructions Input */}
+        <div className="space-y-2">
+          <Label htmlFor="instructions" className="flex items-center gap-2 text-sm">
+            <Lightbulb className="h-4 w-4 text-amber-500" />
+            Instructions (optional)
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              id="instructions"
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="e.g., Mention the conference we met at..."
+              className="flex-1"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={generateEmail}
+              disabled={isGenerating}
+              className="gap-1 shrink-0"
+            >
+              <RefreshCw className={`h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
+              {instructions ? 'Regenerate' : 'Generate'}
+            </Button>
+          </div>
+        </div>
 
         {/* Thread Context Collapsible */}
         {threadContext.length > 0 && (
@@ -230,7 +396,7 @@ ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
         )}
 
         {/* Email Form */}
-        <div className="space-y-4 py-4">
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="to">To</Label>
             <Input
@@ -267,27 +433,101 @@ ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="Email body"
-                className="min-h-[200px]"
+                className="min-h-[180px]"
               />
             )}
           </div>
 
+          {/* Signature Selector */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <PenLine className="h-4 w-4" />
+                Signature
+              </Label>
+              <Select value={selectedSignatureId} onValueChange={handleSignatureChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select signature" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">No signature</SelectItem>
+                  {signatures.map(sig => (
+                    <SelectItem key={sig.id} value={sig.id}>
+                      {sig.name} {sig.is_default && "(default)"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Attachments Selector */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Paperclip className="h-4 w-4" />
+                Suggest Attachments
+              </Label>
+              <Select 
+                value={selectedAttachments.length > 0 ? "selected" : ""} 
+                onValueChange={() => {}}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={
+                    selectedAttachments.length > 0 
+                      ? `${selectedAttachments.length} selected` 
+                      : "Select documents"
+                  } />
+                </SelectTrigger>
+                <SelectContent>
+                  {knowledgeDocs.length === 0 ? (
+                    <div className="p-2 text-sm text-muted-foreground">
+                      No documents in knowledge base
+                    </div>
+                  ) : (
+                    knowledgeDocs.slice(0, 10).map(doc => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted cursor-pointer"
+                        onClick={() => toggleAttachment(doc.id)}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAttachments.includes(doc.id)}
+                          onChange={() => {}}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-sm truncate">
+                          {doc.title || doc.source || 'Untitled Document'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Signature Preview */}
+          {signatureText && (
+            <div className="p-3 bg-muted/30 rounded-lg border">
+              <p className="text-xs text-muted-foreground mb-1">Signature preview:</p>
+              <pre className="text-sm whitespace-pre-wrap font-sans text-muted-foreground">
+                {signatureText}
+              </pre>
+            </div>
+          )}
+
           {/* Indicators */}
           <div className="flex items-center gap-2 flex-wrap">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={generateEmail}
-              disabled={isGenerating}
-              className="gap-1"
-            >
-              <RefreshCw className={`h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
-              Regenerate
-            </Button>
             {knowledgeUsed && (
               <Badge variant="secondary" className="gap-1">
                 <BookOpen className="h-3 w-3" />
                 Knowledge Base Used
+              </Badge>
+            )}
+            {selectedAttachments.length > 0 && (
+              <Badge variant="outline" className="gap-1">
+                <Paperclip className="h-3 w-3" />
+                {selectedAttachments.length} attachment{selectedAttachments.length > 1 ? 's' : ''} to add
               </Badge>
             )}
           </div>
@@ -303,23 +543,32 @@ ${leadDetail.personal_notes ? `Notes: ${leadDetail.personal_notes}` : ''}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          {isConnected ? (
+          
+          {/* Primary action: Open in Gmail */}
+          <Button 
+            onClick={handleOpenInGmail}
+            disabled={isGenerating || !body.trim()}
+            className="gap-1"
+            variant="default"
+          >
+            <Mail className="h-4 w-4" />
+            Open in Gmail
+          </Button>
+          
+          {/* Secondary: Direct send if connected */}
+          {isConnected && (
             <Button 
               onClick={handleSend} 
               disabled={isSyncing || isGenerating || !body.trim()}
               className="gap-1"
+              variant="secondary"
             >
               {isSyncing ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Send className="h-4 w-4" />
               )}
-              Send via Gmail
-            </Button>
-          ) : (
-            <Button disabled className="gap-1">
-              <Send className="h-4 w-4" />
-              Connect Gmail to Send
+              Send Now
             </Button>
           )}
         </DialogFooter>

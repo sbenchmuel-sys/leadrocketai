@@ -1,0 +1,190 @@
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Loader2, Save, User } from "lucide-react";
+import { toast } from "sonner";
+import { getRepProfile, upsertRepProfile, RepProfile } from "@/lib/repProfileQueries";
+
+export function RepProfileCard() {
+  const [profile, setProfile] = useState<RepProfile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Form state
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
+  const [calendarLink, setCalendarLink] = useState("");
+  const [officeAddress, setOfficeAddress] = useState("");
+
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
+  async function loadProfile() {
+    try {
+      const data = await getRepProfile();
+      setProfile(data);
+      if (data) {
+        setFullName(data.full_name || "");
+        setEmail(data.email || "");
+        setPhone(data.phone || "");
+        setJobTitle(data.job_title || "");
+        setCompanyName(data.company_name || "");
+        setLinkedinUrl(data.linkedin_url || "");
+        setCalendarLink(data.calendar_link || "");
+        setOfficeAddress(data.office_address || "");
+      }
+    } catch (err) {
+      console.error("Failed to load rep profile:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleSave() {
+    setIsSaving(true);
+    try {
+      await upsertRepProfile({
+        full_name: fullName.trim() || null,
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        job_title: jobTitle.trim() || null,
+        company_name: companyName.trim() || null,
+        linkedin_url: linkedinUrl.trim() || null,
+        calendar_link: calendarLink.trim() || null,
+        office_address: officeAddress.trim() || null,
+      });
+      toast.success("Profile saved successfully");
+      loadProfile();
+    } catch (err) {
+      console.error("Failed to save profile:", err);
+      toast.error("Failed to save profile");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <User className="h-5 w-5" />
+            Your Profile
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex justify-center py-6">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <User className="h-5 w-5" />
+          Your Profile
+        </CardTitle>
+        <CardDescription>
+          Your information for email signatures and personalization
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="fullName">Full Name</Label>
+            <Input
+              id="fullName"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="John Smith"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="john@company.com"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="phone">Phone</Label>
+            <Input
+              id="phone"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+1 (555) 123-4567"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="jobTitle">Job Title</Label>
+            <Input
+              id="jobTitle"
+              value={jobTitle}
+              onChange={(e) => setJobTitle(e.target.value)}
+              placeholder="Senior Account Executive"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="companyName">Company Name</Label>
+            <Input
+              id="companyName"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="Acme Corp"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="linkedinUrl">LinkedIn URL</Label>
+            <Input
+              id="linkedinUrl"
+              value={linkedinUrl}
+              onChange={(e) => setLinkedinUrl(e.target.value)}
+              placeholder="https://linkedin.com/in/johnsmith"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="calendarLink">Calendar Link</Label>
+            <Input
+              id="calendarLink"
+              value={calendarLink}
+              onChange={(e) => setCalendarLink(e.target.value)}
+              placeholder="https://calendly.com/johnsmith"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="officeAddress">Office Address</Label>
+            <Input
+              id="officeAddress"
+              value={officeAddress}
+              onChange={(e) => setOfficeAddress(e.target.value)}
+              placeholder="123 Main St, Suite 100, City, ST 12345"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button onClick={handleSave} disabled={isSaving}>
+            {isSaving ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Save className="h-4 w-4 mr-2" />
+            )}
+            Save Profile
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

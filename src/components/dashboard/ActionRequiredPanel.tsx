@@ -1,12 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, Mail, FileText, Eye, Send, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { AlertCircle, Mail, FileText, Eye, Send, X, Lightbulb, ChevronDown, ChevronRight } from "lucide-react";
 import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { dismissLeadAction } from "@/lib/supabaseQueries";
+import { updateLeadActionInstructions, getLeadActionInstructions } from "@/lib/repProfileQueries";
 import { toast } from "sonner";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface ActionRequiredPanelProps {
   leads: EnrichedLead[];
@@ -17,6 +20,9 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [expandedInstructions, setExpandedInstructions] = useState<string | null>(null);
+  const [instructions, setInstructions] = useState<Record<string, string>>({});
+  const [currentInstructions, setCurrentInstructions] = useState("");
   
   const actionLeads = leads.filter((l) => l.needs_action).slice(0, 5);
 
@@ -35,9 +41,41 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
     }
   };
 
-  const handleOpenEmailDialog = (lead: EnrichedLead) => {
+  const handleOpenEmailDialog = async (lead: EnrichedLead) => {
+    // Get instructions for this lead
+    const leadInstructions = instructions[lead.id] || "";
+    setCurrentInstructions(leadInstructions);
     setSelectedLead(lead);
     setDialogOpen(true);
+  };
+
+  const toggleInstructions = async (leadId: string) => {
+    if (expandedInstructions === leadId) {
+      // Collapsing - save instructions
+      if (instructions[leadId]) {
+        try {
+          await updateLeadActionInstructions(leadId, instructions[leadId]);
+        } catch (err) {
+          console.error("Failed to save instructions:", err);
+        }
+      }
+      setExpandedInstructions(null);
+    } else {
+      // Expanding - load instructions
+      try {
+        const saved = await getLeadActionInstructions(leadId);
+        if (saved) {
+          setInstructions(prev => ({ ...prev, [leadId]: saved }));
+        }
+      } catch (err) {
+        console.error("Failed to load instructions:", err);
+      }
+      setExpandedInstructions(leadId);
+    }
+  };
+
+  const updateInstructions = (leadId: string, value: string) => {
+    setInstructions(prev => ({ ...prev, [leadId]: value }));
   };
 
   if (actionLeads.length === 0) {
@@ -115,39 +153,71 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
           {actionLeads.map((lead) => (
             <div
               key={lead.id}
-              className="flex items-center justify-between p-3 bg-background rounded-lg border"
+              className="p-3 bg-background rounded-lg border"
             >
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-foreground truncate">
-                  {lead.name}
-                  <span className="text-muted-foreground font-normal"> · {lead.company}</span>
-                </p>
-                <p className="text-sm text-muted-foreground truncate">
-                  {lead.next_action_label || "Action needed"}
-                </p>
+              <div className="flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-foreground truncate">
+                    {lead.name}
+                    <span className="text-muted-foreground font-normal"> · {lead.company}</span>
+                  </p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    {lead.next_action_label || "Action needed"}
+                  </p>
+                </div>
+                <div className="ml-3 flex-shrink-0 flex items-center gap-1">
+                  {getActionButton(lead)}
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    asChild
+                    className="text-muted-foreground"
+                  >
+                    <Link to={`/dashboard/leads/${lead.id}`}>
+                      <Eye className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={(e) => handleDismiss(lead, e)}
+                    disabled={dismissingId === lead.id}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-              <div className="ml-3 flex-shrink-0 flex items-center gap-1">
-                {getActionButton(lead)}
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  asChild
-                  className="text-muted-foreground"
-                >
-                  <Link to={`/dashboard/leads/${lead.id}`}>
-                    <Eye className="h-4 w-4" />
-                  </Link>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-destructive"
-                  onClick={(e) => handleDismiss(lead, e)}
-                  disabled={dismissingId === lead.id}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
+              
+              {/* Instructions Collapsible */}
+              <Collapsible 
+                open={expandedInstructions === lead.id} 
+                onOpenChange={() => toggleInstructions(lead.id)}
+              >
+                <CollapsibleTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="w-full justify-start gap-2 text-xs text-muted-foreground mt-2 h-7"
+                  >
+                    {expandedInstructions === lead.id ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                    <Lightbulb className="h-3 w-3" />
+                    {instructions[lead.id] ? "Edit instructions" : "Add instructions"}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2">
+                  <Input
+                    value={instructions[lead.id] || ""}
+                    onChange={(e) => updateInstructions(lead.id, e.target.value)}
+                    placeholder="e.g., Already sent recap, just follow up on pricing..."
+                    className="text-sm"
+                  />
+                </CollapsibleContent>
+              </Collapsible>
             </div>
           ))}
         </CardContent>
@@ -157,10 +227,12 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
         <EmailActionDialog
           lead={selectedLead}
           open={dialogOpen}
+          initialInstructions={currentInstructions}
           onOpenChange={(open) => {
             setDialogOpen(open);
             if (!open) {
               setSelectedLead(null);
+              setCurrentInstructions("");
               onLeadUpdated?.();
             }
           }}
