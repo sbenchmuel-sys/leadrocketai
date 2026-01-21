@@ -42,7 +42,7 @@ export function useGmailAutoSync() {
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 
-      // Call bulk sync endpoint
+      // Call bulk sync endpoint with leadIds array
       const response = await fetch(`${supabaseUrl}/functions/v1/gmail-bulk-sync`, {
         method: "POST",
         headers: {
@@ -50,8 +50,8 @@ export function useGmailAutoSync() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          leads: leads.map((l: LeadToSync) => ({ id: l.id, email: l.email })),
-          maxResultsPerLead: 10,
+          leadIds: leads.map((l: LeadToSync) => l.id),
+          maxResults: 10,
         }),
       });
 
