@@ -176,11 +176,82 @@ serve(async (req) => {
           gmail_message_id: sendData.id,
         });
 
-      // Update lead's last_activity_at
-      await serviceSupabase
+      // Get current lead data for AI analysis
+      const { data: leadData, error: leadError } = await serviceSupabase
         .from("leads")
-        .update({ last_activity_at: new Date().toISOString() })
-        .eq("id", leadId);
+        .select("stage, next_action_key, next_action_label, company, name")
+        .eq("id", leadId)
+        .single();
+
+      if (leadData && !leadError) {
+        // Call AI to analyze the outgoing email and update lead
+        try {
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const analysisResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": authHeader,
+            },
+            body: JSON.stringify({
+              task: "analyze_outgoing_email",
+              payload: {
+                lead_context: `Name: ${leadData.name}, Company: ${leadData.company}`,
+                current_stage: leadData.stage,
+                current_next_action: leadData.next_action_key || "none",
+                sent_email_subject: subject,
+                sent_email_body: body,
+              },
+            }),
+          });
+
+          if (analysisResponse.ok) {
+            const analysisData = await analysisResponse.json();
+            if (analysisData.ok && analysisData.content) {
+              try {
+                const analysis = JSON.parse(analysisData.content);
+                console.log("[gmail-send] AI analysis result:", analysis);
+                
+                // Update lead with AI suggestions
+                await serviceSupabase
+                  .from("leads")
+                  .update({
+                    stage: analysis.suggested_stage || leadData.stage,
+                    next_action_key: analysis.next_action_key,
+                    next_action_label: analysis.next_action_label,
+                    needs_action: analysis.needs_action ?? false,
+                    last_outbound_at: new Date().toISOString(),
+                    last_activity_at: new Date().toISOString(),
+                    action_instructions: null, // Clear instructions after send
+                  })
+                  .eq("id", leadId);
+                
+                console.log(`[gmail-send] Lead ${leadId} updated with AI analysis`);
+              } catch (parseErr) {
+                console.error("[gmail-send] Failed to parse AI analysis:", parseErr);
+              }
+            }
+          } else {
+            console.error("[gmail-send] AI analysis request failed:", await analysisResponse.text());
+          }
+        } catch (aiError) {
+          console.error("[gmail-send] AI analysis error:", aiError);
+          // Don't fail the send if AI analysis fails, just update basic fields
+          await serviceSupabase
+            .from("leads")
+            .update({ 
+              last_activity_at: new Date().toISOString(),
+              last_outbound_at: new Date().toISOString(),
+            })
+            .eq("id", leadId);
+        }
+      } else {
+        // Update lead's last_activity_at if we couldn't get lead data
+        await serviceSupabase
+          .from("leads")
+          .update({ last_activity_at: new Date().toISOString() })
+          .eq("id", leadId);
+      }
     }
 
     // Update draft status if draftId provided
