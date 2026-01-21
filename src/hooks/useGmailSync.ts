@@ -181,6 +181,24 @@ export function useGmailSync() {
       }
 
       toast.success("Email sent successfully!");
+
+      // After successful send, sync the lead to pull in the sent email
+      if (leadId) {
+        // Get lead email for sync
+        const { data: leadData } = await supabase
+          .from("leads")
+          .select("email")
+          .eq("id", leadId)
+          .single();
+
+        if (leadData?.email) {
+          // Fire and forget - don't block on sync completion
+          syncLead(leadId, leadData.email, 5).catch((err) => {
+            console.error("[SendEmail] Post-send sync failed:", err);
+          });
+        }
+      }
+
       return { ok: true, messageId: data.messageId };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
