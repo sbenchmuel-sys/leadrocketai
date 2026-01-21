@@ -733,6 +733,46 @@ Meeting Link (optional):
 
 OUTPUT
 Return EMAIL BODY ONLY.`,
+
+  // Analyze outgoing email to update lead stage/next action
+  analyze_outgoing_email: `ROLE
+You are analyzing an outgoing sales email to determine its impact on deal progression.
+
+GOAL
+Based on the email content and lead context, suggest updates to the lead's status, stage, and next action.
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Current Stage: {{CURRENT_STAGE}}
+Current Next Action: {{CURRENT_NEXT_ACTION}}
+
+Sent Email Subject: {{SENT_EMAIL_SUBJECT}}
+Sent Email Body: {{SENT_EMAIL_BODY}}
+
+ANALYSIS
+Determine:
+1. Should the stage change? (e.g., new → contacted, contacted → engaged if multi-touch)
+2. What's the appropriate next action for follow-up?
+3. Does the lead still need immediate action or is it waiting for a response?
+
+RULES
+- If this is a first outreach email, stage should be "contacted"
+- If this is a follow-up email after engagement, stage stays "engaged" or higher
+- After sending, typically needs_action should be FALSE (waiting for reply)
+- Next action should be a logical follow-up (e.g., "send_pre_2", "wait_reply", "schedule_meeting")
+- Keep reasoning factual and brief
+
+OUTPUT FORMAT
+Return JSON only:
+{
+  "suggested_stage": "new|contacted|engaged|post_meeting|closing|closed_won|closed_lost",
+  "next_action_key": "wait_reply|send_pre_2|send_pre_3|send_pre_4|schedule_meeting|send_followup|null",
+  "next_action_label": "Human readable next action label or null",
+  "needs_action": false,
+  "reasoning": "Brief explanation of the analysis (1-2 sentences)"
+}`,
 };
 
 // Tasks that require the pro model
@@ -744,6 +784,7 @@ const PRO_MODEL_TASKS = [
   "nurture_sequence",
   "nurture_email_single",
   "post_meeting_followup_email",
+  "analyze_outgoing_email",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {

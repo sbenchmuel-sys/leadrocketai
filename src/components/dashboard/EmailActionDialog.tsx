@@ -36,12 +36,32 @@ import { getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature
 import { toast } from "sonner";
 import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 
+// Minimal lead interface for this dialog (compatible with both EnrichedLead and LeadDetail)
+interface MinimalLead {
+  id: string;
+  name: string;
+  company: string;
+  email: string;
+  stage: string;
+  strategy?: string;
+  job_title?: string | null;
+  industry?: string | null;
+  personal_notes?: string | null;
+  meeting_link?: string | null;
+  next_action_key?: string | null;
+  next_action_label?: string | null;
+}
+
 interface EmailActionDialogProps {
-  lead: EnrichedLead;
+  lead: MinimalLead;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDismiss?: () => void;
+  onSuccess?: () => void;
   initialInstructions?: string;
+  prefilledSubject?: string;
+  prefilledBody?: string;
+  actionKey?: string;
 }
 
 // Map action types to AI tasks
@@ -79,11 +99,15 @@ export function EmailActionDialog({
   open,
   onOpenChange,
   onDismiss,
+  onSuccess,
   initialInstructions = "",
+  prefilledSubject,
+  prefilledBody,
+  actionKey,
 }: EmailActionDialogProps) {
   const [to, setTo] = useState(lead.email);
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [subject, setSubject] = useState(prefilledSubject || "");
+  const [body, setBody] = useState(prefilledBody || "");
   const [instructions, setInstructions] = useState(initialInstructions);
   const [isGenerating, setIsGenerating] = useState(false);
   const [threadContext, setThreadContext] = useState<string[]>([]);
@@ -108,11 +132,19 @@ export function EmailActionDialog({
     loadSignaturesAndDocs();
   }, []);
 
-  // Generate email when dialog opens
+  // Generate email when dialog opens (skip if prefilled)
   useEffect(() => {
     if (open) {
+      setTo(lead.email);
       setInstructions(initialInstructions);
-      generateEmail();
+      
+      // If prefilled values provided, use them instead of generating
+      if (prefilledSubject || prefilledBody) {
+        setSubject(prefilledSubject || "");
+        setBody(prefilledBody || "");
+      } else {
+        generateEmail();
+      }
     }
   }, [open, lead.id]);
 
@@ -169,7 +201,9 @@ export function EmailActionDialog({
       ));
 
       const hasThread = emails.length > 0;
-      const taskType = getAITaskForAction(lead.next_action_key, hasThread);
+      // Use actionKey prop if provided, otherwise fall back to lead.next_action_key
+      const effectiveActionKey = actionKey || lead.next_action_key || null;
+      const taskType = getAITaskForAction(effectiveActionKey, hasThread);
       
       // Get full lead details and rep profile for better context
       let leadDetail;
@@ -284,6 +318,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
     if (result.ok) {
       onOpenChange(false);
       toast.success("Email sent successfully!");
+      onSuccess?.();
     }
   }
 

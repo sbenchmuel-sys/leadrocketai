@@ -8,13 +8,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle, RefreshCw, Database } from "lucide-react";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, FileText, ChevronDown, ChevronUp, CheckCircle2, Clock, HelpCircle, PlusCircle, Scissors, Sparkles, Send, Edit2, AlertCircle, RefreshCw, Database, ExternalLink } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { EmailTemplateSelector } from "@/components/lead/EmailTemplateSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 
 interface DraftsTabProps {
   lead: LeadDetail;
@@ -85,6 +86,11 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   // Pre-meeting email summary for follow-ups
   const [previousEmailSummary, setPreviousEmailSummary] = useState("");
 
+  // Smart Intro instructions and email dialog state
+  const [smartIntroInstructions, setSmartIntroInstructions] = useState("");
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
+  const [emailDialogData, setEmailDialogData] = useState<{ subject: string; body: string } | null>(null);
+
   const loadDrafts = async () => {
     try {
       const data = await getLeadDrafts(lead.id);
@@ -152,7 +158,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
   };
 
-  // Legacy intro email (strategy-based)
+  // Legacy intro email (strategy-based) - now with instructions and dialog integration
   const generateIntroEmail = async () => {
     const task = lead.strategy === "fast" ? "email_intro_fast" : "email_intro_nurture";
     const interactions = await getLeadInteractions(lead.id);
@@ -163,6 +169,32 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       email_text: lastInbound?.body_text || "",
       meeting_link: lead.meeting_link || "",
       lead_id: lead.id,
+      custom_instructions: smartIntroInstructions || undefined,
+    });
+
+    if (result.ok && result.content) {
+      // Open EmailActionDialog instead of just setting state
+      const generatedSubject = `Intro — ${lead.company}`;
+      setEmailDialogData({ subject: generatedSubject, body: result.content });
+      setShowEmailDialog(true);
+      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
+      // Clear instructions after generation
+      setSmartIntroInstructions("");
+    }
+  };
+
+  // Generate intro and open in dialog (alternative button)
+  const generateIntroEmailInline = async () => {
+    const task = lead.strategy === "fast" ? "email_intro_fast" : "email_intro_nurture";
+    const interactions = await getLeadInteractions(lead.id);
+    const lastInbound = interactions.find((i) => i.type === "email_inbound");
+
+    const result = await runTask(task, {
+      lead_context: buildLeadContext(),
+      email_text: lastInbound?.body_text || "",
+      meeting_link: lead.meeting_link || "",
+      lead_id: lead.id,
+      custom_instructions: smartIntroInstructions || undefined,
     });
 
     if (result.ok && result.content) {
@@ -580,19 +612,35 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
             {/* Pre-Meeting Tab */}
             <TabsContent value="pre-meeting" className="space-y-4">
               <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <EmailTemplateSelector 
-                    lead={lead} 
-                    onSelectTemplate={(subject, body) => {
-                      setGeneratedSubject(subject);
-                      setGeneratedContent(body);
-                      setGeneratedType("template_email");
-                    }}
-                  />
-                  <Button onClick={generateIntroEmail} disabled={isGenerating} variant="outline">
-                    {isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
-                    Smart Intro ({lead.strategy})
-                  </Button>
+                {/* Smart Intro with Instructions */}
+                <div className="border rounded-lg p-4 space-y-3">
+                  <h4 className="text-sm font-medium">Smart Intro Email</h4>
+                  <div className="space-y-2">
+                    <Input
+                      value={smartIntroInstructions}
+                      onChange={(e) => setSmartIntroInstructions(e.target.value)}
+                      placeholder="Optional instructions (e.g., mention the conference, focus on pricing...)"
+                      className="text-sm"
+                    />
+                    <div className="flex items-center gap-2">
+                      <EmailTemplateSelector 
+                        lead={lead} 
+                        onSelectTemplate={(subject, body) => {
+                          setGeneratedSubject(subject);
+                          setGeneratedContent(body);
+                          setGeneratedType("template_email");
+                        }}
+                      />
+                      <Button onClick={generateIntroEmail} disabled={isGenerating} className="flex-1">
+                        {isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ExternalLink className="h-4 w-4 mr-2" />}
+                        Smart Intro → Open Dialog
+                      </Button>
+                      <Button onClick={generateIntroEmailInline} disabled={isGenerating} variant="outline">
+                        {isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+                        Inline ({lead.strategy})
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="border rounded-lg p-4 space-y-3">
@@ -1081,6 +1129,25 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Email Action Dialog for Smart Intro */}
+      {showEmailDialog && emailDialogData && (
+        <EmailActionDialog
+          lead={lead}
+          actionKey="email_intro_fast"
+          open={showEmailDialog}
+          onOpenChange={(open) => {
+            setShowEmailDialog(open);
+            if (!open) setEmailDialogData(null);
+          }}
+          onSuccess={() => {
+            onUpdate();
+            loadDrafts();
+          }}
+          prefilledSubject={emailDialogData.subject}
+          prefilledBody={emailDialogData.body}
+        />
+      )}
     </div>
   );
 }
