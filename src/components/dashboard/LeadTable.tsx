@@ -11,7 +11,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Mail, FileText, Eye, Plus, Send } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 
@@ -34,6 +36,9 @@ const stageBadgeVariants: Record<DealStage, string> = {
 export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [currentInstructions, setCurrentInstructions] = useState("");
+  const [instructionsPopover, setInstructionsPopover] = useState<string | null>(null);
+  const [tempInstructions, setTempInstructions] = useState("");
   const navigate = useNavigate();
 
   if (isLoading) {
@@ -70,62 +75,155 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     );
   }
 
-  const handleOpenEmailDialog = (lead: EnrichedLead, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleOpenEmailDialog = (lead: EnrichedLead, instructions: string = "") => {
+    setCurrentInstructions(instructions);
     setSelectedLead(lead);
     setDialogOpen(true);
+    setInstructionsPopover(null);
+  };
+
+  const openInstructionsPopover = (leadId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTempInstructions("");
+    setInstructionsPopover(leadId);
+  };
+
+  const confirmInstructions = (lead: EnrichedLead) => {
+    handleOpenEmailDialog(lead, tempInstructions);
   };
 
   const getActionButton = (lead: EnrichedLead) => {
     const basePath = `/dashboard/leads/${lead.id}`;
     const actionType = getActionType(lead.next_action_key);
 
-    if (lead.needs_action) {
-      switch (actionType) {
-        case "reply":
-          return (
-            <div className="flex items-center gap-1">
-              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
-                <Mail className="h-4 w-4 mr-1" />
-                Reply
-              </Button>
-              <Button size="sm" variant="ghost" asChild>
-                <Link to={basePath}>
-                  <Eye className="h-4 w-4" />
-                </Link>
-              </Button>
-            </div>
-          );
-        case "follow_up":
-        case "recap":
-          return (
-            <div className="flex items-center gap-1">
-              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
-                <FileText className="h-4 w-4 mr-1" />
+    // New leads without action get Smart Intro button
+    if (lead.stage === "new" && !lead.needs_action) {
+      return (
+        <div className="flex items-center gap-1">
+          <Popover 
+            open={instructionsPopover === lead.id} 
+            onOpenChange={(open) => !open && setInstructionsPopover(null)}
+          >
+            <PopoverTrigger asChild>
+              <Button 
+                size="sm" 
+                variant="default" 
+                onClick={(e) => openInstructionsPopover(lead.id, e)}
+              >
+                <Sparkles className="h-4 w-4 mr-1" />
                 Draft
               </Button>
-              <Button size="sm" variant="ghost" asChild>
-                <Link to={basePath}>
-                  <Eye className="h-4 w-4" />
-                </Link>
+            </PopoverTrigger>
+            <PopoverContent className="w-80" align="end">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium">Add instructions (optional)</span>
+                </div>
+                <Input
+                  value={tempInstructions}
+                  onChange={(e) => setTempInstructions(e.target.value)}
+                  placeholder="e.g., Mention the healthcare conference..."
+                  className="text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      confirmInstructions(lead);
+                    }
+                  }}
+                />
+                <div className="flex justify-end gap-2">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={() => setInstructionsPopover(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    onClick={() => confirmInstructions(lead)}
+                  >
+                    Generate Draft
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button size="sm" variant="ghost" asChild>
+            <Link to={basePath}>
+              <Eye className="h-4 w-4" />
+            </Link>
+          </Button>
+        </div>
+      );
+    }
+
+    if (lead.needs_action) {
+      const ActionIcon = actionType === "reply" ? Mail 
+        : actionType === "nurture" ? Send 
+        : FileText;
+      const actionLabel = actionType === "reply" ? "Reply" 
+        : actionType === "nurture" ? "Send" 
+        : "Draft";
+
+      return (
+        <div className="flex items-center gap-1">
+          <Popover 
+            open={instructionsPopover === lead.id} 
+            onOpenChange={(open) => !open && setInstructionsPopover(null)}
+          >
+            <PopoverTrigger asChild>
+              <Button 
+                size="sm" 
+                variant="default" 
+                onClick={(e) => openInstructionsPopover(lead.id, e)}
+              >
+                <ActionIcon className="h-4 w-4 mr-1" />
+                {actionLabel}
               </Button>
-            </div>
-          );
-        case "nurture":
-          return (
-            <div className="flex items-center gap-1">
-              <Button size="sm" variant="default" onClick={(e) => handleOpenEmailDialog(lead, e)}>
-                <Send className="h-4 w-4 mr-1" />
-                Send
-              </Button>
-              <Button size="sm" variant="ghost" asChild>
-                <Link to={basePath}>
-                  <Eye className="h-4 w-4" />
-                </Link>
-              </Button>
-            </div>
-          );
-      }
+            </PopoverTrigger>
+            <PopoverContent className="w-80" align="end">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium">Add instructions (optional)</span>
+                </div>
+                <Input
+                  value={tempInstructions}
+                  onChange={(e) => setTempInstructions(e.target.value)}
+                  placeholder="e.g., Already sent recap, follow up on pricing..."
+                  className="text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      confirmInstructions(lead);
+                    }
+                  }}
+                />
+                <div className="flex justify-end gap-2">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={() => setInstructionsPopover(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    onClick={() => confirmInstructions(lead)}
+                  >
+                    Generate {actionLabel}
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button size="sm" variant="ghost" asChild>
+            <Link to={basePath}>
+              <Eye className="h-4 w-4" />
+            </Link>
+          </Button>
+        </div>
+      );
     }
 
     return (
@@ -160,7 +258,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   key={lead.id}
                   className="cursor-pointer"
                   onClick={(e) => {
-                    if ((e.target as HTMLElement).closest("button, a")) return;
+                    if ((e.target as HTMLElement).closest("button, a, [role='dialog']")) return;
                     navigate(`/dashboard/leads/${lead.id}`);
                   }}
                 >
@@ -177,7 +275,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
                     <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                      {lead.next_action_label || "—"}
+                      {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                     </p>
                   </TableCell>
                   <TableCell className="text-right">{getActionButton(lead)}</TableCell>
@@ -192,10 +290,12 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
         <EmailActionDialog
           lead={selectedLead}
           open={dialogOpen}
+          initialInstructions={currentInstructions}
           onOpenChange={(open) => {
             setDialogOpen(open);
             if (!open) {
               setSelectedLead(null);
+              setCurrentInstructions("");
               onLeadUpdated?.();
             }
           }}

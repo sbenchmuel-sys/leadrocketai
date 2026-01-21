@@ -223,6 +223,7 @@ export type Database = {
       }
       leads: {
         Row: {
+          action_instructions: string | null
           company: string
           country: string | null
           created_at: string
@@ -260,6 +261,7 @@ export type Database = {
           strategy: string
         }
         Insert: {
+          action_instructions?: string | null
           company: string
           country?: string | null
           created_at?: string
@@ -297,6 +299,7 @@ export type Database = {
           strategy: string
         }
         Update: {
+          action_instructions?: string | null
           company?: string
           country?: string | null
           created_at?: string
@@ -540,6 +543,78 @@ export type Database = {
           onboarding_step?: number
           role?: Database["public"]["Enums"]["app_role"]
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      rep_profiles: {
+        Row: {
+          calendar_link: string | null
+          company_name: string | null
+          created_at: string
+          email: string | null
+          full_name: string | null
+          id: string
+          job_title: string | null
+          linkedin_url: string | null
+          office_address: string | null
+          phone: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          calendar_link?: string | null
+          company_name?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          job_title?: string | null
+          linkedin_url?: string | null
+          office_address?: string | null
+          phone?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          calendar_link?: string | null
+          company_name?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          job_title?: string | null
+          linkedin_url?: string | null
+          office_address?: string | null
+          phone?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      rep_signatures: {
+        Row: {
+          created_at: string
+          id: string
+          is_default: boolean
+          name: string
+          signature_text: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          name: string
+          signature_text: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          name?: string
+          signature_text?: string
           user_id?: string
         }
         Relationships: []
