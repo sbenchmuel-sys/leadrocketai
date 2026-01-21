@@ -175,10 +175,14 @@ Constraints:
 - 1 clear CTA (book a 30-min call)
 - If they asked questions, answer briefly and offer to cover deeper on call
 - Do NOT mention anything not in Knowledge Context
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 - Return EMAIL BODY ONLY
 
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Inbound Email:
 {{EMAIL_TEXT}}
@@ -187,7 +191,10 @@ Knowledge Context (approved snippets):
 {{KNOWLEDGE_CONTEXT}}
 
 Meeting link (optional):
-{{MEETING_LINK}}`,
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}`,
 
   email_intro_nurture: `Write a NURTURE intro email reply for a regulated B2B lead.
 Goal: be helpful, provide 1–2 value points, share 1 resource, invite a call without pressure.
@@ -197,10 +204,14 @@ Constraints:
 - Helpful tone, credibility-building
 - 1 soft CTA (offer a call / ask what's best next step)
 - Use Knowledge Context only
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 - Return EMAIL BODY ONLY
 
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Inbound Email:
 {{EMAIL_TEXT}}
@@ -212,7 +223,10 @@ Optional resource to mention:
 {{RESOURCE_LINK_OR_TITLE}}
 
 Meeting link (optional):
-{{MEETING_LINK}}`,
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}`,
 
   followup_sequence_4: `Generate a 4-email follow-up sequence for a regulated B2B prospect.
 Mode is either FAST or NURTURE.
@@ -397,16 +411,23 @@ CONSTRAINTS
 - No medical or performance claims
 - Use only approved Knowledge Context
 - If information is missing, stay high-level
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
 Meeting Link:
 {{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return EMAIL BODY ONLY.`,
@@ -423,10 +444,14 @@ CONSTRAINTS
 - Briefly reference previous email
 - One clear CTA (book a call)
 - No hype or guarantees
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Previous Outreach Summary:
 {{PREVIOUS_EMAIL_SUMMARY}}
@@ -436,6 +461,9 @@ Knowledge Context:
 
 Meeting Link:
 {{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return EMAIL BODY ONLY.`,
@@ -451,16 +479,23 @@ CONSTRAINTS
 - More direct, still polite
 - Explicitly acknowledge silence without pressure
 - One clear CTA (call, redirect, or deprioritize)
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Previous Outreach Summary:
 {{PREVIOUS_EMAIL_SUMMARY}}
 
 Meeting Link:
 {{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return EMAIL BODY ONLY.`,
@@ -476,10 +511,17 @@ CONSTRAINTS
 - Calm, polite, non-defensive
 - No CTA except soft invitation to reconnect
 - No claims
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return EMAIL BODY ONLY.`,
@@ -713,11 +755,15 @@ CONSTRAINTS
 - Use Knowledge Context to provide accurate information
 - No medical or performance claims
 - Keep tone professional but warm
+- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 - Return EMAIL BODY ONLY (no subject line, no greetings like "Dear X,", start with content)
 
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
 
 Email Thread (most recent first):
 {{EMAIL_THREAD}}
@@ -730,6 +776,9 @@ Knowledge Context:
 
 Meeting Link (optional):
 {{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return EMAIL BODY ONLY.`,

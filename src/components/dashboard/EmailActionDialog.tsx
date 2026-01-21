@@ -287,13 +287,28 @@ Calendar Link: ${repProfile.calendar_link || ''}
         setKnowledgeUsed(!!(result as any).knowledge_context_used);
         
         // Generate subject based on action type
-        const actionType = getActionType(lead.next_action_key);
+        const actionType = getActionType(effectiveActionKey);
+        const leadFirstName = lead.name.split(' ')[0];
+        const companyName = lead.company && lead.company !== 'Unknown Company' ? lead.company : null;
+        
         if (actionType === "reply" && emails[0]?.subject) {
           setSubject(`Re: ${emails[0].subject.replace(/^Re:\s*/i, '')}`);
         } else if (actionType === "recap") {
-          setSubject(`Following up on our conversation - ${lead.company}`);
+          setSubject(`Following up on our conversation${companyName ? ` - ${companyName}` : ''}`);
+        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_2")) {
+          setSubject(`Following up - ${leadFirstName}`);
+        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_3")) {
+          setSubject(`Checking in - ${leadFirstName}`);
+        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_4")) {
+          setSubject(`Closing the loop - ${leadFirstName}`);
+        } else if (actionType === "nurture") {
+          setSubject(`Thought you'd find this valuable${companyName ? `, ${leadFirstName}` : ''}`);
         } else {
-          setSubject(`Quick note - ${lead.company}`);
+          // Default: Introduction or first outreach
+          setSubject(companyName 
+            ? `Introduction - ${companyName}` 
+            : `Connecting with you, ${leadFirstName}`
+          );
         }
       } else {
         toast.error("Failed to generate email");
