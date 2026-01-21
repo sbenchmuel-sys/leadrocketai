@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Users, BookOpen, LayoutDashboard, LogOut, Settings } from "lucide-react";
+import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -14,6 +15,9 @@ const navItems = [
 export default function DashboardLayout() {
   const { signOut, user } = useAuth();
   const location = useLocation();
+
+  // Initialize background Gmail auto-sync (every 20 minutes)
+  useGmailAutoSync();
 
   return (
     <div className="min-h-screen flex bg-background">
