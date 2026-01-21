@@ -36,7 +36,7 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 export default function Leads() {
   const navigate = useNavigate();
-  const { authUrl, prepareOAuth, clearAuthUrl } = useGmailConnection();
+  const { authUrl, prepareOAuth, clearAuthUrl, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -137,6 +137,7 @@ export default function Leads() {
       "refresh token",
       "token expired",
       "no refresh token",
+      "gmail not connected",
     ];
     const lowerError = error.toLowerCase();
     return reconnectPhrases.some(phrase => lowerError.includes(phrase));
@@ -144,6 +145,16 @@ export default function Leads() {
 
   const handleBulkSync = async () => {
     if (selectedIds.size === 0) return;
+    
+    // Check Gmail connection before attempting sync
+    if (!isGmailConnected) {
+      setShowReconnectPrompt(true);
+      toast.error("Gmail not connected", { 
+        description: "Please connect your Gmail account to sync emails" 
+      });
+      return;
+    }
+    
     setIsSyncing(true);
     setShowReconnectPrompt(false);
     try {
@@ -325,7 +336,8 @@ export default function Leads() {
                   variant="outline"
                   size="sm"
                   onClick={handleBulkSync}
-                  disabled={isSyncing}
+                  disabled={isSyncing || isGmailLoading}
+                  title={!isGmailConnected ? "Connect Gmail first" : undefined}
                 >
                   <RefreshCw className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
                   {isSyncing ? "Syncing..." : `Sync Gmail (${selectedIds.size})`}
@@ -345,7 +357,11 @@ export default function Leads() {
             <Alert variant="destructive" className="mt-4">
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription className="flex items-center justify-between">
-                <span>Gmail access has expired. Please reconnect to continue syncing emails.</span>
+                <span>
+                  {isGmailConnected 
+                    ? "Gmail access has expired. Please reconnect to continue syncing emails."
+                    : "Gmail is not connected. Please connect your Gmail account to sync emails."}
+                </span>
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -356,12 +372,12 @@ export default function Leads() {
                   {isReconnecting ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Reconnecting...
+                      Connecting...
                     </>
                   ) : (
                     <>
                       <ExternalLink className="h-4 w-4 mr-2" />
-                      Reconnect Gmail
+                      {isGmailConnected ? "Reconnect Gmail" : "Connect Gmail"}
                     </>
                   )}
                 </Button>
