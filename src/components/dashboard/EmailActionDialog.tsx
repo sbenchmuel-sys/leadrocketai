@@ -165,6 +165,9 @@ export function EmailActionDialog({
       } else if (sigs.length > 0) {
         setSelectedSignatureId(sigs[0].id);
         setSignatureText(sigs[0].signature_text);
+      } else {
+        setSelectedSignatureId("none");
+        setSignatureText("");
       }
     } catch (err) {
       console.error("Failed to load signatures/docs:", err);
@@ -173,9 +176,13 @@ export function EmailActionDialog({
 
   function handleSignatureChange(sigId: string) {
     setSelectedSignatureId(sigId);
-    const sig = signatures.find(s => s.id === sigId);
-    if (sig) {
-      setSignatureText(sig.signature_text);
+    if (sigId === "none") {
+      setSignatureText("");
+    } else {
+      const sig = signatures.find(s => s.id === sigId);
+      if (sig) {
+        setSignatureText(sig.signature_text);
+      }
     }
   }
 
@@ -485,7 +492,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
                   <SelectValue placeholder="Select signature" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No signature</SelectItem>
+                  <SelectItem value="none">No signature</SelectItem>
                   {signatures.map(sig => (
                     <SelectItem key={sig.id} value={sig.id}>
                       {sig.name} {sig.is_default && "(default)"}
