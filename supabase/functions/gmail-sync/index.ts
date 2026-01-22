@@ -253,7 +253,8 @@ function deriveAction(
   metrics: LeadMetrics,
   pendingDraftCount: number,
   nurtureCadence: string | null,
-  stage: string
+  stage: string,
+  hasMeetingWithoutFollowup: boolean = false
 ): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
@@ -318,17 +319,13 @@ function deriveAction(
     }
   }
 
-  // D) Post-Meeting Recap Missing - has meeting but no recent outbound within 48h
-  if (metrics.meeting_summary_count > 0) {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    // If no outbound in last 48 hours after having meetings
-    if (now - lastOutTime > 48 * HOUR) {
-      return {
-        needs_action: true,
-        next_action_key: "generate_post_meeting_recap",
-        next_action_label: "Send post-meeting recap",
-      };
-    }
+  // D) Post-Meeting Recap Missing - only trigger if there's a meeting pack without follow-up email
+  if (hasMeetingWithoutFollowup) {
+    return {
+      needs_action: true,
+      next_action_key: "generate_post_meeting_recap",
+      next_action_label: "Send post-meeting recap",
+    };
   }
 
   // E) Nurture Cadence Due
@@ -606,16 +603,22 @@ serve(async (req) => {
       .order("occurred_at", { ascending: true });
 
     // Meeting count is derived from meeting_packs (source of truth)
-    const { count: meetingCount } = await serviceSupabase
+    const { data: meetingPacks } = await serviceSupabase
       .from("meeting_packs")
-      .select("id", { count: "exact", head: true })
+      .select("id, follow_up_email_body")
       .eq("lead_id", leadId);
+
+    const meetingCount = meetingPacks?.length || 0;
+    // Check if any meeting pack is missing a follow-up email
+    const hasMeetingWithoutFollowup = (meetingPacks || []).some(
+      (mp) => !mp.follow_up_email_body || mp.follow_up_email_body.trim() === ""
+    );
 
     const metrics: LeadMetrics = {
       first_outbound_at: null,
       last_outbound_at: null,
       last_inbound_at: null,
-      meeting_summary_count: meetingCount || 0,
+      meeting_summary_count: meetingCount,
       nurture_outbound_count: 0,
       last_nurture_outbound_at: null,
     };
@@ -659,7 +662,9 @@ serve(async (req) => {
 
     // Derive stage and action
     const stage = deriveStage(currentStage, metrics, hasClosingKeywords);
-    const { needs_action, next_action_key, next_action_label } = deriveAction(metrics, pendingDraftCount, nurtureCadence, stage);
+    const { needs_action, next_action_key, next_action_label } = deriveAction(
+      metrics, pendingDraftCount, nurtureCadence, stage, hasMeetingWithoutFollowup
+    );
 
     // Update lead with computed values
     const leadUpdate: LeadUpdate = {

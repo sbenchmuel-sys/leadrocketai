@@ -31,8 +31,9 @@ import {
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useGmailSync } from "@/hooks/useGmailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
-import { getLeadEmailThread, getLeadDetail, saveDraft } from "@/lib/supabaseQueries";
-import { getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile } from "@/lib/repProfileQueries";
+import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction } from "@/lib/supabaseQueries";
+import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile } from "@/lib/repProfileQueries";
+
 import { toast } from "sonner";
 import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 
@@ -351,6 +352,10 @@ Calendar Link: ${repProfile.calendar_link || ''}
       return;
     }
 
+    const fullBody = getFullEmailBody();
+    const effectiveActionKey = actionKey || lead.next_action_key || null;
+    const currentActionType = getActionType(effectiveActionKey);
+
     // Save as draft before opening Gmail
     try {
       await saveDraft(lead.id, {
@@ -358,7 +363,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
         draft_type: 'gmail_compose',
         to_recipient: to.trim(),
         subject: subject.trim(),
-        body_text: getFullEmailBody(),
+        body_text: fullBody,
         status: 'pending',
       });
     } catch (err) {
@@ -366,8 +371,18 @@ Calendar Link: ${repProfile.calendar_link || ''}
       // Continue anyway - not critical
     }
 
-    // Build Gmail compose URL
-    const fullBody = getFullEmailBody();
+    // If this is a post-meeting recap, update the meeting pack and clear the action immediately
+    if (currentActionType === "recap") {
+      try {
+        // Update the most recent meeting pack with the follow-up email content
+        await updateMeetingPackFollowup(lead.id, subject.trim(), fullBody);
+        // Clear the needs_action flag on the lead so it disappears from Action Required
+        await dismissLeadAction(lead.id);
+      } catch (err) {
+        console.error("Failed to update meeting pack followup:", err);
+        // Continue anyway - Gmail will still open
+      }
+    }
     
     // Add attachment reminder if any selected
     let bodyWithAttachments = fullBody;
@@ -383,6 +398,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
     
     toast.success("Opening Gmail compose...");
     onOpenChange(false);
+    onSuccess?.();
   }
 
   const actionType = getActionType(lead.next_action_key);
