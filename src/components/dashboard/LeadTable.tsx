@@ -16,6 +16,33 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
+import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
+
+// Format last email date with color coding
+function formatLastEmail(dateStr: string | null): { text: string; className: string } {
+  if (!dateStr) {
+    return { text: "—", className: "text-muted-foreground italic" };
+  }
+  
+  const date = new Date(dateStr);
+  const hoursAgo = differenceInHours(new Date(), date);
+  
+  let text: string;
+  if (isToday(date)) {
+    text = "Today";
+  } else if (isYesterday(date)) {
+    text = "Yesterday";
+  } else {
+    text = formatDistanceToNow(date, { addSuffix: true });
+  }
+  
+  // Color coding: green for recent (< 24h), muted for older
+  const className = hoursAgo < 24 
+    ? "text-green-600 dark:text-green-400 font-medium" 
+    : "text-muted-foreground";
+  
+  return { text, className };
+}
 
 interface LeadTableProps {
   leads: EnrichedLead[];
@@ -248,12 +275,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               <TableRow>
                 <TableHead>Lead</TableHead>
                 <TableHead>Stage</TableHead>
-                <TableHead className="hidden md:table-cell">Next Action</TableHead>
+                <TableHead className="hidden md:table-cell">Last Email</TableHead>
+                <TableHead className="hidden lg:table-cell">Next Action</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.map((lead) => (
+              {leads.map((lead) => {
+                const lastEmail = formatLastEmail(lead.last_outbound_at);
+                return (
                 <TableRow
                   key={lead.id}
                   className="cursor-pointer"
@@ -274,13 +304,19 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     </Badge>
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
+                    <span className={`text-sm ${lastEmail.className}`}>
+                      {lastEmail.text}
+                    </span>
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell">
                     <p className="text-sm text-muted-foreground truncate max-w-[200px]">
                       {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                     </p>
                   </TableCell>
                   <TableCell className="text-right">{getActionButton(lead)}</TableCell>
                 </TableRow>
-              ))}
+              );
+              })}
             </TableBody>
           </Table>
         </CardContent>

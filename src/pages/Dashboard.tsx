@@ -39,7 +39,8 @@ export default function Dashboard() {
         .select(`
           id, company, name, email, strategy, status, owner_user_id, 
           created_at, last_activity_at, next_step, deal_outlook, country,
-          stage, needs_action, next_action_key, next_action_label, meeting_summary_count
+          stage, needs_action, next_action_key, next_action_label, meeting_summary_count,
+          last_outbound_at
         `)
         .order("last_activity_at", { ascending: false })
         .limit(200);
