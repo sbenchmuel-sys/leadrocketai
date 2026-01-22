@@ -263,3 +263,67 @@ export async function getLeadActionInstructions(leadId: string): Promise<string 
   if (error) throw error;
   return (data as { action_instructions: string | null })?.action_instructions ?? null;
 }
+
+// ============================================
+// MEETING PACK FOLLOWUP UPDATE
+// ============================================
+
+/**
+ * Update the most recent meeting pack for a lead with the follow-up email content.
+ * This marks the meeting as having a follow-up prepared, preventing the action from re-triggering.
+ */
+export async function updateMeetingPackFollowup(
+  leadId: string, 
+  subject: string, 
+  body: string
+): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  // Get the most recent meeting pack for this lead that doesn't have a follow-up yet
+  const { data: meetingPacks, error: fetchErr } = await supabase
+    .from('meeting_packs')
+    .select('id')
+    .eq('lead_id', leadId)
+    .or('follow_up_email_body.is.null,follow_up_email_body.eq.')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (fetchErr) throw fetchErr;
+  
+  if (!meetingPacks || meetingPacks.length === 0) {
+    // No meeting pack without follow-up, try to update the most recent one anyway
+    const { data: anyPack, error: anyErr } = await supabase
+      .from('meeting_packs')
+      .select('id')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    if (anyErr) throw anyErr;
+    if (!anyPack || anyPack.length === 0) {
+      console.log('No meeting pack found for lead, skipping follow-up update');
+      return;
+    }
+    
+    const { error: updateErr } = await supabase
+      .from('meeting_packs')
+      .update({ 
+        follow_up_email_subject: subject,
+        follow_up_email_body: body 
+      })
+      .eq('id', anyPack[0].id);
+    
+    if (updateErr) throw updateErr;
+    return;
+  }
+
+  const { error: updateErr } = await supabase
+    .from('meeting_packs')
+    .update({ 
+      follow_up_email_subject: subject,
+      follow_up_email_body: body 
+    })
+    .eq('id', meetingPacks[0].id);
+
+  if (updateErr) throw updateErr;
+}
