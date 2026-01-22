@@ -85,13 +85,14 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
   }
 }
 
-// Build Gmail compose URL
-function buildGmailComposeUrl(to: string, subject: string, body: string): string {
+// Build Gmail compose URL with optional authuser for account selection
+function buildGmailComposeUrl(to: string, subject: string, body: string, authEmail?: string): string {
   const params = new URLSearchParams();
   params.set("to", to);
   params.set("su", subject);
   params.set("body", body);
-  return `https://mail.google.com/mail/?view=cm&fs=1&${params.toString()}`;
+  const authParam = authEmail ? `authuser=${encodeURIComponent(authEmail)}&` : "";
+  return `https://mail.google.com/mail/?${authParam}view=cm&fs=1&${params.toString()}`;
 }
 
 export function EmailActionDialog({
@@ -125,7 +126,7 @@ export function EmailActionDialog({
   
   const { runTask } = useAITask();
   const { sendEmail, isSyncing } = useGmailSync();
-  const { isConnected } = useGmailConnection();
+  const { isConnected, connection } = useGmailConnection();
 
   // Load signatures and knowledge docs on mount
   useEffect(() => {
@@ -377,7 +378,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
       bodyWithAttachments += `\n\n---\n[Remember to attach: ${attachmentNames}]`;
     }
 
-    const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments);
+    const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, connection?.gmail_email);
     window.open(gmailUrl, '_blank');
     
     toast.success("Opening Gmail compose...");
