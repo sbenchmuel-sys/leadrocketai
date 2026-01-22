@@ -24,6 +24,7 @@ export interface EnrichedLead extends LeadListItem {
   next_action_key: string | null;
   next_action_label: string | null;
   hasMeeting: boolean;
+  last_outbound_at: string | null;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
@@ -33,6 +34,7 @@ export function enrichLead(lead: LeadListItem & {
   next_action_key?: string | null;
   next_action_label?: string | null;
   meeting_summary_count?: number;
+  last_outbound_at?: string | null;
 }): EnrichedLead {
   return {
     ...lead,
@@ -41,6 +43,7 @@ export function enrichLead(lead: LeadListItem & {
     next_action_key: lead.next_action_key || null,
     next_action_label: lead.next_action_label || null,
     hasMeeting: (lead.meeting_summary_count || 0) > 0,
+    last_outbound_at: lead.last_outbound_at || null,
   };
 }
 
