@@ -284,22 +284,41 @@ Meeting Summary: {{MEETING_SUMMARY}}
 Knowledge Context: {{KNOWLEDGE_CONTEXT}}
 Meeting link (optional): {{MEETING_LINK}}`,
 
-  answer_questions: `Write a customer-safe email answer to the prospect's question(s), grounded ONLY in the Knowledge Context.
+  answer_questions: `ROLE
+You are rewriting a sales email draft to answer prospect questions using knowledge base information.
+
+GOAL
+Write a complete, ready-to-send email that answers the prospect's question(s), grounded ONLY in the Knowledge Context.
 If knowledge is insufficient, say what you can, then propose a call or offer to share the right document.
 
-Return EMAIL BODY ONLY (no subject).
+CONSTRAINTS
+- Start with a proper greeting (e.g., "Hi [Prospect First Name],")
+- End with a polite closing and the Rep's first name (extract from Rep Context) - NEVER use placeholders like [Your Name]
+- The email must be complete and ready to send
+- No subject line - only the email body
+- No signature block - just the closing and first name
 
+INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
 
-Questions:
+Rep Context:
+{{REP_CONTEXT}}
+
+Current Draft:
+{{DRAFT_TEXT}}
+
+Questions to Answer:
 {{QUESTIONS_LIST}}
 
 Knowledge Context (approved snippets):
 {{KNOWLEDGE_CONTEXT}}
 
 Meeting link (optional):
-{{MEETING_LINK}}`,
+{{MEETING_LINK}}
+
+OUTPUT
+Return the complete EMAIL BODY ONLY. Must include greeting and sign-off with rep's first name.`,
 
   extract_milestones_risks: `Extract deal milestones and risks from the provided interactions and any meeting summaries in the knowledge context.
 Return JSON ONLY:
@@ -606,6 +625,9 @@ Available actions:
 - rewrite_tone: Rewrite the email with tone "{{TONE}}" (Friendly, Very Professional, Warm, or Concise)
 
 CONSTRAINTS
+- Output a COMPLETE, ready-to-send email
+- Start with a proper greeting (e.g., "Hi [Prospect First Name],") - extract prospect name from Lead Context
+- End with a polite closing and the Rep's first name (extract from Rep Context) - NEVER use placeholders like [Your Name]
 - Maintain the core message and CTA
 - Keep professional tone (unless rewrite_tone specifies otherwise)
 - Do NOT add any new claims or facts
@@ -613,13 +635,20 @@ CONSTRAINTS
 - Preserve all grounded information from the original
 - If add_meeting_cta: include timezone {{TIMEZONE}} and calendar link {{MEETING_LINK}} if provided
 - If rewrite_tone: adjust the overall tone to match "{{TONE}}" while preserving facts and intent
+- No signature block - just the closing and first name
 
 INPUTS
 Draft Text:
 {{DRAFT_TEXT}}
 
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
 OUTPUT
-Return the revised email body text ONLY. No signature. No JSON. No markdown.`,
+Return the complete revised email body. Must include greeting and sign-off with rep's first name. No JSON. No markdown.`,
 
   // Single Nurture Email (progressive generation)
   nurture_email_single: `ROLE
