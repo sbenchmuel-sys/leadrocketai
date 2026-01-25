@@ -86,14 +86,22 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
   }
 }
 
-// Build Gmail compose URL with optional authuser for account selection
-function buildGmailComposeUrl(to: string, subject: string, body: string, authEmail?: string): string {
+// Build Gmail compose URL with reliable account selection using /u/ path
+function buildGmailComposeUrl(to: string, subject: string, body: string, fromEmail?: string): string {
   const params = new URLSearchParams();
   params.set("to", to);
   params.set("su", subject);
   params.set("body", body);
-  const authParam = authEmail ? `authuser=${encodeURIComponent(authEmail)}&` : "";
-  return `https://mail.google.com/mail/?${authParam}view=cm&fs=1&${params.toString()}`;
+  
+  // Use /u/ path parameter with email for reliable account selection
+  // This forces Gmail to use the specific account instead of the browser default
+  if (fromEmail) {
+    params.set("authuser", fromEmail);
+    const encodedEmail = encodeURIComponent(fromEmail);
+    return `https://mail.google.com/mail/u/${encodedEmail}/?view=cm&fs=1&${params.toString()}`;
+  }
+  
+  return `https://mail.google.com/mail/?view=cm&fs=1&${params.toString()}`;
 }
 
 export function EmailActionDialog({
