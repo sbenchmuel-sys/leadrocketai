@@ -291,13 +291,6 @@ GOAL
 Write a complete, ready-to-send email that answers the prospect's question(s), grounded ONLY in the Knowledge Context.
 If knowledge is insufficient, say what you can, then propose a call or offer to share the right document.
 
-CONSTRAINTS
-- Start with a proper greeting (e.g., "Hi [Prospect First Name],")
-- End with a polite closing and the Rep's first name (extract from Rep Context) - NEVER use placeholders like [Your Name]
-- The email must be complete and ready to send
-- No subject line - only the email body
-- No signature block - just the closing and first name
-
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -317,8 +310,16 @@ Knowledge Context (approved snippets):
 Meeting link (optional):
 {{MEETING_LINK}}
 
+CONSTRAINTS
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Mukul Gupta", write "Hi Mukul,")
+- SIGN-OFF: End with a polite closing like "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Sarah Johnson", write "Best,\nSarah")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Rep's First Name], [Your Name], etc.
+- The email must be complete and ready to send
+- No subject line - only the email body
+- No signature block - just the closing and first name
+
 OUTPUT
-Return the complete EMAIL BODY ONLY. Must include greeting and sign-off with rep's first name.`,
+Return the complete EMAIL BODY ONLY with real names (not placeholders).`,
 
   extract_milestones_risks: `Extract deal milestones and risks from the provided interactions and any meeting summaries in the knowledge context.
 Return JSON ONLY:
@@ -624,19 +625,6 @@ Available actions:
 - add_meeting_cta: Update final paragraph with a stronger meeting CTA
 - rewrite_tone: Rewrite the email with tone "{{TONE}}" (Friendly, Very Professional, Warm, or Concise)
 
-CONSTRAINTS
-- Output a COMPLETE, ready-to-send email
-- Start with a proper greeting (e.g., "Hi [Prospect First Name],") - extract prospect name from Lead Context
-- End with a polite closing and the Rep's first name (extract from Rep Context) - NEVER use placeholders like [Your Name]
-- Maintain the core message and CTA
-- Keep professional tone (unless rewrite_tone specifies otherwise)
-- Do NOT add any new claims or facts
-- Do NOT include pricing, discounts, or commercial terms
-- Preserve all grounded information from the original
-- If add_meeting_cta: include timezone {{TIMEZONE}} and calendar link {{MEETING_LINK}} if provided
-- If rewrite_tone: adjust the overall tone to match "{{TONE}}" while preserving facts and intent
-- No signature block - just the closing and first name
-
 INPUTS
 Draft Text:
 {{DRAFT_TEXT}}
@@ -647,8 +635,22 @@ Lead Context:
 Rep Context:
 {{REP_CONTEXT}}
 
+CONSTRAINTS
+- Output a COMPLETE, ready-to-send email
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "John Smith", write "Hi John,")
+- SIGN-OFF: End with a polite closing like "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Sarah Johnson", write "Best,\nSarah")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Rep's First Name], [Your Name], etc.
+- Maintain the core message and CTA
+- Keep professional tone (unless rewrite_tone specifies otherwise)
+- Do NOT add any new claims or facts
+- Do NOT include pricing, discounts, or commercial terms
+- Preserve all grounded information from the original
+- If add_meeting_cta: include timezone {{TIMEZONE}} and calendar link {{MEETING_LINK}} if provided
+- If rewrite_tone: adjust the overall tone to match "{{TONE}}" while preserving facts and intent
+- No signature block - just the closing and first name
+
 OUTPUT
-Return the complete revised email body. Must include greeting and sign-off with rep's first name. No JSON. No markdown.`,
+Return the complete revised email body with real names (not placeholders). No JSON. No markdown.`,
 
   // Single Nurture Email (progressive generation)
   nurture_email_single: `ROLE
