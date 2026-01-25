@@ -602,17 +602,17 @@ ACTION TO PERFORM: {{TARGET}}
 Available actions:
 - fix_grammar: Fix grammar, spelling, and improve clarity without changing meaning
 - shorten_30: Shorten by ~30-40% while keeping key points and CTA
-- make_direct: Rewrite to be more direct and sales-effective (under 170 words)
-- add_bullets: Add a short agenda for a next-step call (max 3 bullets)
 - add_meeting_cta: Update final paragraph with a stronger meeting CTA
+- rewrite_tone: Rewrite the email with tone "{{TONE}}" (Friendly, Very Professional, Warm, or Concise)
 
 CONSTRAINTS
 - Maintain the core message and CTA
-- Keep professional tone
+- Keep professional tone (unless rewrite_tone specifies otherwise)
 - Do NOT add any new claims or facts
 - Do NOT include pricing, discounts, or commercial terms
 - Preserve all grounded information from the original
 - If add_meeting_cta: include timezone {{TIMEZONE}} and calendar link {{MEETING_LINK}} if provided
+- If rewrite_tone: adjust the overall tone to match "{{TONE}}" while preserving facts and intent
 
 INPUTS
 Draft Text:
