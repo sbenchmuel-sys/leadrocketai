@@ -34,8 +34,15 @@ import {
   Sparkles,
   Calendar,
   MessageSquare,
-  Undo2
+  Undo2,
+  Palette
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useGmailSync } from "@/hooks/useGmailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
@@ -476,6 +483,11 @@ Calendar Link: ${repProfile.calendar_link || ''}
     questions_list: "Answer any questions in the email thread using the knowledge base",
     email_thread: threadEmails.map(e => `[${e.direction}] ${e.subject || ''}\n${e.body_text}`).join('\n---\n'),
   });
+  
+  const handleRewriteTone = (tone: string) => runOneClickAction("shorten_draft", `Rewrite ${tone}`, {
+    target: "rewrite_tone",
+    tone: tone,
+  });
 
   // Get full email body with signature
   function getFullEmailBody(): string {
@@ -667,6 +679,38 @@ Calendar Link: ${repProfile.calendar_link || ''}
                 loading={actionLoading === "Add CTA"}
                 disabled={isGenerating || !body}
               />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isGenerating || !body || actionLoading?.startsWith("Rewrite")}
+                    className="gap-1.5 h-8 text-xs"
+                  >
+                    {actionLoading?.startsWith("Rewrite") ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Palette className="h-3.5 w-3.5" />
+                    )}
+                    Rewrite tone
+                    <ChevronDown className="h-3 w-3 ml-0.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => handleRewriteTone("Friendly")}>
+                    Friendly
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleRewriteTone("Very Professional")}>
+                    Very Professional
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleRewriteTone("Warm")}>
+                    Warm
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleRewriteTone("Concise")}>
+                    Concise
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               {showUndo && (
                 <Button
                   variant="ghost"
