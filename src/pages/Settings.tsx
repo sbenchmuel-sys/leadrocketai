@@ -4,6 +4,7 @@ import { UnmatchedMeetingSummariesCard } from "@/components/settings/UnmatchedMe
 import { MatchedMeetingSummariesCard } from "@/components/settings/MatchedMeetingSummariesCard";
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
+import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
 
 export default function Settings() {
   return (
@@ -14,6 +15,7 @@ export default function Settings() {
       </div>
 
       <div className="grid gap-6 max-w-2xl">
+        <WorkspaceProfileCard />
         <RepProfileCard />
         <SignaturesCard />
         <GmailConnectionCard />

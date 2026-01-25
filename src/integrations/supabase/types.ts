@@ -672,6 +672,54 @@ export type Database = {
           },
         ]
       }
+      workspace_profiles: {
+        Row: {
+          allowed_claims: string[] | null
+          company_name: string | null
+          created_at: string
+          disallowed_topics: string[] | null
+          id: string
+          meeting_timezone: string | null
+          pricing_policy: string
+          primary_value_props: string[] | null
+          product_description: string | null
+          product_name: string | null
+          supported_use_cases: string[] | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          allowed_claims?: string[] | null
+          company_name?: string | null
+          created_at?: string
+          disallowed_topics?: string[] | null
+          id?: string
+          meeting_timezone?: string | null
+          pricing_policy?: string
+          primary_value_props?: string[] | null
+          product_description?: string | null
+          product_name?: string | null
+          supported_use_cases?: string[] | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          allowed_claims?: string[] | null
+          company_name?: string | null
+          created_at?: string
+          disallowed_topics?: string[] | null
+          id?: string
+          meeting_timezone?: string | null
+          pricing_policy?: string
+          primary_value_props?: string[] | null
+          product_description?: string | null
+          product_name?: string | null
+          supported_use_cases?: string[] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

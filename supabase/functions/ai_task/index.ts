@@ -593,24 +593,33 @@ Return JSON ONLY:
   ]
 }`,
 
-  // Utility: Shorten Draft
+  // Utility: Shorten Draft (multi-purpose one-click action)
   shorten_draft: `ROLE
-Shorten an existing draft while preserving meaning and CTA.
+You are a professional email editor performing a specific edit action on a sales email draft.
+
+ACTION TO PERFORM: {{TARGET}}
+
+Available actions:
+- fix_grammar: Fix grammar, spelling, and improve clarity without changing meaning
+- shorten_30: Shorten by ~30-40% while keeping key points and CTA
+- make_direct: Rewrite to be more direct and sales-effective (under 170 words)
+- add_bullets: Add a short agenda for a next-step call (max 3 bullets)
+- add_meeting_cta: Update final paragraph with a stronger meeting CTA
 
 CONSTRAINTS
 - Maintain the core message and CTA
-- Remove filler words and redundant phrases
 - Keep professional tone
+- Do NOT add any new claims or facts
+- Do NOT include pricing, discounts, or commercial terms
+- Preserve all grounded information from the original
+- If add_meeting_cta: include timezone {{TIMEZONE}} and calendar link {{MEETING_LINK}} if provided
 
 INPUTS
 Draft Text:
 {{DRAFT_TEXT}}
 
-Target Length:
-{{TARGET}}
-
 OUTPUT
-Return shortened draft text only.`,
+Return the revised email body text ONLY. No signature. No JSON. No markdown.`,
 
   // Single Nurture Email (progressive generation)
   nurture_email_single: `ROLE
