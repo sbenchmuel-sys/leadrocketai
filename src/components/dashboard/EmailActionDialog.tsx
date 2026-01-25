@@ -124,6 +124,10 @@ export function EmailActionDialog({
   const [showThread, setShowThread] = useState(false);
   const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   
+  // Threading state for in-thread replies
+  const [replyThreadId, setReplyThreadId] = useState<string | null>(null);
+  const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
+  
   // Signature state
   const [signatures, setSignatures] = useState<RepSignature[]>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string>("");
@@ -209,6 +213,8 @@ export function EmailActionDialog({
     setBody("");
     setSubject("");
     setKnowledgeUsed(false);
+    setReplyThreadId(null);
+    setReplyToMessageId(null);
 
     try {
       // Fetch email thread for context
@@ -216,6 +222,13 @@ export function EmailActionDialog({
       setThreadContext(emails.map(e => 
         `[${e.direction === 'inbound' ? 'From' : 'To'}: ${e.from_email}]\nSubject: ${e.subject || 'No subject'}\n${e.body_text?.slice(0, 300)}...`
       ));
+      
+      // Extract threading info from the most recent inbound email for reply threading
+      const latestInbound = emails.find(e => e.direction === 'inbound');
+      if (latestInbound) {
+        setReplyThreadId(latestInbound.gmail_thread_id);
+        setReplyToMessageId(latestInbound.gmail_message_id);
+      }
 
       const hasThread = emails.length > 0;
       // Use actionKey prop if provided, otherwise fall back to lead.next_action_key
@@ -346,7 +359,15 @@ Calendar Link: ${repProfile.calendar_link || ''}
     }
 
     const fullBody = getFullEmailBody();
-    const result = await sendEmail(to.trim(), subject.trim(), fullBody, lead.id);
+    const result = await sendEmail(
+      to.trim(), 
+      subject.trim(), 
+      fullBody, 
+      lead.id, 
+      undefined, // draftId
+      replyThreadId || undefined,    // thread for in-thread reply
+      replyToMessageId || undefined  // message to reply to
+    );
     if (result.ok) {
       onOpenChange(false);
       toast.success("Email sent successfully!");

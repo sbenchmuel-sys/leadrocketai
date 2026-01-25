@@ -101,7 +101,7 @@ serve(async (req) => {
       });
     }
 
-    const { to, subject, body, leadId, draftId } = await req.json();
+    const { to, subject, body, leadId, draftId, threadId, replyToMessageId } = await req.json();
     
     if (!to || !subject || !body) {
       return new Response(JSON.stringify({ ok: false, error: "Missing to, subject, or body" }), {
@@ -127,25 +127,38 @@ serve(async (req) => {
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
-    // Build RFC 2822 email
+    // Build RFC 2822 email with threading headers if replying
     const emailLines = [
       `To: ${to}`,
       `Subject: ${subject}`,
       `Content-Type: text/plain; charset=utf-8`,
-      ``,
-      body,
     ];
+    
+    // Add In-Reply-To and References headers for threading
+    if (replyToMessageId) {
+      emailLines.push(`In-Reply-To: <${replyToMessageId}>`);
+      emailLines.push(`References: <${replyToMessageId}>`);
+      console.log(`[gmail-send] Adding threading headers for reply to message: ${replyToMessageId}`);
+    }
+    
+    emailLines.push(``, body);
     const rawEmail = emailLines.join("\r\n");
     const encodedEmail = encodeBase64Url(rawEmail);
 
-    // Send via Gmail API
+    // Send via Gmail API (include threadId if replying to keep in same thread)
+    const sendPayload: { raw: string; threadId?: string } = { raw: encodedEmail };
+    if (threadId) {
+      sendPayload.threadId = threadId;
+      console.log(`[gmail-send] Sending as part of thread: ${threadId}`);
+    }
+    
     const sendResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ raw: encodedEmail }),
+      body: JSON.stringify(sendPayload),
     });
 
     if (!sendResponse.ok) {
@@ -174,6 +187,7 @@ serve(async (req) => {
           to_email: to,
           body_text: body,
           gmail_message_id: sendData.id,
+          gmail_thread_id: sendData.threadId || threadId || null,
         });
 
       // Get current lead data for AI analysis
