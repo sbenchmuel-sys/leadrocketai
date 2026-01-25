@@ -31,13 +31,10 @@ import {
   PenLine,
   Wand2,
   Scissors,
-  ArrowRight,
-  ListOrdered,
   Sparkles,
   Calendar,
   MessageSquare,
-  Undo2,
-  X
+  Undo2
 } from "lucide-react";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useGmailSync } from "@/hooks/useGmailSync";
@@ -470,12 +467,14 @@ Calendar Link: ${repProfile.calendar_link || ''}
   // Action handlers
   const handleFixGrammar = () => runOneClickAction("shorten_draft", "Fix grammar", { target: "fix_grammar" });
   const handleShorten = () => runOneClickAction("shorten_draft", "Shorten", { target: "shorten_30" });
-  const handleMakeDirect = () => runOneClickAction("shorten_draft", "Make direct", { target: "make_direct" });
-  const handleAddBullets = () => runOneClickAction("shorten_draft", "Add bullets", { target: "add_bullets" });
   const handleAddMeetingCTA = () => runOneClickAction("shorten_draft", "Add CTA", { 
     target: "add_meeting_cta",
     meeting_link: repProfile?.calendar_link || '',
     timezone: workspaceProfile?.meeting_timezone || '',
+  });
+  const handleAnswerWithKB = () => runOneClickAction("answer_questions", "Answer with KB", {
+    questions_list: "Answer any questions in the email thread using the knowledge base",
+    email_thread: threadEmails.map(e => `[${e.direction}] ${e.subject || ''}\n${e.body_text}`).join('\n---\n'),
   });
 
   // Get full email body with signature
@@ -655,17 +654,10 @@ Calendar Link: ${repProfile.calendar_link || ''}
                 disabled={isGenerating || !body}
               />
               <ActionButton
-                icon={<ArrowRight className="h-3.5 w-3.5" />}
-                label="Make direct"
-                onClick={handleMakeDirect}
-                loading={actionLoading === "Make direct"}
-                disabled={isGenerating || !body}
-              />
-              <ActionButton
-                icon={<ListOrdered className="h-3.5 w-3.5" />}
-                label="Add bullets"
-                onClick={handleAddBullets}
-                loading={actionLoading === "Add bullets"}
+                icon={<BookOpen className="h-3.5 w-3.5" />}
+                label="Answer with KB"
+                onClick={handleAnswerWithKB}
+                loading={actionLoading === "Answer with KB"}
                 disabled={isGenerating || !body}
               />
               <ActionButton
