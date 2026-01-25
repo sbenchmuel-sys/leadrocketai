@@ -184,20 +184,47 @@ export function useGmailSync() {
 
       toast.success("Email sent successfully!");
 
-      // After successful send, sync the lead to pull in the sent email
+      // After successful send, optimistically update the lead immediately
+      // This ensures the UI updates before the background AI analysis completes
       if (leadId) {
-        // Get lead email for sync
+        // Get current lead data
         const { data: leadData } = await supabase
           .from("leads")
-          .select("email")
+          .select("email, stage, first_outbound_at")
           .eq("id", leadId)
           .single();
 
-        if (leadData?.email) {
-          // Fire and forget - don't block on sync completion
-          syncLead(leadId, leadData.email, 5).catch((err) => {
-            console.error("[SendEmail] Post-send sync failed:", err);
-          });
+        if (leadData) {
+          // Optimistic update: move from "new" to "outreach" stage, update timestamps
+          const updates: Record<string, unknown> = {
+            last_activity_at: new Date().toISOString(),
+            last_outbound_at: new Date().toISOString(),
+            needs_action: false, // Clear action flag since we just took action
+          };
+
+          // If this is a new lead or hasn't been contacted, mark first outbound
+          if (!leadData.first_outbound_at) {
+            updates.first_outbound_at = new Date().toISOString();
+          }
+
+          // Move from "new" to "outreach" stage
+          if (leadData.stage === "new") {
+            updates.stage = "outreach";
+            updates.next_action_key = "wait_reply";
+            updates.next_action_label = "Waiting for reply";
+          }
+
+          await supabase
+            .from("leads")
+            .update(updates)
+            .eq("id", leadId);
+
+          // Fire and forget sync - don't block on sync completion
+          if (leadData.email) {
+            syncLead(leadId, leadData.email, 5).catch((err) => {
+              console.error("[SendEmail] Post-send sync failed:", err);
+            });
+          }
         }
       }
 
