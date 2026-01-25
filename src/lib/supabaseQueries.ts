@@ -796,8 +796,6 @@ export interface EmailThreadItem {
   subject: string | null;
   body_text: string;
   occurred_at: string;
-  gmail_thread_id: string | null;
-  gmail_message_id: string | null;
 }
 
 export async function getLeadEmailThread(
@@ -808,7 +806,7 @@ export async function getLeadEmailThread(
 
   const { data, error } = await supabase
     .from('interactions')
-    .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id')
+    .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction')
     .eq('lead_id', leadId)
     .in('type', ['email_inbound', 'email_outbound'])
     .order('occurred_at', { ascending: false })
@@ -824,8 +822,6 @@ export async function getLeadEmailThread(
     subject: row.subject,
     body_text: row.body_text,
     occurred_at: row.occurred_at,
-    gmail_thread_id: row.gmail_thread_id,
-    gmail_message_id: row.gmail_message_id,
   }));
 
   // Build thread summary for AI context
