@@ -138,7 +138,9 @@ export function useGmailSync() {
     subject: string,
     body: string,
     leadId?: string,
-    draftId?: string
+    draftId?: string,
+    threadId?: string,
+    replyToMessageId?: string
   ): Promise<{ ok: boolean; messageId?: string; error?: string }> => {
     try {
       setIsSyncing(true);
@@ -161,7 +163,7 @@ export function useGmailSync() {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ to, subject, body, leadId, draftId }),
+        body: JSON.stringify({ to, subject, body, leadId, draftId, threadId, replyToMessageId }),
       });
 
       if (!response.ok) {
