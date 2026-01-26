@@ -16,6 +16,7 @@ import { EmailTemplateSelector } from "@/components/lead/EmailTemplateSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
+import { getWorkspaceProfile, CadenceSettingsV1, DEFAULT_CADENCE_SETTINGS } from "@/lib/workspaceProfileQueries";
 
 interface DraftsTabProps {
   lead: LeadDetail;
@@ -90,6 +91,9 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [smartIntroInstructions, setSmartIntroInstructions] = useState("");
   const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [emailDialogData, setEmailDialogData] = useState<{ subject: string; body: string } | null>(null);
+  
+  // Cadence settings from workspace profile
+  const [cadenceSettings, setCadenceSettings] = useState<CadenceSettingsV1>(DEFAULT_CADENCE_SETTINGS);
 
   const loadDrafts = async () => {
     try {
@@ -104,6 +108,15 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
 
   useEffect(() => {
     loadDrafts();
+    
+    // Load workspace cadence settings
+    getWorkspaceProfile().then(profile => {
+      if (profile?.cadence_settings) {
+        setCadenceSettings(profile.cadence_settings);
+      }
+    }).catch(err => {
+      console.warn("[DraftsTab] Failed to load cadence settings, using defaults:", err);
+    });
   }, [lead.id]);
 
   const buildLeadContext = () => {
@@ -1125,6 +1138,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
               onShortenDraft={(text) => {
                 setShortenInput(text);
               }}
+              cadenceSettings={cadenceSettings}
             />
           )}
         </CardContent>
@@ -1159,9 +1173,10 @@ interface SavedDraftsListProps {
   onDraftUpdate: () => void;
   onEditDraft: (draft: Draft) => void;
   onShortenDraft: (text: string) => void;
+  cadenceSettings: CadenceSettingsV1;
 }
 
-function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft, onShortenDraft }: SavedDraftsListProps) {
+function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft, onShortenDraft, cadenceSettings }: SavedDraftsListProps) {
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
@@ -1191,12 +1206,14 @@ function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft, onShortenDr
     });
   });
 
+  // Use cadence settings from workspace profile instead of hardcoded values
   const getCadenceDays = (cadence: string | null | undefined): number => {
+    const nurtureCadences = cadenceSettings.flows?.nurture_campaigns?.cadences_days;
     switch (cadence) {
-      case 'weekly': return 7;
-      case 'biweekly': return 14;
-      case 'monthly': return 30;
-      default: return 14;
+      case 'weekly': return nurtureCadences?.weekly ?? 7;
+      case 'biweekly': return nurtureCadences?.biweekly ?? 14;
+      case 'monthly': return nurtureCadences?.monthly ?? 30;
+      default: return nurtureCadences?.biweekly ?? 14;
     }
   };
 
