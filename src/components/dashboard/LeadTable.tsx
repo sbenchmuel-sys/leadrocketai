@@ -123,6 +123,71 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     const basePath = `/dashboard/leads/${lead.id}`;
     const actionType = getActionType(lead.next_action_key);
 
+    // Email compose button - always available
+    const EmailComposeButton = () => (
+      <Popover 
+        open={instructionsPopover === `compose-${lead.id}`} 
+        onOpenChange={(open) => !open && setInstructionsPopover(null)}
+      >
+        <PopoverTrigger asChild>
+          <Button 
+            size="sm" 
+            variant="ghost" 
+            onClick={(e) => {
+              e.stopPropagation();
+              setTempInstructions("");
+              setInstructionsPopover(`compose-${lead.id}`);
+            }}
+          >
+            <Mail className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80" align="end">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Lightbulb className="h-4 w-4 text-amber-500" />
+              <span className="text-sm font-medium">Add instructions (optional)</span>
+            </div>
+            <Input
+              value={tempInstructions}
+              onChange={(e) => setTempInstructions(e.target.value)}
+              placeholder="e.g., Follow up on pricing discussion..."
+              className="text-sm"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  confirmInstructions(lead);
+                }
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <Button 
+                size="sm" 
+                variant="ghost" 
+                onClick={() => setInstructionsPopover(null)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                size="sm" 
+                onClick={() => confirmInstructions(lead)}
+              >
+                Compose Email
+              </Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+
+    // View button - always available
+    const ViewButton = () => (
+      <Button size="sm" variant="ghost" asChild>
+        <Link to={basePath}>
+          <Eye className="h-4 w-4" />
+        </Link>
+      </Button>
+    );
+
     // New leads without action get Smart Intro button
     if (lead.stage === "new" && !lead.needs_action) {
       return (
@@ -176,11 +241,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </div>
             </PopoverContent>
           </Popover>
-          <Button size="sm" variant="ghost" asChild>
-            <Link to={basePath}>
-              <Eye className="h-4 w-4" />
-            </Link>
-          </Button>
+          <EmailComposeButton />
+          <ViewButton />
         </div>
       );
     }
@@ -244,22 +306,18 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </div>
             </PopoverContent>
           </Popover>
-          <Button size="sm" variant="ghost" asChild>
-            <Link to={basePath}>
-              <Eye className="h-4 w-4" />
-            </Link>
-          </Button>
+          <EmailComposeButton />
+          <ViewButton />
         </div>
       );
     }
 
+    // Default: just email compose + view
     return (
-      <Button size="sm" variant="ghost" asChild>
-        <Link to={basePath}>
-          <Eye className="h-4 w-4 mr-1" />
-          View
-        </Link>
-      </Button>
+      <div className="flex items-center gap-1">
+        <EmailComposeButton />
+        <ViewButton />
+      </div>
     );
   };
 
