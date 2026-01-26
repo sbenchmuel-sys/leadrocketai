@@ -5,6 +5,7 @@ import { MatchedMeetingSummariesCard } from "@/components/settings/MatchedMeetin
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
+import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
 
 export default function Settings() {
   return (
@@ -16,6 +17,7 @@ export default function Settings() {
 
       <div className="grid gap-6 max-w-2xl">
         <WorkspaceProfileCard />
+        <CadenceSettingsCard />
         <RepProfileCard />
         <SignaturesCard />
         <GmailConnectionCard />
