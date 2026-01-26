@@ -197,11 +197,11 @@ CONSTRAINTS
 - 1 clear CTA (book a 30-min call)
 - If they asked questions, answer briefly and offer to cover deeper on call
 - Do NOT mention anything not in Knowledge Context
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," followed by the rep's first name extracted from the "Sender Name" field in Rep Context above
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA (e.g., "Book time here: https://..."). If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- MEETING LINK: CRITICAL - You MUST use the EXACT URL provided in "Meeting Link" above. Copy it verbatim. Do NOT invent, modify, or guess any meeting/calendar URLs. If Meeting Link is empty, ask them to reply with their availability instead. Do NOT mention timezones.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
@@ -239,11 +239,11 @@ CONSTRAINTS
 - Helpful tone, credibility-building
 - 1 soft CTA (offer a call / ask what's best next step)
 - Use Knowledge Context only
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," followed by the rep's first name extracted from the "Sender Name" field in Rep Context above
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- MEETING LINK: CRITICAL - You MUST use the EXACT URL provided in "Meeting Link" above. Copy it verbatim. Do NOT invent, modify, or guess any meeting/calendar URLs. If Meeting Link is empty, ask them to reply with their availability instead. Do NOT mention timezones.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
@@ -466,10 +466,10 @@ CONSTRAINTS
 - No medical or performance claims
 - Use only approved Knowledge Context
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- SIGN-OFF: End with "Best," followed by the rep's first name extracted from the "Sender Name" field in Rep Context above
 - CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA (e.g., "Book time here: https://..."). If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- MEETING LINK: CRITICAL - You MUST use the EXACT URL provided in "Meeting Link" above. Copy it verbatim. Do NOT invent, modify, or guess any meeting/calendar URLs. If Meeting Link is empty, ask them to reply with their availability instead. Do NOT mention timezones.
 - One clear CTA (book a call)
 
 OUTPUT
@@ -505,11 +505,11 @@ CONSTRAINTS
 - Friendly, respectful of time
 - Briefly reference previous email
 - No hype or guarantees
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," followed by the rep's first name extracted from the "Sender Name" field in Rep Context above
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- MEETING LINK: CRITICAL - You MUST use the EXACT URL provided in "Meeting Link" above. Copy it verbatim. Do NOT invent, modify, or guess any meeting/calendar URLs. If Meeting Link is empty, ask them to reply with their availability instead. Do NOT mention timezones.
 - One clear CTA (book a call)
 
 OUTPUT
@@ -541,10 +541,10 @@ CONSTRAINTS
 - 70–120 words
 - More direct, still polite
 - Explicitly acknowledge silence without pressure
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," followed by the rep's first name extracted from the "Sender Name" field in Rep Context above
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
-- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- MEETING LINK: CRITICAL - You MUST use the EXACT URL provided in "Meeting Link" above. Copy it verbatim. Do NOT invent, modify, or guess any meeting/calendar URLs. If Meeting Link is empty, ask them to reply with their availability instead. Do NOT mention timezones.
 - One clear CTA (call, redirect, or deprioritize)
 
 OUTPUT
