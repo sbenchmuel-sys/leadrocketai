@@ -636,8 +636,8 @@ Calendar Link: ${repProfile.calendar_link || ''}
           </div>
         </DialogHeader>
 
-        {/* Scrollable Content */}
-        <ScrollArea className="flex-1 min-h-0">
+        {/* Scrollable Content - Use native overflow instead of ScrollArea for flex compatibility */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="px-6 py-4 space-y-4">
             {/* Instructions Input */}
             <div className="flex gap-2">
@@ -929,7 +929,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
               )}
             </div>
           </div>
-        </ScrollArea>
+        </div>
 
         {/* Sticky Footer */}
         <DialogFooter className="px-6 py-4 border-t shrink-0 flex-row gap-2 sm:justify-between">
