@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -19,16 +19,13 @@ import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
 export default function Dashboard() {
   const [leads, setLeads] = useState<EnrichedLead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const location = useLocation();
 
   // Filters
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [activeStage, setActiveStage] = useState<DealStage | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -54,7 +51,13 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
+
+  // Load data on mount and when navigating back to dashboard
+  useEffect(() => {
+    loadData();
+  }, [loadData, location.key]);
+
 
   // Calculate summary stats
   const stats = useMemo(() => {
