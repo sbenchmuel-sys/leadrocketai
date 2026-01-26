@@ -332,9 +332,9 @@ Meeting link (optional):
 
 CONSTRAINTS
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Mukul Gupta", write "Hi Mukul,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from Rep Context on the next line with NO blank line between (e.g., if rep full_name is "Sarah Johnson", write "Best regards,\nSarah Johnson")
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Sarah Johnson", write "Best regards,\nSarah")
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Rep's First Name], [Your Name], etc.
-- MEETING LINK EMBEDDING: If Meeting Link is provided, you MUST include the FULL URL directly in the email body text where relevant (e.g., "You can book a time here: https://calendly.com/..."). Do NOT invent, modify, or truncate the URL. If Meeting Link is empty, suggest they reply with availability.
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence (e.g., "You can book a time here: https://calendly.com/shai-benchmuel/30min"). Copy the exact URL. Do NOT use "[Meeting Link]" placeholder. If no Calendar Link provided, suggest they reply with availability.
 - DURATION: Do NOT mention specific meeting durations like "15-minute" or "30-minute" unless you can confidently extract it from the Meeting Link URL. Use generic terms like "call" or "meeting" instead.
 - The email must be complete and ready to send
 - No subject line - only the email body
@@ -468,10 +468,10 @@ CONSTRAINTS
 - No medical or performance claims
 - Use only approved Knowledge Context
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from the "Sender Name" field in Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai Benchmuel")
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
 - CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK EMBEDDING: If Meeting Link is provided, you MUST include the FULL URL directly in the email body text where relevant (e.g., "You can book a time here: https://calendly.com/..."). Copy the URL exactly as provided - do NOT invent, modify, or truncate it. If Meeting Link is empty, ask them to reply with their availability instead.
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence (e.g., "You can book a time here: https://calendly.com/shai-benchmuel/30min"). Copy the exact URL. Do NOT use placeholders or truncate. If no Calendar Link, ask them to reply with availability.
 - DURATION: Do NOT mention specific meeting durations like "15-minute" or "30-minute" call unless you can confidently extract it from the Meeting Link URL. Use generic terms like "call" or "meeting" instead.
 - One clear CTA (book a call)
 
@@ -509,10 +509,10 @@ CONSTRAINTS
 - Briefly reference previous email
 - No hype or guarantees
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from the "Sender Name" field in Rep Context on the next line with NO blank line between
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
 - If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK EMBEDDING: If Meeting Link is provided, you MUST include the FULL URL directly in the email body text where relevant. Copy the URL exactly as provided. If Meeting Link is empty, ask them to reply with their availability instead.
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence (e.g., "Book here: https://calendly.com/..."). Copy exact URL. If no Calendar Link, ask them to reply with availability.
 - DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL. Use generic terms like "call" or "meeting".
 - One clear CTA (book a call)
 
@@ -546,9 +546,9 @@ CONSTRAINTS
 - More direct, still polite
 - Explicitly acknowledge silence without pressure
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from the "Sender Name" field in Rep Context on the next line with NO blank line between
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
-- MEETING LINK EMBEDDING: If Meeting Link is provided, you MUST include the FULL URL directly in the email body text where relevant. Copy the URL exactly as provided. If Meeting Link is empty, ask them to reply with their availability instead.
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence. Copy exact URL.
 - DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL. Use generic terms.
 - One clear CTA (call, redirect, or deprioritize)
 
@@ -577,7 +577,7 @@ CONSTRAINTS
 - No CTA except soft invitation to reconnect
 - No claims
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai Benchmuel")
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], etc.
 
 OUTPUT
@@ -596,8 +596,8 @@ CONSTRAINTS
 - Use Knowledge Context to answer questions or provide resources
 - No medical or performance claims
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME on the next line with NO blank line between
-- MEETING LINK EMBEDDING: If Meeting Link is provided, include the FULL URL directly in the email body text where relevant
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY on the next line with NO blank line between
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context, embed the complete URL directly in a sentence
 - DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL
 
 INPUTS
@@ -682,14 +682,14 @@ Rep Context:
 CONSTRAINTS
 - Output a COMPLETE, ready-to-send email
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "John Smith", write "Hi John,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Sarah Johnson", write "Best regards,\nSarah Johnson")
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Sarah Johnson", write "Best regards,\nSarah")
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Rep's First Name], [Your Name], etc.
 - Maintain the core message and CTA
 - Keep professional tone (unless rewrite_tone specifies otherwise)
 - Do NOT add any new claims or facts
 - Do NOT include pricing, discounts, or commercial terms
 - Preserve all grounded information from the original
-- If add_meeting_cta: include the FULL calendar link URL {{MEETING_LINK}} directly in the text if provided (do NOT truncate or modify it). Do NOT mention specific durations unless you can extract it from the URL.
+- If add_meeting_cta: CRITICAL - embed the complete Calendar Link URL from Rep Context directly in a sentence if provided (e.g., "Book here: https://calendly.com/..."). Do NOT use placeholders or truncate.
 - If rewrite_tone: adjust the overall tone to match "{{TONE}}" while preserving facts and intent
 - No signature block - just the closing and first name
 
@@ -711,7 +711,7 @@ CONSTRAINTS
 - Must feel connected to the previous emails (not repetitive)
 - Do NOT repeat talking points from previous emails
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME on the next line with NO blank line between
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY on the next line with NO blank line between
 
 INPUTS
 Lead Context:
@@ -748,8 +748,8 @@ CONSTRAINTS
 - ONE clear CTA (e.g., confirm next meeting, review materials, connect on specific item)
 - No medical or performance claims
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FULL NAME on the next line with NO blank line between
-- MEETING LINK EMBEDDING: If Meeting Link is provided, include the FULL URL directly in the email body text where relevant
+- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY on the next line with NO blank line between
+- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context, embed the complete URL directly in a sentence
 - DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL
 - Return EMAIL BODY ONLY (no subject line, no JSON, no markdown)
 
