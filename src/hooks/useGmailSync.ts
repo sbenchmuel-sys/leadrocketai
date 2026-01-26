@@ -2,6 +2,7 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { Json } from "@/integrations/supabase/types";
+import { getWorkspaceProfile } from "@/lib/workspaceProfileQueries";
 
 export interface SyncResult {
   ok: boolean;
@@ -284,6 +285,17 @@ export function useGmailSync() {
 
     if (!accessToken) return 0;
 
+    // Load workspace cadence settings for AI context
+    let cadenceSettings = null;
+    try {
+      const workspaceProfile = await getWorkspaceProfile();
+      if (workspaceProfile?.cadence_settings) {
+        cadenceSettings = workspaceProfile.cadence_settings;
+      }
+    } catch (err) {
+      console.warn("[Gmail Sync] Failed to load cadence settings:", err);
+    }
+
     const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
       method: "POST",
       headers: {
@@ -296,6 +308,8 @@ export function useGmailSync() {
           email_subject: recentEmails[0]?.subject || "",
           email_body: emailsText,
           pending_milestones: pendingMilestonesText,
+          lead_id: leadId, // Include for workspace settings lookup
+          cadence_settings: cadenceSettings, // Pass cadence for AI context
         },
       }),
     });

@@ -251,10 +251,13 @@ Return EMAIL BODY ONLY. The email must be complete and ready to send with real n
   followup_sequence_4: `Generate a 4-email follow-up sequence for a regulated B2B prospect.
 Mode is either FAST or NURTURE.
 
+IMPORTANT: Use the configured cadence timing provided below. This defines the days between each email in the sequence.
+Configured cadence: {{CADENCE_DAYS}}
+
 Return JSON ONLY in this schema:
 {
   "mode": "fast|nurture",
-  "cadence_days": [3,4,4,5],
+  "cadence_days": {{CADENCE_DAYS}},
   "emails": [
     {"draft_type":"fu1","subject":"...","body":"..."},
     {"draft_type":"fu2","subject":"...","body":"..."},
@@ -270,6 +273,7 @@ Rules:
 - Email 3 adds urgency (light, not pushy)
 - Email 4 is a polite breakup
 - Never include medical claims or unapproved info
+- If mentioning "I'll follow up in X days", use the appropriate value from the configured cadence
 
 INPUT:
 Mode: {{MODE}}
@@ -1022,9 +1026,82 @@ serve(async (req) => {
       });
     }
 
+    // Default cadence settings (single source of truth)
+    const DEFAULT_CADENCE_SETTINGS = {
+      version: 1,
+      modes: {
+        fast: {
+          reply_pending_hours: 4,
+          outbound_followups_days: [2, 3, 3, 4],
+          breakup_trigger: { days_since_first_outbound: 10, days_since_last_outbound: 5 },
+          post_meeting: { recap_suggest_after_hours: 4, checkins_days: [3, 7] },
+        },
+        nurture: {
+          reply_pending_hours: 24,
+          outbound_followups_days: [5, 7, 7, 10],
+          breakup_trigger: { days_since_first_outbound: 30, days_since_last_outbound: 14 },
+          post_meeting: { recap_suggest_after_hours: 24, checkins_days: [7, 14, 30] },
+        },
+      },
+      flows: {
+        nurture_campaigns: {
+          enabled: true,
+          cadences_days: { weekly: 7, biweekly: 14, monthly: 30 },
+          min_days_after_last_touch: 7,
+        },
+      },
+    };
+
     // Enhance payload with semantic knowledge search for relevant tasks
     let enhancedPayload = { ...payload };
     let knowledgeContextUsed = false;
+
+    // Load cadence settings from workspace if available
+    let cadenceSettings = DEFAULT_CADENCE_SETTINGS;
+    if (payload?.lead_id) {
+      try {
+        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+        
+        // Get lead's owner to find workspace settings
+        const { data: leadData } = await adminClient
+          .from("leads")
+          .select("owner_user_id")
+          .eq("id", payload.lead_id)
+          .single();
+        
+        if (leadData?.owner_user_id) {
+          const { data: workspaceData } = await adminClient
+            .from("workspace_profiles")
+            .select("cadence_settings")
+            .eq("user_id", leadData.owner_user_id)
+            .maybeSingle();
+          
+          if (workspaceData?.cadence_settings) {
+            // Deep merge with defaults
+            cadenceSettings = {
+              ...DEFAULT_CADENCE_SETTINGS,
+              ...workspaceData.cadence_settings,
+              modes: {
+                fast: { ...DEFAULT_CADENCE_SETTINGS.modes.fast, ...(workspaceData.cadence_settings as any)?.modes?.fast },
+                nurture: { ...DEFAULT_CADENCE_SETTINGS.modes.nurture, ...(workspaceData.cadence_settings as any)?.modes?.nurture },
+              },
+            };
+            console.log(`[ai_task] Loaded workspace cadence settings for user ${leadData.owner_user_id}`);
+          }
+        }
+      } catch (err) {
+        console.error("[ai_task] Failed to load cadence settings, using defaults:", err);
+      }
+    }
+
+    // Inject cadence_days for followup_sequence_4 task
+    if (task === "followup_sequence_4") {
+      const mode = (payload?.mode || "fast") as "fast" | "nurture";
+      const cadenceDays = cadenceSettings.modes[mode]?.outbound_followups_days || [2, 3, 3, 4];
+      enhancedPayload.cadence_days = JSON.stringify(cadenceDays);
+      console.log(`[ai_task] Injected cadence_days for ${mode} mode: ${JSON.stringify(cadenceDays)}`);
+    }
     
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       // Build a query from the available context
