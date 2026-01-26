@@ -783,8 +783,9 @@ Calendar Link: ${repProfile.calendar_link || ''}
 
             <Separator />
 
-            {/* Context Panel - Mode Aware */}
-            {emailMode === 'reply' && latestInbound ? (
+            {/* Context Panel - Priority: Inbound email > Initial message > Lead metadata */}
+            {latestInbound ? (
+              /* Has inbound email from prospect - show it */
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <MessageSquare className="h-4 w-4" />
@@ -836,8 +837,45 @@ Calendar Link: ${repProfile.calendar_link || ''}
                   </Collapsible>
                 )}
               </div>
+            ) : lead.initial_message ? (
+              /* No inbound email, but has initial message - show it prominently */
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <MessageSquare className="h-4 w-4" />
+                  Initial Message from {lead.name}
+                </div>
+                <div className="p-4 bg-muted/50 rounded-lg border">
+                  <div className="text-sm whitespace-pre-wrap">
+                    {lead.initial_message}
+                  </div>
+                </div>
+                {/* Additional lead context collapsed */}
+                {(lead.job_title || lead.industry || lead.personal_notes) && (
+                  <Collapsible>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground">
+                        <ChevronRight className="h-4 w-4" />
+                        More lead details
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-2">
+                      <div className="p-3 bg-muted/30 rounded-lg text-sm grid gap-2">
+                        <div><span className="text-muted-foreground">Company:</span> {lead.company}</div>
+                        {lead.job_title && <div><span className="text-muted-foreground">Title:</span> {lead.job_title}</div>}
+                        {lead.industry && <div><span className="text-muted-foreground">Industry:</span> {lead.industry}</div>}
+                        {lead.personal_notes && (
+                          <div className="mt-2 pt-2 border-t">
+                            <span className="text-muted-foreground">Notes:</span>
+                            <p className="mt-1">{lead.personal_notes}</p>
+                          </div>
+                        )}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </div>
             ) : (
-              /* New Outreach Mode - Show Lead Context */
+              /* No inbound email, no initial message - show lead metadata */
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Sparkles className="h-4 w-4" />
@@ -853,12 +891,6 @@ Calendar Link: ${repProfile.calendar_link || ''}
                       <div className="mt-2 pt-2 border-t">
                         <span className="text-muted-foreground">Notes:</span>
                         <p className="mt-1">{lead.personal_notes}</p>
-                      </div>
-                    )}
-                    {lead.initial_message && (
-                      <div className="mt-2 pt-2 border-t">
-                        <span className="text-muted-foreground">Initial Message:</span>
-                        <p className="mt-1 whitespace-pre-wrap">{lead.initial_message}</p>
                       </div>
                     )}
                   </div>
