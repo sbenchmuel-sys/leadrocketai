@@ -735,22 +735,37 @@ Return ONLY the email body text. No JSON. No markdown. No subject line.`,
 
   // New: Plain-text post-meeting follow-up email (no JSON)
   post_meeting_followup_email: `ROLE
-Generate a personalized post-meeting follow-up email using all available knowledge about this lead.
+Generate a personalized follow-up email based on the meeting and FULL email thread context.
 
 GOAL
-Thank them for the meeting, summarize key points, and propose clear next steps.
+If this is the FIRST follow-up after a meeting: Thank them, summarize key points, propose next steps.
+If a follow-up was ALREADY sent (check PREVIOUS_EMAILS and LAST_OUTBOUND): Write a brief check-in referencing what was previously shared.
+
+CRITICAL CONTEXT CHECK:
+Review PREVIOUS_EMAILS and LAST_OUTBOUND before writing. If you already sent a follow-up email with:
+- Materials, resources, or demo access shared
+- A summary of the meeting
+- Next steps already proposed
+Then DO NOT:
+- Say "It was great speaking with you" or "It was great talking to you today"
+- Re-introduce yourself or re-summarize the meeting
+- Repeat information from your last email
+
+Instead, write a SHORT follow-up (50-100 words) asking:
+- If they had a chance to review the materials
+- If they have questions about what was shared
+- A gentle nudge toward the next step
 
 CONSTRAINTS
-- 120–200 words
+- If LAST_OUTBOUND contains materials/resources/demo access: 50-100 words check-in
+- If no prior follow-up or LAST_OUTBOUND is empty: 120-200 words recap
 - Professional and warm
 - Reference specific topics discussed if meeting context is available
-- Use knowledge context to add relevant details
-- ONE clear CTA (e.g., confirm next meeting, review materials, connect on specific item)
+- ONE clear CTA
 - No medical or performance claims
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
 - SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY on the next line with NO blank line between
-- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context, embed the complete URL directly in a sentence
-- DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL
+- MEETING LINK EMBEDDING: If a "Calendar Link" appears in Rep Context, embed the complete URL directly
 - Return EMAIL BODY ONLY (no subject line, no JSON, no markdown)
 
 INPUTS
@@ -762,6 +777,12 @@ Rep Context:
 
 Meeting Summary (optional brief notes):
 {{MEETING_SUMMARY_BRIEF}}
+
+Previous Emails (most recent first):
+{{PREVIOUS_EMAILS}}
+
+Your Last Email Sent:
+{{LAST_OUTBOUND}}
 
 Knowledge Context (relevant to this lead):
 {{KNOWLEDGE_CONTEXT}}

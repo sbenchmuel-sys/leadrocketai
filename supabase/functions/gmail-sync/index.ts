@@ -605,14 +605,49 @@ serve(async (req) => {
     // Meeting count is derived from meeting_packs (source of truth)
     const { data: meetingPacks } = await serviceSupabase
       .from("meeting_packs")
-      .select("id, follow_up_email_body")
+      .select("id, follow_up_email_body, meeting_date")
       .eq("lead_id", leadId);
 
     const meetingCount = meetingPacks?.length || 0;
+    
     // Check if any meeting pack is missing a follow-up email
-    const hasMeetingWithoutFollowup = (meetingPacks || []).some(
-      (mp) => !mp.follow_up_email_body || mp.follow_up_email_body.trim() === ""
-    );
+    // BUT also check if an outbound email was sent after the meeting date
+    let hasMeetingWithoutFollowup = false;
+    
+    for (const mp of meetingPacks || []) {
+      // If follow-up email already set, skip
+      if (mp.follow_up_email_body && mp.follow_up_email_body.trim() !== "") {
+        continue;
+      }
+      
+      // Check if any outbound email was sent after this meeting
+      if (mp.meeting_date) {
+        const { data: postMeetingEmails } = await serviceSupabase
+          .from("interactions")
+          .select("id, body_text, occurred_at")
+          .eq("lead_id", leadId)
+          .eq("direction", "outbound")
+          .gt("occurred_at", mp.meeting_date)
+          .order("occurred_at", { ascending: false })
+          .limit(1);
+        
+        if (postMeetingEmails && postMeetingEmails.length > 0) {
+          // An outbound email was sent after this meeting - mark as followed up
+          console.log(`[gmail-sync] Auto-marking meeting pack ${mp.id} as followed up (email sent after meeting)`);
+          await serviceSupabase
+            .from("meeting_packs")
+            .update({ 
+              follow_up_email_body: "[Sent via Gmail]",
+              follow_up_email_subject: "Follow-up" 
+            })
+            .eq("id", mp.id);
+          continue;
+        }
+      }
+      
+      // This meeting pack truly has no follow-up
+      hasMeetingWithoutFollowup = true;
+    }
 
     const metrics: LeadMetrics = {
       first_outbound_at: null,
