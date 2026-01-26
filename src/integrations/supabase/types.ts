@@ -224,13 +224,16 @@ export type Database = {
       leads: {
         Row: {
           action_instructions: string | null
+          action_reason_code: string | null
           company: string
           country: string | null
           created_at: string
           deal_factors_json: Json | null
           deal_outlook: string | null
+          eligible_at: string | null
           email: string
           first_outbound_at: string | null
+          has_future_meeting: boolean
           id: string
           industry: string | null
           initial_message: string | null
@@ -262,13 +265,16 @@ export type Database = {
         }
         Insert: {
           action_instructions?: string | null
+          action_reason_code?: string | null
           company: string
           country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
           deal_outlook?: string | null
+          eligible_at?: string | null
           email: string
           first_outbound_at?: string | null
+          has_future_meeting?: boolean
           id?: string
           industry?: string | null
           initial_message?: string | null
@@ -300,13 +306,16 @@ export type Database = {
         }
         Update: {
           action_instructions?: string | null
+          action_reason_code?: string | null
           company?: string
           country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
           deal_outlook?: string | null
+          eligible_at?: string | null
           email?: string
           first_outbound_at?: string | null
+          has_future_meeting?: boolean
           id?: string
           industry?: string | null
           initial_message?: string | null
@@ -675,6 +684,7 @@ export type Database = {
       workspace_profiles: {
         Row: {
           allowed_claims: string[] | null
+          cadence_settings: Json
           company_name: string | null
           created_at: string
           disallowed_topics: string[] | null
@@ -690,6 +700,7 @@ export type Database = {
         }
         Insert: {
           allowed_claims?: string[] | null
+          cadence_settings?: Json
           company_name?: string | null
           created_at?: string
           disallowed_topics?: string[] | null
@@ -705,6 +716,7 @@ export type Database = {
         }
         Update: {
           allowed_claims?: string[] | null
+          cadence_settings?: Json
           company_name?: string | null
           created_at?: string
           disallowed_topics?: string[] | null

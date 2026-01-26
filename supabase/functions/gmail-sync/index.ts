@@ -1,6 +1,178 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// ============================================
+// CADENCE SETTINGS TYPES (mirrored from frontend)
+// ============================================
+
+interface TimeRules {
+  timezone_mode: "workspace" | "lead";
+  use_business_days: boolean;
+  send_window_local: { start: string; end: string };
+  avoid_weekends: boolean;
+}
+
+interface Guardrails {
+  min_gap_hours_between_emails: number;
+  max_emails_per_lead_per_7d: number;
+  max_emails_per_lead_per_30d: number;
+  same_day_send_allowed: boolean;
+  jitter_percent: number;
+}
+
+interface StopPauseRules {
+  stop_on_any_reply: boolean;
+  stop_on_negative_reply: boolean;
+  stop_on_unsubscribe: boolean;
+  stop_on_bounce: boolean;
+  pause_when_meeting_scheduled: boolean;
+}
+
+interface ModeSettings {
+  reply_pending_hours: number;
+  outbound_followups_days: number[];
+  breakup_trigger: {
+    days_since_first_outbound: number;
+    days_since_last_outbound: number;
+  };
+  post_meeting: {
+    recap_suggest_after_hours: number;
+    checkins_days: number[];
+  };
+}
+
+interface NurtureCampaignsFlow {
+  enabled: boolean;
+  cadences_days: { weekly: number; biweekly: number; monthly: number };
+  min_days_after_last_touch: number;
+}
+
+interface ReengagementFlow {
+  enabled: boolean;
+  after_days_no_contact: number;
+  sequence_days: number[];
+}
+
+interface PreMeetingFlow {
+  enabled: boolean;
+  reminder_hours_before: number[];
+}
+
+interface Flows {
+  nurture_campaigns: NurtureCampaignsFlow;
+  reengagement: ReengagementFlow;
+  pre_meeting: PreMeetingFlow;
+}
+
+interface CadenceSettingsV1 {
+  version: 1;
+  time_rules: TimeRules;
+  guardrails: Guardrails;
+  stop_pause_rules: StopPauseRules;
+  modes: {
+    fast: ModeSettings;
+    nurture: ModeSettings;
+  };
+  flows: Flows;
+}
+
+const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
+  version: 1,
+  time_rules: {
+    timezone_mode: "workspace",
+    use_business_days: true,
+    send_window_local: { start: "09:00", end: "17:00" },
+    avoid_weekends: true,
+  },
+  guardrails: {
+    min_gap_hours_between_emails: 16,
+    max_emails_per_lead_per_7d: 3,
+    max_emails_per_lead_per_30d: 8,
+    same_day_send_allowed: false,
+    jitter_percent: 0.15,
+  },
+  stop_pause_rules: {
+    stop_on_any_reply: true,
+    stop_on_negative_reply: true,
+    stop_on_unsubscribe: true,
+    stop_on_bounce: true,
+    pause_when_meeting_scheduled: true,
+  },
+  modes: {
+    fast: {
+      reply_pending_hours: 4,
+      outbound_followups_days: [2, 3, 3, 4],
+      breakup_trigger: { days_since_first_outbound: 10, days_since_last_outbound: 5 },
+      post_meeting: { recap_suggest_after_hours: 4, checkins_days: [3, 7] },
+    },
+    nurture: {
+      reply_pending_hours: 24,
+      outbound_followups_days: [5, 7, 7, 10],
+      breakup_trigger: { days_since_first_outbound: 30, days_since_last_outbound: 14 },
+      post_meeting: { recap_suggest_after_hours: 24, checkins_days: [7, 14, 30] },
+    },
+  },
+  flows: {
+    nurture_campaigns: {
+      enabled: true,
+      cadences_days: { weekly: 7, biweekly: 14, monthly: 30 },
+      min_days_after_last_touch: 7,
+    },
+    reengagement: {
+      enabled: true,
+      after_days_no_contact: 45,
+      sequence_days: [0, 7],
+    },
+    pre_meeting: {
+      enabled: false,
+      reminder_hours_before: [24, 2],
+    },
+  },
+};
+
+// Deep merge for backwards compatibility (arrays are full override)
+function deepMergeCadence<T extends object>(defaults: T, partial?: Partial<T>): T {
+  if (!partial) return defaults;
+  const result = { ...defaults };
+  for (const key of Object.keys(partial) as (keyof T)[]) {
+    const pv = partial[key];
+    const dv = defaults[key];
+    if (pv === undefined) continue;
+    if (Array.isArray(pv)) {
+      result[key] = pv as T[keyof T];
+    } else if (typeof dv === 'object' && dv !== null && !Array.isArray(dv) && typeof pv === 'object' && pv !== null) {
+      result[key] = deepMergeCadence(dv as object, pv as object) as T[keyof T];
+    } else {
+      result[key] = pv as T[keyof T];
+    }
+  }
+  return result;
+}
+
+// Action reason codes for automation-ready infrastructure
+type ActionReasonCode =
+  | "REPLY_PENDING"
+  | "FOLLOWUP_DUE"
+  | "BREAKUP_DUE"
+  | "NURTURE_DUE"
+  | "REENGAGE_DUE"
+  | "POST_MEETING_RECAP_DUE"
+  | "POST_MEETING_CHECKIN_DUE"
+  | "CLOSING_FOLLOWUP_DUE";
+
+// Deterministic jitter based on lead_id + action_key (no flicker between syncs)
+function getDeterministicJitter(leadId: string, actionKey: string, jitterPercent: number): number {
+  const hashStr = `${leadId}:${actionKey}`;
+  let hash = 0;
+  for (let i = 0; i < hashStr.length; i++) {
+    const char = hashStr.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  const normalized = (hash % 10000) / 10000;
+  return (normalized * 2 - 1) * jitterPercent;
+}
+
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("Origin") || "";
@@ -38,18 +210,12 @@ interface LeadMetrics {
   last_nurture_outbound_at: string | null;
 }
 
-interface LeadUpdate {
-  stage: string;
+interface ActionResult {
   needs_action: boolean;
   next_action_key: string | null;
   next_action_label: string | null;
-  first_outbound_at: string | null;
-  last_outbound_at: string | null;
-  last_inbound_at: string | null;
-  meeting_summary_count: number;
-  nurture_outbound_count: number;
-  last_nurture_outbound_at: string | null;
-  last_activity_at: string;
+  eligible_at: string | null;
+  action_reason_code: ActionReasonCode | null;
 }
 
 function decodeBase64Url(data: string): string {
@@ -248,107 +414,319 @@ function deriveStage(
   return "new";
 }
 
-// Determine needs_action and next_action
+// Determine needs_action and next_action using configurable cadence settings
 function deriveAction(
+  leadId: string,
   metrics: LeadMetrics,
-  pendingDraftCount: number,
   nurtureCadence: string | null,
   stage: string,
-  hasMeetingWithoutFollowup: boolean = false
-): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
+  hasMeetingWithoutFollowup: boolean,
+  hasFutureMeeting: boolean,
+  recentOutbound7d: number,
+  recentOutbound30d: number,
+  modeSettings: ModeSettings,
+  guardrails: Guardrails,
+  stopPauseRules: StopPauseRules,
+  flows: Flows,
+  timezone: string | null
+): ActionResult {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
   const DAY = 24 * HOUR;
 
-  // A) Reply Pending - inbound exists and is newer than last outbound, elapsed > 6 hours
+  // ============================================
+  // STOP/PAUSE RULES (highest priority)
+  // Precedence: bounce/unsub/negative → stop; inbound newer than last outbound → only reply_pending; meeting scheduled → pause
+  // ============================================
+
+  // Pause when meeting is scheduled (check actual future meeting, not stage)
+  if (stopPauseRules.pause_when_meeting_scheduled && hasFutureMeeting) {
+    console.log(`[gmail-sync] Lead ${leadId}: Pausing outbound - future meeting scheduled`);
+    return {
+      needs_action: false,
+      next_action_key: "paused_meeting_scheduled",
+      next_action_label: "Paused - meeting scheduled",
+      eligible_at: null,
+      action_reason_code: null,
+    };
+  }
+
+  // ============================================
+  // GUARDRAILS CHECK
+  // ============================================
+
+  // Check max emails limits
+  if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
+    console.log(`[gmail-sync] Lead ${leadId}: Guardrail hit - max 7d emails (${recentOutbound7d}/${guardrails.max_emails_per_lead_per_7d})`);
+    return {
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      eligible_at: null,
+      action_reason_code: null,
+    };
+  }
+
+  if (recentOutbound30d >= guardrails.max_emails_per_lead_per_30d) {
+    console.log(`[gmail-sync] Lead ${leadId}: Guardrail hit - max 30d emails (${recentOutbound30d}/${guardrails.max_emails_per_lead_per_30d})`);
+    return {
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      eligible_at: null,
+      action_reason_code: null,
+    };
+  }
+
+  // Check min gap between emails
+  const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+  const hoursSinceLastOut = (now - lastOutTime) / HOUR;
+  
+  if (hoursSinceLastOut < guardrails.min_gap_hours_between_emails && lastOutTime > 0) {
+    // Not eligible yet - calculate when we will be
+    const eligibleTime = lastOutTime + (guardrails.min_gap_hours_between_emails * HOUR);
+    console.log(`[gmail-sync] Lead ${leadId}: Guardrail hit - min gap (${hoursSinceLastOut.toFixed(1)}h < ${guardrails.min_gap_hours_between_emails}h)`);
+    return {
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      eligible_at: new Date(eligibleTime).toISOString(),
+      action_reason_code: null,
+    };
+  }
+
+  // Check same-day rule
+  if (!guardrails.same_day_send_allowed && lastOutTime > 0) {
+    const lastOutDate = new Date(lastOutTime).toDateString();
+    const todayDate = new Date(now).toDateString();
+    if (lastOutDate === todayDate) {
+      console.log(`[gmail-sync] Lead ${leadId}: Guardrail hit - same day send not allowed`);
+      return {
+        needs_action: false,
+        next_action_key: null,
+        next_action_label: null,
+        eligible_at: null,
+        action_reason_code: null,
+      };
+    }
+  }
+
+  // ============================================
+  // A) REPLY PENDING - inbound exists and is newer than last outbound
+  // This is always allowed (stop_on_any_reply only affects follow-ups, not replies)
+  // ============================================
   if (metrics.last_inbound_at) {
     const inboundTime = new Date(metrics.last_inbound_at).getTime();
     const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
     
     if (inboundTime > outboundTime) {
       const elapsed = now - inboundTime;
-      if (elapsed > 6 * HOUR) {
+      const thresholdMs = modeSettings.reply_pending_hours * HOUR;
+      
+      if (elapsed > thresholdMs) {
+        // Apply deterministic jitter for eligible_at
+        const jitter = getDeterministicJitter(leadId, "reply_now", guardrails.jitter_percent);
+        const eligibleAt = new Date(inboundTime + thresholdMs * (1 + jitter));
+        
         return {
           needs_action: true,
           next_action_key: "reply_now",
           next_action_label: "Reply to customer",
+          eligible_at: eligibleAt.toISOString(),
+          action_reason_code: "REPLY_PENDING",
         };
       }
     }
   }
 
-  // B) Closing stage - follow up if no outbound in 3 days
+  // ============================================
+  // CHECK STOP RULES (for non-reply actions)
+  // If there's a recent inbound and stop_on_any_reply is true, don't suggest follow-ups
+  // ============================================
+  if (stopPauseRules.stop_on_any_reply && metrics.last_inbound_at) {
+    const inboundTime = new Date(metrics.last_inbound_at).getTime();
+    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    
+    if (inboundTime > outboundTime) {
+      // Lead replied - don't suggest follow-ups, only reply_pending (handled above if threshold met)
+      return {
+        needs_action: false,
+        next_action_key: "wait_reply_threshold",
+        next_action_label: "Waiting for reply threshold",
+        eligible_at: null,
+        action_reason_code: null,
+      };
+    }
+  }
+
+  // ============================================
+  // B) CLOSING STAGE - follow up if no outbound in 3 days
+  // ============================================
   if (stage === "closing") {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
     if (now - lastOutTime > 3 * DAY) {
+      const jitter = getDeterministicJitter(leadId, "closing_followup", guardrails.jitter_percent);
+      const eligibleAt = new Date(lastOutTime + (3 * DAY) * (1 + jitter));
+      
       return {
         needs_action: true,
         next_action_key: "closing_followup",
         next_action_label: "Follow up on proposal/contract",
+        eligible_at: eligibleAt.toISOString(),
+        action_reason_code: "CLOSING_FOLLOWUP_DUE",
       };
     }
   }
 
-  // C) Pre-Meeting Follow-up Overdue (no inbound yet)
+  // ============================================
+  // C) PRE-MEETING FOLLOW-UP (no inbound yet, no meetings)
+  // ============================================
   if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
     const firstOutTime = new Date(metrics.first_outbound_at).getTime();
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : firstOutTime;
     const daysSinceFirst = (now - firstOutTime) / DAY;
     const daysSinceLast = (now - lastOutTime) / DAY;
 
-    // Count outbound emails to determine which follow-up is due
-    // Rough heuristic: use time elapsed since first outbound
-    if (daysSinceFirst >= 14 && daysSinceLast >= 7) {
+    const breakupTrigger = modeSettings.breakup_trigger;
+    const followupDays = modeSettings.outbound_followups_days;
+
+    // Breakup email check
+    if (daysSinceFirst >= breakupTrigger.days_since_first_outbound && 
+        daysSinceLast >= breakupTrigger.days_since_last_outbound) {
+      const jitter = getDeterministicJitter(leadId, "send_pre_4", guardrails.jitter_percent);
+      const eligibleAt = new Date(lastOutTime + (breakupTrigger.days_since_last_outbound * DAY) * (1 + jitter));
+      
       return {
         needs_action: true,
         next_action_key: "send_pre_4",
         next_action_label: "Send breakup email",
+        eligible_at: eligibleAt.toISOString(),
+        action_reason_code: "BREAKUP_DUE",
       };
-    } else if (daysSinceFirst >= 7 && daysSinceLast >= 4) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_3",
-        next_action_label: "Send follow-up Email 3",
-      };
-    } else if (daysSinceFirst >= 4 && daysSinceLast >= 3) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_2",
-        next_action_label: "Send follow-up Email 2",
-      };
+    }
+
+    // Calculate cumulative days for each follow-up
+    let cumulativeDays = 0;
+    for (let i = 0; i < followupDays.length; i++) {
+      cumulativeDays += followupDays[i];
+      const nextStepIndex = i + 2; // fu1 is after intro, so step 2, 3, 4...
+      
+      if (nextStepIndex > 4) break; // Max 4 follow-ups
+      
+      const prevCumulativeDays = cumulativeDays - followupDays[i];
+      
+      if (daysSinceFirst >= cumulativeDays && daysSinceLast >= followupDays[i]) {
+        const jitter = getDeterministicJitter(leadId, `send_pre_${nextStepIndex}`, guardrails.jitter_percent);
+        const eligibleAt = new Date(lastOutTime + (followupDays[i] * DAY) * (1 + jitter));
+        
+        return {
+          needs_action: true,
+          next_action_key: `send_pre_${nextStepIndex}`,
+          next_action_label: nextStepIndex === 4 ? "Send breakup email" : `Send follow-up Email ${nextStepIndex}`,
+          eligible_at: eligibleAt.toISOString(),
+          action_reason_code: "FOLLOWUP_DUE",
+        };
+      }
     }
   }
 
-  // D) Post-Meeting Recap Missing - only trigger if there's a meeting pack without follow-up email
+  // ============================================
+  // D) POST-MEETING RECAP MISSING
+  // ============================================
   if (hasMeetingWithoutFollowup) {
+    const recapHours = modeSettings.post_meeting.recap_suggest_after_hours;
+    // For post-meeting, we'd need meeting time - for now use last activity
+    const jitter = getDeterministicJitter(leadId, "generate_post_meeting_recap", guardrails.jitter_percent);
+    const eligibleAt = new Date(now); // Immediately eligible if meeting happened
+    
     return {
       needs_action: true,
       next_action_key: "generate_post_meeting_recap",
       next_action_label: "Send post-meeting recap",
+      eligible_at: eligibleAt.toISOString(),
+      action_reason_code: "POST_MEETING_RECAP_DUE",
     };
   }
 
-  // E) Nurture Cadence Due
-  if (metrics.nurture_outbound_count > 0 && nurtureCadence) {
+  // ============================================
+  // E) NURTURE CADENCE DUE
+  // ============================================
+  if (flows.nurture_campaigns.enabled && metrics.nurture_outbound_count > 0 && nurtureCadence) {
     const lastNurtureTime = metrics.last_nurture_outbound_at 
       ? new Date(metrics.last_nurture_outbound_at).getTime() 
       : 0;
     
-    let intervalDays = 7; // default weekly
-    if (nurtureCadence === "biweekly") intervalDays = 14;
-    else if (nurtureCadence === "monthly") intervalDays = 30;
+    const cadenceDays = flows.nurture_campaigns.cadences_days;
+    let intervalDays = cadenceDays.weekly; // default weekly
+    if (nurtureCadence === "biweekly") intervalDays = cadenceDays.biweekly;
+    else if (nurtureCadence === "monthly") intervalDays = cadenceDays.monthly;
 
-    if (now - lastNurtureTime >= intervalDays * DAY) {
+    const daysSinceNurture = (now - lastNurtureTime) / DAY;
+    
+    if (daysSinceNurture >= intervalDays) {
+      const jitter = getDeterministicJitter(leadId, `send_nurture_${metrics.nurture_outbound_count + 1}`, guardrails.jitter_percent);
+      const eligibleAt = new Date(lastNurtureTime + (intervalDays * DAY) * (1 + jitter));
+      
       return {
         needs_action: true,
         next_action_key: `send_nurture_${metrics.nurture_outbound_count + 1}`,
         next_action_label: "Send nurture email",
+        eligible_at: eligibleAt.toISOString(),
+        action_reason_code: "NURTURE_DUE",
       };
     }
   }
 
+  // ============================================
+  // F) RE-ENGAGEMENT (cold lead)
+  // ============================================
+  if (flows.reengagement.enabled) {
+    const lastActivityTime = Math.max(
+      metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0,
+      metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0
+    );
+    
+    if (lastActivityTime > 0) {
+      const daysSinceActivity = (now - lastActivityTime) / DAY;
+      
+      if (daysSinceActivity >= flows.reengagement.after_days_no_contact) {
+        const jitter = getDeterministicJitter(leadId, "reengage", guardrails.jitter_percent);
+        const eligibleAt = new Date(lastActivityTime + (flows.reengagement.after_days_no_contact * DAY) * (1 + jitter));
+        
+        return {
+          needs_action: true,
+          next_action_key: "reengage",
+          next_action_label: "Re-engage cold lead",
+          eligible_at: eligibleAt.toISOString(),
+          action_reason_code: "REENGAGE_DUE",
+        };
+      }
+    }
+  }
+
   // No action needed
-  return { needs_action: false, next_action_key: null, next_action_label: null };
+  return { 
+    needs_action: false, 
+    next_action_key: null, 
+    next_action_label: null,
+    eligible_at: null,
+    action_reason_code: null,
+  };
+}
+
+// LeadUpdate interface for database updates
+interface LeadUpdate {
+  stage: string;
+  needs_action: boolean;
+  next_action_key: string | null;
+  next_action_label: string | null;
+  eligible_at: string | null;
+  action_reason_code: string | null;
+  first_outbound_at: string | null;
+  last_outbound_at: string | null;
+  last_inbound_at: string | null;
+  meeting_summary_count: number;
+  nurture_outbound_count: number;
+  last_nurture_outbound_at: string | null;
+  last_activity_at: string;
 }
 
 serve(async (req) => {
@@ -406,15 +784,17 @@ serve(async (req) => {
       });
     }
 
-    // Get current lead data for strategy/cadence info
+    // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy")
+      .select("stage, strategy, owner_user_id, has_future_meeting")
       .eq("id", leadId)
       .single();
 
     const currentStage = leadData?.stage || "new";
     const strategy = leadData?.strategy || "fast";
+    const ownerUserId = leadData?.owner_user_id || user.id;
+    const hasFutureMeeting = leadData?.has_future_meeting || false;
 
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
@@ -691,22 +1071,58 @@ serve(async (req) => {
       .eq("lead_id", leadId)
       .in("status", ["pending", "saved"]);
 
-    const pendingDraftCount = pendingDrafts?.length || 0;
     const nurtureCadence = pendingDrafts?.find(d => d.nurture_cadence)?.nurture_cadence || 
                            (strategy === "nurture" ? "weekly" : null);
 
+    // Load cadence settings from workspace_profiles by owner_user_id
+    const { data: workspaceProfile } = await serviceSupabase
+      .from("workspace_profiles")
+      .select("cadence_settings, meeting_timezone")
+      .eq("user_id", ownerUserId)
+      .maybeSingle();
+
+    const cadenceSettings = deepMergeCadence(DEFAULT_CADENCE_SETTINGS, workspaceProfile?.cadence_settings || {});
+    const timezone = workspaceProfile?.meeting_timezone || null;
+    const modeSettings = cadenceSettings.modes[strategy as 'fast' | 'nurture'] || cadenceSettings.modes.fast;
+
+    // Count recent outbound for guardrails
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    const recentOutbound7d = (allInteractions || []).filter(i => 
+      i.direction === 'outbound' && 
+      new Date(i.occurred_at).getTime() > now - 7 * DAY
+    ).length;
+    const recentOutbound30d = (allInteractions || []).filter(i => 
+      i.direction === 'outbound' && 
+      new Date(i.occurred_at).getTime() > now - 30 * DAY
+    ).length;
+
     // Derive stage and action
     const stage = deriveStage(currentStage, metrics, hasClosingKeywords);
-    const { needs_action, next_action_key, next_action_label } = deriveAction(
-      metrics, pendingDraftCount, nurtureCadence, stage, hasMeetingWithoutFollowup
+    const actionResult = deriveAction(
+      leadId,
+      metrics,
+      nurtureCadence,
+      stage,
+      hasMeetingWithoutFollowup,
+      hasFutureMeeting,
+      recentOutbound7d,
+      recentOutbound30d,
+      modeSettings,
+      cadenceSettings.guardrails,
+      cadenceSettings.stop_pause_rules,
+      cadenceSettings.flows,
+      timezone
     );
 
     // Update lead with computed values
     const leadUpdate: LeadUpdate = {
       stage,
-      needs_action,
-      next_action_key,
-      next_action_label,
+      needs_action: actionResult.needs_action,
+      next_action_key: actionResult.next_action_key,
+      next_action_label: actionResult.next_action_label,
+      eligible_at: actionResult.eligible_at,
+      action_reason_code: actionResult.action_reason_code,
       first_outbound_at: metrics.first_outbound_at,
       last_outbound_at: metrics.last_outbound_at,
       last_inbound_at: metrics.last_inbound_at,
@@ -785,7 +1201,7 @@ serve(async (req) => {
       console.error("[gmail-sync] Zoom processing error (non-blocking):", zoomErr);
     }
 
-    console.log(`[gmail-sync] Synced ${synced} messages, stage=${stage}, needs_action=${needs_action}`);
+    console.log(`[gmail-sync] Synced ${synced} messages, stage=${stage}, needs_action=${actionResult.needs_action}`);
 
     return new Response(
       JSON.stringify({ 
@@ -793,8 +1209,10 @@ serve(async (req) => {
         synced, 
         total: messageIds.length,
         stage,
-        needs_action,
-        next_action_key,
+        needs_action: actionResult.needs_action,
+        next_action_key: actionResult.next_action_key,
+        eligible_at: actionResult.eligible_at,
+        action_reason_code: actionResult.action_reason_code,
         errors: errors.length > 0 ? errors : undefined 
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

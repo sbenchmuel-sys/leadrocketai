@@ -1,5 +1,14 @@
 // Workspace Profile query functions for multi-tenant company/product configuration
 import { supabase } from '@/integrations/supabase/client';
+import { 
+  CadenceSettingsV1, 
+  DEFAULT_CADENCE_SETTINGS, 
+  deepMergeCadenceSettings 
+} from './cadenceSettingsTypes';
+
+// Re-export cadence types for convenience
+export type { CadenceSettingsV1 } from './cadenceSettingsTypes';
+export { DEFAULT_CADENCE_SETTINGS, deepMergeCadenceSettings } from './cadenceSettingsTypes';
 
 // ============================================
 // WORKSPACE PROFILE TYPES & QUERIES
@@ -17,6 +26,7 @@ export interface WorkspaceProfile {
   disallowed_topics: string[];
   pricing_policy: 'no_pricing_in_email' | 'pricing_allowed';
   meeting_timezone: string | null;
+  cadence_settings: CadenceSettingsV1;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +41,7 @@ export interface WorkspaceProfileInput {
   disallowed_topics?: string[];
   pricing_policy?: 'no_pricing_in_email' | 'pricing_allowed';
   meeting_timezone?: string | null;
+  cadence_settings?: Partial<CadenceSettingsV1>;
 }
 
 export async function getWorkspaceProfile(): Promise<WorkspaceProfile | null> {
@@ -49,12 +60,17 @@ export async function getWorkspaceProfile(): Promise<WorkspaceProfile | null> {
   
   if (!data) return null;
   
+  // Merge with defaults to ensure all fields exist
+  const rawCadence = data.cadence_settings || {};
+  const mergedCadence = deepMergeCadenceSettings(DEFAULT_CADENCE_SETTINGS, rawCadence);
+  
   return {
     ...data,
     primary_value_props: data.primary_value_props || [],
     supported_use_cases: data.supported_use_cases || [],
     allowed_claims: data.allowed_claims || [],
     disallowed_topics: data.disallowed_topics || [],
+    cadence_settings: mergedCadence,
   } as WorkspaceProfile;
 }
 
@@ -123,4 +139,28 @@ export function formatWorkspaceContext(workspace: WorkspaceProfile | null): stri
   }
   
   return lines.join('\n');
+}
+
+// ============================================
+// CADENCE SETTINGS QUERIES
+// ============================================
+
+export async function getCadenceSettings(): Promise<CadenceSettingsV1> {
+  const profile = await getWorkspaceProfile();
+  if (!profile) {
+    return DEFAULT_CADENCE_SETTINGS;
+  }
+  return profile.cadence_settings;
+}
+
+export async function updateCadenceSettings(settings: Partial<CadenceSettingsV1>): Promise<void> {
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  if (!user) throw new Error('Not logged in');
+
+  // Get existing settings to merge with
+  const current = await getCadenceSettings();
+  const merged = deepMergeCadenceSettings(current, settings);
+  
+  await upsertWorkspaceProfile({ cadence_settings: merged });
 }
