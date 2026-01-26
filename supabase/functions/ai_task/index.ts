@@ -167,17 +167,13 @@ Lead Context:
 Inbound Email:
 {{EMAIL_TEXT}}`,
 
-  email_intro_fast: `Write a FAST intro email reply for a regulated B2B lead.
-Goal: respond clearly, create confidence, and book a meeting soon.
+  email_intro_fast: `ROLE
+You are writing a FAST intro email reply for a regulated B2B lead.
 
-Constraints:
-- 120–180 words
-- 1 clear CTA (book a 30-min call)
-- If they asked questions, answer briefly and offer to cover deeper on call
-- Do NOT mention anything not in Knowledge Context
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
-- Return EMAIL BODY ONLY
+GOAL
+Respond clearly, create confidence, and book a meeting soon.
 
+INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
 
@@ -190,23 +186,33 @@ Inbound Email:
 Knowledge Context (approved snippets):
 {{KNOWLEDGE_CONTEXT}}
 
-Meeting link (optional):
+Meeting Link:
 {{MEETING_LINK}}
 
 Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}`,
+{{CUSTOM_INSTRUCTIONS}}
 
-  email_intro_nurture: `Write a NURTURE intro email reply for a regulated B2B lead.
-Goal: be helpful, provide 1–2 value points, share 1 resource, invite a call without pressure.
+CONSTRAINTS
+- 120–180 words
+- 1 clear CTA (book a 30-min call)
+- If they asked questions, answer briefly and offer to cover deeper on call
+- Do NOT mention anything not in Knowledge Context
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
+- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
+- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA (e.g., "Book time here: https://..."). If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
 
-Constraints:
-- 140–220 words
-- Helpful tone, credibility-building
-- 1 soft CTA (offer a call / ask what's best next step)
-- Use Knowledge Context only
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
-- Return EMAIL BODY ONLY
+OUTPUT
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
+  email_intro_nurture: `ROLE
+You are writing a NURTURE intro email reply for a regulated B2B lead.
+
+GOAL
+Be helpful, provide 1–2 value points, share 1 resource, invite a call without pressure.
+
+INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
 
@@ -222,11 +228,25 @@ Knowledge Context (approved snippets):
 Optional resource to mention:
 {{RESOURCE_LINK_OR_TITLE}}
 
-Meeting link (optional):
+Meeting Link:
 {{MEETING_LINK}}
 
 Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}`,
+{{CUSTOM_INSTRUCTIONS}}
+
+CONSTRAINTS
+- 140–220 words
+- Helpful tone, credibility-building
+- 1 soft CTA (offer a call / ask what's best next step)
+- Use Knowledge Context only
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
+- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
+- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+
+OUTPUT
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   followup_sequence_4: `Generate a 4-email follow-up sequence for a regulated B2B prospect.
 Mode is either FAST or NURTURE.
@@ -424,15 +444,6 @@ You are generating Email 1 (Intro) in a pre-meeting outreach cadence for a regul
 GOAL
 Introduce the company clearly, personalize to the lead, and encourage booking the first meeting.
 
-CONSTRAINTS
-- 120–180 words
-- Professional, confident, non-pushy
-- One clear CTA (book a call)
-- No medical or performance claims
-- Use only approved Knowledge Context
-- If information is missing, stay high-level
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
-
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -449,8 +460,20 @@ Meeting Link:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
+CONSTRAINTS
+- 120–180 words
+- Professional, confident, non-pushy
+- No medical or performance claims
+- Use only approved Knowledge Context
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
+- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
+- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA (e.g., "Book time here: https://..."). If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- One clear CTA (book a call)
+
 OUTPUT
-Return EMAIL BODY ONLY.`,
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_2_followup: `ROLE
 You are generating Email 2 in a pre-meeting outreach cadence.
@@ -458,14 +481,6 @@ You are generating Email 2 in a pre-meeting outreach cadence.
 GOAL
 Politely follow up after no response, add one value point, and reduce friction to reply.
 
-CONSTRAINTS
-- 90–140 words
-- Friendly, respectful of time
-- Briefly reference previous email
-- One clear CTA (book a call)
-- No hype or guarantees
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
-
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -485,21 +500,26 @@ Meeting Link:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
+CONSTRAINTS
+- 90–140 words
+- Friendly, respectful of time
+- Briefly reference previous email
+- No hype or guarantees
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
+- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
+- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- One clear CTA (book a call)
+
 OUTPUT
-Return EMAIL BODY ONLY.`,
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_3_followup: `ROLE
 You are generating Email 3 in a pre-meeting outreach cadence.
 
 GOAL
 Check relevance, prompt a yes/no response, and keep tone professional.
-
-CONSTRAINTS
-- 70–120 words
-- More direct, still polite
-- Explicitly acknowledge silence without pressure
-- One clear CTA (call, redirect, or deprioritize)
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
@@ -517,21 +537,24 @@ Meeting Link:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
+CONSTRAINTS
+- 70–120 words
+- More direct, still polite
+- Explicitly acknowledge silence without pressure
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
+- MEETING LINK: If a Meeting Link URL is provided above, include it directly in the CTA. If no meeting link is provided or it's empty, ask them to reply with their availability instead. Do NOT output placeholder text like "[Meeting Link]". Do NOT mention timezones.
+- One clear CTA (call, redirect, or deprioritize)
+
 OUTPUT
-Return EMAIL BODY ONLY.`,
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_4_breakup: `ROLE
 You are generating Email 4 (Breakup) in a pre-meeting outreach cadence.
 
 GOAL
 Close the loop respectfully and leave the door open.
-
-CONSTRAINTS
-- 50–90 words
-- Calm, polite, non-defensive
-- No CTA except soft invitation to reconnect
-- No claims
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
 
 INPUTS
 Lead Context:
@@ -543,8 +566,17 @@ Rep Context:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
+CONSTRAINTS
+- 50–90 words
+- Calm, polite, non-defensive
+- No CTA except soft invitation to reconnect
+- No claims
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+- SIGN-OFF: End with "Best," followed by the rep's first name from Rep Context (e.g., if rep full_name is "Shai Efrati", write "Best,\nShai")
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], etc.
+
 OUTPUT
-Return EMAIL BODY ONLY.`,
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   // Post-Meeting Personalized Follow-up
   post_meeting_followup_personalized: `ROLE

@@ -87,7 +87,9 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
   
   switch (actionType) {
     case "reply":
-      return hasThread ? "reply_to_thread" : "email_intro_fast";
+      // For replies WITH a thread, use reply_to_thread
+      // For new outreach without a thread, use pre_email_1_intro (intro email)
+      return hasThread ? "reply_to_thread" : "pre_email_1_intro";
     case "recap":
       return "post_meeting_followup_email";
     case "follow_up":
@@ -98,7 +100,8 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
     case "nurture":
       return "nurture_email_single";
     default:
-      return "email_intro_fast";
+      // Default to intro email for new outreach
+      return "pre_email_1_intro";
   }
 }
 
