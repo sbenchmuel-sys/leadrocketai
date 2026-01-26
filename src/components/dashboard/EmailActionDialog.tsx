@@ -190,6 +190,7 @@ export function EmailActionDialog({
   // Profile state
   const [repProfile, setRepProfile] = useState<RepProfile | null>(null);
   const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null);
+  const [profilesLoaded, setProfilesLoaded] = useState(false);
   
   // Undo state
   const [previousBody, setPreviousBody] = useState<string | null>(null);
@@ -208,9 +209,9 @@ export function EmailActionDialog({
     loadData();
   }, []);
 
-  // Generate email when dialog opens
+  // Generate email when dialog opens AND profiles are loaded
   useEffect(() => {
-    if (open) {
+    if (open && profilesLoaded) {
       setTo(lead.email);
       setInstructions(initialInstructions);
       
@@ -221,7 +222,7 @@ export function EmailActionDialog({
         generateEmail();
       }
     }
-  }, [open, lead.id]);
+  }, [open, lead.id, profilesLoaded]);
 
   async function loadData() {
     try {
@@ -236,6 +237,7 @@ export function EmailActionDialog({
       setKnowledgeDocs(docs);
       setRepProfile(rep);
       setWorkspaceProfile(workspace);
+      setProfilesLoaded(true);
       
       // Set default signature
       const defaultSig = sigs.find(s => s.is_default);
@@ -251,6 +253,7 @@ export function EmailActionDialog({
       }
     } catch (err) {
       console.error("Failed to load data:", err);
+      setProfilesLoaded(true); // Still mark as loaded to prevent indefinite waiting
     }
   }
 
@@ -295,6 +298,12 @@ Calendar Link: ${repProfile.calendar_link || ''}
   }
 
   async function generateEmail() {
+    // Guard: ensure profiles are loaded before generating
+    if (!profilesLoaded) {
+      console.warn('Profiles not loaded yet, skipping generation');
+      return;
+    }
+    
     setIsGenerating(true);
     setBody("");
     setSubject("");
