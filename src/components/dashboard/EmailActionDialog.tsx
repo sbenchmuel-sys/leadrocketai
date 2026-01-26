@@ -372,9 +372,13 @@ Calendar Link: ${repProfile.calendar_link || ''}
         payload.previous_emails = threadSummary || "";
       }
 
-      // For post-meeting follow-ups
+      // For post-meeting follow-ups - include thread context so AI knows what was already sent
       if (taskType === "post_meeting_followup_email") {
         payload.meeting_summary_brief = "Recent meeting with lead - follow up on discussed items.";
+        payload.previous_emails = threadSummary || "";
+        // Find the most recent outbound email to check if follow-up was already sent
+        const lastOutboundEmail = emails.find(e => e.direction === 'outbound');
+        payload.last_outbound = lastOutboundEmail?.body_text || "";
       }
 
       const result = await runTask(taskType, payload);
