@@ -589,8 +589,16 @@ Calendar Link: ${repProfile.calendar_link || ''}
   const effectiveActionKey = actionKey || lead.next_action_key || null;
   const hasThread = threadEmails.length > 0;
   const emailMode = getEmailMode(effectiveActionKey, hasThread);
-  const latestInbound = threadEmails.find(e => e.direction === 'inbound');
-  const olderEmails = threadEmails.slice(latestInbound ? 1 : 0);
+  
+  // Sort emails by date descending to ensure proper ordering
+  const sortedEmails = [...threadEmails].sort(
+    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+  );
+  
+  // Get the most recent email (regardless of direction) and the latest inbound for reply context
+  const mostRecentEmail = sortedEmails[0] || null;
+  const latestInbound = sortedEmails.find(e => e.direction === 'inbound');
+  const olderEmails = sortedEmails.slice(1); // All emails except the most recent
   
   const actionType = getActionType(lead.next_action_key);
   const dialogTitle = actionType === "reply" 
@@ -797,33 +805,37 @@ Calendar Link: ${repProfile.calendar_link || ''}
             <Separator />
 
             {/* Context Panel - Priority: Inbound email > Initial message > Lead metadata */}
-            {latestInbound ? (
-              /* Has inbound email from prospect - show it */
+            {mostRecentEmail ? (
+              /* Has emails in thread - show most recent prominently */
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <MessageSquare className="h-4 w-4" />
-                  Latest from {lead.name}
+                  {mostRecentEmail.direction === 'inbound' 
+                    ? `Latest from ${lead.name}` 
+                    : `Your last email to ${lead.name}`}
                 </div>
                 
-                {/* Latest Inbound - Always expanded, never truncated */}
-                <div className="p-4 bg-muted/50 rounded-lg border">
+                {/* Most Recent Email - Always expanded */}
+                <div className={`p-4 rounded-lg border ${mostRecentEmail.direction === 'inbound' ? 'bg-muted/50' : 'bg-primary/5 border-primary/20'}`}>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-                    <span>From: {latestInbound.from_email}</span>
+                    <Badge variant={mostRecentEmail.direction === 'inbound' ? 'secondary' : 'outline'} className="text-xs">
+                      {mostRecentEmail.direction === 'inbound' ? 'Received' : 'Sent'}
+                    </Badge>
                     <span>•</span>
-                    <span>{new Date(latestInbound.occurred_at).toLocaleDateString()}</span>
+                    <span>{new Date(mostRecentEmail.occurred_at).toLocaleDateString()}</span>
                   </div>
-                  {latestInbound.subject && (
+                  {mostRecentEmail.subject && (
                     <div className="font-medium text-sm mb-2">
-                      {latestInbound.subject}
+                      {mostRecentEmail.subject}
                     </div>
                   )}
                   {/* FULL email body - never truncated */}
                   <div className="text-sm whitespace-pre-wrap">
-                    {latestInbound.body_text}
+                    {mostRecentEmail.body_text}
                   </div>
                 </div>
 
-                {/* Older Emails - Collapsed */}
+                {/* Older Emails - Collapsed, sorted by date descending */}
                 {olderEmails.length > 0 && (
                   <Collapsible open={showOlderEmails} onOpenChange={setShowOlderEmails}>
                     <CollapsibleTrigger asChild>
@@ -834,9 +846,14 @@ Calendar Link: ${repProfile.calendar_link || ''}
                     </CollapsibleTrigger>
                     <CollapsibleContent className="space-y-2 pt-2">
                       {olderEmails.map((email, idx) => (
-                        <div key={email.id || idx} className="p-3 bg-muted/30 rounded-lg text-sm">
+                        <div 
+                          key={email.id || idx} 
+                          className={`p-3 rounded-lg text-sm ${email.direction === 'inbound' ? 'bg-muted/30' : 'bg-primary/5'}`}
+                        >
                           <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                            <span>{email.direction === 'inbound' ? 'From' : 'To'}: {email.from_email}</span>
+                            <Badge variant={email.direction === 'inbound' ? 'secondary' : 'outline'} className="text-xs">
+                              {email.direction === 'inbound' ? 'Received' : 'Sent'}
+                            </Badge>
                             <span>•</span>
                             <span>{new Date(email.occurred_at).toLocaleDateString()}</span>
                           </div>
