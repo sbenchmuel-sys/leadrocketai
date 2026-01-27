@@ -1,250 +1,229 @@
 
-# Dashboard UI/UX Enhancement Plan
+# Auto-Nurture Mode & Re-engagement Recommendations
 
 ## Overview
-This plan implements a comprehensive dashboard redesign combining visual polish, intelligence widgets, enhanced action panels, and an improved lead table. The changes will transform the dashboard into a modern, production-ready CRM interface.
+This plan connects the lead stages and cadence logic to enable automatic mode switching (fast → nurture) when prospects don't respond, and surfaces intelligent recommendations for re-engagement through nurture campaigns.
 
 ---
 
-## 1. Visual Polish & Modern Design
+## 1. Database Schema Updates
 
-### 1.1 CSS Variables & Theme Enhancements
-**File:** `src/index.css`
+### 1.1 Add Nurture Tracking Fields to Leads
+Add new columns to support nurture mode tracking:
 
-Add new CSS variables for:
-- Glassmorphism effects (backdrop blur, subtle borders)
-- Gradient backgrounds for cards
-- Success/warning/info semantic colors
-- Enhanced shadow system
+```sql
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS nurture_cadence TEXT CHECK (nurture_cadence IN ('weekly', 'biweekly', 'monthly'));
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS mode_changed_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS auto_nurture_eligible BOOLEAN DEFAULT false;
+```
 
-```css
-:root {
-  --glass-bg: 0 0% 100% / 0.7;
-  --glass-border: 0 0% 100% / 0.2;
-  --success: 142 76% 36%;
-  --warning: 38 92% 50%;
-  --info: 217 91% 60%;
+- `nurture_cadence`: The selected cadence when in nurture mode (weekly/biweekly/monthly)
+- `mode_changed_at`: Timestamp when strategy was last changed (for analytics)
+- `auto_nurture_eligible`: Flag set when lead meets criteria for auto-switch
+
+---
+
+## 2. Enhanced Mode Switching Logic
+
+### 2.1 Update gmail-sync deriveAction
+**File:** `supabase/functions/gmail-sync/index.ts`
+
+Add new logic after breakup detection to suggest mode switching:
+
+```text
+BEFORE breakup email suggestion:
+  - If lead is in "fast" mode AND
+  - No reply after X follow-ups (e.g., 3+ outbound emails) AND
+  - No inbound ever recorded AND
+  - Days since first outbound > breakup trigger
+  → Set auto_nurture_eligible = true
+  → Suggest action: "Switch to nurture mode"
+  → Return action_reason_code: "NURTURE_SWITCH_RECOMMENDED"
+```
+
+### 2.2 New Action Reason Code
+**File:** `src/lib/cadenceSettingsTypes.ts`
+
+Add new reason codes:
+- `NURTURE_SWITCH_RECOMMENDED` - Suggest switching from fast to nurture
+- `NURTURE_CAMPAIGN_START` - Suggest starting a nurture campaign
+
+---
+
+## 3. Dashboard Intelligence Enhancements
+
+### 3.1 New "Nurture Candidates" Intelligence Widget
+**File:** `src/components/dashboard/IntelligenceCards.tsx`
+
+Add a fourth intelligence card showing leads recommended for nurture:
+- Count of leads with `auto_nurture_eligible = true`
+- Clickable to filter the lead table
+
+### 3.2 Update Dashboard Stats Calculation
+**File:** `src/lib/dashboardUtils.ts`
+
+Add new function:
+```typescript
+function getNurtureCandidates(leads: EnrichedLead[]): EnrichedLead[] {
+  // Leads that:
+  // - Are in "fast" strategy
+  // - Have sent 3+ outbound emails
+  // - Have no inbound replies
+  // - Are not in closing/closed stages
 }
 ```
 
-### 1.2 Animation Keyframes
-**File:** `tailwind.config.ts`
+### 3.3 Enhanced AI Recommendation
+**File:** `src/components/dashboard/AIRecommendation.tsx`
 
-Add keyframes for:
-- `fade-in` - smooth entrance animations
-- `slide-up` - card reveal effect
-- `pulse-subtle` - attention indicators
-- `count-up` - number transitions
-
-### 1.3 Summary Cards Redesign
-**File:** `src/components/dashboard/SummaryCards.tsx`
-
-Changes:
-- Add gradient backgrounds per card type
-- Implement mini sparkline trend indicator (using recharts `<Sparkline>`)
-- Add subtle glassmorphism effect with backdrop blur
-- Animate value changes with CSS transitions
-- Add hover lift effect with shadow increase
-- Include secondary metric (e.g., "+3 this week")
-
-### 1.4 Deal Flow Bar Enhancement
-**File:** `src/components/dashboard/DealFlowBar.tsx`
-
-Changes:
-- Add subtle gradient progression across stages
-- Improve active state with glow effect
-- Add count animation on load
-- Better visual separation between stages
+Update to include nurture-specific recommendations:
+- "Consider moving [Lead] to nurture mode - no response after 4 emails"
+- "[Lead] is ready for re-engagement after 45 days"
+- "Start a monthly nurture campaign for [Lead] with industry insights"
 
 ---
 
-## 2. Contextual Intelligence Widgets
+## 4. Nurture Mode Switch UI
 
-### 2.1 Dashboard Stats Calculation
-**File:** `src/lib/dashboardUtils.ts`
-
-Add new utility functions:
-- `getStaleLeads(leads)` - leads with no outbound > 14 days and not closed
-- `calculateMomentum(leads)` - ratio of stage progressions vs regressions in last 7 days
-- `calculateReplyRate(leads)` - percentage of outbounds that got inbound replies
-
-### 2.2 Intelligence Cards Component
-**File:** `src/components/dashboard/IntelligenceCards.tsx` (new)
-
-Create a compact row of 3 intelligence indicators:
-
-```text
-+---------------------+---------------------+---------------------+
-| [!] STALE LEADS     | [^] MOMENTUM        | [%] REPLY RATE      |
-|     3 leads         |     +2 net moves    |     42%             |
-|  > 14 days silent   |   last 7 days       |   last 30 days      |
-+---------------------+---------------------+---------------------+
-```
-
-Features:
-- Stale Leads: Amber warning color, clickable to filter table
-- Momentum: Green/red indicator based on positive/negative
-- Reply Rate: Percentage with trend arrow
-
-### 2.3 Dashboard Integration
-**File:** `src/pages/Dashboard.tsx`
-
-- Add new state for intelligence metrics
-- Calculate metrics in `useMemo`
-- Place `IntelligenceCards` between Summary Cards and Deal Flow Bar
-- Add `stale` filter type to FilterType
-
----
-
-## 3. Enhanced Action Required Panel
-
-### 3.1 Inline Email Preview
+### 4.1 Quick Action: Switch to Nurture
 **File:** `src/components/dashboard/ActionRequiredPanel.tsx`
 
-Add expandable preview section for each action item:
-- Fetch latest inbound email snippet (first 150 chars) from `interactions` table
-- Show preview in a collapsible section below the action
-- Use `HoverCard` for quick preview on hover
-- Display sender name and time received
+When `action_reason_code === "NURTURE_SWITCH_RECOMMENDED"`:
+- Show special action card with nurture icon
+- Primary button: "Switch to Nurture"
+- On click: Open dialog to select cadence (weekly/biweekly/monthly)
 
-### 3.2 Quick Dismiss with Reason
-**File:** `src/components/dashboard/ActionRequiredPanel.tsx`
+### 4.2 Nurture Cadence Selection Dialog
+**File:** `src/components/dashboard/NurtureSwitchDialog.tsx` (new)
 
-Replace simple X dismiss with dropdown:
-- "Already handled"
-- "Not relevant"
-- "Will do later"
-- "Other"
+Modal dialog with:
+- Explanation of nurture mode benefits
+- Radio buttons for cadence selection (weekly, biweekly, monthly)
+- Optional: Theme selection (industry updates, product tips, case studies)
+- Confirm button that updates lead strategy and nurture_cadence
 
-Store dismiss reason in `action_reason_code` field (already exists in schema).
+### 4.3 Lead Table Quick Switch
+**File:** `src/components/dashboard/LeadTable.tsx`
 
-### 3.3 Visual Improvements
-- Add urgency color coding (red border for overdue)
-- Better action button styling with consistent widths
-- Subtle animation on item removal
+Add inline strategy switching:
+- Display current strategy badge (Fast/Nurture) in a new column
+- Click to toggle or open cadence selector
+- Show nurture cadence indicator if set
 
 ---
 
-## 4. Enhanced Lead Table
+## 5. Re-engagement Recommendations
 
-### 4.1 Avatar Component
-**File:** `src/components/dashboard/LeadAvatar.tsx` (new)
+### 5.1 Update deriveAction for Better Re-engagement
+**File:** `supabase/functions/gmail-sync/index.ts`
 
-Generate initials-based avatar:
-- First letter of name + first letter of company
-- Consistent color based on hash of lead ID
-- Small circular badge
+Enhance re-engagement logic:
+- When suggesting "Re-engage cold lead", include context in action_instructions
+- Provide suggested themes based on last interaction type
+- Consider time of year for relevant hooks
 
-### 4.2 Inline Stage Editing
-**File:** `src/components/dashboard/LeadTable.tsx`
+### 5.2 Re-engagement Templates
+**File:** `src/prompts/emailPrompts.ts`
 
-Add inline stage dropdown:
-- Click on stage badge to open dropdown
-- Select new stage to update immediately
-- Show loading spinner during update
-- Toast confirmation on success
+Add new prompt for re-engagement emails:
+```typescript
+export const REENGAGE_EMAIL_PROMPT = `Write a re-engagement email for a lead who hasn't responded in ${DAYS} days.
 
-### 4.3 Quick Actions on Hover
-**File:** `src/components/dashboard/LeadTable.tsx`
+Context: Last interaction was about ${LAST_TOPIC}.
+Strategy: Provide value first, then soft CTA.
 
-Row hover reveals action icons:
-- Email compose (already exists)
-- View (already exists)
-- Quick stage forward arrow
-- Add icons with subtle fade-in animation
-
-### 4.4 Bulk Selection
-**File:** `src/components/dashboard/LeadTable.tsx`
-
-Add checkbox column:
-- Header checkbox for select all (visible)
-- Row checkboxes
-- Floating action bar when items selected
-- Actions: "Mark all as..." stage dropdown
-
-### 4.5 Visual Polish
-- Add avatar to lead name column
-- Improve badge colors and consistency
-- Add alternating row backgrounds (subtle)
-- Better mobile responsiveness
+Suggested hooks:
+- Industry news/update relevant to their business
+- New feature or capability announcement
+- Case study from similar company
+- Seasonal/quarterly check-in
+`;
+```
 
 ---
 
-## Technical Implementation Details
+## 6. Cadence-Based Reminders
 
-### Database Queries Needed
+### 6.1 Nurture Due Calculation Enhancement
+**File:** `supabase/functions/gmail-sync/index.ts`
 
-1. **Fetch latest inbound email for preview:**
-```sql
-SELECT body_text, from_email, occurred_at 
-FROM interactions 
-WHERE lead_id = $1 AND type = 'email_inbound'
-ORDER BY occurred_at DESC 
-LIMIT 1
-```
+Update nurture campaign logic to work without requiring prior `nurture_outbound_count`:
+- If lead is in nurture mode with cadence set, calculate next touch date
+- If never sent nurture email, suggest first nurture touch after min_days_after_last_touch
 
-2. **Update lead stage inline:**
+### 6.2 Dashboard Reminder Integration
+The existing `needs_action` + `eligible_at` system will surface nurture reminders automatically once the backend is updated.
+
+---
+
+## 7. Settings: Auto-Nurture Rules
+
+### 7.1 New Signals Configuration UI
+**File:** `src/components/settings/CadenceSettingsCard.tsx`
+
+Add a new "Auto-Nurture Rules" section:
+- Toggle: "Suggest nurture mode when no reply after X follow-ups"
+- Input: Number of follow-ups before suggestion (default: 3)
+- Toggle: "Automatically switch to nurture after breakup email"
+- Dropdown: Default nurture cadence for auto-switches
+
+### 7.2 Update cadence_settings Schema
+**File:** `src/lib/cadenceSettingsTypes.ts`
+
+Add to `Signals` interface:
 ```typescript
-await supabase.from('leads').update({ stage, last_activity_at: now }).eq('id', leadId)
+auto_nurture: {
+  enabled: boolean;
+  after_followup_count: number;
+  auto_switch_after_breakup: boolean;
+  default_cadence: "weekly" | "biweekly" | "monthly";
+}
 ```
-
-3. **Dismiss with reason:**
-```typescript
-await supabase.from('leads').update({
-  needs_action: false,
-  next_action_key: null,
-  action_reason_code: reason
-}).eq('id', leadId)
-```
-
-### New Files to Create
-- `src/components/dashboard/IntelligenceCards.tsx`
-- `src/components/dashboard/LeadAvatar.tsx`
-
-### Files to Modify
-- `src/index.css` - Theme enhancements
-- `tailwind.config.ts` - Animation keyframes
-- `src/components/dashboard/SummaryCards.tsx` - Visual redesign
-- `src/components/dashboard/DealFlowBar.tsx` - Visual polish
-- `src/components/dashboard/ActionRequiredPanel.tsx` - Preview + dismiss reasons
-- `src/components/dashboard/LeadTable.tsx` - Avatars, inline edit, bulk select
-- `src/lib/dashboardUtils.ts` - Intelligence calculations
-- `src/lib/supabaseQueries.ts` - New queries
-- `src/pages/Dashboard.tsx` - Integration
 
 ---
 
 ## Implementation Order
 
-1. **Phase 1: Visual Foundation**
-   - Update CSS variables and theme
-   - Add animation keyframes to Tailwind
-   - Redesign SummaryCards with gradients and hover effects
-   - Polish DealFlowBar
+### Phase 1: Database & Backend
+1. Add new columns to leads table (nurture_cadence, mode_changed_at, auto_nurture_eligible)
+2. Update deriveAction to set auto_nurture_eligible flag
+3. Add NURTURE_SWITCH_RECOMMENDED action reason code
 
-2. **Phase 2: Intelligence Layer**
-   - Add utility functions for stale/momentum/reply calculations
-   - Create IntelligenceCards component
-   - Integrate into Dashboard
+### Phase 2: Dashboard UI
+4. Add "Nurture Candidates" to IntelligenceCards
+5. Create NurtureSwitchDialog component
+6. Update ActionRequiredPanel to handle nurture switch actions
+7. Add strategy column with inline switching to LeadTable
 
-3. **Phase 3: Action Panel Enhancement**
-   - Add inline email preview with collapsible
-   - Implement quick dismiss dropdown with reasons
-   - Add urgency indicators
+### Phase 3: Recommendations
+8. Enhance AIRecommendation with nurture-specific suggestions
+9. Add re-engagement email prompts
+10. Update deriveAction re-engagement logic
 
-4. **Phase 4: Lead Table Upgrade**
-   - Create LeadAvatar component
-   - Add inline stage editing
-   - Implement bulk selection
-   - Polish hover states and animations
+### Phase 4: Settings
+11. Add auto-nurture configuration to CadenceSettingsCard
+12. Update cadence_settings schema with auto_nurture section
 
 ---
 
-## Expected Result
+## Expected Behavior After Implementation
 
-A modern, visually polished dashboard that:
-- Feels responsive and alive with subtle animations
-- Surfaces key intelligence at a glance (stale leads, momentum, reply rate)
-- Enables faster action with inline previews and quick dismissals
-- Streamlines lead management with inline editing and bulk actions
-- Maintains consistency with existing design system while feeling more premium
+1. **Lead with no response after 3 follow-ups:**
+   - Action Required panel shows "Switch to Nurture Mode" with special styling
+   - Clicking opens cadence selection dialog
+   - After selection, lead's strategy changes to "nurture" with the chosen cadence
+
+2. **Lead in nurture mode:**
+   - Dashboard shows when next nurture email is due based on cadence
+   - AI recommendations suggest relevant nurture themes
+   - Lead table shows "Nurture (Monthly)" badge
+
+3. **Cold lead (45+ days):**
+   - Re-engagement action appears in Action Required panel
+   - Email composer pre-loads re-engagement template
+   - Includes suggested hooks based on last interaction
+
+4. **Dashboard intelligence:**
+   - New "Nurture Candidates" card shows count of leads to consider
+   - Stale leads and nurture candidates may overlap but serve different purposes
+   - AI recommendations prioritize time-sensitive nurture actions
