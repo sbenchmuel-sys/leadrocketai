@@ -2,7 +2,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Users, Target, AlertCircle, Calendar, TrendingUp, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type FilterType = "all" | "active" | "needs_action" | "meetings" | "stale";
+export type FilterType = "all" | "active" | "needs_action" | "meetings" | "stale" | "nurture_candidates";
 
 interface SummaryCardsProps {
   total: number;

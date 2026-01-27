@@ -73,6 +73,48 @@ export function getActionType(actionKey: string | null): "reply" | "follow_up" |
 // ============================================
 
 /**
+ * Get leads that are eligible for nurture mode switch
+ * - In "fast" strategy
+ * - Have sent 3+ outbound emails (estimated by looking at first/last outbound)
+ * - Have no inbound replies
+ * - Not in closing/closed stages
+ */
+export function getNurtureCandidates(leads: EnrichedLead[]): EnrichedLead[] {
+  return leads.filter((lead) => {
+    // Must be in fast strategy
+    if ((lead as any).strategy !== "fast") {
+      return false;
+    }
+    
+    // Skip closed leads
+    if (lead.stage === "closed_won" || lead.stage === "closed_lost" || lead.stage === "closing") {
+      return false;
+    }
+    
+    // Must have first outbound (means we've contacted them)
+    if (!lead.first_outbound_at) {
+      return false;
+    }
+    
+    // No inbound means no reply
+    if (lead.last_inbound_at) {
+      return false;
+    }
+    
+    // Check if auto_nurture_eligible is set (from backend)
+    if ((lead as any).auto_nurture_eligible) {
+      return true;
+    }
+    
+    // Fallback: estimate based on time since first outbound (if > 10 days, likely multiple follow-ups sent)
+    const now = new Date();
+    const firstOutbound = new Date(lead.first_outbound_at);
+    const daysSinceFirst = differenceInDays(now, firstOutbound);
+    return daysSinceFirst >= 10;
+  });
+}
+
+/**
  * Get leads that are "stale" - no outbound contact in >14 days and not closed
  */
 export function getStaleLeads(leads: EnrichedLead[]): EnrichedLead[] {
@@ -170,6 +212,18 @@ export function calculateReplyRate(leads: EnrichedLead[]): number {
 
 // Get AI recommendation summary
 export function getAIRecommendation(leads: EnrichedLead[]): string[] {
+  const recommendations: string[] = [];
+  
+  // First, check for nurture candidates that need mode switching
+  const nurtureCandidates = getNurtureCandidates(leads);
+  if (nurtureCandidates.length > 0) {
+    const lead = nurtureCandidates[0];
+    recommendations.push(
+      `Consider moving ${lead.name} to nurture mode — no response after multiple follow-ups.`
+    );
+  }
+  
+  // Then get regular actionable items
   const actionable = leads
     .filter((l) => l.needs_action && l.next_action_label)
     .sort((a, b) => {
@@ -182,31 +236,33 @@ export function getAIRecommendation(leads: EnrichedLead[]): string[] {
         send_pre_2: 4,
         send_pre_3: 5,
         send_pre_4: 6,
+        reengage: 7,
       };
       const aPriority = priority[a.next_action_key || ""] || 10;
       const bPriority = priority[b.next_action_key || ""] || 10;
       return aPriority - bPriority;
     })
-    .slice(0, 3);
+    .slice(0, 3 - recommendations.length);
 
-  return actionable.map((l) => {
+  for (const l of actionable) {
     const actionType = getActionType(l.next_action_key);
     
     if (actionType === "reply") {
-      return `Reply to ${l.name} at ${l.company} — they're waiting for your response.`;
+      recommendations.push(`Reply to ${l.name} at ${l.company} — they're waiting for your response.`);
+    } else if (actionType === "recap") {
+      recommendations.push(`Send ${l.name} a post-meeting follow-up to keep momentum.`);
+    } else if (actionType === "closing") {
+      recommendations.push(`${l.name} at ${l.company} is in closing — ${l.next_action_label}.`);
+    } else if (actionType === "follow_up") {
+      recommendations.push(`Follow up with ${l.name} at ${l.company} — ${l.next_action_label}.`);
+    } else if (actionType === "nurture") {
+      recommendations.push(`Continue nurturing ${l.name} at ${l.company} with the next email.`);
+    } else if (l.next_action_key === "reengage") {
+      recommendations.push(`Re-engage ${l.name} at ${l.company} — they've been quiet for 45+ days.`);
+    } else {
+      recommendations.push(`Check in on ${l.name} at ${l.company}.`);
     }
-    if (actionType === "recap") {
-      return `Send ${l.name} a post-meeting follow-up to keep momentum.`;
-    }
-    if (actionType === "closing") {
-      return `${l.name} at ${l.company} is in closing — ${l.next_action_label}.`;
-    }
-    if (actionType === "follow_up") {
-      return `Follow up with ${l.name} at ${l.company} — ${l.next_action_label}.`;
-    }
-    if (actionType === "nurture") {
-      return `Continue nurturing ${l.name} at ${l.company} with the next email.`;
-    }
-    return `Check in on ${l.name} at ${l.company}.`;
-  });
+  }
+  
+  return recommendations;
 }

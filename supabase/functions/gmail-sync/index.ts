@@ -158,7 +158,9 @@ type ActionReasonCode =
   | "REENGAGE_DUE"
   | "POST_MEETING_RECAP_DUE"
   | "POST_MEETING_CHECKIN_DUE"
-  | "CLOSING_FOLLOWUP_DUE";
+  | "CLOSING_FOLLOWUP_DUE"
+  | "NURTURE_SWITCH_RECOMMENDED"
+  | "NURTURE_CAMPAIGN_START";
 
 // Deterministic jitter based on lead_id + action_key (no flicker between syncs)
 function getDeterministicJitter(leadId: string, actionKey: string, jitterPercent: number): number {
@@ -428,8 +430,9 @@ function deriveAction(
   guardrails: Guardrails,
   stopPauseRules: StopPauseRules,
   flows: Flows,
-  timezone: string | null
-): ActionResult {
+  timezone: string | null,
+  strategy: string
+): ActionResult & { auto_nurture_eligible?: boolean } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
   const DAY = 24 * HOUR;
@@ -587,6 +590,32 @@ function deriveAction(
 
     const breakupTrigger = modeSettings.breakup_trigger;
     const followupDays = modeSettings.outbound_followups_days;
+
+    // NURTURE SWITCH CHECK - Before breakup, check if we should suggest nurture switch
+    // If in fast mode, 3+ follow-ups sent (estimate based on time), and no reply
+    if (strategy === "fast" && daysSinceFirst >= breakupTrigger.days_since_first_outbound * 0.8) {
+      // Estimate follow-up count based on cumulative days
+      let estimatedFollowups = 0;
+      let cumDays = 0;
+      for (const days of followupDays) {
+        cumDays += days;
+        if (daysSinceFirst >= cumDays) {
+          estimatedFollowups++;
+        }
+      }
+      
+      if (estimatedFollowups >= 3) {
+        console.log(`[gmail-sync] Lead ${leadId}: Suggesting nurture switch (${estimatedFollowups} follow-ups, no reply)`);
+        return {
+          needs_action: true,
+          next_action_key: "switch_to_nurture",
+          next_action_label: "Consider switching to nurture mode",
+          eligible_at: new Date(now).toISOString(),
+          action_reason_code: "NURTURE_SWITCH_RECOMMENDED",
+          auto_nurture_eligible: true,
+        };
+      }
+    }
 
     // Breakup email check
     if (daysSinceFirst >= breakupTrigger.days_since_first_outbound && 
@@ -1112,11 +1141,12 @@ serve(async (req) => {
       cadenceSettings.guardrails,
       cadenceSettings.stop_pause_rules,
       cadenceSettings.flows,
-      timezone
+      timezone,
+      strategy
     );
 
     // Update lead with computed values
-    const leadUpdate: LeadUpdate = {
+    const leadUpdate: LeadUpdate & { auto_nurture_eligible?: boolean } = {
       stage,
       needs_action: actionResult.needs_action,
       next_action_key: actionResult.next_action_key,
@@ -1131,6 +1161,11 @@ serve(async (req) => {
       last_nurture_outbound_at: metrics.last_nurture_outbound_at,
       last_activity_at: new Date().toISOString(),
     };
+
+    // Set auto_nurture_eligible if the action suggests it
+    if (actionResult.auto_nurture_eligible !== undefined) {
+      leadUpdate.auto_nurture_eligible = actionResult.auto_nurture_eligible;
+    }
 
     await serviceSupabase
       .from("leads")

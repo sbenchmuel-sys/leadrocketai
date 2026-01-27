@@ -10,6 +10,7 @@ import {
   STAGE_ORDER,
   getAIRecommendation,
   getStaleLeads,
+  getNurtureCandidates,
   calculateMomentum,
   calculateReplyRate,
 } from "@/lib/dashboardUtils";
@@ -40,8 +41,9 @@ export default function Dashboard() {
         .select(`
           id, company, name, email, strategy, status, owner_user_id, 
           created_at, last_activity_at, next_step, deal_outlook, country,
-          stage, needs_action, next_action_key, next_action_label, meeting_summary_count,
-          last_outbound_at, last_inbound_at, first_outbound_at
+          stage, needs_action, next_action_key, next_action_label, action_reason_code,
+          meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
+          nurture_cadence, auto_nurture_eligible
         `)
         .order("last_activity_at", { ascending: false })
         .limit(200);
@@ -77,9 +79,17 @@ export default function Dashboard() {
   // Calculate intelligence metrics
   const intelligenceMetrics = useMemo(() => {
     const staleLeads = getStaleLeads(leads);
+    const nurtureCandidates = getNurtureCandidates(leads);
     const momentum = calculateMomentum(leads);
     const replyRate = calculateReplyRate(leads);
-    return { staleCount: staleLeads.length, staleLeads, momentum, replyRate };
+    return { 
+      staleCount: staleLeads.length, 
+      staleLeads, 
+      nurtureCandidateCount: nurtureCandidates.length,
+      nurtureCandidates,
+      momentum, 
+      replyRate 
+    };
   }, [leads]);
 
   // Calculate stage counts
@@ -114,6 +124,8 @@ export default function Dashboard() {
       result = result.filter((l) => l.hasMeeting);
     } else if (activeFilter === "stale") {
       result = intelligenceMetrics.staleLeads;
+    } else if (activeFilter === "nurture_candidates") {
+      result = intelligenceMetrics.nurtureCandidates;
     }
 
     // Apply stage filter
@@ -122,7 +134,7 @@ export default function Dashboard() {
     }
 
     return result;
-  }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads]);
+  }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads, intelligenceMetrics.nurtureCandidates]);
 
   // AI recommendations
   const recommendations = useMemo(() => {
@@ -140,6 +152,11 @@ export default function Dashboard() {
 
   const handleStaleClick = () => {
     setActiveFilter(activeFilter === "stale" ? "all" : "stale");
+    setActiveStage(null);
+  };
+
+  const handleNurtureClick = () => {
+    setActiveFilter(activeFilter === "nurture_candidates" ? "all" : "nurture_candidates");
     setActiveStage(null);
   };
 
@@ -175,7 +192,9 @@ export default function Dashboard() {
         staleCount={intelligenceMetrics.staleCount}
         momentum={intelligenceMetrics.momentum}
         replyRate={intelligenceMetrics.replyRate}
+        nurtureCandidateCount={intelligenceMetrics.nurtureCandidateCount}
         onStaleClick={handleStaleClick}
+        onNurtureClick={handleNurtureClick}
         activeFilter={activeFilter}
       />
 

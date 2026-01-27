@@ -174,3 +174,82 @@ export interface PostMeetingRecapOutput {
 export function getIntroEmailPrompt(strategy: 'fast' | 'nurture'): string {
   return strategy === 'fast' ? EMAIL_INTRO_FAST_PROMPT : EMAIL_INTRO_NURTURE_PROMPT;
 }
+
+// ============================================
+// RE-ENGAGEMENT EMAIL
+// ============================================
+export const REENGAGE_EMAIL_PROMPT = `Write a re-engagement email for a lead who hasn't responded in a while.
+The goal is to restart the conversation with value, not pressure.
+
+Strategy: Provide value first, then include a soft CTA.
+
+Suggested hooks to consider:
+- Industry news or update relevant to their business
+- New feature or capability that addresses their needs
+- Case study from a similar company
+- Quarterly/seasonal check-in
+- Helpful resource or insight
+
+Constraints:
+- 100–150 words
+- Lead with value, not "checking in"
+- 1 soft CTA (offer to help, share something, or suggest a quick call)
+- Be warm but professional, not desperate
+- Do NOT mention anything not in Knowledge Context
+- Return EMAIL BODY ONLY
+
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Knowledge Context (approved snippets):
+{{KNOWLEDGE_CONTEXT}}
+
+Days since last contact: {{DAYS_SINCE_CONTACT}}
+
+Meeting link (optional):
+{{MEETING_LINK}}`;
+
+// ============================================
+// NURTURE EMAIL
+// ============================================
+export const NURTURE_EMAIL_PROMPT = `Write a nurture email for a lead in long-term nurture mode.
+The goal is to stay top of mind with value, not to push for a meeting.
+
+Theme suggestions:
+- Industry insights or trends
+- Product tips or best practices
+- Case study highlight
+- Educational content or resource
+
+Constraints:
+- 80–120 words
+- Focus on providing value
+- 1 soft CTA at most (e.g., "happy to chat if this resonates")
+- No pressure, no urgency
+- Do NOT mention anything not in Knowledge Context
+- Return EMAIL BODY ONLY
+
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Nurture cadence: {{NURTURE_CADENCE}}
+
+Knowledge Context (approved snippets):
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting link (optional):
+{{MEETING_LINK}}`;
+
+export interface ReengageEmailParams {
+  leadContext: string;
+  knowledgeContext: string;
+  daysSinceContact: number;
+  meetingLink?: string;
+}
+
+export interface NurtureEmailParams {
+  leadContext: string;
+  nurtureCadence: 'weekly' | 'biweekly' | 'monthly';
+  knowledgeContext: string;
+  meetingLink?: string;
+}

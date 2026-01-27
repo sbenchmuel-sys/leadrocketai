@@ -11,10 +11,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { 
   AlertCircle, Mail, FileText, Eye, Send, X, Lightbulb, 
-  ChevronDown, ChevronRight, MoreHorizontal, Clock
+  ChevronDown, ChevronRight, MoreHorizontal, Clock, RefreshCw
 } from "lucide-react";
 import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
+import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { dismissLeadAction, getLatestInboundEmail, EmailPreviewSnippet } from "@/lib/supabaseQueries";
 import { updateLeadActionInstructions, getLeadActionInstructions } from "@/lib/repProfileQueries";
 import { toast } from "sonner";
@@ -37,6 +38,7 @@ interface ActionRequiredPanelProps {
 export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPanelProps) {
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [expandedInstructions, setExpandedInstructions] = useState<string | null>(null);
   const [expandedPreview, setExpandedPreview] = useState<string | null>(null);
@@ -141,6 +143,22 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
 
   const getActionButton = (lead: EnrichedLead) => {
     const actionType = getActionType(lead.next_action_key);
+    const actionReasonCode = (lead as any).action_reason_code;
+    
+    // Special handling for nurture switch recommendation
+    if (actionReasonCode === "NURTURE_SWITCH_RECOMMENDED") {
+      return (
+        <Button 
+          size="sm" 
+          variant="outline"
+          className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+          onClick={() => setNurtureSwitchLead(lead)}
+        >
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Switch to Nurture
+        </Button>
+      );
+    }
 
     switch (actionType) {
       case "reply":
@@ -376,6 +394,21 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
               onLeadUpdated?.();
             }
           }}
+        />
+      )}
+
+      {nurtureSwitchLead && (
+        <NurtureSwitchDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) {
+              setNurtureSwitchLead(null);
+              onLeadUpdated?.();
+            }
+          }}
+          leadId={nurtureSwitchLead.id}
+          leadName={nurtureSwitchLead.name}
+          onSuccess={onLeadUpdated}
         />
       )}
     </>

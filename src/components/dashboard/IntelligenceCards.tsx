@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { AlertTriangle, TrendingUp, TrendingDown, Percent, Minus } from "lucide-react";
+import { AlertTriangle, TrendingUp, TrendingDown, Percent, Minus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FilterType } from "./SummaryCards";
 
@@ -7,7 +7,9 @@ interface IntelligenceCardsProps {
   staleCount: number;
   momentum: number; // positive = net forward movement, negative = regression
   replyRate: number; // percentage 0-100
+  nurtureCandidateCount: number;
   onStaleClick?: () => void;
+  onNurtureClick?: () => void;
   activeFilter?: FilterType;
 }
 
@@ -15,7 +17,9 @@ export function IntelligenceCards({
   staleCount, 
   momentum, 
   replyRate,
+  nurtureCandidateCount,
   onStaleClick,
+  onNurtureClick,
   activeFilter,
 }: IntelligenceCardsProps) {
   const getMomentumDisplay = () => {
@@ -32,7 +36,7 @@ export function IntelligenceCards({
   const MomentumIcon = momentumDisplay.icon;
 
   return (
-    <div className="grid gap-3 grid-cols-3">
+    <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
       {/* Stale Leads */}
       <Card 
         className={cn(
@@ -100,6 +104,49 @@ export function IntelligenceCards({
               </div>
               <p className="text-xs text-muted-foreground truncate">
                 last 7 days
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Nurture Candidates */}
+      <Card 
+        className={cn(
+          "cursor-pointer transition-all duration-200 hover:shadow-md border-primary/20",
+          nurtureCandidateCount > 0 && "bg-primary/5",
+          activeFilter === "nurture_candidates" && "ring-2 ring-primary shadow-md"
+        )}
+        onClick={onNurtureClick}
+      >
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "p-1.5 rounded-md",
+              nurtureCandidateCount > 0 ? "bg-primary/10" : "bg-muted"
+            )}>
+              <RefreshCw className={cn(
+                "h-4 w-4",
+                nurtureCandidateCount > 0 ? "text-primary" : "text-muted-foreground"
+              )} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Nurture Ready
+              </p>
+              <div className="flex items-baseline gap-1.5">
+                <span className={cn(
+                  "text-lg font-bold tabular-nums",
+                  nurtureCandidateCount > 0 ? "text-primary" : "text-foreground"
+                )}>
+                  {nurtureCandidateCount}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {nurtureCandidateCount === 1 ? "lead" : "leads"}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground truncate">
+                switch to nurture
               </p>
             </div>
           </div>
