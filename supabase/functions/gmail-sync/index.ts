@@ -233,6 +233,19 @@ function getHeader(headers: Array<{ name: string; value: string }>, name: string
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
+function messageInvolvesLead(headers: Array<{ name: string; value: string }>, leadEmail: string): boolean {
+  const needle = leadEmail.trim().toLowerCase();
+  if (!needle) return false;
+
+  const from = (getHeader(headers, "From") || "").toLowerCase();
+  const to = (getHeader(headers, "To") || "").toLowerCase();
+  const cc = (getHeader(headers, "Cc") || "").toLowerCase();
+  const bcc = (getHeader(headers, "Bcc") || "").toLowerCase();
+  const all = `${from} ${to} ${cc} ${bcc}`;
+
+  return all.includes(needle);
+}
+
 // Convert HTML to readable plain text
 function htmlToPlainText(html: string): string {
   let text = html;
@@ -792,8 +805,9 @@ serve(async (req) => {
     }
 
     const { leadId, leadEmail, maxResults = 20 } = await req.json();
+    const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim() : "";
     
-    if (!leadId || !leadEmail) {
+    if (!leadId || !leadEmailNorm) {
       return new Response(JSON.stringify({ ok: false, error: "Missing leadId or leadEmail" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -842,7 +856,7 @@ serve(async (req) => {
     );
 
     // Search for emails from/to this lead
-    const query = `from:${leadEmail} OR to:${leadEmail}`;
+    const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
     const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
     
     const searchResponse = await fetch(searchUrl, {
@@ -861,7 +875,7 @@ serve(async (req) => {
     const searchData = await searchResponse.json();
     const messageIds = searchData.messages || [];
     
-    console.log(`[gmail-sync] Found ${messageIds.length} messages for ${leadEmail}`);
+    console.log(`[gmail-sync] Found ${messageIds.length} messages for ${leadEmailNorm}`);
 
     // Get existing Gmail message IDs for deduplication
     const { data: existingInteractions } = await supabase
@@ -899,6 +913,14 @@ serve(async (req) => {
         // Lock this thread to this lead
         lockedThreadIds.add(threadId);
         
+        // Safety check: never attach a message to a lead unless the headers actually include the lead email
+        if (!messageInvolvesLead(headers, leadEmailNorm)) {
+          console.warn(
+            `[gmail-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
+          );
+          continue;
+        }
+
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
         const subject = getHeader(headers, "Subject") || "(no subject)";
@@ -906,7 +928,7 @@ serve(async (req) => {
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
         // Determine direction based on whether from contains lead email
-        const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+        const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
         const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
         
@@ -964,13 +986,20 @@ serve(async (req) => {
           if (existingMessageIds.has(gmailMessageId)) continue;
 
           const headers = message.payload?.headers || [];
+          if (!messageInvolvesLead(headers, leadEmailNorm)) {
+            console.warn(
+              `[gmail-sync] Skipping thread message ${gmailMessageId} in thread ${threadId} (does not involve lead email ${leadEmailNorm})`
+            );
+            continue;
+          }
+
           const from = getHeader(headers, "From") || "";
           const to = getHeader(headers, "To") || "";
           const subject = getHeader(headers, "Subject") || "(no subject)";
           const date = getHeader(headers, "Date");
           const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-          const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+          const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
           const direction = isFromLead ? "inbound" : "outbound";
           const type = isFromLead ? "email_inbound" : "email_outbound";
           

@@ -40,6 +40,19 @@ function getHeader(headers: Array<{ name: string; value: string }>, name: string
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
+function messageInvolvesLead(headers: Array<{ name: string; value: string }>, leadEmail: string): boolean {
+  const needle = leadEmail.trim().toLowerCase();
+  if (!needle) return false;
+
+  const from = (getHeader(headers, "From") || "").toLowerCase();
+  const to = (getHeader(headers, "To") || "").toLowerCase();
+  const cc = (getHeader(headers, "Cc") || "").toLowerCase();
+  const bcc = (getHeader(headers, "Bcc") || "").toLowerCase();
+  const all = `${from} ${to} ${cc} ${bcc}`;
+
+  return all.includes(needle);
+}
+
 function getMessageBody(message: GmailMessage): string {
   if (message.payload.body?.data) {
     return decodeBase64Url(message.payload.body.data);
@@ -266,9 +279,14 @@ async function syncLeadEmails(
   maxResults: number
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
+  const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim() : "";
   const errors: string[] = [];
   let synced = 0;
   let hasClosingKeywords = false;
+
+  if (!leadEmailNorm) {
+    return { synced: 0, errors: ["Lead email is missing"], stage: currentStage };
+  }
 
   // Get existing thread IDs locked to this lead
   const { data: existingThreads } = await serviceSupabase
@@ -282,7 +300,7 @@ async function syncLeadEmails(
   );
 
   // Search for emails from/to this lead
-  const query = `from:${leadEmail} OR to:${leadEmail}`;
+  const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
   const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
   
   const searchResponse = await fetch(searchUrl, {
@@ -298,7 +316,7 @@ async function syncLeadEmails(
   const searchData = await searchResponse.json();
   const messageIds = searchData.messages || [];
   
-  console.log(`[gmail-bulk-sync] Found ${messageIds.length} messages for ${leadEmail}`);
+  console.log(`[gmail-bulk-sync] Found ${messageIds.length} messages for ${leadEmailNorm}`);
 
   // Get existing Gmail message IDs for deduplication
   const { data: existingInteractions } = await serviceSupabase
@@ -331,13 +349,20 @@ async function syncLeadEmails(
       
       lockedThreadIds.add(threadId);
       
+      if (!messageInvolvesLead(headers, leadEmailNorm)) {
+        console.warn(
+          `[gmail-bulk-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
+        );
+        continue;
+      }
+
       const from = getHeader(headers, "From") || "";
       const to = getHeader(headers, "To") || "";
       const subject = getHeader(headers, "Subject") || "(no subject)";
       const date = getHeader(headers, "Date");
       const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-      const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+      const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
       const direction = isFromLead ? "inbound" : "outbound";
       const type = isFromLead ? "email_inbound" : "email_outbound";
       
@@ -394,13 +419,20 @@ async function syncLeadEmails(
         if (existingMessageIds.has(gmailMessageId)) continue;
 
         const headers = message.payload?.headers || [];
+        if (!messageInvolvesLead(headers, leadEmailNorm)) {
+          console.warn(
+            `[gmail-bulk-sync] Skipping thread message ${gmailMessageId} in thread ${threadId} (does not involve lead email ${leadEmailNorm})`
+          );
+          continue;
+        }
+
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-        const isFromLead = from.toLowerCase().includes(leadEmail.toLowerCase());
+        const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
         const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
         
