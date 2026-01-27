@@ -1,229 +1,170 @@
 
-# Auto-Nurture Mode & Re-engagement Recommendations
+# Fix: Dismissed Actions Reappearing After Refresh
 
-## Overview
-This plan connects the lead stages and cadence logic to enable automatic mode switching (fast → nurture) when prospects don't respond, and surfaces intelligent recommendations for re-engagement through nurture campaigns.
+## Problem Summary
+When a user dismisses an action (e.g., "Already handled") in the Action Required panel, the lead is removed from the queue temporarily, but reappears after a page refresh.
+
+## Root Cause Analysis
+The issue stems from the `gmail-sync` Edge Function unconditionally overwriting the `needs_action` field:
+
+1. **Dismiss flow (works correctly):** When clicking "Already handled", `dismissLeadAction()` sets:
+   - `needs_action: false`
+   - `next_action_key: null`
+   - `action_reason_code: "already_handled"`
+
+2. **Sync flow (overwrites dismissal):** When `gmail-sync` runs (on page load, auto-sync, or manual sync), it:
+   - Recalculates `deriveAction()` based on interaction metrics
+   - Blindly updates the lead with computed values (`needs_action: true`, new `action_reason_code`)
+   - **Does NOT check if the action was manually dismissed**
+
+This means the backend has no "memory" that the user already handled this specific action.
+
+## Solution
+Add an `action_dismissed_at` timestamp field to track when an action was dismissed, and modify the `gmail-sync` function to respect this dismissal until a new interaction invalidates it.
+
+### Logic
+- When user dismisses: Set `action_dismissed_at = now()`
+- When sync runs: Check if `action_dismissed_at > last_outbound_at` (or any relevant interaction timestamp)
+  - If true, the dismissal is still valid - don't suggest this action again
+  - If false (new email sent/received since dismissal), reset and recalculate
 
 ---
 
-## 1. Database Schema Updates
+## Implementation Plan
 
-### 1.1 Add Nurture Tracking Fields to Leads
-Add new columns to support nurture mode tracking:
+### Phase 1: Database Schema Update
+Add a new column to track when an action was dismissed:
 
 ```sql
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS nurture_cadence TEXT CHECK (nurture_cadence IN ('weekly', 'biweekly', 'monthly'));
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS mode_changed_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS auto_nurture_eligible BOOLEAN DEFAULT false;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS action_dismissed_at TIMESTAMP WITH TIME ZONE;
 ```
 
-- `nurture_cadence`: The selected cadence when in nurture mode (weekly/biweekly/monthly)
-- `mode_changed_at`: Timestamp when strategy was last changed (for analytics)
-- `auto_nurture_eligible`: Flag set when lead meets criteria for auto-switch
+### Phase 2: Update Dismiss Function
+**File:** `src/lib/supabaseQueries.ts`
 
----
+Update `dismissLeadAction` to also set the `action_dismissed_at` timestamp:
 
-## 2. Enhanced Mode Switching Logic
-
-### 2.1 Update gmail-sync deriveAction
-**File:** `supabase/functions/gmail-sync/index.ts`
-
-Add new logic after breakup detection to suggest mode switching:
-
-```text
-BEFORE breakup email suggestion:
-  - If lead is in "fast" mode AND
-  - No reply after X follow-ups (e.g., 3+ outbound emails) AND
-  - No inbound ever recorded AND
-  - Days since first outbound > breakup trigger
-  → Set auto_nurture_eligible = true
-  → Suggest action: "Switch to nurture mode"
-  → Return action_reason_code: "NURTURE_SWITCH_RECOMMENDED"
-```
-
-### 2.2 New Action Reason Code
-**File:** `src/lib/cadenceSettingsTypes.ts`
-
-Add new reason codes:
-- `NURTURE_SWITCH_RECOMMENDED` - Suggest switching from fast to nurture
-- `NURTURE_CAMPAIGN_START` - Suggest starting a nurture campaign
-
----
-
-## 3. Dashboard Intelligence Enhancements
-
-### 3.1 New "Nurture Candidates" Intelligence Widget
-**File:** `src/components/dashboard/IntelligenceCards.tsx`
-
-Add a fourth intelligence card showing leads recommended for nurture:
-- Count of leads with `auto_nurture_eligible = true`
-- Clickable to filter the lead table
-
-### 3.2 Update Dashboard Stats Calculation
-**File:** `src/lib/dashboardUtils.ts`
-
-Add new function:
 ```typescript
-function getNurtureCandidates(leads: EnrichedLead[]): EnrichedLead[] {
-  // Leads that:
-  // - Are in "fast" strategy
-  // - Have sent 3+ outbound emails
-  // - Have no inbound replies
-  // - Are not in closing/closed stages
+export async function dismissLeadAction(leadId: string, reasonCode?: string): Promise<void> {
+  const { error } = await supabase
+    .from('leads')
+    .update({
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      action_reason_code: reasonCode || null,
+      action_dismissed_at: new Date().toISOString(), // NEW
+      last_activity_at: new Date().toISOString(),
+    })
+    .eq('id', leadId);
+  if (error) throw error;
 }
 ```
 
-### 3.3 Enhanced AI Recommendation
-**File:** `src/components/dashboard/AIRecommendation.tsx`
-
-Update to include nurture-specific recommendations:
-- "Consider moving [Lead] to nurture mode - no response after 4 emails"
-- "[Lead] is ready for re-engagement after 45 days"
-- "Start a monthly nurture campaign for [Lead] with industry insights"
-
----
-
-## 4. Nurture Mode Switch UI
-
-### 4.1 Quick Action: Switch to Nurture
-**File:** `src/components/dashboard/ActionRequiredPanel.tsx`
-
-When `action_reason_code === "NURTURE_SWITCH_RECOMMENDED"`:
-- Show special action card with nurture icon
-- Primary button: "Switch to Nurture"
-- On click: Open dialog to select cadence (weekly/biweekly/monthly)
-
-### 4.2 Nurture Cadence Selection Dialog
-**File:** `src/components/dashboard/NurtureSwitchDialog.tsx` (new)
-
-Modal dialog with:
-- Explanation of nurture mode benefits
-- Radio buttons for cadence selection (weekly, biweekly, monthly)
-- Optional: Theme selection (industry updates, product tips, case studies)
-- Confirm button that updates lead strategy and nurture_cadence
-
-### 4.3 Lead Table Quick Switch
-**File:** `src/components/dashboard/LeadTable.tsx`
-
-Add inline strategy switching:
-- Display current strategy badge (Fast/Nurture) in a new column
-- Click to toggle or open cadence selector
-- Show nurture cadence indicator if set
-
----
-
-## 5. Re-engagement Recommendations
-
-### 5.1 Update deriveAction for Better Re-engagement
+### Phase 3: Update gmail-sync to Respect Dismissals
 **File:** `supabase/functions/gmail-sync/index.ts`
 
-Enhance re-engagement logic:
-- When suggesting "Re-engage cold lead", include context in action_instructions
-- Provide suggested themes based on last interaction type
-- Consider time of year for relevant hooks
+1. **Fetch current lead state** including `action_dismissed_at` before computing new action
+2. **Add dismissal check** in the `deriveAction` function or before updating the lead:
+   - If `action_dismissed_at` exists and is more recent than the latest interaction, skip overwriting
+   - If a new interaction occurred after dismissal, clear `action_dismissed_at` and recalculate
 
-### 5.2 Re-engagement Templates
-**File:** `src/prompts/emailPrompts.ts`
+Modified logic at lead update section (around line 1148):
 
-Add new prompt for re-engagement emails:
 ```typescript
-export const REENGAGE_EMAIL_PROMPT = `Write a re-engagement email for a lead who hasn't responded in ${DAYS} days.
+// Fetch current lead state to check for dismissal
+const { data: currentLead } = await serviceSupabase
+  .from("leads")
+  .select("action_dismissed_at")
+  .eq("id", leadId)
+  .single();
 
-Context: Last interaction was about ${LAST_TOPIC}.
-Strategy: Provide value first, then soft CTA.
+// Check if dismissal should be respected
+const dismissedAt = currentLead?.action_dismissed_at 
+  ? new Date(currentLead.action_dismissed_at).getTime() 
+  : 0;
+const lastInteractionTime = Math.max(
+  metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0,
+  metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0
+);
 
-Suggested hooks:
-- Industry news/update relevant to their business
-- New feature or capability announcement
-- Case study from similar company
-- Seasonal/quarterly check-in
-`;
+let finalAction = actionResult;
+
+// If dismissed after last interaction, respect the dismissal
+if (dismissedAt > 0 && dismissedAt > lastInteractionTime) {
+  console.log(`[gmail-sync] Lead ${leadId}: Respecting manual dismissal from ${currentLead.action_dismissed_at}`);
+  finalAction = {
+    needs_action: false,
+    next_action_key: null,
+    next_action_label: null,
+    eligible_at: null,
+    action_reason_code: null, // Keep existing reason code
+  };
+}
+
+// If new interaction occurred after dismissal, clear the dismissal flag
+const shouldClearDismissal = dismissedAt > 0 && lastInteractionTime > dismissedAt;
+
+const leadUpdate = {
+  stage,
+  needs_action: finalAction.needs_action,
+  next_action_key: finalAction.next_action_key,
+  next_action_label: finalAction.next_action_label,
+  eligible_at: finalAction.eligible_at,
+  action_reason_code: finalAction.action_reason_code,
+  // Clear dismissal if new interaction occurred
+  action_dismissed_at: shouldClearDismissal ? null : undefined,
+  // ... rest of metrics
+};
 ```
 
----
-
-## 6. Cadence-Based Reminders
-
-### 6.1 Nurture Due Calculation Enhancement
+### Phase 4: Update LeadUpdate Interface
 **File:** `supabase/functions/gmail-sync/index.ts`
 
-Update nurture campaign logic to work without requiring prior `nurture_outbound_count`:
-- If lead is in nurture mode with cadence set, calculate next touch date
-- If never sent nurture email, suggest first nurture touch after min_days_after_last_touch
+Add `action_dismissed_at` to the `LeadUpdate` interface:
 
-### 6.2 Dashboard Reminder Integration
-The existing `needs_action` + `eligible_at` system will surface nurture reminders automatically once the backend is updated.
-
----
-
-## 7. Settings: Auto-Nurture Rules
-
-### 7.1 New Signals Configuration UI
-**File:** `src/components/settings/CadenceSettingsCard.tsx`
-
-Add a new "Auto-Nurture Rules" section:
-- Toggle: "Suggest nurture mode when no reply after X follow-ups"
-- Input: Number of follow-ups before suggestion (default: 3)
-- Toggle: "Automatically switch to nurture after breakup email"
-- Dropdown: Default nurture cadence for auto-switches
-
-### 7.2 Update cadence_settings Schema
-**File:** `src/lib/cadenceSettingsTypes.ts`
-
-Add to `Signals` interface:
 ```typescript
-auto_nurture: {
-  enabled: boolean;
-  after_followup_count: number;
-  auto_switch_after_breakup: boolean;
-  default_cadence: "weekly" | "biweekly" | "monthly";
+interface LeadUpdate {
+  // ... existing fields
+  action_dismissed_at?: string | null;
 }
 ```
 
 ---
 
-## Implementation Order
+## Technical Details
 
-### Phase 1: Database & Backend
-1. Add new columns to leads table (nurture_cadence, mode_changed_at, auto_nurture_eligible)
-2. Update deriveAction to set auto_nurture_eligible flag
-3. Add NURTURE_SWITCH_RECOMMENDED action reason code
+### Dismissal Validity Rules
+The dismissal remains valid until:
+1. A new outbound email is sent by the user
+2. A new inbound email is received from the lead
+3. A new meeting summary is processed
 
-### Phase 2: Dashboard UI
-4. Add "Nurture Candidates" to IntelligenceCards
-5. Create NurtureSwitchDialog component
-6. Update ActionRequiredPanel to handle nurture switch actions
-7. Add strategy column with inline switching to LeadTable
+Once any of these occur, the system recalculates the action as normal.
 
-### Phase 3: Recommendations
-8. Enhance AIRecommendation with nurture-specific suggestions
-9. Add re-engagement email prompts
-10. Update deriveAction re-engagement logic
-
-### Phase 4: Settings
-11. Add auto-nurture configuration to CadenceSettingsCard
-12. Update cadence_settings schema with auto_nurture section
+### Edge Cases Handled
+- **User dismisses, then sends email:** Dismissal cleared, new action calculated
+- **User dismisses, lead replies:** Dismissal cleared, "Reply to customer" action shown
+- **User dismisses, no new activity:** Dismissal respected indefinitely
+- **Multiple syncs in a row:** Dismissal persists across all syncs until new interaction
 
 ---
 
-## Expected Behavior After Implementation
+## Files to Modify
 
-1. **Lead with no response after 3 follow-ups:**
-   - Action Required panel shows "Switch to Nurture Mode" with special styling
-   - Clicking opens cadence selection dialog
-   - After selection, lead's strategy changes to "nurture" with the chosen cadence
+| File | Change |
+|------|--------|
+| Database migration | Add `action_dismissed_at` column |
+| `src/lib/supabaseQueries.ts` | Update `dismissLeadAction` to set timestamp |
+| `supabase/functions/gmail-sync/index.ts` | Add dismissal check before lead update |
 
-2. **Lead in nurture mode:**
-   - Dashboard shows when next nurture email is due based on cadence
-   - AI recommendations suggest relevant nurture themes
-   - Lead table shows "Nurture (Monthly)" badge
+---
 
-3. **Cold lead (45+ days):**
-   - Re-engagement action appears in Action Required panel
-   - Email composer pre-loads re-engagement template
-   - Includes suggested hooks based on last interaction
+## Expected Behavior After Fix
 
-4. **Dashboard intelligence:**
-   - New "Nurture Candidates" card shows count of leads to consider
-   - Stale leads and nurture candidates may overlap but serve different purposes
-   - AI recommendations prioritize time-sensitive nurture actions
+1. User clicks "Already handled" on a lead action
+2. Lead is removed from Action Required panel
+3. Page refresh: Lead stays removed (dismissal respected)
+4. Gmail sync runs: Lead stays removed (dismissal timestamp checked)
+5. User sends new email to lead: Dismissal cleared, new action may appear
+6. Lead replies: Dismissal cleared, "Reply to customer" action appears
