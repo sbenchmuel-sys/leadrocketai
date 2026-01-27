@@ -9,9 +9,13 @@ import {
   DealStage,
   STAGE_ORDER,
   getAIRecommendation,
+  getStaleLeads,
+  calculateMomentum,
+  calculateReplyRate,
 } from "@/lib/dashboardUtils";
 import { SummaryCards, FilterType } from "@/components/dashboard/SummaryCards";
 import { DealFlowBar } from "@/components/dashboard/DealFlowBar";
+import { IntelligenceCards } from "@/components/dashboard/IntelligenceCards";
 import { ActionRequiredPanel } from "@/components/dashboard/ActionRequiredPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
@@ -37,7 +41,7 @@ export default function Dashboard() {
           id, company, name, email, strategy, status, owner_user_id, 
           created_at, last_activity_at, next_step, deal_outlook, country,
           stage, needs_action, next_action_key, next_action_label, meeting_summary_count,
-          last_outbound_at
+          last_outbound_at, last_inbound_at, first_outbound_at
         `)
         .order("last_activity_at", { ascending: false })
         .limit(200);
@@ -70,6 +74,14 @@ export default function Dashboard() {
     return { total, active, needsAction, meetings };
   }, [leads]);
 
+  // Calculate intelligence metrics
+  const intelligenceMetrics = useMemo(() => {
+    const staleLeads = getStaleLeads(leads);
+    const momentum = calculateMomentum(leads);
+    const replyRate = calculateReplyRate(leads);
+    return { staleCount: staleLeads.length, staleLeads, momentum, replyRate };
+  }, [leads]);
+
   // Calculate stage counts
   const stageCounts = useMemo(() => {
     const counts: Record<DealStage, number> = {
@@ -100,6 +112,8 @@ export default function Dashboard() {
       result = result.filter((l) => l.needs_action);
     } else if (activeFilter === "meetings") {
       result = result.filter((l) => l.hasMeeting);
+    } else if (activeFilter === "stale") {
+      result = intelligenceMetrics.staleLeads;
     }
 
     // Apply stage filter
@@ -108,7 +122,7 @@ export default function Dashboard() {
     }
 
     return result;
-  }, [leads, activeFilter, activeStage]);
+  }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads]);
 
   // AI recommendations
   const recommendations = useMemo(() => {
@@ -122,6 +136,11 @@ export default function Dashboard() {
 
   const handleStageClick = (stage: DealStage | null) => {
     setActiveStage(stage);
+  };
+
+  const handleStaleClick = () => {
+    setActiveFilter(activeFilter === "stale" ? "all" : "stale");
+    setActiveStage(null);
   };
 
   return (
@@ -149,6 +168,15 @@ export default function Dashboard() {
         activeFilter={activeFilter}
         onFilterChange={handleFilterChange}
         isLoading={isLoading}
+      />
+
+      {/* Intelligence Cards */}
+      <IntelligenceCards
+        staleCount={intelligenceMetrics.staleCount}
+        momentum={intelligenceMetrics.momentum}
+        replyRate={intelligenceMetrics.replyRate}
+        onStaleClick={handleStaleClick}
+        activeFilter={activeFilter}
       />
 
       {/* Deal Flow Bar */}
