@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Table,
@@ -12,11 +12,23 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles } from "lucide-react";
-import { EnrichedLead, STAGE_LABELS, DealStage, getActionType } from "@/lib/dashboardUtils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2 } from "lucide-react";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
+import { LeadAvatar } from "./LeadAvatar";
+import { updateLeadStage, bulkUpdateLeadStage } from "@/lib/supabaseQueries";
 import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 // Format last email date with color coding
 function formatLastEmail(dateStr: string | null): { text: string; className: string } {
@@ -38,7 +50,7 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
   
   // Color coding: green for recent (< 24h), muted for older
   const className = hoursAgo < 24 
-    ? "text-green-600 dark:text-green-400 font-medium" 
+    ? "text-success font-medium" 
     : "text-muted-foreground";
   
   return { text, className };
@@ -51,14 +63,16 @@ interface LeadTableProps {
 }
 
 const stageBadgeVariants: Record<DealStage, string> = {
-  new: "bg-secondary text-secondary-foreground",
-  contacted: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300",
-  engaged: "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300",
-  post_meeting: "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300",
-  closing: "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300",
-  closed_won: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300",
-  closed_lost: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300",
+  new: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+  contacted: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 hover:bg-blue-200",
+  engaged: "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 hover:bg-green-200",
+  post_meeting: "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300 hover:bg-purple-200",
+  closing: "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 hover:bg-orange-200",
+  closed_won: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 hover:bg-emerald-200",
+  closed_lost: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300 hover:bg-red-200",
 };
+
+const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
 export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
@@ -66,7 +80,62 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [currentInstructions, setCurrentInstructions] = useState("");
   const [instructionsPopover, setInstructionsPopover] = useState<string | null>(null);
   const [tempInstructions, setTempInstructions] = useState("");
+  const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
+  const [updatingStage, setUpdatingStage] = useState<string | null>(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
   const navigate = useNavigate();
+
+  const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
+  const someSelected = selectedLeads.size > 0 && selectedLeads.size < leads.length;
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedLeads(new Set(leads.map(l => l.id)));
+    } else {
+      setSelectedLeads(new Set());
+    }
+  };
+
+  const handleSelectLead = (leadId: string, checked: boolean) => {
+    const newSelected = new Set(selectedLeads);
+    if (checked) {
+      newSelected.add(leadId);
+    } else {
+      newSelected.delete(leadId);
+    }
+    setSelectedLeads(newSelected);
+  };
+
+  const handleStageChange = async (leadId: string, newStage: DealStage) => {
+    setUpdatingStage(leadId);
+    try {
+      await updateLeadStage(leadId, newStage);
+      toast.success(`Stage updated to ${STAGE_LABELS[newStage]}`);
+      onLeadUpdated?.();
+    } catch (err) {
+      console.error("Failed to update stage:", err);
+      toast.error("Failed to update stage");
+    } finally {
+      setUpdatingStage(null);
+    }
+  };
+
+  const handleBulkStageChange = async (newStage: DealStage) => {
+    if (selectedLeads.size === 0) return;
+    
+    setBulkUpdating(true);
+    try {
+      await bulkUpdateLeadStage(Array.from(selectedLeads), newStage);
+      toast.success(`Updated ${selectedLeads.size} leads to ${STAGE_LABELS[newStage]}`);
+      setSelectedLeads(new Set());
+      onLeadUpdated?.();
+    } catch (err) {
+      console.error("Failed to bulk update stages:", err);
+      toast.error("Failed to update stages");
+    } finally {
+      setBulkUpdating(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -119,74 +188,71 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     handleOpenEmailDialog(lead, tempInstructions);
   };
 
-  const getActionButton = (lead: EnrichedLead) => {
-    const basePath = `/dashboard/leads/${lead.id}`;
-    const actionType = getActionType(lead.next_action_key);
-
-    // Email compose button - always available
-    const EmailComposeButton = () => (
-      <Popover 
-        open={instructionsPopover === `compose-${lead.id}`} 
-        onOpenChange={(open) => !open && setInstructionsPopover(null)}
-      >
-        <PopoverTrigger asChild>
-          <Button 
-            size="sm" 
-            variant="ghost" 
-            onClick={(e) => {
-              e.stopPropagation();
-              setTempInstructions("");
-              setInstructionsPopover(`compose-${lead.id}`);
-            }}
-          >
-            <Mail className="h-4 w-4" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-80" align="end">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Lightbulb className="h-4 w-4 text-amber-500" />
-              <span className="text-sm font-medium">Add instructions (optional)</span>
-            </div>
-            <Input
-              value={tempInstructions}
-              onChange={(e) => setTempInstructions(e.target.value)}
-              placeholder="e.g., Follow up on pricing discussion..."
-              className="text-sm"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  confirmInstructions(lead);
-                }
-              }}
-            />
-            <div className="flex justify-end gap-2">
-              <Button 
-                size="sm" 
-                variant="ghost" 
-                onClick={() => setInstructionsPopover(null)}
-              >
-                Cancel
-              </Button>
-              <Button 
-                size="sm" 
-                onClick={() => confirmInstructions(lead)}
-              >
-                Compose Email
-              </Button>
-            </div>
+  const renderEmailComposeButton = (lead: EnrichedLead) => (
+    <Popover 
+      open={instructionsPopover === `compose-${lead.id}`} 
+      onOpenChange={(open) => !open && setInstructionsPopover(null)}
+    >
+      <PopoverTrigger asChild>
+        <Button 
+          size="sm" 
+          variant="ghost" 
+          onClick={(e) => {
+            e.stopPropagation();
+            setTempInstructions("");
+            setInstructionsPopover(`compose-${lead.id}`);
+          }}
+        >
+          <Mail className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" align="end">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Lightbulb className="h-4 w-4 text-warning" />
+            <span className="text-sm font-medium">Add instructions (optional)</span>
           </div>
-        </PopoverContent>
-      </Popover>
-    );
+          <Input
+            value={tempInstructions}
+            onChange={(e) => setTempInstructions(e.target.value)}
+            placeholder="e.g., Follow up on pricing discussion..."
+            className="text-sm"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                confirmInstructions(lead);
+              }
+            }}
+          />
+          <div className="flex justify-end gap-2">
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              onClick={() => setInstructionsPopover(null)}
+            >
+              Cancel
+            </Button>
+            <Button 
+              size="sm" 
+              onClick={() => confirmInstructions(lead)}
+            >
+              Compose Email
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 
-    // View button - always available
-    const ViewButton = () => (
-      <Button size="sm" variant="ghost" asChild>
-        <Link to={basePath}>
-          <Eye className="h-4 w-4" />
-        </Link>
-      </Button>
-    );
+  const renderViewButton = (lead: EnrichedLead) => (
+    <Button size="sm" variant="ghost" asChild>
+      <Link to={`/dashboard/leads/${lead.id}`}>
+        <Eye className="h-4 w-4" />
+      </Link>
+    </Button>
+  );
+
+  const getActionButton = (lead: EnrichedLead) => {
+    const actionType = getActionType(lead.next_action_key);
 
     // New leads without action get Smart Intro button
     if (lead.stage === "new" && !lead.needs_action) {
@@ -209,7 +275,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
             <PopoverContent className="w-80" align="end">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-amber-500" />
+                  <Lightbulb className="h-4 w-4 text-warning" />
                   <span className="text-sm font-medium">Add instructions (optional)</span>
                 </div>
                 <Input
@@ -241,8 +307,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </div>
             </PopoverContent>
           </Popover>
-          <EmailComposeButton />
-          <ViewButton />
+          {renderEmailComposeButton(lead)}
+          {renderViewButton(lead)}
         </div>
       );
     }
@@ -274,7 +340,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
             <PopoverContent className="w-80" align="end">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-amber-500" />
+                  <Lightbulb className="h-4 w-4 text-warning" />
                   <span className="text-sm font-medium">Add instructions (optional)</span>
                 </div>
                 <Input
@@ -306,8 +372,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </div>
             </PopoverContent>
           </Popover>
-          <EmailComposeButton />
-          <ViewButton />
+          {renderEmailComposeButton(lead)}
+          {renderViewButton(lead)}
         </div>
       );
     }
@@ -315,8 +381,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     // Default: just email compose + view
     return (
       <div className="flex items-center gap-1">
-        <EmailComposeButton />
-        <ViewButton />
+        {renderEmailComposeButton(lead)}
+        {renderViewButton(lead)}
       </div>
     );
   };
@@ -325,12 +391,45 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Leads</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>Leads</CardTitle>
+            {selectedLeads.size > 0 && (
+              <div className="flex items-center gap-2 animate-fade-in">
+                <span className="text-sm text-muted-foreground">
+                  {selectedLeads.size} selected
+                </span>
+                <Select
+                  onValueChange={(value) => handleBulkStageChange(value as DealStage)}
+                  disabled={bulkUpdating}
+                >
+                  <SelectTrigger className="w-[160px] h-8">
+                    <SelectValue placeholder="Move to stage..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ALL_STAGES.map((stage) => (
+                      <SelectItem key={stage} value={stage}>
+                        {STAGE_LABELS[stage]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {bulkUpdating && <Loader2 className="h-4 w-4 animate-spin" />}
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={handleSelectAll}
+                    aria-label="Select all"
+                    className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
+                  />
+                </TableHead>
                 <TableHead>Lead</TableHead>
                 <TableHead>Stage</TableHead>
                 <TableHead className="hidden md:table-cell">Last Email</TableHead>
@@ -339,41 +438,85 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.map((lead) => {
+              {leads.map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_outbound_at);
+                const isSelected = selectedLeads.has(lead.id);
+                const isUpdatingThis = updatingStage === lead.id;
+                
                 return (
-                <TableRow
-                  key={lead.id}
-                  className="cursor-pointer"
-                  onClick={(e) => {
-                    if ((e.target as HTMLElement).closest("button, a, [role='dialog']")) return;
-                    navigate(`/dashboard/leads/${lead.id}`);
-                  }}
-                >
-                  <TableCell>
-                    <div>
-                      <p className="font-medium text-foreground">{lead.name}</p>
-                      <p className="text-sm text-muted-foreground">{lead.company}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={stageBadgeVariants[lead.stage]}>
-                      {STAGE_LABELS[lead.stage]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <span className={`text-sm ${lastEmail.className}`}>
-                      {lastEmail.text}
-                    </span>
-                  </TableCell>
-                  <TableCell className="hidden lg:table-cell">
-                    <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                      {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-right">{getActionButton(lead)}</TableCell>
-                </TableRow>
-              );
+                  <TableRow
+                    key={lead.id}
+                    className={cn(
+                      "cursor-pointer transition-colors group",
+                      isSelected && "bg-muted/50",
+                      index % 2 === 1 && !isSelected && "bg-muted/20"
+                    )}
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest("button, a, [role='dialog'], input, [role='combobox']")) return;
+                      navigate(`/dashboard/leads/${lead.id}`);
+                    }}
+                  >
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
+                        aria-label={`Select ${lead.name}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <LeadAvatar 
+                          name={lead.name} 
+                          company={lead.company} 
+                          leadId={lead.id}
+                          size="sm"
+                        />
+                        <div>
+                          <p className="font-medium text-foreground">{lead.name}</p>
+                          <p className="text-sm text-muted-foreground">{lead.company}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Select
+                        value={lead.stage}
+                        onValueChange={(value) => handleStageChange(lead.id, value as DealStage)}
+                        disabled={isUpdatingThis}
+                      >
+                        <SelectTrigger 
+                          className={cn(
+                            "w-[130px] h-7 border-0 font-medium text-xs",
+                            stageBadgeVariants[lead.stage]
+                          )}
+                        >
+                          {isUpdatingThis ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <SelectValue />
+                          )}
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ALL_STAGES.map((stage) => (
+                            <SelectItem key={stage} value={stage}>
+                              {STAGE_LABELS[stage]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      <span className={`text-sm ${lastEmail.className}`}>
+                        {lastEmail.text}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                        {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-right">{getActionButton(lead)}</TableCell>
+                  </TableRow>
+                );
               })}
             </TableBody>
           </Table>

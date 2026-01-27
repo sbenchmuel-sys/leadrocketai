@@ -840,7 +840,7 @@ export async function getLeadEmailThread(
 // LEAD ACTION MANAGEMENT
 // ============================================
 
-export async function dismissLeadAction(leadId: string): Promise<void> {
+export async function dismissLeadAction(leadId: string, reasonCode?: string): Promise<void> {
   if (!leadId) throw new Error('Missing leadId');
 
   const { error } = await supabase
@@ -849,9 +849,69 @@ export async function dismissLeadAction(leadId: string): Promise<void> {
       needs_action: false,
       next_action_key: null,
       next_action_label: null,
+      action_reason_code: reasonCode || null,
       last_activity_at: new Date().toISOString(),
     })
     .eq('id', leadId);
+
+  if (error) throw error;
+}
+
+// ============================================
+// INLINE EMAIL PREVIEW
+// ============================================
+
+export interface EmailPreviewSnippet {
+  body_text: string;
+  from_email: string | null;
+  occurred_at: string;
+  subject: string | null;
+}
+
+export async function getLatestInboundEmail(leadId: string): Promise<EmailPreviewSnippet | null> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { data, error } = await supabase
+    .from('interactions')
+    .select('body_text, from_email, occurred_at, subject')
+    .eq('lead_id', leadId)
+    .eq('type', 'email_inbound')
+    .order('occurred_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+// ============================================
+// STAGE UPDATES
+// ============================================
+
+export async function updateLeadStage(leadId: string, stage: string): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  const { error } = await supabase
+    .from('leads')
+    .update({
+      stage,
+      last_activity_at: new Date().toISOString(),
+    })
+    .eq('id', leadId);
+
+  if (error) throw error;
+}
+
+export async function bulkUpdateLeadStage(leadIds: string[], stage: string): Promise<void> {
+  if (!leadIds.length) throw new Error('No leads to update');
+
+  const { error } = await supabase
+    .from('leads')
+    .update({
+      stage,
+      last_activity_at: new Date().toISOString(),
+    })
+    .in('id', leadIds);
 
   if (error) throw error;
 }
