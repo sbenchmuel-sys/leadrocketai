@@ -21,14 +21,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2 } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
+import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
 import { updateLeadStage, bulkUpdateLeadStage } from "@/lib/supabaseQueries";
 import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 
 // Format last email date with color coding
 function formatLastEmail(dateStr: string | null): { text: string; className: string } {
@@ -77,11 +79,13 @@ const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [currentInstructions, setCurrentInstructions] = useState("");
   const [instructionsPopover, setInstructionsPopover] = useState<string | null>(null);
   const [tempInstructions, setTempInstructions] = useState("");
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [updatingStage, setUpdatingStage] = useState<string | null>(null);
+  const [updatingStrategy, setUpdatingStrategy] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const navigate = useNavigate();
 
@@ -134,6 +138,39 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
       toast.error("Failed to update stages");
     } finally {
       setBulkUpdating(false);
+    }
+  };
+
+  const handleStrategyToggle = async (lead: EnrichedLead) => {
+    const currentStrategy = (lead as any).strategy || "fast";
+    
+    // If switching TO nurture, open the dialog
+    if (currentStrategy === "fast") {
+      setNurtureSwitchLead(lead);
+      return;
+    }
+    
+    // If switching FROM nurture to fast
+    setUpdatingStrategy(lead.id);
+    try {
+      const { error } = await supabase
+        .from("leads")
+        .update({
+          strategy: "fast",
+          nurture_cadence: null,
+          mode_changed_at: new Date().toISOString(),
+        })
+        .eq("id", lead.id);
+
+      if (error) throw error;
+
+      toast.success(`Switched ${lead.name} to fast mode`);
+      onLeadUpdated?.();
+    } catch (err) {
+      console.error("Failed to switch strategy:", err);
+      toast.error("Failed to switch strategy");
+    } finally {
+      setUpdatingStrategy(null);
     }
   };
 
@@ -432,6 +469,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 </TableHead>
                 <TableHead>Lead</TableHead>
                 <TableHead>Stage</TableHead>
+                <TableHead className="hidden sm:table-cell">Mode</TableHead>
                 <TableHead className="hidden md:table-cell">Last Email</TableHead>
                 <TableHead className="hidden lg:table-cell">Next Action</TableHead>
                 <TableHead className="text-right">Action</TableHead>
@@ -442,6 +480,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 const lastEmail = formatLastEmail(lead.last_outbound_at);
                 const isSelected = selectedLeads.has(lead.id);
                 const isUpdatingThis = updatingStage === lead.id;
+                const isUpdatingStrategyThis = updatingStrategy === lead.id;
+                const strategy = (lead as any).strategy || "fast";
+                const nurtureCadence = (lead as any).nurture_cadence;
                 
                 return (
                   <TableRow
@@ -504,6 +545,34 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                         </SelectContent>
                       </Select>
                     </TableCell>
+                    <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "h-7 px-2 text-xs font-medium gap-1",
+                          strategy === "fast" 
+                            ? "text-info hover:bg-info/10" 
+                            : "text-primary hover:bg-primary/10"
+                        )}
+                        onClick={() => handleStrategyToggle(lead)}
+                        disabled={isUpdatingStrategyThis}
+                      >
+                        {isUpdatingStrategyThis ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : strategy === "fast" ? (
+                          <>
+                            <Zap className="h-3 w-3" />
+                            Fast
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-3 w-3" />
+                            {nurtureCadence ? nurtureCadence.charAt(0).toUpperCase() + nurtureCadence.slice(1) : "Nurture"}
+                          </>
+                        )}
+                      </Button>
+                    </TableCell>
                     <TableCell className="hidden md:table-cell">
                       <span className={`text-sm ${lastEmail.className}`}>
                         {lastEmail.text}
@@ -536,6 +605,21 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               onLeadUpdated?.();
             }
           }}
+        />
+      )}
+
+      {nurtureSwitchLead && (
+        <NurtureSwitchDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) {
+              setNurtureSwitchLead(null);
+              onLeadUpdated?.();
+            }
+          }}
+          leadId={nurtureSwitchLead.id}
+          leadName={nurtureSwitchLead.name}
+          onSuccess={onLeadUpdated}
         />
       )}
     </>

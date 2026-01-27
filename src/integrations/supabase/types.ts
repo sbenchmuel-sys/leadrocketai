@@ -225,6 +225,7 @@ export type Database = {
         Row: {
           action_instructions: string | null
           action_reason_code: string | null
+          auto_nurture_eligible: boolean | null
           company: string
           country: string | null
           created_at: string
@@ -246,12 +247,14 @@ export type Database = {
           meeting_link: string | null
           meeting_summary_count: number
           milestones_json: Json | null
+          mode_changed_at: string | null
           name: string
           needs_action: boolean
           next_action_key: string | null
           next_action_label: string | null
           next_step: string | null
           next_step_reason: string | null
+          nurture_cadence: string | null
           nurture_outbound_count: number
           owner_user_id: string
           personal_notes: string | null
@@ -266,6 +269,7 @@ export type Database = {
         Insert: {
           action_instructions?: string | null
           action_reason_code?: string | null
+          auto_nurture_eligible?: boolean | null
           company: string
           country?: string | null
           created_at?: string
@@ -287,12 +291,14 @@ export type Database = {
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
+          mode_changed_at?: string | null
           name: string
           needs_action?: boolean
           next_action_key?: string | null
           next_action_label?: string | null
           next_step?: string | null
           next_step_reason?: string | null
+          nurture_cadence?: string | null
           nurture_outbound_count?: number
           owner_user_id: string
           personal_notes?: string | null
@@ -307,6 +313,7 @@ export type Database = {
         Update: {
           action_instructions?: string | null
           action_reason_code?: string | null
+          auto_nurture_eligible?: boolean | null
           company?: string
           country?: string | null
           created_at?: string
@@ -328,12 +335,14 @@ export type Database = {
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
+          mode_changed_at?: string | null
           name?: string
           needs_action?: boolean
           next_action_key?: string | null
           next_action_label?: string | null
           next_step?: string | null
           next_step_reason?: string | null
+          nurture_cadence?: string | null
           nurture_outbound_count?: number
           owner_user_id?: string
           personal_notes?: string | null

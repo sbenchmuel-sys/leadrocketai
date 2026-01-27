@@ -69,8 +69,16 @@ export interface SignalRule {
   suggest_only?: boolean;
 }
 
+export interface AutoNurtureSettings {
+  enabled: boolean;
+  after_followup_count: number;
+  auto_switch_after_breakup: boolean;
+  default_cadence: "weekly" | "biweekly" | "monthly";
+}
+
 export interface Signals {
   mode_switch_rules: SignalRule[];
+  auto_nurture?: AutoNurtureSettings;
 }
 
 export interface CadenceSettingsV1 {
@@ -146,6 +154,12 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
       { if: "open_count>=3", suggest_only: true },
       { if: "link_clicked=true", set_mode: "fast" },
     ],
+    auto_nurture: {
+      enabled: true,
+      after_followup_count: 3,
+      auto_switch_after_breakup: false,
+      default_cadence: "biweekly",
+    },
   },
 };
 
@@ -199,7 +213,9 @@ export type ActionReasonCode =
   | "POST_MEETING_RECAP_DUE"
   | "POST_MEETING_CHECKIN_DUE"
   | "CLOSING_FOLLOWUP_DUE"
-  | "PRE_MEETING_REMINDER_DUE";
+  | "PRE_MEETING_REMINDER_DUE"
+  | "NURTURE_SWITCH_RECOMMENDED"
+  | "NURTURE_CAMPAIGN_START";
 
 // Extended action result with eligibility for automation
 export interface ActionSuggestion {
