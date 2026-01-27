@@ -223,6 +223,7 @@ export type Database = {
       }
       leads: {
         Row: {
+          action_dismissed_at: string | null
           action_instructions: string | null
           action_reason_code: string | null
           auto_nurture_eligible: boolean | null
@@ -267,6 +268,7 @@ export type Database = {
           strategy: string
         }
         Insert: {
+          action_dismissed_at?: string | null
           action_instructions?: string | null
           action_reason_code?: string | null
           auto_nurture_eligible?: boolean | null
@@ -311,6 +313,7 @@ export type Database = {
           strategy: string
         }
         Update: {
+          action_dismissed_at?: string | null
           action_instructions?: string | null
           action_reason_code?: string | null
           auto_nurture_eligible?: boolean | null
