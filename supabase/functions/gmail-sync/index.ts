@@ -756,6 +756,7 @@ interface LeadUpdate {
   nurture_outbound_count: number;
   last_nurture_outbound_at: string | null;
   last_activity_at: string;
+  action_dismissed_at?: string | null; // Track manual dismissals
 }
 
 serve(async (req) => {
@@ -816,7 +817,7 @@ serve(async (req) => {
     // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at")
       .eq("id", leadId)
       .single();
 
@@ -824,6 +825,7 @@ serve(async (req) => {
     const strategy = leadData?.strategy || "fast";
     const ownerUserId = leadData?.owner_user_id || user.id;
     const hasFutureMeeting = leadData?.has_future_meeting || false;
+    const actionDismissedAt = leadData?.action_dismissed_at || null;
 
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
@@ -1145,14 +1147,43 @@ serve(async (req) => {
       strategy
     );
 
+    // ============================================
+    // DISMISSAL CHECK - Respect manual dismissals
+    // ============================================
+    const dismissedAt = actionDismissedAt ? new Date(actionDismissedAt).getTime() : 0;
+    const lastInteractionTime = Math.max(
+      metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0,
+      metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0
+    );
+
+    let finalAction = actionResult;
+    let shouldClearDismissal = false;
+
+    // If dismissed after last interaction, respect the dismissal
+    if (dismissedAt > 0 && dismissedAt > lastInteractionTime) {
+      console.log(`[gmail-sync] Lead ${leadId}: Respecting manual dismissal from ${actionDismissedAt}`);
+      finalAction = {
+        needs_action: false,
+        next_action_key: null,
+        next_action_label: null,
+        eligible_at: null,
+        action_reason_code: null,
+        auto_nurture_eligible: actionResult.auto_nurture_eligible,
+      };
+    } else if (dismissedAt > 0 && lastInteractionTime > dismissedAt) {
+      // New interaction occurred after dismissal, clear the dismissal flag
+      console.log(`[gmail-sync] Lead ${leadId}: Clearing dismissal - new interaction detected`);
+      shouldClearDismissal = true;
+    }
+
     // Update lead with computed values
     const leadUpdate: LeadUpdate & { auto_nurture_eligible?: boolean } = {
       stage,
-      needs_action: actionResult.needs_action,
-      next_action_key: actionResult.next_action_key,
-      next_action_label: actionResult.next_action_label,
-      eligible_at: actionResult.eligible_at,
-      action_reason_code: actionResult.action_reason_code,
+      needs_action: finalAction.needs_action,
+      next_action_key: finalAction.next_action_key,
+      next_action_label: finalAction.next_action_label,
+      eligible_at: finalAction.eligible_at,
+      action_reason_code: finalAction.action_reason_code,
       first_outbound_at: metrics.first_outbound_at,
       last_outbound_at: metrics.last_outbound_at,
       last_inbound_at: metrics.last_inbound_at,
@@ -1162,9 +1193,14 @@ serve(async (req) => {
       last_activity_at: new Date().toISOString(),
     };
 
+    // Clear dismissal if new interaction occurred
+    if (shouldClearDismissal) {
+      leadUpdate.action_dismissed_at = null;
+    }
+
     // Set auto_nurture_eligible if the action suggests it
-    if (actionResult.auto_nurture_eligible !== undefined) {
-      leadUpdate.auto_nurture_eligible = actionResult.auto_nurture_eligible;
+    if (finalAction.auto_nurture_eligible !== undefined) {
+      leadUpdate.auto_nurture_eligible = finalAction.auto_nurture_eligible;
     }
 
     await serviceSupabase

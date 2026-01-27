@@ -850,6 +850,7 @@ export async function dismissLeadAction(leadId: string, reasonCode?: string): Pr
       next_action_key: null,
       next_action_label: null,
       action_reason_code: reasonCode || null,
+      action_dismissed_at: new Date().toISOString(), // Track dismissal timestamp
       last_activity_at: new Date().toISOString(),
     })
     .eq('id', leadId);
