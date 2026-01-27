@@ -1193,9 +1193,13 @@ serve(async (req) => {
       last_activity_at: new Date().toISOString(),
     };
 
-    // Clear dismissal if new interaction occurred
+    // Handle action_dismissed_at field
     if (shouldClearDismissal) {
+      // New interaction occurred after dismissal - clear it
       leadUpdate.action_dismissed_at = null;
+    } else if (dismissedAt > 0) {
+      // Dismissal is still valid - explicitly preserve it (don't let undefined clear it)
+      // Don't include in update to preserve existing value
     }
 
     // Set auto_nurture_eligible if the action suggests it
