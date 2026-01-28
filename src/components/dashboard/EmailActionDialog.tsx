@@ -100,8 +100,8 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
     case "nurture":
       return "nurture_email_single";
     default:
-      // Default to intro email for new outreach
-      return "pre_email_1_intro";
+      // If there's email history, generate a reply; otherwise intro email
+      return hasThread ? "reply_to_thread" : "pre_email_1_intro";
   }
 }
 
