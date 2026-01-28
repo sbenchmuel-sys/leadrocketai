@@ -63,6 +63,7 @@ export function getActionType(actionKey: string | null): "reply" | "follow_up" |
   if (actionKey === "reply_now") return "reply";
   if (actionKey.startsWith("send_pre_")) return "follow_up";
   if (actionKey === "generate_post_meeting_recap") return "recap";
+  if (actionKey === "post_meeting_followup") return "follow_up";
   if (actionKey.startsWith("send_nurture_")) return "nurture";
   if (actionKey === "send_proposal" || actionKey === "closing_followup") return "closing";
   return "view";
