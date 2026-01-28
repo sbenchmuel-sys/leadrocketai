@@ -310,6 +310,18 @@ async function syncLeadEmails(
   if (!searchResponse.ok) {
     const errorText = await searchResponse.text();
     console.error(`[gmail-bulk-sync] Search failed for ${leadEmail}:`, errorText);
+
+    // If the token is missing required Gmail scopes (common after an app permissions change),
+    // force the UI down the reauthorization path.
+    const scopeInsufficient =
+      errorText.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+      errorText.includes("insufficientPermissions") ||
+      errorText.includes("insufficient authentication scopes") ||
+      errorText.includes("PERMISSION_DENIED");
+    if (scopeInsufficient) {
+      throw new Error("Gmail permissions need updating - please reauthorize Gmail in Settings");
+    }
+
     return { synced: 0, errors: [`Gmail search failed for ${leadEmail}`], stage: currentStage };
   }
 
@@ -658,7 +670,9 @@ serve(async (req) => {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
     const needsReconnect = errorMessage.includes("revoked") || 
                            errorMessage.includes("reconnect") ||
-                           errorMessage.includes("invalid_grant");
+                           errorMessage.includes("invalid_grant") ||
+                           errorMessage.toLowerCase().includes("insufficient") ||
+                           errorMessage.toLowerCase().includes("permissions");
     
     return new Response(JSON.stringify({ 
       ok: false, 
