@@ -168,9 +168,28 @@ export function useGmailSync() {
       });
 
       if (!response.ok) {
-        const errorMsg = `Failed to send email: ${response.status}`;
+        const errorText = await response.text();
+        let errorMsg = `Failed to send email: ${response.status}`;
+        let needsReconnect = false;
+        
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = errorJson.error;
+            needsReconnect = isReconnectError(errorJson.error) || errorJson.needsReconnect;
+          }
+        } catch {
+          // Use default error message
+        }
+        
         setError(errorMsg);
-        toast.error(errorMsg);
+        if (needsReconnect) {
+          toast.error("Gmail needs reconnection", { 
+            description: "Go to Settings to reconnect your Gmail account" 
+          });
+        } else {
+          toast.error(errorMsg);
+        }
         return { ok: false, error: errorMsg };
       }
 
@@ -178,8 +197,15 @@ export function useGmailSync() {
 
       if (!data.ok) {
         const errorMsg = data.error || "Send email failed";
+        const needsReconnect = isReconnectError(errorMsg) || data.needsReconnect;
         setError(errorMsg);
-        toast.error(errorMsg);
+        if (needsReconnect) {
+          toast.error("Gmail needs reconnection", { 
+            description: "Go to Settings to reconnect your Gmail account" 
+          });
+        } else {
+          toast.error(errorMsg);
+        }
         return { ok: false, error: errorMsg };
       }
 

@@ -49,7 +49,14 @@ async function refreshTokenIfNeeded(
     });
     
     if (!response.ok) {
-      throw new Error("Failed to refresh token");
+      const errorBody = await response.text();
+      console.error("[gmail-send] Token refresh failed:", response.status, errorBody);
+      
+      // Check for revoked access
+      if (errorBody.includes("invalid_grant")) {
+        throw new Error("Gmail access revoked - please reconnect Gmail in Settings");
+      }
+      throw new Error(`Failed to refresh token: ${response.status}`);
     }
     
     const tokens = await response.json();
@@ -163,9 +170,21 @@ serve(async (req) => {
 
     if (!sendResponse.ok) {
       const errorText = await sendResponse.text();
-      console.error("[gmail-send] Send failed:", errorText);
-      return new Response(JSON.stringify({ ok: false, error: "Failed to send email" }), {
-        status: 500,
+      console.error("[gmail-send] Send failed:", sendResponse.status, errorText);
+      
+      // Check if it's an auth/token issue
+      const needsReconnect = errorText.includes("invalid_grant") || 
+                             errorText.includes("Invalid Credentials") ||
+                             errorText.includes("Token has been expired or revoked") ||
+                             sendResponse.status === 401;
+      
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: needsReconnect ? "Gmail access revoked - please reconnect Gmail in Settings" : "Failed to send email",
+        needsReconnect,
+      }), {
+        // Return 200 for reconnect errors so supabase.functions.invoke doesn't throw
+        status: needsReconnect ? 200 : 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -299,10 +318,26 @@ serve(async (req) => {
     );
   } catch (error) {
     const errorId = crypto.randomUUID();
+    const errorMessage = error instanceof Error ? error.message : "An error occurred while sending the email";
     console.error(`[gmail-send] Error ${errorId}:`, error);
+    
+    // Check if this is a reconnection error
+    const needsReconnect = errorMessage.includes("revoked") || 
+                           errorMessage.includes("reconnect") ||
+                           errorMessage.includes("invalid_grant");
+    
     return new Response(
-      JSON.stringify({ ok: false, error: "An error occurred while sending the email", error_id: errorId }),
-      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
+      JSON.stringify({ 
+        ok: false, 
+        error: errorMessage, 
+        error_id: errorId,
+        needsReconnect,
+      }),
+      { 
+        // Return 200 for reconnect errors so supabase.functions.invoke doesn't throw
+        status: needsReconnect ? 200 : 500, 
+        headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } 
+      }
     );
   }
 });
