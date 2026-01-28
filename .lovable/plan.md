@@ -1,170 +1,112 @@
 
-# Fix: Dismissed Actions Reappearing After Refresh
 
-## Problem Summary
-When a user dismisses an action (e.g., "Already handled") in the Action Required panel, the lead is removed from the queue temporarily, but reappears after a page refresh.
+# Plan: Add OAuth Token Encryption for Gmail Connections
 
-## Root Cause Analysis
-The issue stems from the `gmail-sync` Edge Function unconditionally overwriting the `needs_action` field:
+## Overview
+This plan implements end-to-end encryption for Gmail OAuth tokens stored in the `gmail_connections` table. Tokens will be encrypted using AES-256-GCM before storage and decrypted only when needed to call Gmail APIs.
 
-1. **Dismiss flow (works correctly):** When clicking "Already handled", `dismissLeadAction()` sets:
-   - `needs_action: false`
-   - `next_action_key: null`
-   - `action_reason_code: "already_handled"`
-
-2. **Sync flow (overwrites dismissal):** When `gmail-sync` runs (on page load, auto-sync, or manual sync), it:
-   - Recalculates `deriveAction()` based on interaction metrics
-   - Blindly updates the lead with computed values (`needs_action: true`, new `action_reason_code`)
-   - **Does NOT check if the action was manually dismissed**
-
-This means the backend has no "memory" that the user already handled this specific action.
-
-## Solution
-Add an `action_dismissed_at` timestamp field to track when an action was dismissed, and modify the `gmail-sync` function to respect this dismissal until a new interaction invalidates it.
-
-### Logic
-- When user dismisses: Set `action_dismissed_at = now()`
-- When sync runs: Check if `action_dismissed_at > last_outbound_at` (or any relevant interaction timestamp)
-  - If true, the dismissal is still valid - don't suggest this action again
-  - If false (new email sent/received since dismissal), reset and recalculate
+## Why This Matters
+Currently, OAuth tokens are stored in plaintext. If an attacker compromises a user account, they could extract these tokens and access the user's Gmail indefinitely. Encrypting tokens at rest adds a critical security layer.
 
 ---
 
-## Implementation Plan
+## Implementation Steps
 
-### Phase 1: Database Schema Update
-Add a new column to track when an action was dismissed:
+### Step 1: Add the TOKEN_ENCRYPTION_KEY Secret
+Request you to input your generated encryption key as a secret in the backend environment.
 
-```sql
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS action_dismissed_at TIMESTAMP WITH TIME ZONE;
+### Step 2: Update `gmail-callback` (Token Storage)
+When Google returns tokens after OAuth flow, encrypt both `access_token` and `refresh_token` before storing:
+
+```text
+gmail-callback/index.ts changes:
+├── Import encryptToken from _shared/encryption.ts
+├── Encrypt access_token before storage
+├── Encrypt refresh_token before storage
+└── Store encrypted values in gmail_connections table
 ```
 
-### Phase 2: Update Dismiss Function
-**File:** `src/lib/supabaseQueries.ts`
+### Step 3: Update `gmail-sync` (Token Usage)
+When syncing emails, decrypt tokens before using them with Gmail API:
 
-Update `dismissLeadAction` to also set the `action_dismissed_at` timestamp:
-
-```typescript
-export async function dismissLeadAction(leadId: string, reasonCode?: string): Promise<void> {
-  const { error } = await supabase
-    .from('leads')
-    .update({
-      needs_action: false,
-      next_action_key: null,
-      next_action_label: null,
-      action_reason_code: reasonCode || null,
-      action_dismissed_at: new Date().toISOString(), // NEW
-      last_activity_at: new Date().toISOString(),
-    })
-    .eq('id', leadId);
-  if (error) throw error;
-}
+```text
+gmail-sync/index.ts changes:
+├── Import safeDecryptToken from _shared/encryption.ts
+├── Decrypt access_token when fetched from database
+├── Decrypt refresh_token when needed for refresh
+├── Encrypt new access_token when storing after refresh
+└── Use decrypted tokens for Gmail API calls
 ```
 
-### Phase 3: Update gmail-sync to Respect Dismissals
-**File:** `supabase/functions/gmail-sync/index.ts`
+### Step 4: Update `gmail-send` (Token Usage)
+When sending emails, decrypt tokens before using them:
 
-1. **Fetch current lead state** including `action_dismissed_at` before computing new action
-2. **Add dismissal check** in the `deriveAction` function or before updating the lead:
-   - If `action_dismissed_at` exists and is more recent than the latest interaction, skip overwriting
-   - If a new interaction occurred after dismissal, clear `action_dismissed_at` and recalculate
-
-Modified logic at lead update section (around line 1148):
-
-```typescript
-// Fetch current lead state to check for dismissal
-const { data: currentLead } = await serviceSupabase
-  .from("leads")
-  .select("action_dismissed_at")
-  .eq("id", leadId)
-  .single();
-
-// Check if dismissal should be respected
-const dismissedAt = currentLead?.action_dismissed_at 
-  ? new Date(currentLead.action_dismissed_at).getTime() 
-  : 0;
-const lastInteractionTime = Math.max(
-  metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0,
-  metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0
-);
-
-let finalAction = actionResult;
-
-// If dismissed after last interaction, respect the dismissal
-if (dismissedAt > 0 && dismissedAt > lastInteractionTime) {
-  console.log(`[gmail-sync] Lead ${leadId}: Respecting manual dismissal from ${currentLead.action_dismissed_at}`);
-  finalAction = {
-    needs_action: false,
-    next_action_key: null,
-    next_action_label: null,
-    eligible_at: null,
-    action_reason_code: null, // Keep existing reason code
-  };
-}
-
-// If new interaction occurred after dismissal, clear the dismissal flag
-const shouldClearDismissal = dismissedAt > 0 && lastInteractionTime > dismissedAt;
-
-const leadUpdate = {
-  stage,
-  needs_action: finalAction.needs_action,
-  next_action_key: finalAction.next_action_key,
-  next_action_label: finalAction.next_action_label,
-  eligible_at: finalAction.eligible_at,
-  action_reason_code: finalAction.action_reason_code,
-  // Clear dismissal if new interaction occurred
-  action_dismissed_at: shouldClearDismissal ? null : undefined,
-  // ... rest of metrics
-};
+```text
+gmail-send/index.ts changes:
+├── Import safeDecryptToken, encryptToken from _shared/encryption.ts
+├── Decrypt tokens when fetched from database
+├── Encrypt new access_token when storing after refresh
+└── Use decrypted tokens for Gmail API calls
 ```
 
-### Phase 4: Update LeadUpdate Interface
-**File:** `supabase/functions/gmail-sync/index.ts`
+### Step 5: Update `gmail-bulk-sync` (Token Usage)
+Similar to gmail-sync, decrypt tokens for bulk operations:
 
-Add `action_dismissed_at` to the `LeadUpdate` interface:
-
-```typescript
-interface LeadUpdate {
-  // ... existing fields
-  action_dismissed_at?: string | null;
-}
+```text
+gmail-bulk-sync/index.ts changes:
+├── Import safeDecryptToken, encryptToken from _shared/encryption.ts
+├── Decrypt tokens when fetched from database
+├── Encrypt new access_token when storing after refresh
+└── Use decrypted tokens for Gmail API calls
 ```
+
+### Step 6: Deploy Updated Functions
+All four edge functions will be redeployed with encryption support.
 
 ---
 
 ## Technical Details
 
-### Dismissal Validity Rules
-The dismissal remains valid until:
-1. A new outbound email is sent by the user
-2. A new inbound email is received from the lead
-3. A new meeting summary is processed
+### Encryption Method
+- **Algorithm**: AES-256-GCM (authenticated encryption)
+- **Key Derivation**: SHA-256 hash of TOKEN_ENCRYPTION_KEY
+- **Storage Format**: Base64(IV + Ciphertext + AuthTag)
 
-Once any of these occur, the system recalculates the action as normal.
+### Backwards Compatibility
+The `safeDecryptToken()` function handles migration gracefully:
+- If TOKEN_ENCRYPTION_KEY is not set → returns token as-is (plaintext)
+- If token doesn't look encrypted → returns as-is (legacy token)
+- If decryption fails → falls back to treating as plaintext
 
-### Edge Cases Handled
-- **User dismisses, then sends email:** Dismissal cleared, new action calculated
-- **User dismisses, lead replies:** Dismissal cleared, "Reply to customer" action shown
-- **User dismisses, no new activity:** Dismissal respected indefinitely
-- **Multiple syncs in a row:** Dismissal persists across all syncs until new interaction
+This means:
+1. Existing plaintext tokens continue to work
+2. New/refreshed tokens get encrypted automatically
+3. Over time, all tokens become encrypted
+
+### Token Refresh Flow
+When tokens are refreshed:
+1. Decrypt stored refresh_token
+2. Call Google OAuth to get new access_token
+3. Encrypt new access_token
+4. Store encrypted access_token in database
 
 ---
 
 ## Files to Modify
 
-| File | Change |
-|------|--------|
-| Database migration | Add `action_dismissed_at` column |
-| `src/lib/supabaseQueries.ts` | Update `dismissLeadAction` to set timestamp |
-| `supabase/functions/gmail-sync/index.ts` | Add dismissal check before lead update |
+| File | Changes |
+|------|---------|
+| `supabase/functions/gmail-callback/index.ts` | Encrypt tokens on initial OAuth completion |
+| `supabase/functions/gmail-sync/index.ts` | Decrypt tokens for API calls, encrypt on refresh |
+| `supabase/functions/gmail-send/index.ts` | Decrypt tokens for API calls, encrypt on refresh |
+| `supabase/functions/gmail-bulk-sync/index.ts` | Decrypt tokens for API calls, encrypt on refresh |
 
 ---
 
-## Expected Behavior After Fix
+## Testing
+After implementation:
+1. Reconnect Gmail to store newly encrypted tokens
+2. Verify email sync still works
+3. Verify email sending still works
+4. Check database to confirm tokens are now encrypted (long base64 strings)
 
-1. User clicks "Already handled" on a lead action
-2. Lead is removed from Action Required panel
-3. Page refresh: Lead stays removed (dismissal respected)
-4. Gmail sync runs: Lead stays removed (dismissal timestamp checked)
-5. User sends new email to lead: Dismissal cleared, new action may appear
-6. Lead replies: Dismissal cleared, "Reply to customer" action appears
