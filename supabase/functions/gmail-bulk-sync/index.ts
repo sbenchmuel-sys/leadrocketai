@@ -665,7 +665,9 @@ serve(async (req) => {
       error: errorMessage,
       needsReconnect,
     }), {
-      status: needsReconnect ? 401 : 500,
+      // IMPORTANT: Keep this 200 so supabase-js `functions.invoke` does not throw.
+      // The UI should rely on the JSON payload (`ok:false`, `needsReconnect:true`).
+      status: needsReconnect ? 200 : 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
