@@ -21,12 +21,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2 } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
-import { updateLeadStage, bulkUpdateLeadStage } from "@/lib/supabaseQueries";
+import { updateLeadStage, bulkUpdateLeadStage, deleteLead } from "@/lib/supabaseQueries";
 import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -87,6 +98,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [updatingStage, setUpdatingStage] = useState<string | null>(null);
   const [updatingStrategy, setUpdatingStrategy] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const navigate = useNavigate();
 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
@@ -138,6 +151,27 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
       toast.error("Failed to update stages");
     } finally {
       setBulkUpdating(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedLeads.size === 0) return;
+    
+    setBulkDeleting(true);
+    try {
+      // Delete leads one by one (or use batch delete if available)
+      const deletePromises = Array.from(selectedLeads).map(id => deleteLead(id));
+      await Promise.all(deletePromises);
+      
+      toast.success(`Deleted ${selectedLeads.size} lead${selectedLeads.size > 1 ? 's' : ''}`);
+      setSelectedLeads(new Set());
+      setDeleteDialogOpen(false);
+      onLeadUpdated?.();
+    } catch (err) {
+      console.error("Failed to delete leads:", err);
+      toast.error("Failed to delete some leads");
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -225,59 +259,21 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     handleOpenEmailDialog(lead, tempInstructions);
   };
 
+  // Small mail icon - opens composer directly (no popover)
+  // Uses history-aware mode: if lead has email history, prepare reply; otherwise intro
   const renderEmailComposeButton = (lead: EnrichedLead) => (
-    <Popover 
-      open={instructionsPopover === `compose-${lead.id}`} 
-      onOpenChange={(open) => !open && setInstructionsPopover(null)}
+    <Button 
+      size="sm" 
+      variant="ghost" 
+      onClick={(e) => {
+        e.stopPropagation();
+        // Open composer directly without instruction popover
+        handleOpenEmailDialog(lead, "");
+      }}
+      title={lead.last_outbound_at ? "Compose reply" : "Compose intro email"}
     >
-      <PopoverTrigger asChild>
-        <Button 
-          size="sm" 
-          variant="ghost" 
-          onClick={(e) => {
-            e.stopPropagation();
-            setTempInstructions("");
-            setInstructionsPopover(`compose-${lead.id}`);
-          }}
-        >
-          <Mail className="h-4 w-4" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-80" align="end">
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Lightbulb className="h-4 w-4 text-warning" />
-            <span className="text-sm font-medium">Add instructions (optional)</span>
-          </div>
-          <Input
-            value={tempInstructions}
-            onChange={(e) => setTempInstructions(e.target.value)}
-            placeholder="e.g., Follow up on pricing discussion..."
-            className="text-sm"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                confirmInstructions(lead);
-              }
-            }}
-          />
-          <div className="flex justify-end gap-2">
-            <Button 
-              size="sm" 
-              variant="ghost" 
-              onClick={() => setInstructionsPopover(null)}
-            >
-              Cancel
-            </Button>
-            <Button 
-              size="sm" 
-              onClick={() => confirmInstructions(lead)}
-            >
-              Compose Email
-            </Button>
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+      <Mail className="h-4 w-4" />
+    </Button>
   );
 
   const renderViewButton = (lead: EnrichedLead) => (
@@ -437,7 +433,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 </span>
                 <Select
                   onValueChange={(value) => handleBulkStageChange(value as DealStage)}
-                  disabled={bulkUpdating}
+                  disabled={bulkUpdating || bulkDeleting}
                 >
                   <SelectTrigger className="w-[160px] h-8">
                     <SelectValue placeholder="Move to stage..." />
@@ -450,7 +446,50 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     ))}
                   </SelectContent>
                 </Select>
-                {bulkUpdating && <Loader2 className="h-4 w-4 animate-spin" />}
+                
+                <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                  <AlertDialogTrigger asChild>
+                    <Button 
+                      variant="destructive" 
+                      size="sm"
+                      disabled={bulkUpdating || bulkDeleting}
+                      className="h-8"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Delete
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This action cannot be undone. All associated interactions, drafts, and meeting packs will also be deleted.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={bulkDeleting}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction 
+                        onClick={handleBulkDelete}
+                        disabled={bulkDeleting}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {bulkDeleting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Deleting...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </>
+                        )}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+                
+                {(bulkUpdating || bulkDeleting) && <Loader2 className="h-4 w-4 animate-spin" />}
               </div>
             )}
           </div>
