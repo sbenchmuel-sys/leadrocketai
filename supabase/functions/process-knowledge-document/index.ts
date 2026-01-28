@@ -78,7 +78,27 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[process-knowledge-document] Processing document: ${title || 'Untitled'}, text length: ${text.length}, lead_id: ${lead_id || 'global'}`);
+    // Verify lead ownership if lead_id is provided
+    let verified_lead_id: string | null = null;
+    if (lead_id) {
+      const { data: lead, error: leadError } = await supabase
+        .from("leads")
+        .select("id, owner_user_id")
+        .eq("id", lead_id)
+        .single();
+
+      if (leadError || !lead || lead.owner_user_id !== user.id) {
+        console.warn(`[process-knowledge-document] Lead ownership verification failed for lead_id: ${lead_id}, user: ${user.id}`);
+        return new Response(
+          JSON.stringify({ ok: false, error: "Lead not found or access denied" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      verified_lead_id = lead_id;
+      console.log(`[process-knowledge-document] Lead ownership verified for lead_id: ${lead_id}`);
+    }
+
+    console.log(`[process-knowledge-document] Processing document: ${title || 'Untitled'}, text length: ${text.length}, lead_id: ${verified_lead_id || 'global'}`);
 
     // Generate a unique document ID to group chunks
     const documentId = crypto.randomUUID();
@@ -101,7 +121,7 @@ serve(async (req) => {
       document_id: documentId,
       chunk_index: index,
       processing_status: "completed", // Text search doesn't need embeddings
-      lead_id: lead_id || null,
+      lead_id: verified_lead_id,
     }));
 
     const { data: insertedChunks, error: insertError } = await supabaseAdmin
