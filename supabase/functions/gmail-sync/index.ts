@@ -158,6 +158,7 @@ type ActionReasonCode =
   | "REENGAGE_DUE"
   | "POST_MEETING_RECAP_DUE"
   | "POST_MEETING_CHECKIN_DUE"
+  | "POST_MEETING_FOLLOWUP_DUE"
   | "CLOSING_FOLLOWUP_DUE"
   | "NURTURE_SWITCH_RECOMMENDED"
   | "NURTURE_CAMPAIGN_START";
@@ -686,6 +687,38 @@ function deriveAction(
       eligible_at: eligibleAt.toISOString(),
       action_reason_code: "POST_MEETING_RECAP_DUE",
     };
+  }
+
+  // ============================================
+  // D2) POST-MEETING FOLLOW-UP (no response in 7 days)
+  // ============================================
+  // If lead is in post_meeting stage, we sent a follow-up, but no response in 7 days
+  if (stage === "post_meeting" && !hasMeetingWithoutFollowup) {
+    const lastOutboundTime = metrics.last_outbound_at 
+      ? new Date(metrics.last_outbound_at).getTime() 
+      : 0;
+    const lastInboundTime = metrics.last_inbound_at 
+      ? new Date(metrics.last_inbound_at).getTime() 
+      : 0;
+    
+    // Only trigger if we sent something and they haven't replied since
+    if (lastOutboundTime > 0 && lastOutboundTime > lastInboundTime) {
+      const daysSinceOutbound = (now - lastOutboundTime) / DAY;
+      const POST_MEETING_FOLLOWUP_DAYS = 7;
+      
+      if (daysSinceOutbound >= POST_MEETING_FOLLOWUP_DAYS) {
+        const jitter = getDeterministicJitter(leadId, "post_meeting_followup", guardrails.jitter_percent);
+        const eligibleAt = new Date(lastOutboundTime + (POST_MEETING_FOLLOWUP_DAYS * DAY) * (1 + jitter));
+        
+        return {
+          needs_action: true,
+          next_action_key: "post_meeting_followup",
+          next_action_label: "Follow up (no response in 7 days)",
+          eligible_at: eligibleAt.toISOString(),
+          action_reason_code: "POST_MEETING_FOLLOWUP_DUE",
+        };
+      }
+    }
   }
 
   // ============================================
