@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { encryptToken } from "../_shared/encryption.ts";
 
 // HTML escape function to prevent XSS
 function escapeHtml(str: string): string {
@@ -165,14 +166,32 @@ serve(async (req) => {
     // Calculate token expiry
     const tokenExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
 
+    // Encrypt tokens before storage (if TOKEN_ENCRYPTION_KEY is configured)
+    let encryptedAccessToken = access_token;
+    let encryptedRefreshToken = refresh_token;
+    
+    try {
+      const hasEncryptionKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+      if (hasEncryptionKey) {
+        console.log("[gmail-callback] Encrypting tokens before storage");
+        encryptedAccessToken = await encryptToken(access_token);
+        encryptedRefreshToken = await encryptToken(refresh_token);
+      } else {
+        console.warn("[gmail-callback] TOKEN_ENCRYPTION_KEY not configured, storing tokens in plaintext");
+      }
+    } catch (encryptError) {
+      console.error("[gmail-callback] Token encryption failed, storing in plaintext:", encryptError);
+      // Fall back to plaintext if encryption fails
+    }
+
     // Store connection using service role key (bypasses RLS for upsert)
     const { error: upsertError } = await supabase
       .from("gmail_connections")
       .upsert({
         user_id: stateData.user_id,
         gmail_email: gmailEmail,
-        access_token,
-        refresh_token,
+        access_token: encryptedAccessToken,
+        refresh_token: encryptedRefreshToken,
         token_expires_at: tokenExpiresAt,
       }, { onConflict: "user_id" });
 
