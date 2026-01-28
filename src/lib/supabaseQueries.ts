@@ -1,5 +1,5 @@
 // 07_SUPABASE_JS_QUERIES
-// Database query functions for Binah Deal Assistant
+// Database query functions for Deal Assistant
 
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
