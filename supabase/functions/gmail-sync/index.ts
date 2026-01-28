@@ -866,10 +866,27 @@ serve(async (req) => {
     if (!searchResponse.ok) {
       const errorText = await searchResponse.text();
       console.error("[gmail-sync] Search failed:", errorText);
-      return new Response(JSON.stringify({ ok: false, error: "Gmail search failed" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+
+      const scopeInsufficient =
+        errorText.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+        errorText.includes("insufficientPermissions") ||
+        errorText.includes("insufficient authentication scopes") ||
+        errorText.includes("PERMISSION_DENIED");
+
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: scopeInsufficient
+            ? "Gmail permissions need updating - please reauthorize Gmail in Settings"
+            : "Gmail search failed",
+          needsReconnect: scopeInsufficient,
+        }),
+        {
+          // Keep 200 on reconnect-required errors so the frontend can handle it without throw.
+          status: scopeInsufficient ? 200 : 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
     }
 
     const searchData = await searchResponse.json();
@@ -1323,10 +1340,22 @@ serve(async (req) => {
     );
   } catch (error) {
     const errorId = crypto.randomUUID();
+    const errorMessage = error instanceof Error ? error.message : "An error occurred while syncing emails";
+    const needsReconnect =
+      errorMessage.toLowerCase().includes("invalid_grant") ||
+      errorMessage.toLowerCase().includes("revoked") ||
+      errorMessage.toLowerCase().includes("reconnect") ||
+      errorMessage.toLowerCase().includes("insufficient") ||
+      errorMessage.toLowerCase().includes("permissions");
+
     console.error(`[gmail-sync] Error ${errorId}:`, error);
     return new Response(
-      JSON.stringify({ ok: false, error: "An error occurred while syncing emails", error_id: errorId }),
-      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
+      JSON.stringify({ ok: false, error: errorMessage, error_id: errorId, needsReconnect }),
+      {
+        // Keep 200 on reconnect-required errors so the frontend can handle it without throw.
+        status: needsReconnect ? 200 : 500,
+        headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+      }
     );
   }
 });

@@ -176,11 +176,17 @@ serve(async (req) => {
       const needsReconnect = errorText.includes("invalid_grant") || 
                              errorText.includes("Invalid Credentials") ||
                              errorText.includes("Token has been expired or revoked") ||
-                             sendResponse.status === 401;
+                             errorText.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+                             errorText.includes("insufficientPermissions") ||
+                             errorText.includes("insufficient authentication scopes") ||
+                             sendResponse.status === 401 ||
+                             sendResponse.status === 403;
       
       return new Response(JSON.stringify({ 
         ok: false, 
-        error: needsReconnect ? "Gmail access revoked - please reconnect Gmail in Settings" : "Failed to send email",
+        error: needsReconnect
+          ? "Gmail permissions need updating - please reauthorize Gmail in Settings"
+          : "Failed to send email",
         needsReconnect,
       }), {
         // Return 200 for reconnect errors so supabase.functions.invoke doesn't throw
