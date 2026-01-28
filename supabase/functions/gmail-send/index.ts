@@ -133,8 +133,11 @@ serve(async (req) => {
       });
     }
 
-    // Get Gmail connection
-    const { data: connection, error: connError } = await supabase
+    // Create service role client first - needed to access encrypted tokens
+    const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // Get Gmail connection using service role (column-level security blocks token access for regular users)
+    const { data: connection, error: connError } = await serviceSupabase
       .from("gmail_connections")
       .select("*")
       .eq("user_id", user.id)
@@ -147,7 +150,6 @@ serve(async (req) => {
       });
     }
 
-    const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
     // Build RFC 2822 email with threading headers if replying
