@@ -1062,13 +1062,13 @@ serve(async (req) => {
     // Meeting count is derived from meeting_packs (source of truth)
     const { data: meetingPacks } = await serviceSupabase
       .from("meeting_packs")
-      .select("id, follow_up_email_body, meeting_date")
+      .select("id, follow_up_email_body, meeting_date, created_at")
       .eq("lead_id", leadId);
 
     const meetingCount = meetingPacks?.length || 0;
     
     // Check if any meeting pack is missing a follow-up email
-    // BUT also check if an outbound email was sent after the meeting date
+    // BUT also check if an outbound email was sent after the meeting date OR after pack creation
     let hasMeetingWithoutFollowup = false;
     
     for (const mp of meetingPacks || []) {
@@ -1077,20 +1077,23 @@ serve(async (req) => {
         continue;
       }
       
-      // Check if any outbound email was sent after this meeting
-      if (mp.meeting_date) {
+      // Use meeting_date if available, otherwise fall back to pack creation time (created_at)
+      // We need to check if ANY outbound was sent after this meeting/pack
+      const referenceDate = mp.meeting_date || (mp as any).created_at;
+      
+      if (referenceDate) {
         const { data: postMeetingEmails } = await serviceSupabase
           .from("interactions")
           .select("id, body_text, occurred_at")
           .eq("lead_id", leadId)
           .eq("direction", "outbound")
-          .gt("occurred_at", mp.meeting_date)
+          .gt("occurred_at", referenceDate)
           .order("occurred_at", { ascending: false })
           .limit(1);
         
         if (postMeetingEmails && postMeetingEmails.length > 0) {
           // An outbound email was sent after this meeting - mark as followed up
-          console.log(`[gmail-sync] Auto-marking meeting pack ${mp.id} as followed up (email sent after meeting)`);
+          console.log(`[gmail-sync] Auto-marking meeting pack ${mp.id} as followed up (email sent after meeting/pack creation)`);
           await serviceSupabase
             .from("meeting_packs")
             .update({ 
