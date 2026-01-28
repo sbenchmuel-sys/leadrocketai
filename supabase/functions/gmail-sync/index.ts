@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 
 // ============================================
 // CADENCE SETTINGS TYPES (mirrored from frontend)
@@ -329,6 +330,10 @@ async function refreshTokenIfNeeded(
   const expiresAt = new Date(connection.token_expires_at);
   const now = new Date();
   
+  // Decrypt the stored tokens
+  const decryptedAccessToken = await safeDecryptToken(connection.access_token);
+  const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token);
+  
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-sync] Refreshing expired token");
     
@@ -340,7 +345,7 @@ async function refreshTokenIfNeeded(
       throw new Error("Missing Google OAuth credentials");
     }
 
-    if (!connection.refresh_token) {
+    if (!decryptedRefreshToken) {
       console.error("[gmail-sync] No refresh token available - user needs to reconnect Gmail");
       throw new Error("No refresh token - please reconnect Gmail");
     }
@@ -351,7 +356,7 @@ async function refreshTokenIfNeeded(
       body: new URLSearchParams({
         client_id: GOOGLE_CLIENT_ID,
         client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: connection.refresh_token,
+        refresh_token: decryptedRefreshToken,
         grant_type: "refresh_token",
       }),
     });
@@ -369,10 +374,21 @@ async function refreshTokenIfNeeded(
     const tokens = await response.json();
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     
+    // Encrypt the new access token before storage
+    let encryptedNewAccessToken = tokens.access_token;
+    try {
+      const hasEncryptionKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+      if (hasEncryptionKey) {
+        encryptedNewAccessToken = await encryptToken(tokens.access_token);
+      }
+    } catch (encryptError) {
+      console.error("[gmail-sync] Token encryption failed, storing in plaintext:", encryptError);
+    }
+    
     await supabase
       .from("gmail_connections")
       .update({
-        access_token: tokens.access_token,
+        access_token: encryptedNewAccessToken,
         token_expires_at: newExpiresAt,
       })
       .eq("user_id", connection.user_id);
@@ -380,7 +396,7 @@ async function refreshTokenIfNeeded(
     return tokens.access_token;
   }
   
-  return connection.access_token;
+  return decryptedAccessToken;
 }
 
 // Check if email body contains closing-stage keywords

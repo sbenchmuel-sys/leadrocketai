@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -31,6 +32,10 @@ async function refreshTokenIfNeeded(
   const expiresAt = new Date(connection.token_expires_at);
   const now = new Date();
   
+  // Decrypt the stored tokens
+  const decryptedAccessToken = await safeDecryptToken(connection.access_token);
+  const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token);
+  
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-send] Refreshing expired token");
     
@@ -43,7 +48,7 @@ async function refreshTokenIfNeeded(
       body: new URLSearchParams({
         client_id: GOOGLE_CLIENT_ID,
         client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: connection.refresh_token,
+        refresh_token: decryptedRefreshToken,
         grant_type: "refresh_token",
       }),
     });
@@ -62,10 +67,21 @@ async function refreshTokenIfNeeded(
     const tokens = await response.json();
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     
+    // Encrypt the new access token before storage
+    let encryptedNewAccessToken = tokens.access_token;
+    try {
+      const hasEncryptionKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+      if (hasEncryptionKey) {
+        encryptedNewAccessToken = await encryptToken(tokens.access_token);
+      }
+    } catch (encryptError) {
+      console.error("[gmail-send] Token encryption failed, storing in plaintext:", encryptError);
+    }
+    
     await supabase
       .from("gmail_connections")
       .update({
-        access_token: tokens.access_token,
+        access_token: encryptedNewAccessToken,
         token_expires_at: newExpiresAt,
       })
       .eq("user_id", connection.user_id);
@@ -73,7 +89,7 @@ async function refreshTokenIfNeeded(
     return tokens.access_token;
   }
   
-  return connection.access_token;
+  return decryptedAccessToken;
 }
 
 serve(async (req) => {
