@@ -55,12 +55,19 @@ export function useGmailAutoSync() {
         }),
       });
 
-      if (!response.ok) {
-        console.error("[AutoSync] Bulk sync failed:", response.status);
+      const result = await response.json();
+      
+      if (result.needsReconnect) {
+        // Gmail access revoked - silently stop auto-sync (user will see error when they manually sync)
+        console.warn("[AutoSync] Gmail needs reconnection - stopping auto-sync");
         return;
       }
 
-      const result = await response.json();
+      if (!response.ok) {
+        console.error("[AutoSync] Bulk sync failed:", response.status, result.error);
+        return;
+      }
+
       if (result.ok && result.totalSynced > 0) {
         console.log(`[AutoSync] Synced ${result.totalSynced} emails across ${result.leadsProcessed} leads`);
       }

@@ -655,11 +655,17 @@ serve(async (req) => {
 
   } catch (err) {
     console.error("[gmail-bulk-sync] Error:", err);
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    const needsReconnect = errorMessage.includes("revoked") || 
+                           errorMessage.includes("reconnect") ||
+                           errorMessage.includes("invalid_grant");
+    
     return new Response(JSON.stringify({ 
       ok: false, 
-      error: err instanceof Error ? err.message : "Unknown error" 
+      error: errorMessage,
+      needsReconnect,
     }), {
-      status: 500,
+      status: needsReconnect ? 401 : 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
