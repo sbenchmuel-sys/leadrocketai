@@ -235,17 +235,40 @@ function getHeader(headers: Array<{ name: string; value: string }>, name: string
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
+// Extract email addresses from a header value (handles "Name" <email> format and comma-separated lists)
+function extractEmailAddresses(headerValue: string): string[] {
+  const emails: string[] = [];
+  // Match email patterns: either <email@domain.com> or standalone email@domain.com
+  const emailRegex = /<([^>]+@[^>]+)>|([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+  let match;
+  while ((match = emailRegex.exec(headerValue)) !== null) {
+    const email = (match[1] || match[2]).toLowerCase().trim();
+    if (email) {
+      emails.push(email);
+    }
+  }
+  return emails;
+}
+
 function messageInvolvesLead(headers: Array<{ name: string; value: string }>, leadEmail: string): boolean {
   const needle = leadEmail.trim().toLowerCase();
   if (!needle) return false;
 
-  const from = (getHeader(headers, "From") || "").toLowerCase();
-  const to = (getHeader(headers, "To") || "").toLowerCase();
-  const cc = (getHeader(headers, "Cc") || "").toLowerCase();
-  const bcc = (getHeader(headers, "Bcc") || "").toLowerCase();
-  const all = `${from} ${to} ${cc} ${bcc}`;
+  // Extract all email addresses from relevant headers
+  const from = getHeader(headers, "From") || "";
+  const to = getHeader(headers, "To") || "";
+  const cc = getHeader(headers, "Cc") || "";
+  const bcc = getHeader(headers, "Bcc") || "";
+  
+  const allEmails = [
+    ...extractEmailAddresses(from),
+    ...extractEmailAddresses(to),
+    ...extractEmailAddresses(cc),
+    ...extractEmailAddresses(bcc),
+  ];
 
-  return all.includes(needle);
+  // Perform exact email match, not substring match
+  return allEmails.some(email => email === needle);
 }
 
 // Convert HTML to readable plain text
