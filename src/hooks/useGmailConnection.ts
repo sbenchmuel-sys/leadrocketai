@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 export interface GmailConnection {
   id: string;
@@ -14,8 +15,8 @@ export interface GmailConnection {
 export function useGmailConnection() {
   const [connection, setConnection] = useState<GmailConnection | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [authUrl, setAuthUrl] = useState<string | null>(null);
 
   const fetchConnection = useCallback(async () => {
     try {
@@ -51,25 +52,30 @@ export function useGmailConnection() {
     fetchConnection();
   }, [fetchConnection]);
 
-  // Listen for postMessage from OAuth popup
+  // Detect ?gmail_connected=true after redirect back from OAuth
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === "GMAIL_CONNECTED") {
-        setAuthUrl(null);
-        fetchConnection();
-      }
-    };
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail_connected") === "true") {
+      // Clean up the query param
+      params.delete("gmail_connected");
+      const newSearch = params.toString();
+      const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "") + window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+
+      toast.success("Gmail connected!", { description: "Your Gmail account has been linked successfully." });
+      fetchConnection();
+    }
   }, [fetchConnection]);
 
-  const prepareOAuth = async () => {
+  const connectGmail = async (returnUrl?: string) => {
     try {
       setError(null);
-      setAuthUrl(null);
-      
+      setIsConnecting(true);
+
+      const path = returnUrl || window.location.pathname;
+
       const { data, error: fnError } = await supabase.functions.invoke("gmail-auth", {
-        body: { redirectUrl: window.location.href },
+        body: { redirectUrl: window.location.href, returnUrl: path },
       });
 
       if (fnError) {
@@ -80,15 +86,15 @@ export function useGmailConnection() {
         throw new Error(data.error || "Failed to start OAuth");
       }
 
-      // Store authUrl for user to click (anchor-based approach)
-      setAuthUrl(data.authUrl);
+      // Navigate top-level window to break out of iframe (Lovable preview)
+      const target = window.top || window;
+      target.location.href = data.authUrl;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to prepare Gmail OAuth");
+      setIsConnecting(false);
+      setError(err instanceof Error ? err.message : "Failed to start Gmail connection");
       throw err;
     }
   };
-
-  const clearAuthUrl = () => setAuthUrl(null);
 
   const disconnect = async () => {
     try {
@@ -116,10 +122,9 @@ export function useGmailConnection() {
     connection,
     isConnected: !!connection,
     isLoading,
+    isConnecting,
     error,
-    authUrl,
-    prepareOAuth,
-    clearAuthUrl,
+    connectGmail,
     disconnect,
     refetch: fetchConnection,
   };

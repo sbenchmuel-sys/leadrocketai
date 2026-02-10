@@ -36,7 +36,7 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 export default function Leads() {
   const navigate = useNavigate();
-  const { authUrl, prepareOAuth, clearAuthUrl, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
+  const { connectGmail, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -56,23 +56,10 @@ export default function Leads() {
     strategy: "fast",
   });
 
-  // Handle authUrl changes - open popup when ready
-  useEffect(() => {
-    if (authUrl && isReconnecting) {
-      const popup = window.open(authUrl, "gmail-auth", "width=500,height=600,scrollbars=yes");
-      if (!popup || popup.closed) {
-        toast.error("Popup blocked", { description: "Please allow popups and try again" });
-      }
-      clearAuthUrl();
-      setIsReconnecting(false);
-      setShowReconnectPrompt(false);
-    }
-  }, [authUrl, isReconnecting, clearAuthUrl]);
-
   const handleReconnectGmail = async () => {
     setIsReconnecting(true);
     try {
-      await prepareOAuth();
+      await connectGmail("/leads");
     } catch (err) {
       toast.error("Failed to start Gmail reconnection");
       setIsReconnecting(false);

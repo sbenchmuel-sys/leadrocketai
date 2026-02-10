@@ -508,6 +508,54 @@ export type Database = {
         }
         Relationships: []
       }
+      onboarding_config: {
+        Row: {
+          automation_level: string | null
+          completed: boolean
+          created_at: string
+          current_step: number
+          extracted_kb: Json
+          extraction_status: string | null
+          id: string
+          industry: string | null
+          industry_pack: Json
+          messaging_constraints: Json
+          primary_goal: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          automation_level?: string | null
+          completed?: boolean
+          created_at?: string
+          current_step?: number
+          extracted_kb?: Json
+          extraction_status?: string | null
+          id?: string
+          industry?: string | null
+          industry_pack?: Json
+          messaging_constraints?: Json
+          primary_goal?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          automation_level?: string | null
+          completed?: boolean
+          created_at?: string
+          current_step?: number
+          extracted_kb?: Json
+          extraction_status?: string | null
+          id?: string
+          industry?: string | null
+          industry_pack?: Json
+          messaging_constraints?: Json
+          primary_goal?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       org_settings: {
         Row: {
           created_at: string
@@ -697,12 +745,16 @@ export type Database = {
         Row: {
           allowed_claims: string[] | null
           cadence_settings: Json
+          company_kb: Json
           company_name: string | null
           created_at: string
           disallowed_topics: string[] | null
           id: string
+          industry: string | null
+          industry_pack: Json
           meeting_timezone: string | null
           pricing_policy: string
+          primary_goal: string | null
           primary_value_props: string[] | null
           product_description: string | null
           product_name: string | null
@@ -713,12 +765,16 @@ export type Database = {
         Insert: {
           allowed_claims?: string[] | null
           cadence_settings?: Json
+          company_kb?: Json
           company_name?: string | null
           created_at?: string
           disallowed_topics?: string[] | null
           id?: string
+          industry?: string | null
+          industry_pack?: Json
           meeting_timezone?: string | null
           pricing_policy?: string
+          primary_goal?: string | null
           primary_value_props?: string[] | null
           product_description?: string | null
           product_name?: string | null
@@ -729,12 +785,16 @@ export type Database = {
         Update: {
           allowed_claims?: string[] | null
           cadence_settings?: Json
+          company_kb?: Json
           company_name?: string | null
           created_at?: string
           disallowed_topics?: string[] | null
           id?: string
+          industry?: string | null
+          industry_pack?: Json
           meeting_timezone?: string | null
           pricing_policy?: string
+          primary_goal?: string | null
           primary_value_props?: string[] | null
           product_description?: string | null
           product_name?: string | null

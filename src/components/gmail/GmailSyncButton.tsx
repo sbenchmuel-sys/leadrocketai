@@ -33,7 +33,7 @@ export function GmailSyncButton({
   size = "sm",
   showLastSync = true
 }: GmailSyncButtonProps) {
-  const { connection, isConnected, isLoading: isLoadingConnection, authUrl, prepareOAuth, clearAuthUrl, refetch } = useGmailConnection();
+  const { connection, isConnected, isLoading: isLoadingConnection, connectGmail, refetch } = useGmailConnection();
   const { syncLead, isSyncing } = useGmailSync();
   const [justSynced, setJustSynced] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
@@ -47,24 +47,12 @@ export function GmailSyncButton({
     }
   }, [justSynced]);
 
-  // Handle authUrl changes - open popup when ready
-  useEffect(() => {
-    if (authUrl && isReconnecting) {
-      const popup = window.open(authUrl, "gmail-auth", "width=500,height=600,scrollbars=yes");
-      if (!popup || popup.closed) {
-        toast.error("Popup blocked", { description: "Please allow popups and try again" });
-      }
-      clearAuthUrl();
-      setIsReconnecting(false);
-    }
-  }, [authUrl, isReconnecting, clearAuthUrl]);
-
   const handleSync = async () => {
     setNeedsReconnect(false);
     const result = await syncLead(leadId, leadEmail);
     if (result.ok) {
       setJustSynced(true);
-      refetch(); // Refresh connection to get updated last_sync_at
+      refetch();
       onSyncComplete?.();
     } else if (result.needsReconnect) {
       setNeedsReconnect(true);
@@ -74,7 +62,7 @@ export function GmailSyncButton({
   const handleReconnect = async () => {
     setIsReconnecting(true);
     try {
-      await prepareOAuth();
+      await connectGmail(window.location.pathname);
     } catch (err) {
       toast.error("Failed to start reconnection");
       setIsReconnecting(false);
