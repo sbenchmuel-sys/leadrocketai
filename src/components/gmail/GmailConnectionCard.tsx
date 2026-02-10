@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { toast } from "sonner";
-import { Loader2, Mail, AlertCircle, MailCheck, RefreshCw, Unplug } from "lucide-react";
+import { Loader2, Mail, AlertCircle, MailCheck, RefreshCw, Unplug, ExternalLink, Copy } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -12,7 +12,7 @@ interface GmailConnectionCardProps {
 }
 
 export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardProps) {
-  const { connection, isConnected, isLoading, isConnecting, error, connectGmail, disconnect } = useGmailConnection();
+  const { connection, isConnected, isLoading, isConnecting, error, authFallback, connectGmail, clearAuthFallback, disconnect } = useGmailConnection();
 
   const handleConnect = async () => {
     try {
@@ -73,7 +73,7 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {error && (
+        {error && !authFallback && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="flex items-center justify-between">
@@ -110,6 +110,28 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
             <p className="text-xs text-muted-foreground">
               If sending emails fails, click "Reauthorize" to update permissions.
             </p>
+          </div>
+        ) : authFallback ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Open the link below in a new browser tab to authorize Gmail:
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(authFallback.authUrl);
+                  toast.success("Copied!", { description: "Paste the URL in a new browser tab" });
+                }}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Authorization URL
+              </Button>
+            </div>
+            <Button variant="ghost" size="sm" onClick={clearAuthFallback}>
+              Cancel
+            </Button>
           </div>
         ) : (
           <Button onClick={handleConnect} disabled={isConnecting}>

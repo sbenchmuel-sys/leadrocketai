@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+export type GmailAuthFallback = { authUrl: string } | null;
+
 export interface GmailConnection {
   id: string;
   user_id: string;
@@ -17,6 +19,7 @@ export function useGmailConnection() {
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authFallback, setAuthFallback] = useState<GmailAuthFallback>(null);
 
   const fetchConnection = useCallback(async () => {
     try {
@@ -71,6 +74,7 @@ export function useGmailConnection() {
     try {
       setError(null);
       setIsConnecting(true);
+      setAuthFallback(null);
 
       const path = returnUrl || window.location.pathname;
 
@@ -86,15 +90,34 @@ export function useGmailConnection() {
         throw new Error(data.error || "Failed to start OAuth");
       }
 
-      // Navigate top-level window to break out of iframe (Lovable preview)
-      const target = window.top || window;
-      target.location.href = data.authUrl;
+      // Try navigating: top window first, then current window, then fallback to link
+      try {
+        if (window.top && window.top !== window) {
+          window.top.location.href = data.authUrl;
+          return;
+        }
+      } catch {
+        // Cross-origin iframe, can't access top
+      }
+
+      try {
+        window.location.href = data.authUrl;
+        return;
+      } catch {
+        // Navigation blocked
+      }
+
+      // Fallback: show the URL for manual opening
+      setIsConnecting(false);
+      setAuthFallback({ authUrl: data.authUrl });
     } catch (err) {
       setIsConnecting(false);
       setError(err instanceof Error ? err.message : "Failed to start Gmail connection");
       throw err;
     }
   };
+
+  const clearAuthFallback = () => setAuthFallback(null);
 
   const disconnect = async () => {
     try {
@@ -124,7 +147,9 @@ export function useGmailConnection() {
     isLoading,
     isConnecting,
     error,
+    authFallback,
     connectGmail,
+    clearAuthFallback,
     disconnect,
     refetch: fetchConnection,
   };
