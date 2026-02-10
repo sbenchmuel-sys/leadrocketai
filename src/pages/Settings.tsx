@@ -1,7 +1,5 @@
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
-import { UnmatchedMeetingSummariesCard } from "@/components/settings/UnmatchedMeetingSummariesCard";
-import { MatchedMeetingSummariesCard } from "@/components/settings/MatchedMeetingSummariesCard";
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
@@ -12,7 +10,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Building2, Clock, User, PenLine, Mail, Video, AlertCircle, ArrowRightLeft } from "lucide-react";
+import { Building2, Clock, User, PenLine, Mail, Video } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -113,35 +111,6 @@ export default function Settings() {
           </AccordionContent>
         </AccordionItem>
 
-        <AccordionItem value="unmatched" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Unmatched Meeting Summaries</div>
-                <div className="text-sm text-muted-foreground font-normal">Match orphaned Zoom summaries to leads</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <UnmatchedMeetingSummariesCard />
-          </AccordionContent>
-        </AccordionItem>
-
-        <AccordionItem value="reassign" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <ArrowRightLeft className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Reassign Meeting Summaries</div>
-                <div className="text-sm text-muted-foreground font-normal">Fix incorrectly matched summaries</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <MatchedMeetingSummariesCard />
-          </AccordionContent>
-        </AccordionItem>
       </Accordion>
     </div>
   );
