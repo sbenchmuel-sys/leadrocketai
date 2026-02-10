@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Loader2, Plus, X, Save } from "lucide-react";
+import { Building2, Loader2, Plus, X, Save, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { 
   getWorkspaceProfile, 
@@ -15,10 +15,51 @@ import {
   WorkspaceProfileInput 
 } from "@/lib/workspaceProfileQueries";
 
+interface CompanyKb {
+  differentiators?: { text: string }[];
+  target_customers?: { text: string }[];
+  proof_points?: { text: string }[];
+  company_name?: string;
+  product_name?: string;
+}
+
+function extractAutoFill(profile: WorkspaceProfile) {
+  const kb = (profile as any).company_kb as CompanyKb | undefined;
+  const autoFilled: string[] = [];
+  const values: Partial<Record<'companyName' | 'productName' | 'productDescription' | 'valueProps', any>> = {};
+
+  if (kb && typeof kb === 'object') {
+    if (!profile.company_name && kb.company_name) {
+      values.companyName = kb.company_name;
+      autoFilled.push('company_name');
+    }
+    if (!profile.product_name && kb.product_name) {
+      values.productName = kb.product_name;
+      autoFilled.push('product_name');
+    }
+    if (!profile.product_description) {
+      const diffs = kb.differentiators?.map(d => d.text).filter(Boolean) || [];
+      const targets = kb.target_customers?.map(t => t.text).filter(Boolean) || [];
+      if (diffs.length > 0 && targets.length > 0) {
+        values.productDescription = `Target customers: ${targets.join(', ')}. Key differentiators: ${diffs.join('; ')}.`;
+        autoFilled.push('product_description');
+      }
+    }
+  }
+
+  if ((!profile.primary_value_props || profile.primary_value_props.length === 0)) {
+    const vp = (profile as any).primary_value_props;
+    // value props from onboarding are already on the profile row — handled by normal load
+  }
+
+  return { values, autoFilled };
+}
+
 export function WorkspaceProfileCard() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<WorkspaceProfile | null>(null);
+  const [autoFilledFields, setAutoFilledFields] = useState<string[]>([]);
   
   // Form state
   const [companyName, setCompanyName] = useState("");
@@ -44,6 +85,13 @@ export function WorkspaceProfileCard() {
         setPricingPolicy(data.pricing_policy);
         setMeetingTimezone(data.meeting_timezone || "");
         setValueProps(data.primary_value_props || []);
+
+        // Auto-fill empty fields from knowledge base
+        const { values, autoFilled } = extractAutoFill(data);
+        if (values.companyName) setCompanyName(values.companyName);
+        if (values.productName) setProductName(values.productName);
+        if (values.productDescription) setProductDescription(values.productDescription);
+        setAutoFilledFields(autoFilled);
       }
     } catch (err) {
       console.error("Failed to load workspace profile:", err);
@@ -106,11 +154,20 @@ export function WorkspaceProfileCard() {
         <CardDescription>
           Configure your company and product information for AI-generated emails
         </CardDescription>
+        {autoFilledFields.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            Some fields were auto-filled from your knowledge base. Review and save to confirm.
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="companyName">Company Name</Label>
+            <Label htmlFor="companyName" className="flex items-center gap-1.5">
+              Company Name
+              {autoFilledFields.includes('company_name') && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">auto-filled</Badge>}
+            </Label>
             <Input
               id="companyName"
               value={companyName}
@@ -119,7 +176,10 @@ export function WorkspaceProfileCard() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="productName">Product Name</Label>
+            <Label htmlFor="productName" className="flex items-center gap-1.5">
+              Product Name
+              {autoFilledFields.includes('product_name') && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">auto-filled</Badge>}
+            </Label>
             <Input
               id="productName"
               value={productName}
@@ -130,7 +190,10 @@ export function WorkspaceProfileCard() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="productDescription">Product Description</Label>
+          <Label htmlFor="productDescription" className="flex items-center gap-1.5">
+            Product Description
+            {autoFilledFields.includes('product_description') && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">auto-filled</Badge>}
+          </Label>
           <Textarea
             id="productDescription"
             value={productDescription}
