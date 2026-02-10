@@ -1,39 +1,20 @@
 
-# Plan: Remove Hardcoded "Binah" Reference
 
-## Finding
+# Update Google OAuth and Encryption Secrets
 
-There is only **one hardcoded "Binah" reference** in the codebase:
+## What We'll Do
 
-| File | Line | Current Text |
-|------|------|--------------|
-| `src/lib/supabaseQueries.ts` | 2 | `// Database query functions for Binah Deal Assistant` |
+Set the three secrets needed for Gmail integration:
 
-The system prompts (`src/prompts/systemPrompt.ts` and `supabase/functions/ai_task/index.ts`) do **not** contain "Binah" - they reference "regulated B2B" and healthcare industries, but per your request, I will not modify those.
+1. **GOOGLE_CLIENT_ID** - Your Google OAuth client identifier
+2. **GOOGLE_CLIENT_SECRET** - Your Google OAuth client secret
+3. **TOKEN_ENCRYPTION_KEY** - Your self-generated encryption key for securing stored tokens
 
----
+## Steps
 
-## Change
+1. Use the secret management tool to prompt you for each of the three values
+2. You'll paste each value into the secure input field
+3. Once all three are saved, the Gmail OAuth flow will be fully operational
 
-**File: `src/lib/supabaseQueries.ts` (line 2)**
+No code changes are needed -- the edge functions (`gmail-auth`, `gmail-callback`, `gmail-sync`, `gmail-bulk-sync`) already reference these secrets.
 
-```typescript
-// FROM:
-// Database query functions for Binah Deal Assistant
-
-// TO:
-// Database query functions for Deal Assistant
-```
-
----
-
-## Important Note
-
-The "Binah" content appearing in your AI-generated emails is coming from your **database**, not hardcoded prompts. Specifically, your `workspace_profiles` record contains:
-
-- **company_name**: "Binah.ai"
-- **product_name**: "Binah.ai' SDK"  
-- **product_description**: Full Binah SDK description
-- **primary_value_props**: Binah-specific value propositions
-
-To make the platform truly generic, you need to **clear or update your Workspace Profile** in **Settings > Workspace Profile** within the app. This is stored in the database and cannot be removed via code changes.
