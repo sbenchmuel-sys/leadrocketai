@@ -1,20 +1,35 @@
 
+# Auto-populate Workspace Profile & Remove Meeting Summary Sections
 
-# Update Google OAuth and Encryption Secrets
+## What will change
 
-## What We'll Do
+### 1. Remove "Unmatched Meeting Summaries" and "Reassign Meeting Summaries" sections
+Both accordion items and their component imports will be removed from the Settings page. The component files themselves will be kept (not deleted) in case they're needed later, but they won't be rendered anywhere.
 
-Set the three secrets needed for Gmail integration:
+### 2. Auto-populate Workspace Profile from Knowledge Base
+When the Workspace Profile card loads and fields are empty, it will check the `company_kb` and `industry_pack` data already stored in `workspace_profiles` (populated during onboarding). If there's enough data to be 80%+ confident in a value, it will pre-fill the empty form fields.
 
-1. **GOOGLE_CLIENT_ID** - Your Google OAuth client identifier
-2. **GOOGLE_CLIENT_SECRET** - Your Google OAuth client secret
-3. **TOKEN_ENCRYPTION_KEY** - Your self-generated encryption key for securing stored tokens
+**Mapping logic:**
+- `company_name` -- from `company_kb` if it contains a company name reference
+- `product_name` -- from `company_kb` if identifiable
+- `product_description` -- synthesized from `company_kb.differentiators` + `target_customers` if both exist
+- `primary_value_props` -- already populated from onboarding extraction (direct use)
+- Fields that already have user-entered values will NOT be overwritten
 
-## Steps
+The auto-fill will only apply to empty fields, and the user still needs to click "Save" to persist -- nothing is saved automatically.
 
-1. Use the secret management tool to prompt you for each of the three values
-2. You'll paste each value into the secure input field
-3. Once all three are saved, the Gmail OAuth flow will be fully operational
+---
 
-No code changes are needed -- the edge functions (`gmail-auth`, `gmail-callback`, `gmail-sync`, `gmail-bulk-sync`) already reference these secrets.
+## Technical Details
 
+### Files modified:
+
+**`src/pages/Settings.tsx`**
+- Remove imports for `UnmatchedMeetingSummariesCard` and `MatchedMeetingSummariesCard`
+- Remove the two `AccordionItem` blocks for "unmatched" and "reassign" (lines 116-144)
+- Remove unused icon imports (`AlertCircle`, `ArrowRightLeft`)
+
+**`src/components/settings/WorkspaceProfileCard.tsx`**
+- Update `loadProfile()` to check `company_kb` and `industry_pack` from the workspace profile
+- When form fields are empty and knowledge base has relevant data, pre-fill the form state
+- Add a small info badge/note indicating "Auto-filled from knowledge base" when fields were populated this way, so the user knows to review before saving
