@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, getLeadMeetingPacks, updateDraftStatus, createMeetingPack, appendLeadMilestones, MilestoneItem } from "@/lib/supabaseQueries";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
+import { updateSequenceState } from "@/lib/sequenceUpdater";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -541,6 +542,42 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                   variant="default"
                   size="sm"
                 />
+              </div>
+            )}
+            {/* Log as Sent for WhatsApp channel */}
+            {channel === "whatsapp" && (
+              <div className="flex gap-2 justify-end">
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      // 1. Create outbound interaction
+                      const { data: { user } } = await supabase.auth.getUser();
+                      await supabase.from("interactions").insert({
+                        lead_id: lead.id,
+                        type: "whatsapp_outbound",
+                        source: "manual",
+                        body_text: generatedContent,
+                        direction: "outbound",
+                        from_email: user?.email || null,
+                        to_email: lead.email,
+                        occurred_at: new Date().toISOString(),
+                      });
+                      // 2. Run sequence engine — same as email
+                      const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
+                      await updateSequenceState(lead.id, intentUsed);
+                      toast.success("WhatsApp message logged & sequence updated");
+                      setGeneratedContent("");
+                      onUpdate();
+                    } catch (err) {
+                      console.error("[DraftsTab] WhatsApp log error:", err);
+                      toast.error("Failed to log WhatsApp message");
+                    }
+                  }}
+                >
+                  <Send className="h-3.5 w-3.5 mr-1" />
+                  Log as Sent
+                </Button>
               </div>
             )}
           </CardContent>

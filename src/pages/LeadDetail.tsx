@@ -104,7 +104,7 @@ export default function LeadDetail() {
             </TabsList>
 
             <TabsContent value="timeline" className="mt-6">
-              <TimelineTab leadId={lead.id} />
+              <TimelineTab leadId={lead.id} onWhatsAppReply={handleUpdate} />
             </TabsContent>
             <TabsContent value="drafts" className="mt-6">
               <DraftsTab lead={lead} onUpdate={handleUpdate} />
