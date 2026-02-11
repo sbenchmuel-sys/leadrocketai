@@ -1,41 +1,128 @@
 
+# Phase 1: Unified Draft Pipeline (Foundation)
 
-## Plan: Auto-Update Lead State on Email Upload + Meeting Summary Upload
+## Overview
+Create a centralized draft generation service layer that resolves context, determines the right playbook/intent, and feeds the EmailActionDialog composer. No UI changes -- this is pure infrastructure with console logging for verification.
 
-### Problem 1: Lead card doesn't auto-update after uploading email history
+## New Files
 
-When you upload interactions (e.g., inbound/outbound emails) via the Upload tab, the lead's `motion`, `stage`, `strategy`, and timestamps (`last_inbound_at`, `last_outbound_at`, `first_outbound_at`) are NOT recalculated. The lead keeps whatever defaults it was imported with.
+### 1. `src/lib/contextResolver.ts` -- Context Resolver
+Fetches and assembles all lead context needed for draft generation in a single call.
 
-**Fix:** After inserting an interaction in the Upload tab, run a stage-derivation update on the lead:
-- If an **inbound email** is uploaded: set `last_inbound_at`, derive stage to at least `engaged`, and if the lead was `outbound_prospecting` with no prior inbound, the automation should reflect "Paused - Reply Received"
-- If an **outbound email** is uploaded: set `last_outbound_at` / `first_outbound_at`
-- If **email history is present** (any inbound exists): automation status should show paused/off accordingly
-- Recalculate `stage` using the existing priority hierarchy (closed > closing > post_meeting > engaged > contacted > new)
-- Refresh the lead data after update so the header and overview panel reflect changes immediately
+**Input:** `lead_id: string`
 
-### Problem 2: No place to upload meeting summaries in the Meetings tab
+**Output:** `ResolvedContext` object containing:
+- Lead data: `source_type`, `motion`, `strategy`, `stage`, `status`
+- Sequence state: derived `sequence_type`, `sequence_step`, `sequence_status` (computed from `next_action_key`, `motion`, interactions)
+- Email history: `last_outbound_email`, `last_inbound_email` (from `getLeadEmailThread`)
+- Meeting data: `last_meeting_summary` (from `getLeadMeetingPacks`)
+- Intelligence: `buying_signals`, `risk_signals` (parsed from `milestones_json`, `risks_json`)
+- Engagement: `engagement_level`, `closing_power` (from `calculateClosingPower` in `closingPowerUtils.ts`)
+- Knowledge: `company_kb`, `industry_kb`, `persona_kb` (from workspace profile's `company_kb`, `industry_pack`, and KB chunks)
 
-Currently meeting notes can only be added via the Upload tab (interaction type "meeting"), but the Meetings tab shows "No Meetings Yet" with no upload option. Users expect to add meeting summaries directly from the Meetings tab.
+**Implementation approach:**
+- Parallel-fetch lead detail, email thread, meeting packs, workspace profile, rep profile, and knowledge docs using `Promise.all`
+- Parse `milestones_json` for buying signals (pricing, decision-maker, docs-requested patterns -- reuse patterns from `closingPowerUtils.ts`)
+- Parse `risks_json` for risk signals
+- Derive `sequence_type` from motion + action key (e.g., `outbound_prospecting` motion with `send_pre_2` action = outbound sequence step 2)
+- Derive `sequence_step` number from `next_action_key` pattern matching
 
-**Fix:** Add a "Add Meeting Summary" button to the Meetings tab that opens an inline form or dialog for pasting meeting notes. When submitted, it runs the same AI pipeline (recap generation, milestone extraction, deal factors, next steps) that already exists in the Upload tab's `runMeetingPipeline` function, and creates a meeting pack.
+### 2. `src/lib/playbookResolver.ts` -- Playbook Resolver
+Takes resolved context and determines the recommended intent, playbook name, and next sequence step.
 
----
+**Input:** `context: ResolvedContext`
 
-### Technical Details
+**Output:** `PlaybookRecommendation` object:
+- `recommended_intent`: the AI task type to use (e.g., `pre_email_2_followup`, `reply_to_thread`, `nurture_email_single`)
+- `recommended_playbook`: human-readable label (e.g., "Outbound Prospecting", "Post-Meeting Follow-up")
+- `next_sequence_step`: step number or label (e.g., "Step 2 of 4", "Nurture Email 1")
 
-#### File: `src/components/lead/UploadTab.tsx`
-- After `insertInteraction` succeeds, add a lead update step:
-  - For `email_inbound`: update `last_inbound_at`, set `stage` to at least `engaged`
-  - For `email_outbound`: update `last_outbound_at`, `first_outbound_at` (if null)
-  - For `meeting`: update `stage` to `post_meeting`, set `meeting_summary_count` increment
-- Call `onSuccess()` to trigger `handleUpdate` which reloads the lead and refreshes the header/overview panel
+**Rules (priority order):**
+1. If meeting exists and no recap sent --> `post_meeting_followup_email`
+2. If inbound reply exists and no outbound after it --> `reply_to_thread`
+3. If motion = `nurture` --> `nurture_email_single`
+4. If motion = `closing` --> `pre_email_3_followup` (closing nudge)
+5. If `next_action_key` exists --> map directly (reuse existing `getAITaskForAction` logic)
+6. Default: derive from motion + source_type (outbound = intro/followup sequence, inbound = response)
 
-#### File: `src/components/lead/MeetingsTab.tsx`
-- Add an "Add Meeting Summary" button (visible in both empty state and header area)
-- When clicked, show a form with: Title (optional), Date, and Notes textarea
-- On submit, call `createMeetingPack` with raw notes, then run the AI pipeline (reuse the same recap/milestones/factors/recommendations flow from UploadTab)
-- Refresh the meetings list after completion
+### 3. `src/lib/generateDraft.ts` -- Unified Draft Generator
+The single entry point that orchestrates context resolution, playbook selection, and returns everything the composer needs.
 
-#### File: `src/components/lead/LeadDetailHeader.tsx`
-- No changes needed — it already derives automation status from lead fields. Once the lead fields are updated correctly, it will auto-reflect.
+**Input:**
+```
+{
+  lead_id: string,
+  channel?: "email" | "linkedin" | "whatsapp",  // default "email"
+  override_intent?: AITaskType | null,           // user manually selected intent
+  instructions?: string | null,                  // custom user notes
+  motion_override?: Motion | null                // user changed motion in composer
+}
+```
 
+**Output:** `DraftPipelineResult`
+```
+{
+  resolved_context: ResolvedContext,
+  playbook: PlaybookRecommendation,
+  recommended_intent: AITaskType,
+  recommended_playbook: string,
+  sequence_step: string,
+  draft_text: string | null  // null until AI generates it
+}
+```
+
+**Behavior:**
+- Calls `contextResolver(lead_id)`
+- Calls `playbookResolver(context)` 
+- If `override_intent` is provided, uses that instead of recommended intent
+- Logs all resolved data to console for verification
+- Does NOT call the AI task yet (that stays in `EmailActionDialog.generateEmail()` for now)
+- Returns the recommendation so the composer can use it
+
+### 4. Wire into `EmailActionDialog.tsx`
+
+**Changes (minimal, additive):**
+- Import `generateDraft` from the new service
+- In the existing `generateEmail()` function, call `generateDraft()` BEFORE the existing logic
+- Log the returned `resolved_context`, `recommended_intent`, and `playbook` to console
+- Do NOT replace existing generation logic yet -- the new pipeline runs alongside it
+- The existing `getAITaskForAction`, `buildLeadContext`, `getPlaybookLabel` functions remain untouched
+
+**Console output pattern:**
+```
+[generateDraft] Context resolved for lead xyz
+[generateDraft] Recommended: { intent: "pre_email_2_followup", playbook: "Outbound Prospecting", step: "Step 2 of 4" }
+[generateDraft] Actual (legacy): { actionKey: "send_pre_2_followup", taskType: "pre_email_2_followup" }
+```
+
+This lets us verify the new pipeline recommends correctly without breaking anything.
+
+## Technical Details
+
+### File structure
+```
+src/lib/contextResolver.ts    -- ResolvedContext type + contextResolver()
+src/lib/playbookResolver.ts   -- PlaybookRecommendation type + playbookResolver()  
+src/lib/generateDraft.ts      -- generateDraft() orchestrator
+```
+
+### Dependencies used (all existing)
+- `getLeadDetail`, `getLeadEmailThread`, `getLeadMeetingPacks`, `getLeadInteractions` from `supabaseQueries`
+- `getRepProfile`, `getKnowledgeDocuments` from `repProfileQueries`
+- `getWorkspaceProfile`, `formatWorkspaceContext` from `workspaceProfileQueries`
+- `calculateClosingPower` from `closingPowerUtils`
+- `getActionType`, `Motion`, `SourceType` from `dashboardUtils`
+- `AITaskType` from `useAITask`
+
+### What stays the same
+- All existing composer UI and behavior
+- All existing AI task calls
+- EmailActionDialog's `generateEmail()` still does the actual generation
+- DraftsTab's intent selection still works as before
+- No database changes needed
+
+### Verification checklist
+- Composer still generates emails as before
+- Console shows correct recommended intent matching what legacy logic produces
+- No UI breakage
+- No automation changes
