@@ -34,13 +34,25 @@ function getAutomationLabel(lead: LeadDetail): { label: string; color: string } 
   if (stage === "closed_won" || stage === "closed_lost") {
     return { label: "Completed", color: "text-muted-foreground" };
   }
+  // Nurture-specific labels
+  if (motion === "nurture") {
+    const nurtureStatus = (lead as any).nurture_status || "inactive";
+    const nurtureMode = (lead as any).nurture_mode || "review";
+    if (nurtureStatus === "paused" || lead.last_inbound_at || lead.has_future_meeting) {
+      return { label: "Nurture Paused", color: "text-amber-600 dark:text-amber-400" };
+    }
+    if (nurtureStatus === "active") {
+      return { label: nurtureMode === "automatic" ? "Nurture Auto" : "Nurture Review", color: "text-emerald-600 dark:text-emerald-400" };
+    }
+    return { label: "Nurture", color: "text-muted-foreground" };
+  }
   if (lead.last_inbound_at) {
     return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
   }
   if (lead.has_future_meeting) {
     return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
   }
-  const automationAllowed = motion === "outbound_prospecting" || motion === "nurture";
+  const automationAllowed = motion === "outbound_prospecting";
   if (!automationAllowed) {
     return { label: "Manual", color: "text-muted-foreground" };
   }

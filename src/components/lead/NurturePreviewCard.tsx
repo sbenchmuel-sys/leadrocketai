@@ -1,0 +1,430 @@
+import { useState, useMemo } from "react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { format, addDays } from "date-fns";
+import type { LeadDetail } from "@/lib/supabaseQueries";
+import { saveDraft } from "@/lib/supabaseQueries";
+import { supabase } from "@/integrations/supabase/client";
+import { useAITask } from "@/hooks/useAITask";
+import { toast } from "sonner";
+
+interface NurturePreviewCardProps {
+  lead: LeadDetail;
+  onUpdate: () => void;
+}
+
+type NurtureMode = "review" | "automatic";
+type NurtureStatus = "active" | "paused" | "inactive";
+
+const CADENCE_DAYS: Record<string, number> = {
+  weekly: 7,
+  biweekly: 14,
+  monthly: 30,
+};
+
+const THEME_LABELS: Record<string, string> = {
+  balanced: "Balanced",
+  educational: "Educational",
+  case_study: "Case Study",
+};
+
+const NURTURE_STEP_LABELS = ["Industry Insight", "Case Study", "Value-Add Resource"];
+
+function getScheduledDates(lead: LeadDetail) {
+  const cadence = lead.nurture_cadence || "biweekly";
+  const days = CADENCE_DAYS[cadence] || 14;
+  const base = lead.mode_changed_at ? new Date(lead.mode_changed_at) : new Date();
+  const nurtureSent = (lead as any).nurture_outbound_count || 0;
+
+  const nextDate = addDays(base, days * (nurtureSent + 1));
+  nextDate.setHours(9, 30, 0, 0);
+  const followingDate = addDays(base, days * (nurtureSent + 2));
+  followingDate.setHours(9, 0, 0, 0);
+
+  const nextLabel = NURTURE_STEP_LABELS[nurtureSent % NURTURE_STEP_LABELS.length];
+  const followingLabel = NURTURE_STEP_LABELS[(nurtureSent + 1) % NURTURE_STEP_LABELS.length];
+
+  return { nextDate, followingDate, nextLabel, followingLabel };
+}
+
+export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCardProps) {
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewSubject, setPreviewSubject] = useState("");
+  const [previewTarget, setPreviewTarget] = useState<"next" | "following">("next");
+  const [isApproving, setIsApproving] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
+  const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
+  const { runTask, isLoading: isGenerating } = useAITask();
+
+  const mode = ((lead as any).nurture_mode as NurtureMode) || "review";
+  const status = ((lead as any).nurture_status as NurtureStatus) || "inactive";
+  const theme = ((lead as any).nurture_theme as string) || "balanced";
+  const nurtureSent = (lead as any).nurture_outbound_count || 0;
+
+  // Don't render if not in nurture
+  if (lead.motion !== "nurture" || status === "inactive") return null;
+
+  const { nextDate, followingDate, nextLabel, followingLabel } = useMemo(
+    () => getScheduledDates(lead),
+    [lead]
+  );
+
+  // Re-engagement safety
+  const isReEngaged = !!lead.last_inbound_at || lead.has_future_meeting;
+
+  const generateDraft = async (target: "next" | "following") => {
+    setPreviewTarget(target);
+    setShowPreview(true);
+    setPreviewContent("");
+    setPreviewSubject("");
+
+    const stepLabel = target === "next" ? nextLabel : followingLabel;
+    const result = await runTask("nurture_email_single", {
+      lead_context: [
+        `Name: ${lead.name}`,
+        `Company: ${lead.company}`,
+        `Email: ${lead.email}`,
+        lead.job_title && `Job Title: ${lead.job_title}`,
+        lead.industry && `Industry: ${lead.industry}`,
+        `Nurture Theme: ${theme}`,
+        `Email Type: ${stepLabel}`,
+      ].filter(Boolean).join("\n"),
+      nurture_theme: theme,
+      email_type: stepLabel,
+      lead_id: lead.id,
+    });
+
+    if (result.ok && result.content) {
+      // Try to extract subject from content
+      const lines = result.content.split("\n");
+      const subjectLine = lines.find(l => l.toLowerCase().startsWith("subject:"));
+      if (subjectLine) {
+        setPreviewSubject(subjectLine.replace(/^subject:\s*/i, "").trim());
+        setPreviewContent(lines.filter(l => !l.toLowerCase().startsWith("subject:")).join("\n").trim());
+      } else {
+        setPreviewContent(result.content);
+        setPreviewSubject(`${stepLabel} for ${lead.company}`);
+      }
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!previewContent.trim()) return;
+    setIsApproving(true);
+    try {
+      await saveDraft(lead.id, {
+        channel: "email",
+        draft_type: "nurture",
+        to_recipient: lead.email,
+        subject: previewSubject || undefined,
+        body_text: previewContent,
+        step_key: `nurture_${nurtureSent + (previewTarget === "following" ? 2 : 1)}`,
+        nurture_theme: theme,
+        nurture_cadence: lead.nurture_cadence || "biweekly",
+        status: "saved",
+      });
+
+      toast.success("Nurture email approved and saved");
+      setShowPreview(false);
+
+      // After first manual approval, show upgrade prompt
+      if (nurtureSent === 0 && mode === "review") {
+        setShowUpgradePrompt(true);
+      }
+
+      onUpdate();
+    } catch (err) {
+      console.error("Failed to approve nurture email:", err);
+      toast.error("Failed to save approved email");
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  const handlePause = async () => {
+    setIsPausing(true);
+    try {
+      await supabase
+        .from("leads")
+        .update({
+          nurture_status: "paused",
+          needs_action: false,
+          next_action_key: null,
+          next_action_label: "Nurture paused",
+        })
+        .eq("id", lead.id);
+      onUpdate();
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setIsPausing(true);
+    try {
+      await supabase
+        .from("leads")
+        .update({
+          nurture_status: "active",
+          needs_action: true,
+          next_action_label: "Review next nurture email",
+          eligible_at: new Date().toISOString(),
+        })
+        .eq("id", lead.id);
+      onUpdate();
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const handleEnableAutomation = async () => {
+    try {
+      await supabase
+        .from("leads")
+        .update({ nurture_mode: "automatic" })
+        .eq("id", lead.id);
+      toast.success("Nurture automation enabled");
+      setShowUpgradeDialog(false);
+      onUpdate();
+    } catch {
+      toast.error("Failed to enable automation");
+    }
+  };
+
+  // ─── Re-engaged / Paused by system ───
+  if (isReEngaged && status === "active") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Sprout className="h-3.5 w-3.5 text-emerald-500" />
+          <span className="text-sm font-medium text-foreground">Nurture Paused</span>
+        </div>
+        <p className="text-xs text-muted-foreground">Lead re-engaged.</p>
+      </div>
+    );
+  }
+
+  // ─── Paused ───
+  if (status === "paused") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Pause className="h-3.5 w-3.5 text-amber-500" />
+          <span className="text-sm font-medium text-foreground">Nurture Paused</span>
+        </div>
+        <p className="text-xs text-muted-foreground">Manually paused</p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleResume}
+          disabled={isPausing}
+          className="w-full text-xs h-7"
+        >
+          {isPausing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
+          Resume
+        </Button>
+      </div>
+    );
+  }
+
+  // ─── Active ───
+  return (
+    <>
+      <div className="space-y-3">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sprout className="h-3.5 w-3.5 text-emerald-500" />
+            <span className="text-sm font-medium text-foreground">
+              Nurture Mode
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 font-medium">
+                {mode === "review" ? "Review" : "Auto"}
+              </span>
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-medium">
+              Active
+            </span>
+          </div>
+        </div>
+
+        {/* Meta */}
+        <div className="text-xs text-muted-foreground">
+          Theme: {THEME_LABELS[theme] || theme} · Cadence: Every {CADENCE_DAYS[lead.nurture_cadence || "biweekly"]} days
+        </div>
+
+        <Separator className="bg-border/40" />
+
+        {/* Next Email */}
+        <div className="space-y-0.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next</span>
+          <p className="text-sm font-semibold text-foreground">{nextLabel}</p>
+          <p className="text-xs text-muted-foreground">
+            {format(nextDate, "MMM d")} · {format(nextDate, "h:mm a")}
+          </p>
+        </div>
+
+        {/* Following */}
+        <div className="space-y-0.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Following</span>
+          <p className="text-sm font-semibold text-foreground">{followingLabel}</p>
+          <p className="text-xs text-muted-foreground">
+            {format(followingDate, "MMM d")} · {format(followingDate, "h:mm a")}
+          </p>
+        </div>
+
+        <Separator className="bg-border/40" />
+
+        {/* Actions */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => generateDraft("next")}
+            className="flex-1 text-xs h-7"
+          >
+            <Eye className="h-3 w-3 mr-1" />
+            Preview Next
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => generateDraft("following")}
+            className="flex-1 text-xs h-7"
+          >
+            <Wand2 className="h-3 w-3 mr-1" />
+            Generate Following
+          </Button>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handlePause}
+          disabled={isPausing}
+          className="w-full text-xs h-7 text-muted-foreground"
+        >
+          {isPausing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Pause className="h-3 w-3 mr-1" />}
+          Pause
+        </Button>
+
+        {/* Upgrade prompt (inline) */}
+        {showUpgradePrompt && mode === "review" && (
+          <>
+            <Separator className="bg-border/40" />
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                You've reviewed your first nurture email. Enable automatic sending?
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowUpgradeDialog(true)}
+                className="w-full text-xs h-7"
+              >
+                <Zap className="h-3 w-3 mr-1" />
+                Enable Automation
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Preview Modal */}
+      <Dialog open={showPreview} onOpenChange={setShowPreview}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <Sprout className="h-4 w-4 text-emerald-500" />
+              {previewTarget === "next" ? "Preview" : "Generate"}: {previewTarget === "next" ? nextLabel : followingLabel}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Scheduled: {format(previewTarget === "next" ? nextDate : followingDate, "MMM d, yyyy · h:mm a")}
+            </p>
+            {isGenerating ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                <span className="text-sm text-muted-foreground ml-2">Generating draft…</span>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Subject</label>
+                  <input
+                    value={previewSubject}
+                    onChange={(e) => setPreviewSubject(e.target.value)}
+                    className="w-full text-sm border border-input bg-background rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder="Email subject..."
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Body</label>
+                  <Textarea
+                    value={previewContent}
+                    onChange={(e) => setPreviewContent(e.target.value)}
+                    rows={10}
+                    className="text-sm"
+                    placeholder="Draft will appear here..."
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" size="sm" onClick={() => setShowPreview(false)}>
+              Close
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleApprove}
+              disabled={isGenerating || isApproving || !previewContent.trim()}
+            >
+              {isApproving ? (
+                <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Saving...</>
+              ) : (
+                <><CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve & Save</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Upgrade to Automation Dialog */}
+      <Dialog open={showUpgradeDialog} onOpenChange={setShowUpgradeDialog}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Zap className="h-4 w-4 text-primary" />
+              Enable Nurture Automation?
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Emails will send automatically at cadence. System stops instantly on reply or meeting.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" size="sm" onClick={() => setShowUpgradeDialog(false)}>
+              Keep Review Mode
+            </Button>
+            <Button size="sm" onClick={handleEnableAutomation}>
+              <Zap className="h-3.5 w-3.5 mr-1" />
+              Enable Automatic Sending
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
