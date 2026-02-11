@@ -61,15 +61,34 @@ export function WhatsAppConnectionCard() {
       setIsConnecting(true);
 
       // Get workspace_id from workspace_members
-      const { data: membership, error: memErr } = await supabase
+      let { data: membership } = await supabase
         .from("workspace_members")
         .select("workspace_id")
         .eq("user_id", user!.id)
         .limit(1)
-        .single();
+        .maybeSingle();
 
-      if (memErr || !membership) {
-        throw new Error("Could not find your workspace. Please contact support.");
+      // Auto-create workspace if none exists
+      if (!membership) {
+        const { data: newWs, error: wsErr } = await supabase
+          .from("workspaces")
+          .insert({ name: "My Workspace", plan: "free" })
+          .select("id")
+          .single();
+
+        if (wsErr || !newWs) {
+          throw new Error("Could not create workspace. Please contact support.");
+        }
+
+        const { error: memInsertErr } = await supabase
+          .from("workspace_members")
+          .insert({ workspace_id: newWs.id, user_id: user!.id, role: "admin" as const });
+
+        if (memInsertErr) {
+          throw new Error("Could not set up workspace membership.");
+        }
+
+        membership = { workspace_id: newWs.id };
       }
 
       const { data, error } = await supabase.functions.invoke("whatsapp-connect", {
