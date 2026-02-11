@@ -2,18 +2,18 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import {
-  enrichLead,
   EnrichedLead,
   DealStage,
-  STAGE_ORDER,
   getAIRecommendation,
-  getStaleLeads,
-  getNurtureCandidates,
-  calculateMomentum,
   calculateReplyRate,
 } from "@/lib/dashboardUtils";
+import {
+  getDashboardMetrics,
+  refreshDashboard,
+  onDashboardRefresh,
+  type DashboardMetrics,
+} from "@/lib/dashboardMetricsService";
 import { SummaryCards, FilterType } from "@/components/dashboard/SummaryCards";
 import { DealFlowBar } from "@/components/dashboard/DealFlowBar";
 import { IntelligenceCards } from "@/components/dashboard/IntelligenceCards";
@@ -22,7 +22,7 @@ import { LeadTable } from "@/components/dashboard/LeadTable";
 import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
 
 export default function Dashboard() {
-  const [leads, setLeads] = useState<EnrichedLead[]>([]);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const location = useLocation();
 
@@ -32,26 +32,8 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Fetch leads with new fields
-      const { data: leadsData, error } = await supabase
-        .from("leads")
-        .select(`
-          id, company, name, email, strategy, status, owner_user_id, 
-          created_at, last_activity_at, next_step, deal_outlook, country,
-          stage, needs_action, next_action_key, next_action_label, action_reason_code,
-          meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
-          nurture_cadence, auto_nurture_eligible, source_type, motion
-        `)
-        .order("last_activity_at", { ascending: false })
-        .limit(200);
-
-      if (error) throw error;
-
-      const enrichedLeads = (leadsData || []).map(enrichLead);
-      setLeads(enrichedLeads);
+      const m = await getDashboardMetrics();
+      setMetrics(m);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -64,6 +46,15 @@ export default function Dashboard() {
     loadData();
   }, [loadData, location.key]);
 
+  // Subscribe to refresh events from other parts of the app
+  useEffect(() => {
+    const unsub = onDashboardRefresh((_reason, m) => {
+      setMetrics(m);
+    });
+    return unsub;
+  }, []);
+
+  const leads = metrics?.leads ?? [];
 
   // Calculate summary stats
   const stats = useMemo(() => {
@@ -71,42 +62,31 @@ export default function Dashboard() {
     const active = leads.filter(
       (l) => l.stage !== "closed_won" && l.stage !== "closed_lost"
     ).length;
-    const needsAction = leads.filter((l) => l.needs_action).length;
+    const needsAction = metrics?.needs_action_count ?? 0;
     const meetings = leads.filter((l) => l.hasMeeting).length;
     return { total, active, needsAction, meetings };
-  }, [leads]);
+  }, [leads, metrics?.needs_action_count]);
 
-  // Calculate intelligence metrics
+  // Intelligence metrics from service
   const intelligenceMetrics = useMemo(() => {
-    const staleLeads = getStaleLeads(leads);
-    const nurtureCandidates = getNurtureCandidates(leads);
-    const momentum = calculateMomentum(leads);
-    const replyRate = calculateReplyRate(leads);
-    return { 
-      staleCount: staleLeads.length, 
-      staleLeads, 
-      nurtureCandidateCount: nurtureCandidates.length,
-      nurtureCandidates,
-      momentum, 
-      replyRate 
+    if (!metrics) return { staleCount: 0, staleLeads: [], nurtureCandidateCount: 0, nurtureCandidates: [], momentum: 0, replyRate: 0 };
+    return {
+      staleCount: metrics.stale_count,
+      staleLeads: metrics.staleLeads,
+      nurtureCandidateCount: metrics.nurture_ready_count,
+      nurtureCandidates: metrics.nurtureCandidates,
+      momentum: metrics.momentum_score,
+      replyRate: calculateReplyRate(leads),
     };
-  }, [leads]);
+  }, [metrics, leads]);
 
   // Calculate stage counts
   const stageCounts = useMemo(() => {
     const counts: Record<DealStage, number> = {
-      new: 0,
-      contacted: 0,
-      engaged: 0,
-      post_meeting: 0,
-      closing: 0,
-      closed_won: 0,
-      closed_lost: 0,
+      new: 0, contacted: 0, engaged: 0, post_meeting: 0, closing: 0, closed_won: 0, closed_lost: 0,
     };
     leads.forEach((l) => {
-      if (counts[l.stage] !== undefined) {
-        counts[l.stage]++;
-      }
+      if (counts[l.stage] !== undefined) counts[l.stage]++;
     });
     return counts;
   }, [leads]);
@@ -115,7 +95,6 @@ export default function Dashboard() {
   const filteredLeads = useMemo(() => {
     let result = leads;
 
-    // Apply summary card filter
     if (activeFilter === "active") {
       result = result.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
     } else if (activeFilter === "needs_action") {
@@ -128,7 +107,6 @@ export default function Dashboard() {
       result = intelligenceMetrics.nurtureCandidates;
     }
 
-    // Apply stage filter
     if (activeStage) {
       result = result.filter((l) => l.stage === activeStage);
     }
@@ -137,9 +115,7 @@ export default function Dashboard() {
   }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads, intelligenceMetrics.nurtureCandidates]);
 
   // AI recommendations
-  const recommendations = useMemo(() => {
-    return getAIRecommendation(leads);
-  }, [leads]);
+  const recommendations = useMemo(() => getAIRecommendation(leads), [leads]);
 
   const handleFilterChange = (filter: FilterType) => {
     setActiveFilter(filter);
