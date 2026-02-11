@@ -41,8 +41,8 @@ export default function Settings() {
             <div className="flex items-center gap-3">
               <Clock className="h-5 w-5 text-muted-foreground" />
               <div className="text-left">
-                <div className="font-semibold">Email Cadence Settings</div>
-                <div className="text-sm text-muted-foreground font-normal">Configure automation timing and rules</div>
+                <div className="font-semibold">Sequence & Cadence Settings</div>
+                <div className="text-sm text-muted-foreground font-normal">Configure Email & WhatsApp timing and sequence rules</div>
               </div>
             </div>
           </AccordionTrigger>

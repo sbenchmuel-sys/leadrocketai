@@ -81,6 +81,22 @@ export interface Signals {
   auto_nurture?: AutoNurtureSettings;
 }
 
+export interface WhatsAppCadenceSettings {
+  outbound_followups_hours: number[];
+  nurture_cadence_days: number[];
+  post_meeting_hours: number[];
+  max_messages_before_pause: number;
+  automation_enabled: boolean;
+}
+
+export const DEFAULT_WHATSAPP_CADENCE: WhatsAppCadenceSettings = {
+  outbound_followups_hours: [24, 48, 72],
+  nurture_cadence_days: [7, 14],
+  post_meeting_hours: [4, 48],
+  max_messages_before_pause: 3,
+  automation_enabled: false,
+};
+
 export interface CadenceSettingsV1 {
   version: 1;
   time_rules: TimeRules;
@@ -90,6 +106,7 @@ export interface CadenceSettingsV1 {
     fast: ModeSettings;
     nurture: ModeSettings;
   };
+  whatsapp: WhatsAppCadenceSettings;
   flows: Flows;
   signals: Signals;
 }
@@ -131,6 +148,7 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
       post_meeting: { recap_suggest_after_hours: 24, checkins_days: [7, 14, 30] },
     },
   },
+  whatsapp: { ...DEFAULT_WHATSAPP_CADENCE },
   flows: {
     nurture_campaigns: {
       enabled: true,
