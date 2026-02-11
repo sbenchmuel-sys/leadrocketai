@@ -111,8 +111,15 @@ export default function Dashboard() {
     return result;
   }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads, intelligenceMetrics.nurtureCandidates]);
 
-  // AI recommendations
-  const recommendations = useMemo(() => getAIRecommendation(leads), [leads]);
+  // AI insights
+  const aiInsights = useMemo(() => {
+    const warmingUp = leads.filter(
+      (l) => l.stage === "engaged" || l.stage === "post_meeting"
+    ).length;
+    const atRisk = intelligenceMetrics.staleCount;
+    const recs = getAIRecommendation(leads);
+    return { warmingUp, atRisk, topRecommendation: recs[0] ?? null };
+  }, [leads, intelligenceMetrics.staleCount]);
 
   const handleFilterChange = (filter: FilterType) => {
     setActiveFilter(filter);
@@ -182,7 +189,12 @@ export default function Dashboard() {
           <ActionRequiredPanel leads={leads} onLeadUpdated={loadData} />
         </div>
         <div>
-          <AIRecommendation recommendations={recommendations} />
+          <AIRecommendation
+            warmingUp={aiInsights.warmingUp}
+            atRisk={aiInsights.atRisk}
+            nurtureCandidates={intelligenceMetrics.nurtureCandidateCount}
+            topRecommendation={aiInsights.topRecommendation}
+          />
         </div>
       </div>
 
