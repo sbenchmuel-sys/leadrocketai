@@ -9,9 +9,9 @@ import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import MeetingsTab from "@/components/lead/MeetingsTab";
-import MeetingPackHeader from "@/components/lead/MeetingPackHeader";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
+import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
@@ -88,37 +88,45 @@ export default function LeadDetail() {
         onSyncComplete={loadLead}
       />
 
-      <MeetingPackHeader
-        leadId={lead.id}
-        leadName={lead.name}
-        onNavigateToMeetings={() => setActiveTab("meetings")}
-      />
+      {/* Split layout: Main content + Side panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Main content — 2/3 */}
+        <div className="lg:col-span-2">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="w-full justify-start">
+              <TabsTrigger value="timeline">Timeline</TabsTrigger>
+              <TabsTrigger value="drafts">Drafts</TabsTrigger>
+              <TabsTrigger value="meetings">Meetings</TabsTrigger>
+              <TabsTrigger value="upload">Upload</TabsTrigger>
+              <TabsTrigger value="recommendations">Analysis</TabsTrigger>
+            </TabsList>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="w-full justify-start">
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="drafts">Drafts</TabsTrigger>
-          <TabsTrigger value="meetings">Meetings</TabsTrigger>
-          <TabsTrigger value="upload">Upload</TabsTrigger>
-          <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
-        </TabsList>
+            <TabsContent value="timeline" className="mt-6">
+              <TimelineTab leadId={lead.id} />
+            </TabsContent>
+            <TabsContent value="drafts" className="mt-6">
+              <DraftsTab lead={lead} onUpdate={handleUpdate} />
+            </TabsContent>
+            <TabsContent value="meetings" className="mt-6">
+              <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
+            </TabsContent>
+            <TabsContent value="upload" className="mt-6">
+              <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
+            </TabsContent>
+            <TabsContent value="recommendations" className="mt-6">
+              <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
+            </TabsContent>
+          </Tabs>
+        </div>
 
-        <TabsContent value="timeline" className="mt-6">
-          <TimelineTab leadId={lead.id} />
-        </TabsContent>
-        <TabsContent value="drafts" className="mt-6">
-          <DraftsTab lead={lead} onUpdate={handleUpdate} />
-        </TabsContent>
-        <TabsContent value="meetings" className="mt-6">
-          <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
-        </TabsContent>
-        <TabsContent value="upload" className="mt-6">
-          <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
-        </TabsContent>
-        <TabsContent value="recommendations" className="mt-6">
-          <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
-        </TabsContent>
-      </Tabs>
+        {/* Sticky side panel — 1/3 */}
+        <div className="hidden lg:block">
+          <LeadOverviewPanel
+            lead={lead}
+            onNavigateToMeetings={() => setActiveTab("meetings")}
+          />
+        </div>
+      </div>
     </div>
   );
 }
