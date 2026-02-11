@@ -13,7 +13,7 @@ import { format, addDays } from "date-fns";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { saveDraft } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
-import { useAITask } from "@/hooks/useAITask";
+import { generateDraft as generateDraftPipeline } from "@/lib/generateDraft";
 import { toast } from "sonner";
 
 interface NurturePreviewCardProps {
@@ -64,7 +64,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const [isPausing, setIsPausing] = useState(false);
   const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
-  const { runTask, isLoading: isGenerating } = useAITask();
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const mode = ((lead as any).nurture_mode as NurtureMode) || "review";
   const status = ((lead as any).nurture_status as NurtureStatus) || "inactive";
@@ -82,39 +82,37 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   // Re-engagement safety
   const isReEngaged = !!lead.last_inbound_at || lead.has_future_meeting;
 
-  const generateDraft = async (target: "next" | "following") => {
+  const handleGenerateDraft = async (target: "next" | "following") => {
     setPreviewTarget(target);
     setShowPreview(true);
     setPreviewContent("");
     setPreviewSubject("");
+    setIsGenerating(true);
 
-    const stepLabel = target === "next" ? nextLabel : followingLabel;
-    const result = await runTask("nurture_email_single", {
-      lead_context: [
-        `Name: ${lead.name}`,
-        `Company: ${lead.company}`,
-        `Email: ${lead.email}`,
-        lead.job_title && `Job Title: ${lead.job_title}`,
-        lead.industry && `Industry: ${lead.industry}`,
-        `Nurture Theme: ${theme}`,
-        `Email Type: ${stepLabel}`,
-      ].filter(Boolean).join("\n"),
-      nurture_theme: theme,
-      email_type: stepLabel,
-      lead_id: lead.id,
-    });
+    try {
+      const pipelineResult = await generateDraftPipeline({
+        lead_id: lead.id,
+        channel: "email",
+        override_intent: "nurture_email_single",
+        motion_override: "nurture",
+      });
 
-    if (result.ok && result.content) {
-      // Try to extract subject from content
-      const lines = result.content.split("\n");
-      const subjectLine = lines.find(l => l.toLowerCase().startsWith("subject:"));
-      if (subjectLine) {
-        setPreviewSubject(subjectLine.replace(/^subject:\s*/i, "").trim());
-        setPreviewContent(lines.filter(l => !l.toLowerCase().startsWith("subject:")).join("\n").trim());
-      } else {
-        setPreviewContent(result.content);
-        setPreviewSubject(`${stepLabel} for ${lead.company}`);
+      if (pipelineResult.draft_text) {
+        const lines = pipelineResult.draft_text.split("\n");
+        const subjectLine = lines.find(l => l.toLowerCase().startsWith("subject:"));
+        if (subjectLine) {
+          setPreviewSubject(subjectLine.replace(/^subject:\s*/i, "").trim());
+          setPreviewContent(lines.filter(l => !l.toLowerCase().startsWith("subject:")).join("\n").trim());
+        } else {
+          setPreviewContent(pipelineResult.draft_text);
+          setPreviewSubject(pipelineResult.suggested_subject || `${target === "next" ? nextLabel : followingLabel} for ${lead.company}`);
+        }
       }
+    } catch (err) {
+      console.error("[NurturePreviewCard] Generation error:", err);
+      toast.error("Failed to generate nurture draft");
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -292,7 +290,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           <Button
             variant="outline"
             size="sm"
-            onClick={() => generateDraft("next")}
+            onClick={() => handleGenerateDraft("next")}
             className="flex-1 text-xs h-7"
           >
             <Eye className="h-3 w-3 mr-1" />
@@ -301,7 +299,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           <Button
             variant="outline"
             size="sm"
-            onClick={() => generateDraft("following")}
+            onClick={() => handleGenerateDraft("following")}
             className="flex-1 text-xs h-7"
           >
             <Wand2 className="h-3 w-3 mr-1" />

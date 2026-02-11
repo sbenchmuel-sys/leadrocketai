@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, getLeadMeetingPacks, updateDraftStatus, createMeetingPack, appendLeadMilestones, MilestoneItem } from "@/lib/supabaseQueries";
-import { useAITask, AITaskType } from "@/hooks/useAITask";
+import type { AITaskType } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -188,7 +188,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [composerNote, setComposerNote] = useState("");
   const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   const [hasOutboundAfterMeeting, setHasOutboundAfterMeeting] = useState(false);
-  const { runTask, isLoading: isGenerating } = useAITask();
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Dialog state for full composer
   const [showEmailDialog, setShowEmailDialog] = useState(false);
@@ -293,6 +293,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
     }
 
     // For LinkedIn/WhatsApp: keep inline generation
+    setIsGenerating(true);
     try {
       const motionOverride = selectedIntent === "post_meeting_recap" ? "post_meeting" as const
         : selectedIntent === "closing_nudge" ? "closing" as const
@@ -309,31 +310,18 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         override_intent: intentOverride,
       });
 
-      // For WhatsApp: use dedicated whatsapp_message task
-      const taskType = channel === "whatsapp" ? "whatsapp_message" as const : pipelineResult.recommended_intent;
-      const payload: Record<string, unknown> = {
-        lead_context: buildLeadContext(),
-        meeting_link: lead.meeting_link || "",
-        lead_id: lead.id,
-        custom_instructions: composerNote.trim() || undefined,
-      };
-
-      if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
-        payload.prospect_name = lead.name;
-        payload.title = lead.job_title || "";
-        payload.company = lead.company;
-        payload.context = buildLinkedInContext();
-      }
-
-      const result = await runTask(taskType, payload);
-      if (result.ok && result.content) {
-        setGeneratedContent(result.content);
-        setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
-        setGeneratedSubject("");
+      if (pipelineResult.draft_text) {
+        setGeneratedContent(pipelineResult.draft_text);
+        setKnowledgeUsed(false);
+        setGeneratedSubject(pipelineResult.suggested_subject || "");
+      } else {
+        toast.error("AI returned no content");
       }
     } catch (err) {
       console.error("[DraftsTab] Generation error:", err);
       toast.error("Failed to generate draft");
+    } finally {
+      setIsGenerating(false);
     }
   };
 
