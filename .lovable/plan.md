@@ -1,94 +1,64 @@
 
-# Update Settings: Add WhatsApp Cadence + Channel-Aware Sequence Display
 
-## Overview
-The current Cadence Settings card only shows email-specific sequence configuration. We need to update it to reflect the new dual-channel architecture (Email + WhatsApp) with their distinct cadence models for Outbound, Inbound, and Nurture flows.
+# Fix: Strategy Switch from Nurture to Fast Not Resetting State
 
-## Changes
+## Problem
+When switching a lead from **Nurture back to Fast** mode via the mode toggle in the LeadTable, only `strategy` and `nurture_cadence` are updated. All nurture-related fields persist:
+- `motion` stays as `"nurture"` (so the Phase badge still shows "Nurture")
+- `next_action_key` stays as `"send_nurture_1"` 
+- `next_action_label` stays as `"Review first nurture email"`
+- `nurture_status`, `nurture_mode`, `nurture_theme` all persist
+- `needs_action` stays true for the wrong reason
 
-### 1. Update Types (`src/lib/cadenceSettingsTypes.ts`)
+This is because `NurtureSwitchDialog` sets ~10 fields when activating nurture, but `handleStrategyToggle` only resets 2 of them when reverting.
 
-Add a new `WhatsAppCadenceSettings` interface and include it in `CadenceSettingsV1`:
-
+## Root Cause
+In `src/components/dashboard/LeadTable.tsx`, lines 190-197, the nurture-to-fast update is:
 ```
-WhatsAppCadenceSettings {
-  outbound_followups_hours: number[];  // [24, 48, 72] then pause
-  nurture_cadence_days: number[];      // [7, 14] (light touches)
-  post_meeting_hours: number[];        // [4, 48] (reminder, check-in)
-  max_messages_before_pause: number;   // default: 3
-  automation_enabled: boolean;         // default: false (manual only)
-}
-```
-
-Add defaults:
-- `outbound_followups_hours: [24, 48, 72]`
-- `nurture_cadence_days: [7, 14]`
-- `post_meeting_hours: [4, 48]`
-- `max_messages_before_pause: 3`
-- `automation_enabled: false`
-
-### 2. Redesign Modes Tab in CadenceSettingsCard (`src/components/settings/CadenceSettingsCard.tsx`)
-
-**Current**: Single "Fast / Nurture" toggle showing one mode's email settings at a time.
-
-**New**: A two-level structure:
-1. Keep the Fast / Nurture mode toggle at the top
-2. Below it, add a channel sub-section showing **Email** and **WhatsApp** side by side (or as sub-tabs)
-
-For each mode (Fast/Nurture), display:
-
-**Email Channel Section:**
-- Reply Alert After (hours) -- existing
-- Follow-up Sequence (days) -- existing chips: [2,3,3,4] for Fast, [5,7,7,10] for Nurture
-- Breakup Trigger -- existing
-- Post-Meeting settings -- existing
-
-**WhatsApp Channel Section (new):**
-- Follow-up Intervals (hours) -- chip input: [24, 48, 72]
-- Max messages before pause -- number input (default 3)
-- Post-Meeting nudge timing (hours) -- chip input: [4, 48]
-- Nurture touch intervals (days) -- chip input: [7, 14] (only shown in Nurture mode)
-- Automation enabled toggle -- Switch (default off, with helper text "WhatsApp is manual-only for now")
-
-### 3. Add Visual Sequence Summary
-
-At the top of the Modes tab, add a compact read-only summary showing the active sequences:
-
-```
-Outbound (Fast):
-  Email:    Intro -> 2d -> FU1 -> 3d -> FU2 -> 3d -> FU3 -> 4d -> Breakup
-  WhatsApp: Intro -> 24h -> Follow-up -> 48h -> Nudge -> Pause
-
-Nurture:
-  Email:    Insight -> 5d -> Case Study -> 7d -> Resource -> 7d -> ...
-  WhatsApp: Short Insight -> 7d -> Soft Reconnect -> Pause
+strategy: "fast",
+nurture_cadence: null,
+mode_changed_at: new Date().toISOString(),
 ```
 
-This is a simple text/badge display, not editable -- just for clarity.
+It needs to also reset motion, nurture fields, and re-derive the correct next action.
 
-### 4. Update Settings Page Accordion Label
+## Fix
 
-In `src/pages/Settings.tsx`, rename the accordion item from "Email Cadence Settings" to "Sequence & Cadence Settings" to reflect that it now covers both channels.
+### File: `src/components/dashboard/LeadTable.tsx`
 
-## Technical Details
+Update the `handleStrategyToggle` function (the nurture-to-fast branch) to reset all nurture-related fields:
 
-### Files Modified
+```typescript
+const { error } = await supabase
+  .from("leads")
+  .update({
+    strategy: "fast",
+    // Reset nurture-specific fields
+    nurture_cadence: null,
+    nurture_mode: null,
+    nurture_status: null,
+    nurture_theme: null,
+    auto_nurture_eligible: false,
+    // Restore motion based on lead context
+    motion: lead.last_inbound_at ? "inbound_response" : "outbound_prospecting",
+    // Clear nurture-driven action
+    needs_action: false,
+    next_action_key: null,
+    next_action_label: null,
+    action_reason_code: null,
+    mode_changed_at: new Date().toISOString(),
+  })
+  .eq("id", lead.id);
+```
 
-1. **`src/lib/cadenceSettingsTypes.ts`**
-   - Add `WhatsAppCadenceSettings` interface
-   - Add `whatsapp` field to `CadenceSettingsV1` type
-   - Add WhatsApp defaults to `DEFAULT_CADENCE_SETTINGS`
+This mirrors the inverse of what `NurtureSwitchDialog.handleConfirm` sets, ensuring a clean state transition back to Fast mode.
 
-2. **`src/components/settings/CadenceSettingsCard.tsx`**
-   - Add WhatsApp section inside the Modes tab beneath the existing email fields
-   - Add helper functions: `updateWhatsAppSetting()` for state updates
-   - Add `HourSequenceInput` usage for WhatsApp follow-up intervals
-   - Add a compact sequence summary component at top of Modes tab
-   - Update card title from "Email Cadence Settings" to "Sequence & Cadence Settings"
+## What Changes
+- Phase badge reverts from "Nurture" to the correct phase (e.g., "Prospecting" for new leads)
+- Motion resets to `outbound_prospecting` or `inbound_response` based on lead history
+- Next Action clears the stale "Review first nurture email" label
+- All nurture metadata (`nurture_mode`, `nurture_status`, `nurture_theme`) is cleared
 
-3. **`src/pages/Settings.tsx`**
-   - Update accordion title and description for the cadence section
-   - Change icon or label to reflect multi-channel scope
+## Files Modified
+1. **`src/components/dashboard/LeadTable.tsx`** -- Expand the nurture-to-fast update object to reset all nurture-related fields
 
-4. **`src/lib/workspaceProfileQueries.ts`** (if needed)
-   - Ensure `getCadenceSettings` and `updateCadenceSettings` handle the new `whatsapp` field via deep merge with defaults (backward compatible)
