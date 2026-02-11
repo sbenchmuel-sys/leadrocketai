@@ -21,7 +21,6 @@ const editLeadSchema = z.object({
   phone: z.string().trim().max(50).optional().or(z.literal("")),
   industry: z.string().trim().max(100).optional().or(z.literal("")),
   country: z.string().trim().max(100).optional().or(z.literal("")),
-  strategy: z.enum(["fast", "nurture"]),
   stage: z.enum(["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"]),
   meeting_link: z.string().trim().max(500).optional().or(z.literal("")),
   personal_notes: z.string().trim().max(2000).optional().or(z.literal("")),
@@ -49,7 +48,6 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
       phone: lead.phone || "",
       industry: lead.industry || "",
       country: lead.country || "",
-      strategy: lead.strategy as "fast" | "nurture",
       stage: (lead.stage as "new" | "contacted" | "engaged" | "post_meeting" | "closing" | "closed_won" | "closed_lost") || "new",
       meeting_link: lead.meeting_link || "",
       personal_notes: lead.personal_notes || "",
@@ -70,7 +68,6 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
           phone: data.phone || null,
           industry: data.industry || null,
           country: data.country || null,
-          strategy: data.strategy,
           stage: data.stage,
           meeting_link: data.meeting_link || null,
           personal_notes: data.personal_notes || null,
@@ -222,27 +219,6 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="strategy"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Strategy</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="fast">Fast</SelectItem>
-                        <SelectItem value="nurture">Nurture</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
               <FormField
                 control={form.control}
                 name="stage"

@@ -59,7 +59,7 @@ function DaySequenceInput({
       <div className="flex flex-wrap gap-2 items-center">
         {value.map((day, idx) => (
           <Badge key={idx} variant="secondary" className="flex items-center gap-1 px-2 py-1">
-            {day} days
+            {day}d
             <button
               type="button"
               onClick={() => removeDay(idx)}
@@ -167,48 +167,71 @@ function HourSequenceInput({
   );
 }
 
-// Visual sequence summary component
-function SequenceSummary({ settings, mode }: { settings: CadenceSettingsV1; mode: "fast" | "nurture" }) {
-  const modeSettings = settings.modes[mode];
+// Visual sequence summary component — motion-based
+function SequenceSummary({ settings, motion }: { settings: CadenceSettingsV1; motion: "outbound" | "inbound" | "nurture" }) {
   const wa = settings.whatsapp;
 
-  const emailSteps = mode === "fast"
-    ? ["Intro", ...modeSettings.outbound_followups_days.map((d, i) => `FU${i + 1}`), "Breakup"]
-    : ["Insight", "Case Study", "Resource", "..."];
+  if (motion === "nurture") {
+    const cadences = settings.motions.nurture.cadences;
+    return (
+      <div className="p-3 border rounded-lg bg-muted/20 space-y-2 text-xs">
+        <div className="font-medium text-sm text-muted-foreground uppercase tracking-wide">
+          Nurture — Cadence Profiles
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">Weekly: {cadences.weekly}d</Badge>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">Biweekly: {cadences.biweekly}d</Badge>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">Monthly: {cadences.monthly}d</Badge>
+        </div>
+      </div>
+    );
+  }
 
-  const emailIntervals = mode === "fast"
-    ? modeSettings.outbound_followups_days.map(d => `${d}d`)
-    : modeSettings.outbound_followups_days.map(d => `${d}d`);
+  const intervals = motion === "outbound"
+    ? settings.motions.outbound.email_intervals_days
+    : settings.motions.inbound.email_intervals_days;
 
-  const waSteps = mode === "fast"
-    ? ["Intro", "Follow-up", "Nudge", "Pause"]
-    : ["Short Insight", "Soft Reconnect", "Pause"];
+  const stepLabels = motion === "outbound"
+    ? ["Intro", "FU1", "FU2", "Breakup"]
+    : ["Intro", "FU1", "FU2"];
 
-  const waIntervals = mode === "fast"
-    ? wa.outbound_followups_hours.map(h => `${h}h`)
-    : wa.nurture_cadence_days.map(d => `${d}d`);
+  const waSteps = ["Intro", "Follow-up", "Nudge", "Pause"];
+  const waIntervals = wa.outbound_followups_hours.map(h => `${h}h`);
 
-  const buildFlow = (steps: string[], intervals: string[]) => {
+  const buildEmailFlow = () => {
     const parts: string[] = [];
-    steps.forEach((step, i) => {
-      parts.push(step);
-      if (i < intervals.length) parts.push(intervals[i]);
+    intervals.forEach((offset, i) => {
+      if (i < stepLabels.length) {
+        if (i > 0) parts.push(`${offset - intervals[i - 1]}d`);
+        parts.push(stepLabels[i]);
+      }
     });
     return parts;
   };
 
+  const buildFlow = (steps: string[], ints: string[]) => {
+    const parts: string[] = [];
+    steps.forEach((step, i) => {
+      parts.push(step);
+      if (i < ints.length) parts.push(ints[i]);
+    });
+    return parts;
+  };
+
+  const emailFlow = buildEmailFlow();
+
   return (
     <div className="p-3 border rounded-lg bg-muted/20 space-y-2 text-xs">
       <div className="font-medium text-sm text-muted-foreground uppercase tracking-wide">
-        {mode === "fast" ? "Outbound (Fast)" : "Nurture"} — Active Sequences
+        {motion === "outbound" ? "Outbound" : "Inbound"} — Active Sequences
       </div>
       <div className="space-y-1.5">
         <div className="flex items-center gap-1 flex-wrap">
           <Mail className="h-3.5 w-3.5 text-primary shrink-0" />
           <span className="font-medium text-muted-foreground mr-1">Email:</span>
-          {buildFlow(emailSteps, emailIntervals).map((part, i) => (
+          {emailFlow.map((part, i) => (
             <span key={i}>
-              {emailSteps.includes(part) ? (
+              {stepLabels.includes(part) ? (
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0">{part}</Badge>
               ) : (
                 <span className="text-muted-foreground mx-0.5">→ {part} →</span>
@@ -239,8 +262,8 @@ export function CadenceSettingsCard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState("modes");
-  const [selectedMode, setSelectedMode] = useState<"fast" | "nurture">("fast");
+  const [activeTab, setActiveTab] = useState("motions");
+  const [selectedMotion, setSelectedMotion] = useState<"outbound" | "inbound" | "nurture">("outbound");
   const [selectedChannel, setSelectedChannel] = useState<"email" | "whatsapp">("email");
 
   useEffect(() => {
@@ -284,40 +307,26 @@ export function CadenceSettingsCard() {
     }
   };
 
-  const updateModeSettings = (mode: "fast" | "nurture", key: string, value: unknown) => {
+  const updateMotionIntervals = (motion: "outbound" | "inbound", intervals: number[]) => {
     if (!settings) return;
     setSettings({
       ...settings,
-      modes: {
-        ...settings.modes,
-        [mode]: { ...settings.modes[mode], [key]: value },
+      motions: {
+        ...settings.motions,
+        [motion]: { ...settings.motions[motion], email_intervals_days: intervals },
       },
     });
   };
 
-  const updateBreakupTrigger = (mode: "fast" | "nurture", key: string, value: number) => {
+  const updateNurtureCadence = (cadence: "weekly" | "biweekly" | "monthly", value: number) => {
     if (!settings) return;
     setSettings({
       ...settings,
-      modes: {
-        ...settings.modes,
-        [mode]: {
-          ...settings.modes[mode],
-          breakup_trigger: { ...settings.modes[mode].breakup_trigger, [key]: value },
-        },
-      },
-    });
-  };
-
-  const updatePostMeeting = (mode: "fast" | "nurture", key: string, value: unknown) => {
-    if (!settings) return;
-    setSettings({
-      ...settings,
-      modes: {
-        ...settings.modes,
-        [mode]: {
-          ...settings.modes[mode],
-          post_meeting: { ...settings.modes[mode].post_meeting, [key]: value },
+      motions: {
+        ...settings.motions,
+        nurture: {
+          ...settings.motions.nurture,
+          cadences: { ...settings.motions.nurture.cadences, [cadence]: value },
         },
       },
     });
@@ -349,7 +358,7 @@ export function CadenceSettingsCard() {
     });
   };
 
-  const updateNurtureCadence = (cadence: "weekly" | "biweekly" | "monthly", value: number) => {
+  const updateFlowNurtureCadence = (cadence: "weekly" | "biweekly" | "monthly", value: number) => {
     if (!settings) return;
     setSettings({
       ...settings,
@@ -395,8 +404,6 @@ export function CadenceSettingsCard() {
     );
   }
 
-  const currentMode = settings.modes[selectedMode];
-
   return (
     <Card>
       <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
@@ -423,9 +430,9 @@ export function CadenceSettingsCard() {
           <CardContent className="space-y-6">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="modes" className="flex items-center gap-1">
+                <TabsTrigger value="motions" className="flex items-center gap-1">
                   <Mail className="h-4 w-4" />
-                  <span className="hidden sm:inline">Modes</span>
+                  <span className="hidden sm:inline">Motions</span>
                 </TabsTrigger>
                 <TabsTrigger value="guardrails" className="flex items-center gap-1">
                   <Shield className="h-4 w-4" />
@@ -441,159 +448,141 @@ export function CadenceSettingsCard() {
                 </TabsTrigger>
               </TabsList>
 
-              {/* MODES TAB */}
-              <TabsContent value="modes" className="space-y-6 mt-4">
+              {/* MOTIONS TAB */}
+              <TabsContent value="motions" className="space-y-6 mt-4">
                 {/* Visual Sequence Summary */}
-                <SequenceSummary settings={settings} mode={selectedMode} />
+                <SequenceSummary settings={settings} motion={selectedMotion} />
 
-                {/* Mode Toggle */}
+                {/* Motion Toggle */}
                 <div className="flex items-center gap-2">
-                  <Label>Editing Mode:</Label>
+                  <Label>Motion:</Label>
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      variant={selectedMode === "fast" ? "default" : "outline"}
-                      onClick={() => setSelectedMode("fast")}
+                      variant={selectedMotion === "outbound" ? "default" : "outline"}
+                      onClick={() => setSelectedMotion("outbound")}
                     >
-                      Fast
+                      Outbound
                     </Button>
                     <Button
                       size="sm"
-                      variant={selectedMode === "nurture" ? "default" : "outline"}
-                      onClick={() => setSelectedMode("nurture")}
+                      variant={selectedMotion === "inbound" ? "default" : "outline"}
+                      onClick={() => setSelectedMotion("inbound")}
+                    >
+                      Inbound
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={selectedMotion === "nurture" ? "default" : "outline"}
+                      onClick={() => setSelectedMotion("nurture")}
                     >
                       Nurture
                     </Button>
                   </div>
                 </div>
 
-                {/* Channel Sub-tabs */}
-                <div className="flex items-center gap-2">
-                  <Label>Channel:</Label>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant={selectedChannel === "email" ? "default" : "outline"}
-                      onClick={() => setSelectedChannel("email")}
-                      className="flex items-center gap-1"
-                    >
-                      <Mail className="h-3.5 w-3.5" />
-                      Email
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={selectedChannel === "whatsapp" ? "default" : "outline"}
-                      onClick={() => setSelectedChannel("whatsapp")}
-                      className="flex items-center gap-1"
-                    >
-                      <MessageSquare className="h-3.5 w-3.5" />
-                      WhatsApp
-                    </Button>
+                {/* Channel Sub-tabs (not for nurture) */}
+                {selectedMotion !== "nurture" && (
+                  <div className="flex items-center gap-2">
+                    <Label>Channel:</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant={selectedChannel === "email" ? "default" : "outline"}
+                        onClick={() => setSelectedChannel("email")}
+                        className="flex items-center gap-1"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        Email
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={selectedChannel === "whatsapp" ? "default" : "outline"}
+                        onClick={() => setSelectedChannel("whatsapp")}
+                        className="flex items-center gap-1"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        WhatsApp
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Email Channel */}
-                {selectedChannel === "email" && (
+                {/* Outbound / Inbound Email Settings */}
+                {selectedMotion !== "nurture" && selectedChannel === "email" && (
                   <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
                     <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
                       <Mail className="h-4 w-4" />
-                      {selectedMode === "fast" ? "Fast Mode" : "Nurture Mode"} — Email
+                      {selectedMotion === "outbound" ? "Outbound" : "Inbound"} — Email Intervals
                     </h4>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor={`reply-pending-${selectedMode}`}>Reply Alert After (hours)</Label>
-                        <Input
-                          id={`reply-pending-${selectedMode}`}
-                          type="number"
-                          value={currentMode.reply_pending_hours}
-                          onChange={(e) =>
-                            updateModeSettings(selectedMode, "reply_pending_hours", parseInt(e.target.value, 10) || 1)
-                          }
-                          min={1}
-                          className="w-24"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Flag as "needs reply" after this many hours
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor={`post-recap-${selectedMode}`}>Post-Meeting Recap (hours)</Label>
-                        <Input
-                          id={`post-recap-${selectedMode}`}
-                          type="number"
-                          value={currentMode.post_meeting.recap_suggest_after_hours}
-                          onChange={(e) =>
-                            updatePostMeeting(selectedMode, "recap_suggest_after_hours", parseInt(e.target.value, 10) || 1)
-                          }
-                          min={1}
-                          className="w-24"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Suggest recap email after meeting
-                        </p>
-                      </div>
-                    </div>
-
-                    <Separator />
-
                     <DaySequenceInput
-                      value={currentMode.outbound_followups_days}
-                      onChange={(val) => updateModeSettings(selectedMode, "outbound_followups_days", val)}
-                      label="Follow-up Sequence (days between emails)"
+                      value={settings.motions[selectedMotion].email_intervals_days}
+                      onChange={(val) => updateMotionIntervals(selectedMotion as "outbound" | "inbound", val)}
+                      label="Step offsets from first send (cumulative days)"
                       maxItems={8}
                       minItems={1}
                     />
 
-                    <DaySequenceInput
-                      value={currentMode.post_meeting.checkins_days}
-                      onChange={(val) => updatePostMeeting(selectedMode, "checkins_days", val)}
-                      label="Post-Meeting Check-ins (days after recap)"
-                      maxItems={5}
-                      minItems={1}
-                    />
+                    <p className="text-xs text-muted-foreground">
+                      Each value is the day offset from the first email. E.g., [0, 2, 4, 7] means: send intro immediately, follow-up 1 at day 2, follow-up 2 at day 4, breakup at day 7.
+                    </p>
+                  </div>
+                )}
 
-                    <Separator />
+                {/* Nurture Settings */}
+                {selectedMotion === "nurture" && (
+                  <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
+                    <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+                      <Mail className="h-4 w-4" />
+                      Nurture — Cadence Profiles
+                    </h4>
 
-                    <div className="space-y-3">
-                      <h5 className="text-sm font-medium">Breakup Email Trigger</h5>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label>Days since first outbound</Label>
-                          <Input
-                            type="number"
-                            value={currentMode.breakup_trigger.days_since_first_outbound}
-                            onChange={(e) =>
-                              updateBreakupTrigger(selectedMode, "days_since_first_outbound", parseInt(e.target.value, 10) || 1)
-                            }
-                            min={1}
-                            className="w-24"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Days since last outbound</Label>
-                          <Input
-                            type="number"
-                            value={currentMode.breakup_trigger.days_since_last_outbound}
-                            onChange={(e) =>
-                              updateBreakupTrigger(selectedMode, "days_since_last_outbound", parseInt(e.target.value, 10) || 1)
-                            }
-                            min={1}
-                            className="w-24"
-                          />
-                        </div>
+                    <p className="text-xs text-muted-foreground">
+                      Each lead in nurture mode uses one of these cadence profiles. The interval defines days between nurture emails.
+                    </p>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Weekly (days)</Label>
+                        <Input
+                          type="number"
+                          value={settings.motions.nurture.cadences.weekly}
+                          onChange={(e) => updateNurtureCadence("weekly", parseInt(e.target.value, 10) || 7)}
+                          min={1}
+                          className="w-20"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Biweekly (days)</Label>
+                        <Input
+                          type="number"
+                          value={settings.motions.nurture.cadences.biweekly}
+                          onChange={(e) => updateNurtureCadence("biweekly", parseInt(e.target.value, 10) || 14)}
+                          min={1}
+                          className="w-20"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Monthly (days)</Label>
+                        <Input
+                          type="number"
+                          value={settings.motions.nurture.cadences.monthly}
+                          onChange={(e) => updateNurtureCadence("monthly", parseInt(e.target.value, 10) || 30)}
+                          min={1}
+                          className="w-20"
+                        />
                       </div>
                     </div>
                   </div>
                 )}
 
                 {/* WhatsApp Channel */}
-                {selectedChannel === "whatsapp" && (
+                {selectedMotion !== "nurture" && selectedChannel === "whatsapp" && (
                   <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
                     <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
                       <MessageSquare className="h-4 w-4 text-green-600" />
-                      {selectedMode === "fast" ? "Fast Mode" : "Nurture Mode"} — WhatsApp
+                      {selectedMotion === "outbound" ? "Outbound" : "Inbound"} — WhatsApp
                     </h4>
                     <p className="text-xs text-muted-foreground">
                       WhatsApp uses conversational nudges — shorter, lighter cadences than email.
@@ -631,19 +620,6 @@ export function CadenceSettingsCard() {
                       label="Post-Meeting Nudge Timing (hours)"
                       maxItems={4}
                     />
-
-                    {selectedMode === "nurture" && (
-                      <>
-                        <Separator />
-                        <DaySequenceInput
-                          value={settings.whatsapp.nurture_cadence_days}
-                          onChange={(val) => updateWhatsAppSetting("nurture_cadence_days", val)}
-                          label="Nurture Touch Intervals (days)"
-                          maxItems={4}
-                          minItems={1}
-                        />
-                      </>
-                    )}
 
                     <Separator />
 
@@ -840,7 +816,7 @@ export function CadenceSettingsCard() {
                           <Input
                             type="number"
                             value={settings.flows.nurture_campaigns.cadences_days.weekly}
-                            onChange={(e) => updateNurtureCadence("weekly", parseInt(e.target.value, 10) || 7)}
+                            onChange={(e) => updateFlowNurtureCadence("weekly", parseInt(e.target.value, 10) || 7)}
                             min={1}
                             className="w-20"
                           />
@@ -850,7 +826,7 @@ export function CadenceSettingsCard() {
                           <Input
                             type="number"
                             value={settings.flows.nurture_campaigns.cadences_days.biweekly}
-                            onChange={(e) => updateNurtureCadence("biweekly", parseInt(e.target.value, 10) || 14)}
+                            onChange={(e) => updateFlowNurtureCadence("biweekly", parseInt(e.target.value, 10) || 14)}
                             min={1}
                             className="w-20"
                           />
@@ -860,7 +836,7 @@ export function CadenceSettingsCard() {
                           <Input
                             type="number"
                             value={settings.flows.nurture_campaigns.cadences_days.monthly}
-                            onChange={(e) => updateNurtureCadence("monthly", parseInt(e.target.value, 10) || 30)}
+                            onChange={(e) => updateFlowNurtureCadence("monthly", parseInt(e.target.value, 10) || 30)}
                             min={1}
                             className="w-20"
                           />
@@ -886,13 +862,13 @@ export function CadenceSettingsCard() {
                   )}
                 </div>
 
-                {/* Reengagement */}
+                {/* Re-engagement */}
                 <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
                   <div className="flex items-center justify-between">
                     <div>
                       <h4 className="font-medium">Re-engagement</h4>
                       <p className="text-xs text-muted-foreground">
-                        Reach out to leads that have gone cold
+                        Auto-suggest re-engagement for leads gone quiet
                       </p>
                     </div>
                     <Switch
@@ -904,14 +880,14 @@ export function CadenceSettingsCard() {
                   {settings.flows.reengagement.enabled && (
                     <div className="space-y-4 pt-2">
                       <div className="space-y-2">
-                        <Label>Trigger after no contact (days)</Label>
+                        <Label>After days of no contact</Label>
                         <Input
                           type="number"
                           value={settings.flows.reengagement.after_days_no_contact}
                           onChange={(e) =>
                             updateFlow("reengagement", "after_days_no_contact", parseInt(e.target.value, 10) || 30)
                           }
-                          min={1}
+                          min={7}
                           className="w-24"
                         />
                       </div>
@@ -919,7 +895,7 @@ export function CadenceSettingsCard() {
                       <DaySequenceInput
                         value={settings.flows.reengagement.sequence_days}
                         onChange={(val) => updateFlow("reengagement", "sequence_days", val)}
-                        label="Re-engagement sequence (days between emails)"
+                        label="Re-engagement Sequence (days)"
                         maxItems={4}
                         minItems={1}
                       />
@@ -927,45 +903,87 @@ export function CadenceSettingsCard() {
                   )}
                 </div>
 
-                {/* Pre-Meeting Reminders */}
+                {/* Stop/Pause Rules */}
                 <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium">Pre-Meeting Reminders</h4>
-                      <p className="text-xs text-muted-foreground">
-                        Send reminders before scheduled meetings
-                      </p>
-                    </div>
-                    <Switch
-                      checked={settings.flows.pre_meeting.enabled}
-                      onCheckedChange={(checked) => updateFlow("pre_meeting", "enabled", checked)}
-                    />
-                  </div>
+                  <h4 className="font-medium flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    Stop & Pause Rules
+                  </h4>
 
-                  {settings.flows.pre_meeting.enabled && (
-                    <div className="pt-2">
-                      <HourSequenceInput
-                        value={settings.flows.pre_meeting.reminder_hours_before}
-                        onChange={(val) => updateFlow("pre_meeting", "reminder_hours_before", val)}
-                        label="Reminder hours before meeting"
-                        maxItems={4}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label>Stop on any reply</Label>
+                      <Switch
+                        checked={settings.stop_pause_rules.stop_on_any_reply}
+                        onCheckedChange={(checked) =>
+                          setSettings({
+                            ...settings,
+                            stop_pause_rules: { ...settings.stop_pause_rules, stop_on_any_reply: checked },
+                          })
+                        }
                       />
                     </div>
-                  )}
+                    <div className="flex items-center justify-between">
+                      <Label>Stop on negative reply</Label>
+                      <Switch
+                        checked={settings.stop_pause_rules.stop_on_negative_reply}
+                        onCheckedChange={(checked) =>
+                          setSettings({
+                            ...settings,
+                            stop_pause_rules: { ...settings.stop_pause_rules, stop_on_negative_reply: checked },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label>Stop on unsubscribe</Label>
+                      <Switch
+                        checked={settings.stop_pause_rules.stop_on_unsubscribe}
+                        onCheckedChange={(checked) =>
+                          setSettings({
+                            ...settings,
+                            stop_pause_rules: { ...settings.stop_pause_rules, stop_on_unsubscribe: checked },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label>Stop on bounce</Label>
+                      <Switch
+                        checked={settings.stop_pause_rules.stop_on_bounce}
+                        onCheckedChange={(checked) =>
+                          setSettings({
+                            ...settings,
+                            stop_pause_rules: { ...settings.stop_pause_rules, stop_on_bounce: checked },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label>Pause when meeting scheduled</Label>
+                      <Switch
+                        checked={settings.stop_pause_rules.pause_when_meeting_scheduled}
+                        onCheckedChange={(checked) =>
+                          setSettings({
+                            ...settings,
+                            stop_pause_rules: {
+                              ...settings.stop_pause_rules,
+                              pause_when_meeting_scheduled: checked,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
                 </div>
               </TabsContent>
             </Tabs>
 
-            <div className="flex justify-end pt-4">
+            {/* Save Button */}
+            <div className="flex justify-end pt-2">
               <Button onClick={handleSave} disabled={isSaving}>
-                {isSaving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save Settings"
-                )}
+                {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Save Settings
               </Button>
             </div>
           </CardContent>

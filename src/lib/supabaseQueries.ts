@@ -89,7 +89,7 @@ export async function finishOnboarding(): Promise<{ user_id: string; onboarding_
 // ============================================
 
 export type LeadListItem = Pick<Lead, 
-  'id' | 'company' | 'name' | 'email' | 'strategy' | 'status' | 
+  'id' | 'company' | 'name' | 'email' | 'status' | 
   'owner_user_id' | 'created_at' | 'last_activity_at' | 'next_step' | 'deal_outlook' | 'country'
 >;
 
@@ -107,7 +107,7 @@ export async function getLeadsList(): Promise<LeadListItem[]> {
 
   let query = supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, owner_user_id, created_at, last_activity_at, next_step, deal_outlook, country')
+    .select('id, company, name, email, status, owner_user_id, created_at, last_activity_at, next_step, deal_outlook, country')
     .order('last_activity_at', { ascending: false })
     .limit(200);
 
@@ -163,7 +163,6 @@ export interface CreateLeadInput {
   name: string;
   company: string;
   email: string;
-  strategy: 'fast' | 'nurture';
   source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry';
 }
 
@@ -176,13 +175,13 @@ export async function createLead(form: CreateLeadInput): Promise<{ id: string }>
     name: form.name?.trim(),
     company: form.company?.trim(),
     email: form.email?.trim().toLowerCase(),
-    strategy: form.strategy,
+    strategy: 'fast' as const, // kept for DB column compatibility, no longer used for logic
     source_type: form.source_type || 'manual_entry',
     owner_user_id: user.id,
     last_activity_at: new Date().toISOString(),
   };
 
-  if (!payload.name || !payload.company || !payload.email || !payload.strategy) {
+  if (!payload.name || !payload.company || !payload.email) {
     throw new Error('Missing required lead fields');
   }
 

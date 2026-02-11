@@ -20,7 +20,6 @@ export const IntentRouterSchema = z.object({
   ]),
   urgency: z.enum(['high', 'medium', 'low']),
   reply_worthy: z.boolean(),
-  suggested_strategy: z.enum(['fast', 'nurture']),
   questions_extracted: z.array(z.string()),
   tone: z.enum(['positive', 'neutral', 'negative']),
 }).strict();

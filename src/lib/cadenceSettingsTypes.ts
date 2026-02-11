@@ -26,17 +26,13 @@ export interface StopPauseRules {
   pause_when_meeting_scheduled: boolean;
 }
 
-export interface ModeSettings {
-  reply_pending_hours: number;
-  outbound_followups_days: number[];
-  breakup_trigger: {
-    days_since_first_outbound: number;
-    days_since_last_outbound: number;
-  };
-  post_meeting: {
-    recap_suggest_after_hours: number;
-    checkins_days: number[];
-  };
+// Motion-based interval types (replaces ModeSettings)
+export interface MotionIntervals {
+  email_intervals_days: number[];
+}
+
+export interface NurtureIntervals {
+  cadences: { weekly: number; biweekly: number; monthly: number };
 }
 
 export interface NurtureCampaignsFlow {
@@ -64,7 +60,7 @@ export interface Flows {
 
 export interface SignalRule {
   if: string;
-  set_mode?: "fast" | "nurture";
+  set_motion?: "outbound" | "inbound" | "nurture";
   pause?: boolean;
   suggest_only?: boolean;
 }
@@ -102,9 +98,10 @@ export interface CadenceSettingsV1 {
   time_rules: TimeRules;
   guardrails: Guardrails;
   stop_pause_rules: StopPauseRules;
-  modes: {
-    fast: ModeSettings;
-    nurture: ModeSettings;
+  motions: {
+    outbound: MotionIntervals;
+    inbound: MotionIntervals;
+    nurture: NurtureIntervals;
   };
   whatsapp: WhatsAppCadenceSettings;
   flows: Flows;
@@ -134,18 +131,15 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
     stop_on_bounce: true,
     pause_when_meeting_scheduled: true,
   },
-  modes: {
-    fast: {
-      reply_pending_hours: 4,
-      outbound_followups_days: [2, 3, 3, 4],
-      breakup_trigger: { days_since_first_outbound: 10, days_since_last_outbound: 5 },
-      post_meeting: { recap_suggest_after_hours: 4, checkins_days: [3, 7] },
+  motions: {
+    outbound: {
+      email_intervals_days: [0, 2, 4, 7],
+    },
+    inbound: {
+      email_intervals_days: [0, 2, 4],
     },
     nurture: {
-      reply_pending_hours: 24,
-      outbound_followups_days: [5, 7, 7, 10],
-      breakup_trigger: { days_since_first_outbound: 30, days_since_last_outbound: 14 },
-      post_meeting: { recap_suggest_after_hours: 24, checkins_days: [7, 14, 30] },
+      cadences: { weekly: 7, biweekly: 14, monthly: 30 },
     },
   },
   whatsapp: { ...DEFAULT_WHATSAPP_CADENCE },
@@ -167,10 +161,10 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
   },
   signals: {
     mode_switch_rules: [
-      { if: "lead_status=positive", set_mode: "fast" },
+      { if: "lead_status=positive", set_motion: "outbound" },
       { if: "meeting_scheduled=true", pause: true },
       { if: "open_count>=3", suggest_only: true },
-      { if: "link_clicked=true", set_mode: "fast" },
+      { if: "link_clicked=true", set_motion: "outbound" },
     ],
     auto_nurture: {
       enabled: true,
@@ -244,23 +238,40 @@ export interface ActionSuggestion {
   reason_code: ActionReasonCode | null;
 }
 
+// Helper to get motion intervals for outbound/inbound
+export function getMotionIntervals(motion: string): number[] {
+  const defaults = DEFAULT_CADENCE_SETTINGS.motions;
+  if (motion === "outbound_prospecting") return defaults.outbound.email_intervals_days;
+  if (motion === "inbound_response") return defaults.inbound.email_intervals_days;
+  return defaults.outbound.email_intervals_days; // fallback
+}
+
+// Helper to get nurture cadence interval in days
+export function getNurtureCadenceDays(cadence: string): number {
+  const cadences = DEFAULT_CADENCE_SETTINGS.motions.nurture.cadences;
+  switch (cadence) {
+    case "weekly": return cadences.weekly;
+    case "monthly": return cadences.monthly;
+    case "biweekly":
+    default: return cadences.biweekly;
+  }
+}
+
 // Helper to generate deterministic jitter based on lead_id + action_key
 export function getDeterministicJitter(
   leadId: string,
   actionKey: string,
   jitterPercent: number
 ): number {
-  // Simple hash function for determinism
   const hashStr = `${leadId}:${actionKey}`;
   let hash = 0;
   for (let i = 0; i < hashStr.length; i++) {
     const char = hashStr.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
-  // Normalize to -1 to 1 range, then scale by jitter percent
-  const normalized = (hash % 10000) / 10000; // 0 to 1
-  return (normalized * 2 - 1) * jitterPercent; // -jitterPercent to +jitterPercent
+  const normalized = (hash % 10000) / 10000;
+  return (normalized * 2 - 1) * jitterPercent;
 }
 
 // Helper to check if a time is within the send window (business hours)
@@ -269,8 +280,6 @@ export function isWithinSendWindow(
   timeRules: TimeRules,
   timezone: string | null
 ): boolean {
-  // For now, we use workspace timezone or UTC
-  // Convert to local time and check against send window
   const hours = date.getHours();
   const minutes = date.getMinutes();
   const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
@@ -283,7 +292,7 @@ export function isWithinSendWindow(
 export function isBusinessDay(date: Date, avoidWeekends: boolean): boolean {
   if (!avoidWeekends) return true;
   const day = date.getDay();
-  return day !== 0 && day !== 6; // Not Sunday or Saturday
+  return day !== 0 && day !== 6;
 }
 
 // Calculate next eligible time respecting time rules
@@ -297,22 +306,18 @@ export function calculateEligibleAt(
 ): Date {
   const { time_rules, guardrails } = cadenceSettings;
   
-  // Apply deterministic jitter
   const jitterMultiplier = getDeterministicJitter(leadId, actionKey, guardrails.jitter_percent);
   const jitteredIntervalMs = intervalMs * (1 + jitterMultiplier);
   
   let eligibleTime = new Date(baseTime + jitteredIntervalMs);
   
-  // If using business days and avoiding weekends, adjust forward
   if (time_rules.use_business_days) {
     let iterations = 0;
-    const maxIterations = 7; // Prevent infinite loop
+    const maxIterations = 7;
     
     while (iterations < maxIterations) {
       if (!isBusinessDay(eligibleTime, time_rules.avoid_weekends)) {
-        // Move to next day
         eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
-        // Reset to start of send window
         const [startHour, startMin] = time_rules.send_window_local.start.split(':').map(Number);
         eligibleTime.setHours(startHour, startMin, 0, 0);
         iterations++;
@@ -320,7 +325,6 @@ export function calculateEligibleAt(
       }
       
       if (!isWithinSendWindow(eligibleTime, time_rules, timezone)) {
-        // If before window, set to window start
         const [startHour, startMin] = time_rules.send_window_local.start.split(':').map(Number);
         const [endHour, endMin] = time_rules.send_window_local.end.split(':').map(Number);
         const currentHour = eligibleTime.getHours();
@@ -328,7 +332,6 @@ export function calculateEligibleAt(
         if (currentHour < startHour || (currentHour === startHour && eligibleTime.getMinutes() < startMin)) {
           eligibleTime.setHours(startHour, startMin, 0, 0);
         } else if (currentHour >= endHour) {
-          // Past window - move to next business day
           eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
           eligibleTime.setHours(startHour, startMin, 0, 0);
         }
@@ -336,7 +339,7 @@ export function calculateEligibleAt(
         continue;
       }
       
-      break; // Valid time found
+      break;
     }
   }
   
