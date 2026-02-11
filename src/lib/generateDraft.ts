@@ -68,6 +68,32 @@ function buildAIPayload(
   instructions: string | null
 ): Record<string, unknown> {
   const lead = ctx.lead;
+
+  // LinkedIn tasks use a different payload shape
+  if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
+    return {
+      prospect_name: lead.name,
+      title: lead.job_title || "",
+      company: lead.company !== "Unknown Company" ? lead.company : "",
+      context: [
+        lead.industry ? `Industry: ${lead.industry}` : "",
+        lead.initial_message ? `Their message: ${lead.initial_message}` : "",
+        (lead as any).personal_notes ? `Notes: ${(lead as any).personal_notes}` : "",
+        instructions ? `Instructions: ${instructions}` : "",
+      ].filter(Boolean).join(". ") || `B2B sales outreach`,
+      knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
+    };
+  }
+
+  // WhatsApp tasks use a lightweight payload
+  if (taskType === "whatsapp_message") {
+    return {
+      lead_context: buildLeadContext(ctx),
+      custom_instructions: instructions || undefined,
+      knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
+    };
+  }
+
   const payload: Record<string, unknown> = {
     lead_id: lead.id,
     lead_context: buildLeadContext(ctx),
