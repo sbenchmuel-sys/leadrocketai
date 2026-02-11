@@ -1,64 +1,59 @@
 
 
-# Fix: Strategy Switch from Nurture to Fast Not Resetting State
+## Fix: Dashboard Top Row Filter Connections
 
-## Problem
-When switching a lead from **Nurture back to Fast** mode via the mode toggle in the LeadTable, only `strategy` and `nurture_cadence` are updated. All nurture-related fields persist:
-- `motion` stays as `"nurture"` (so the Phase badge still shows "Nurture")
-- `next_action_key` stays as `"send_nurture_1"` 
-- `next_action_label` stays as `"Review first nurture email"`
-- `nurture_status`, `nurture_mode`, `nurture_theme` all persist
-- `needs_action` stays true for the wrong reason
+### Problem
+The four executive tiles in the top row (Active Leads, Needs Action, Warming Up, Automation Running) should all be clickable to filter the leads table. Currently, only "Warming Up" has click-to-filter wired up. The other three cards are completely inert -- clicking them does nothing.
 
-This is because `NurtureSwitchDialog` sets ~10 fields when activating nurture, but `handleStrategyToggle` only resets 2 of them when reverting.
+### What Changes
 
-## Root Cause
-In `src/components/dashboard/LeadTable.tsx`, lines 190-197, the nurture-to-fast update is:
-```
-strategy: "fast",
-nurture_cadence: null,
-mode_changed_at: new Date().toISOString(),
-```
+**1. SummaryCards component** (`src/components/dashboard/SummaryCards.tsx`)
+- Add a single generic `onCardClick` callback prop that receives the card key as a filter type
+- Make ALL four cards clickable with `cursor-pointer`
+- Show active ring styling on whichever card matches `activeFilter`:
+  - "active" filter highlights "Active Leads"
+  - "needs_action" highlights "Needs Action"
+  - "warming_up" highlights "Warming Up"
+  - "automation" highlights "Automation Running" (new filter type)
+- Remove the separate `onWarmingUpClick` prop in favor of the unified callback
 
-It needs to also reset motion, nurture fields, and re-derive the correct next action.
+**2. FilterType update** (`src/components/dashboard/SummaryCards.tsx`)
+- Add `"automation"` to the `FilterType` union so it can be used as a filter value
 
-## Fix
+**3. Dashboard page** (`src/pages/Dashboard.tsx`)
+- Replace `onWarmingUpClick` with a unified `onCardClick` handler that calls `setActiveFilter` with the appropriate filter and resets `activeStage`
+- Remove the standalone `handleWarmingUpClick` function
+- Add filtering logic for `"automation"` in the `filteredLeads` memo: filter leads where `nurture_mode === "auto"` and `nurture_status === "active"`
+- Map card keys to filter types: `active` -> `"active"`, `needs_action` -> `"needs_action"`, `warming_up` -> `"warming_up"`, `automation` -> `"automation"`
 
-### File: `src/components/dashboard/LeadTable.tsx`
+### How Filtering Works After Fix
 
-Update the `handleStrategyToggle` function (the nurture-to-fast branch) to reset all nurture-related fields:
+| Card Clicked | Filter Applied | Leads Shown |
+|---|---|---|
+| Active Leads | `active` | Leads not in closed_won / closed_lost |
+| Needs Action | `needs_action` | Leads with `needs_action = true` |
+| Warming Up | `warming_up` | Leads from `warmingUpLeads` array |
+| Automation Running | `automation` | Leads with `nurture_mode=auto` and `nurture_status=active` |
 
-```typescript
-const { error } = await supabase
-  .from("leads")
-  .update({
-    strategy: "fast",
-    // Reset nurture-specific fields
-    nurture_cadence: null,
-    nurture_mode: null,
-    nurture_status: null,
-    nurture_theme: null,
-    auto_nurture_eligible: false,
-    // Restore motion based on lead context
-    motion: lead.last_inbound_at ? "inbound_response" : "outbound_prospecting",
-    // Clear nurture-driven action
-    needs_action: false,
-    next_action_key: null,
-    next_action_label: null,
-    action_reason_code: null,
-    mode_changed_at: new Date().toISOString(),
-  })
-  .eq("id", lead.id);
+Clicking the same card again toggles back to "all" (show everything).
+
+### Technical Details
+
+```text
+SummaryCards props (before):
+  onWarmingUpClick?: () => void
+
+SummaryCards props (after):
+  onCardClick?: (filter: FilterType) => void
 ```
 
-This mirrors the inverse of what `NurtureSwitchDialog.handleConfirm` sets, ensuring a clean state transition back to Fast mode.
+The `filteredLeads` memo gains one new branch:
 
-## What Changes
-- Phase badge reverts from "Nurture" to the correct phase (e.g., "Prospecting" for new leads)
-- Motion resets to `outbound_prospecting` or `inbound_response` based on lead history
-- Next Action clears the stale "Review first nurture email" label
-- All nurture metadata (`nurture_mode`, `nurture_status`, `nurture_theme`) is cleared
+```text
+else if (activeFilter === "automation") {
+  result = result.filter(l => l.nurture_mode === "auto" && l.nurture_status === "active")
+}
+```
 
-## Files Modified
-1. **`src/components/dashboard/LeadTable.tsx`** -- Expand the nurture-to-fast update object to reset all nurture-related fields
+No changes to underlying data fetching, metric derivation, Intelligence Cards, Deal Flow Bar, or Action Required panel.
 
