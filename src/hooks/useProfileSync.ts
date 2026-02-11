@@ -38,7 +38,7 @@ export interface ExtractionResult {
   signatures?: ExtractedSignature[];
 }
 
-const MIN_CONFIDENCE = 0.8;
+const MIN_CONFIDENCE = 0.7;
 
 /** Filter only high-confidence fields */
 export function getHighConfidenceValue<T>(field?: ExtractedField<T>): T | undefined {
