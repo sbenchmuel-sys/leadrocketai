@@ -1,128 +1,80 @@
 
-# Phase 1: Unified Draft Pipeline (Foundation)
+# Fix: Route DraftsTab Through Full Composer + Resolve Rep Name Placeholders
 
-## Overview
-Create a centralized draft generation service layer that resolves context, determines the right playbook/intent, and feeds the EmailActionDialog composer. No UI changes -- this is pure infrastructure with console logging for verification.
+## Problem
+1. The "Generate Draft" button in DraftsTab runs AI inline and shows results in a basic textarea, bypassing the full EmailActionDialog composer which provides signatures, KB attachments, shorten/rewrite tools, thread context, and motion controls.
+2. Generated emails sometimes contain `{Rep's first name}` or similar placeholders instead of the actual rep name.
 
-## New Files
+## Solution
 
-### 1. `src/lib/contextResolver.ts` -- Context Resolver
-Fetches and assembles all lead context needed for draft generation in a single call.
+### 1. DraftsTab: Open EmailActionDialog Instead of Inline Generation
 
-**Input:** `lead_id: string`
+**File: `src/components/lead/DraftsTab.tsx`**
 
-**Output:** `ResolvedContext` object containing:
-- Lead data: `source_type`, `motion`, `strategy`, `stage`, `status`
-- Sequence state: derived `sequence_type`, `sequence_step`, `sequence_status` (computed from `next_action_key`, `motion`, interactions)
-- Email history: `last_outbound_email`, `last_inbound_email` (from `getLeadEmailThread`)
-- Meeting data: `last_meeting_summary` (from `getLeadMeetingPacks`)
-- Intelligence: `buying_signals`, `risk_signals` (parsed from `milestones_json`, `risks_json`)
-- Engagement: `engagement_level`, `closing_power` (from `calculateClosingPower` in `closingPowerUtils.ts`)
-- Knowledge: `company_kb`, `industry_kb`, `persona_kb` (from workspace profile's `company_kb`, `industry_pack`, and KB chunks)
+- Remove the inline `handleGenerate()` function that calls `generateDraft()` + `runTask()` directly
+- Remove the inline generated content card (the textarea showing generated email)
+- When user clicks "Generate Draft", open the `EmailActionDialog` with the selected intent and composer note as initial instructions
+- The EmailActionDialog already has all the features: signatures, KB, shorten, rewrite, thread display, motion override, send/Gmail buttons
+- Pass the selected channel intent as the `actionKey` so the dialog generates the right type of email
+- Pass `composerNote` as `initialInstructions`
 
-**Implementation approach:**
-- Parallel-fetch lead detail, email thread, meeting packs, workspace profile, rep profile, and knowledge docs using `Promise.all`
-- Parse `milestones_json` for buying signals (pricing, decision-maker, docs-requested patterns -- reuse patterns from `closingPowerUtils.ts`)
-- Parse `risks_json` for risk signals
-- Derive `sequence_type` from motion + action key (e.g., `outbound_prospecting` motion with `send_pre_2` action = outbound sequence step 2)
-- Derive `sequence_step` number from `next_action_key` pattern matching
+**Changes:**
+- The "Generate Draft" button sets `showEmailDialog = true` with the appropriate action key mapped from the selected intent
+- Remove `generatedContent`, `generatedSubject`, `knowledgeUsed` state variables and the generated content card UI
+- Keep the channel toggle and intent selector as they feed into the dialog
+- Map `ComposerIntent` to an `actionKey` string that EmailActionDialog understands (e.g., `follow_up` maps to `send_pre_2_followup`, `post_meeting_recap` maps to `generate_post_meeting_recap`)
 
-### 2. `src/lib/playbookResolver.ts` -- Playbook Resolver
-Takes resolved context and determines the recommended intent, playbook name, and next sequence step.
+### 2. Post-Process AI Output to Replace Placeholders
 
-**Input:** `context: ResolvedContext`
+**File: `src/components/dashboard/EmailActionDialog.tsx`**
 
-**Output:** `PlaybookRecommendation` object:
-- `recommended_intent`: the AI task type to use (e.g., `pre_email_2_followup`, `reply_to_thread`, `nurture_email_single`)
-- `recommended_playbook`: human-readable label (e.g., "Outbound Prospecting", "Post-Meeting Follow-up")
-- `next_sequence_step`: step number or label (e.g., "Step 2 of 4", "Nurture Email 1")
+After the AI returns `result.content`, run a placeholder replacement pass:
+- Replace `{Rep's first name}`, `[Rep's first name]`, `{Your Name}`, `[Your Name]`, `{Sender Name}`, `[Sender Name]` with the actual rep first name from `repProfile.full_name`
+- Replace `{Rep's First Name}` (case variants) similarly
+- If no rep profile exists, fall back to an empty string (remove the placeholder entirely)
 
-**Rules (priority order):**
-1. If meeting exists and no recap sent --> `post_meeting_followup_email`
-2. If inbound reply exists and no outbound after it --> `reply_to_thread`
-3. If motion = `nurture` --> `nurture_email_single`
-4. If motion = `closing` --> `pre_email_3_followup` (closing nudge)
-5. If `next_action_key` exists --> map directly (reuse existing `getAITaskForAction` logic)
-6. Default: derive from motion + source_type (outbound = intro/followup sequence, inbound = response)
+This ensures every email is ready to send with the actual name signed.
 
-### 3. `src/lib/generateDraft.ts` -- Unified Draft Generator
-The single entry point that orchestrates context resolution, playbook selection, and returns everything the composer needs.
+**File: `src/lib/generateDraft.ts`** (or a new utility)
 
-**Input:**
+Add a `resolveEmailPlaceholders(text, repProfile)` function:
 ```
-{
-  lead_id: string,
-  channel?: "email" | "linkedin" | "whatsapp",  // default "email"
-  override_intent?: AITaskType | null,           // user manually selected intent
-  instructions?: string | null,                  // custom user notes
-  motion_override?: Motion | null                // user changed motion in composer
+function resolveEmailPlaceholders(text: string, repName: string | null): string {
+  const firstName = repName?.split(' ')[0] || '';
+  return text
+    .replace(/\{Rep's\s*first\s*name\}/gi, firstName)
+    .replace(/\[Rep's\s*first\s*name\]/gi, firstName)
+    .replace(/\{Your\s*Name\}/gi, firstName)
+    .replace(/\[Your\s*Name\]/gi, firstName)
+    .replace(/\{Sender\s*Name\}/gi, firstName)
+    .replace(/\[Sender\s*Name\]/gi, firstName);
 }
 ```
 
-**Output:** `DraftPipelineResult`
-```
-{
-  resolved_context: ResolvedContext,
-  playbook: PlaybookRecommendation,
-  recommended_intent: AITaskType,
-  recommended_playbook: string,
-  sequence_step: string,
-  draft_text: string | null  // null until AI generates it
-}
-```
-
-**Behavior:**
-- Calls `contextResolver(lead_id)`
-- Calls `playbookResolver(context)` 
-- If `override_intent` is provided, uses that instead of recommended intent
-- Logs all resolved data to console for verification
-- Does NOT call the AI task yet (that stays in `EmailActionDialog.generateEmail()` for now)
-- Returns the recommendation so the composer can use it
-
-### 4. Wire into `EmailActionDialog.tsx`
-
-**Changes (minimal, additive):**
-- Import `generateDraft` from the new service
-- In the existing `generateEmail()` function, call `generateDraft()` BEFORE the existing logic
-- Log the returned `resolved_context`, `recommended_intent`, and `playbook` to console
-- Do NOT replace existing generation logic yet -- the new pipeline runs alongside it
-- The existing `getAITaskForAction`, `buildLeadContext`, `getPlaybookLabel` functions remain untouched
-
-**Console output pattern:**
-```
-[generateDraft] Context resolved for lead xyz
-[generateDraft] Recommended: { intent: "pre_email_2_followup", playbook: "Outbound Prospecting", step: "Step 2 of 4" }
-[generateDraft] Actual (legacy): { actionKey: "send_pre_2_followup", taskType: "pre_email_2_followup" }
-```
-
-This lets us verify the new pipeline recommends correctly without breaking anything.
+Apply this in `EmailActionDialog.generateEmail()` right after `result.content` is received, before setting it into the body state.
 
 ## Technical Details
 
-### File structure
-```
-src/lib/contextResolver.ts    -- ResolvedContext type + contextResolver()
-src/lib/playbookResolver.ts   -- PlaybookRecommendation type + playbookResolver()  
-src/lib/generateDraft.ts      -- generateDraft() orchestrator
-```
+### DraftsTab changes
+- Remove: `generatedContent`, `generatedSubject`, `knowledgeUsed` state
+- Remove: `handleGenerate()` function (lines 275-377)
+- Remove: generated content Card (lines 507-588)
+- Keep: channel toggle, intent selector, composer note input, saved drafts list
+- Modify: "Generate Draft" button now opens EmailActionDialog with mapped action key
+- Add intent-to-actionKey mapping:
+  - `follow_up` -> `send_pre_2_followup`
+  - `inbound_response` -> `reply_now`
+  - `reply_to_thread` -> `reply_now`
+  - `post_meeting_recap` -> `generate_post_meeting_recap`
+  - `closing_nudge` -> `send_pre_3_followup`
+  - `nurture_email` -> `send_nurture_1`
+- For LinkedIn/WhatsApp: keep inline generation since EmailActionDialog is email-only
 
-### Dependencies used (all existing)
-- `getLeadDetail`, `getLeadEmailThread`, `getLeadMeetingPacks`, `getLeadInteractions` from `supabaseQueries`
-- `getRepProfile`, `getKnowledgeDocuments` from `repProfileQueries`
-- `getWorkspaceProfile`, `formatWorkspaceContext` from `workspaceProfileQueries`
-- `calculateClosingPower` from `closingPowerUtils`
-- `getActionType`, `Motion`, `SourceType` from `dashboardUtils`
-- `AITaskType` from `useAITask`
+### EmailActionDialog changes
+- Add `resolveEmailPlaceholders()` utility function
+- Apply it after AI content is set (in `generateEmail()` and `runOneClickAction()`)
+- The rep profile is already loaded in `loadData()` so the name is available
 
-### What stays the same
-- All existing composer UI and behavior
-- All existing AI task calls
-- EmailActionDialog's `generateEmail()` still does the actual generation
-- DraftsTab's intent selection still works as before
-- No database changes needed
-
-### Verification checklist
-- Composer still generates emails as before
-- Console shows correct recommended intent matching what legacy logic produces
-- No UI breakage
-- No automation changes
+### Files modified
+1. `src/components/lead/DraftsTab.tsx` -- route email generation to EmailActionDialog
+2. `src/components/dashboard/EmailActionDialog.tsx` -- add placeholder resolution post-processing
