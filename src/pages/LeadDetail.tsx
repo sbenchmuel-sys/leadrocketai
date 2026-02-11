@@ -86,6 +86,8 @@ export default function LeadDetail() {
         onDelete={handleDelete}
         onUpdate={handleUpdate}
         onSyncComplete={loadLead}
+        onCompose={() => setActiveTab("drafts")}
+        onAddMeeting={() => setActiveTab("meetings")}
       />
 
       {/* Split layout: Main content + Side panel */}
