@@ -16,6 +16,7 @@ import LeadDetail from "./pages/LeadDetail";
 import Knowledge from "./pages/Knowledge";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
+import ManagerAnalytics from "./pages/ManagerAnalytics";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -53,6 +54,7 @@ const App = () => (
               <Route path="leads/:id" element={<LeadDetail />} />
               <Route path="knowledge" element={<Knowledge />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="analytics" element={<ManagerAnalytics />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
