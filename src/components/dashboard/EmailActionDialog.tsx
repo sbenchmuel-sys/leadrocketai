@@ -54,6 +54,7 @@ import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 import { generateDraft } from "@/lib/generateDraft";
 import { contextResolver } from "@/lib/contextResolver";
+import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 
 // ============================================
@@ -261,6 +262,10 @@ export function EmailActionDialog({
   
   // One-click action loading states
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Playbook recommendation state (logged in header)
+  const [resolvedIntent, setResolvedIntent] = useState<string | null>(null);
+  const [resolvedStep, setResolvedStep] = useState<string | null>(null);
   
   const { runTask } = useAITask();
   const { sendEmail, isSyncing } = useGmailSync();
@@ -277,8 +282,17 @@ export function EmailActionDialog({
       setTo(lead.email);
       setInstructions(initialInstructions);
 
-      // Log resolved context when Composer opens
+      // Log resolved context + playbook when Composer opens
       contextResolver(lead.id).then((ctx) => {
+        const pb = playbookResolver(ctx);
+        setResolvedIntent(pb.recommended_intent);
+        setResolvedStep(pb.next_sequence_step);
+
+        console.log("[Composer] Playbook recommendation:", {
+          recommended_intent: pb.recommended_intent,
+          recommended_playbook: pb.recommended_playbook,
+          next_sequence_step: pb.next_sequence_step,
+        });
         console.log("[Composer] Resolved context on open:", {
           source_type: ctx.source_type,
           motion: ctx.motion,
@@ -752,8 +766,13 @@ Calendar Link: ${repProfile.calendar_link || ''}
         {/* Sticky Header */}
         <DialogHeader className="px-6 py-4 border-b shrink-0">
           {/* Playbook context strip */}
-          <div className="text-[11px] text-muted-foreground/70 tracking-wide mb-1">
-            Playbook: {getPlaybookLabel(effectiveActionKey, selectedMotion)}
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground/70 tracking-wide mb-1">
+            <span>Playbook: {getPlaybookLabel(effectiveActionKey, selectedMotion)}</span>
+            {resolvedIntent && (
+              <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                {resolvedIntent}{resolvedStep ? ` · ${resolvedStep}` : ""}
+              </Badge>
+            )}
           </div>
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2">
