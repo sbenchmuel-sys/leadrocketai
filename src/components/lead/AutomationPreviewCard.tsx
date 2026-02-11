@@ -63,13 +63,9 @@ function deriveAutomationState(lead: LeadDetail): {
     return { state: "hidden", steps: [] };
   }
 
-  // Paused: reply detected
-  if (lead.last_inbound_at && lead.last_outbound_at) {
-    const inbound = new Date(lead.last_inbound_at).getTime();
-    const outbound = new Date(lead.last_outbound_at).getTime();
-    if (inbound > outbound) {
-      return { state: "paused", pauseReason: { label: "Reply received" }, steps: [] };
-    }
+  // Paused: reply detected — any inbound means active conversation, automation should stop
+  if (lead.last_inbound_at) {
+    return { state: "paused", pauseReason: { label: "Reply received — active conversation" }, steps: [] };
   }
 
   // Paused: meeting scheduled
