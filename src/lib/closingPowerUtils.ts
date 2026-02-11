@@ -68,10 +68,22 @@ export function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
     factors.push({ label: "Closing stage", points: 10 }); score += 10;
   }
 
-  // WhatsApp engagement bonus — multi-channel engagement is a positive signal
+  // WhatsApp engagement scoring — richer multi-channel signal
   const hasWhatsApp = milestones.some(m => m.description?.toLowerCase().includes("whatsapp"));
   if (hasWhatsApp) {
     factors.push({ label: "WhatsApp engaged", points: 5 }); score += 5;
+  }
+
+  // WhatsApp inbound reply — strong engagement signal
+  if (lead.last_inbound_at) {
+    // Check for WhatsApp-specific interactions via milestones text proxy
+    const hasWhatsAppInbound = milestones.some(m =>
+      m.description?.toLowerCase().includes("whatsapp") &&
+      (m.description?.toLowerCase().includes("reply") || m.description?.toLowerCase().includes("inbound"))
+    );
+    if (hasWhatsAppInbound) {
+      factors.push({ label: "WhatsApp inbound", points: 10 }); score += 10;
+    }
   }
 
   return { total: Math.max(0, Math.min(100, score)), factors };

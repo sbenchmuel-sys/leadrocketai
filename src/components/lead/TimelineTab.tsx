@@ -433,13 +433,16 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
       });
 
       // 2. Update lead: pause automation, set engaged, update last_inbound_at
+      // Phase 6: WhatsApp inbound ALWAYS pauses automation — no exceptions
       await supabase.from("leads").update({
         last_inbound_at: new Date().toISOString(),
         last_activity_at: new Date().toISOString(),
         stage: "engaged",
+        motion: "engaged",
         needs_action: true,
         next_action_key: "reply_now",
         next_action_label: "Reply to WhatsApp message",
+        nurture_status: "paused",
       }).eq("id", leadId);
 
       toast.success("WhatsApp reply logged — automation paused");

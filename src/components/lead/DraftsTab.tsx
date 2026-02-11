@@ -544,9 +544,23 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                 />
               </div>
             )}
-            {/* Log as Sent for WhatsApp channel */}
+            {/* WhatsApp actions: Log as Sent + Open in WhatsApp */}
             {channel === "whatsapp" && (
               <div className="flex gap-2 justify-end">
+                {lead.phone && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const phone = lead.phone!.replace(/[^0-9+]/g, "").replace(/^\+/, "");
+                      const encoded = encodeURIComponent(generatedContent);
+                      window.open(`https://wa.me/${phone}?text=${encoded}`, "_blank");
+                    }}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 mr-1" />
+                    Open in WhatsApp
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   onClick={async () => {
