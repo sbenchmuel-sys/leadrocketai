@@ -121,6 +121,8 @@ export default function Dashboard() {
       result = intelligenceMetrics.nurtureCandidates;
     } else if (activeFilter === "warming_up") {
       result = metrics?.warmingUpLeads ?? [];
+    } else if (activeFilter === "automation") {
+      result = result.filter((l) => l.nurture_mode === "auto" && l.nurture_status === "active");
     }
 
     if (activeStage) {
@@ -139,18 +141,11 @@ export default function Dashboard() {
     setActiveStage(stage);
   };
 
-  const handleStaleClick = () => {
-    setActiveFilter(activeFilter === "stale" ? "all" : "stale");
-    setActiveStage(null);
-  };
+  const handleStaleClick = () => handleCardClick("stale" as FilterType);
+  const handleNurtureClick = () => handleCardClick("nurture_candidates" as FilterType);
 
-  const handleNurtureClick = () => {
-    setActiveFilter(activeFilter === "nurture_candidates" ? "all" : "nurture_candidates");
-    setActiveStage(null);
-  };
-
-  const handleWarmingUpClick = () => {
-    setActiveFilter(activeFilter === "warming_up" ? "all" : "warming_up");
+  const handleCardClick = (filter: FilterType) => {
+    setActiveFilter(activeFilter === filter ? "all" : filter);
     setActiveStage(null);
   };
 
@@ -184,7 +179,7 @@ export default function Dashboard() {
         warmingUp={execStats.warmingUp}
         automationRunning={execStats.automationRunning}
         isLoading={isLoading}
-        onWarmingUpClick={handleWarmingUpClick}
+        onCardClick={handleCardClick}
         activeFilter={activeFilter}
       />
 

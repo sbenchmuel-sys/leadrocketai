@@ -2,7 +2,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle, Users, Flame, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type FilterType = "all" | "active" | "needs_action" | "meetings" | "stale" | "nurture_candidates" | "warming_up";
+export type FilterType = "all" | "active" | "needs_action" | "meetings" | "stale" | "nurture_candidates" | "warming_up" | "automation";
 
 interface ExecutiveCardsProps {
   activeLeads: number;
@@ -10,7 +10,7 @@ interface ExecutiveCardsProps {
   warmingUp: number;
   automationRunning: number;
   isLoading: boolean;
-  onWarmingUpClick?: () => void;
+  onCardClick?: (filter: FilterType) => void;
   activeFilter?: FilterType;
 }
 
@@ -59,16 +59,23 @@ export function SummaryCards({
   warmingUp,
   automationRunning,
   isLoading,
-  onWarmingUpClick,
+  onCardClick,
   activeFilter,
 }: ExecutiveCardsProps) {
   const values = [activeLeads, needsAction, warmingUp, automationRunning];
 
+  const keyToFilter: Record<string, FilterType> = {
+    active: "active",
+    needs_action: "needs_action",
+    warming_up: "warming_up",
+    automation: "automation",
+  };
+
   return (
     <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
       {cardConfig.map((card, index) => {
-        const isClickable = card.key === "warming_up";
-        const isActive = card.key === "warming_up" && activeFilter === "warming_up";
+        const filterKey = keyToFilter[card.key];
+        const isActive = activeFilter === filterKey;
 
         return (
           <Card
@@ -77,12 +84,12 @@ export function SummaryCards({
               "transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5 border-0",
               card.gradient,
               !isLoading && "animate-fade-in",
-              card.emphasis === "strong" && "ring-1 ring-warning/30",
-              isClickable && "cursor-pointer",
-              isActive && "ring-2 ring-orange-500 shadow-md",
+              card.emphasis === "strong" && !isActive && "ring-1 ring-warning/30",
+              "cursor-pointer",
+              isActive && "ring-2 ring-primary shadow-md",
             )}
             style={{ animationDelay: `${index * 50}ms` }}
-            onClick={isClickable ? onWarmingUpClick : undefined}
+            onClick={() => onCardClick?.(filterKey)}
           >
             <CardContent className="p-4">
               <div className="flex items-start justify-between">
