@@ -1,5 +1,6 @@
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
+import { WhatsAppConnectionCard } from "@/components/settings/WhatsAppConnectionCard";
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
@@ -10,7 +11,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Building2, Clock, User, PenLine, Mail, Video } from "lucide-react";
+import { Building2, Clock, User, PenLine, Mail, Video, MessageSquare } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -93,6 +94,21 @@ export default function Settings() {
           </AccordionTrigger>
           <AccordionContent>
             <GmailConnectionCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="whatsapp" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <MessageSquare className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">WhatsApp Business</div>
+                <div className="text-sm text-muted-foreground font-normal">Connect your WhatsApp Business account via Cloud API</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <WhatsAppConnectionCard />
           </AccordionContent>
         </AccordionItem>
 
