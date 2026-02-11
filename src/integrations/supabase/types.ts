@@ -14,6 +14,242 @@ export type Database = {
   }
   public: {
     Tables: {
+      contact_identities: {
+        Row: {
+          contact_id: string
+          created_at: string
+          id: string
+          is_primary: boolean
+          type: Database["public"]["Enums"]["identity_type"]
+          value: string
+          workspace_id: string
+        }
+        Insert: {
+          contact_id: string
+          created_at?: string
+          id?: string
+          is_primary?: boolean
+          type: Database["public"]["Enums"]["identity_type"]
+          value: string
+          workspace_id: string
+        }
+        Update: {
+          contact_id?: string
+          created_at?: string
+          id?: string
+          is_primary?: boolean
+          type?: Database["public"]["Enums"]["identity_type"]
+          value?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_identities_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_identities_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      contacts: {
+        Row: {
+          assigned_rep_user_id: string | null
+          company: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          last_activity_at: string
+          notes: string | null
+          status: Database["public"]["Enums"]["contact_status"]
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          assigned_rep_user_id?: string | null
+          company?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          last_activity_at?: string
+          notes?: string | null
+          status?: Database["public"]["Enums"]["contact_status"]
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          assigned_rep_user_id?: string | null
+          company?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          last_activity_at?: string
+          notes?: string | null
+          status?: Database["public"]["Enums"]["contact_status"]
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contacts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversation_analysis: {
+        Row: {
+          contact_id: string
+          conversation_id: string
+          created_at: string
+          embedding: string | null
+          extracted_features: Json
+          id: string
+          message_window_end: string | null
+          message_window_start: string | null
+          model_used: string | null
+          sentiment: string | null
+          summary_text: string | null
+          topics: string[] | null
+          workspace_id: string
+        }
+        Insert: {
+          contact_id: string
+          conversation_id: string
+          created_at?: string
+          embedding?: string | null
+          extracted_features?: Json
+          id?: string
+          message_window_end?: string | null
+          message_window_start?: string | null
+          model_used?: string | null
+          sentiment?: string | null
+          summary_text?: string | null
+          topics?: string[] | null
+          workspace_id: string
+        }
+        Update: {
+          contact_id?: string
+          conversation_id?: string
+          created_at?: string
+          embedding?: string | null
+          extracted_features?: Json
+          id?: string
+          message_window_end?: string | null
+          message_window_start?: string | null
+          model_used?: string | null
+          sentiment?: string | null
+          summary_text?: string | null
+          topics?: string[] | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_analysis_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_analysis_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_analysis_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "manager_conversation_metrics"
+            referencedColumns: ["conversation_id"]
+          },
+          {
+            foreignKeyName: "conversation_analysis_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversations: {
+        Row: {
+          channel: Database["public"]["Enums"]["integration_type"]
+          contact_id: string
+          created_at: string
+          id: string
+          integration_id: string | null
+          last_message_at: string
+          message_count: number
+          owner_user_id: string
+          provider_thread_id: string | null
+          status: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          channel?: Database["public"]["Enums"]["integration_type"]
+          contact_id: string
+          created_at?: string
+          id?: string
+          integration_id?: string | null
+          last_message_at?: string
+          message_count?: number
+          owner_user_id: string
+          provider_thread_id?: string | null
+          status?: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          channel?: Database["public"]["Enums"]["integration_type"]
+          contact_id?: string
+          created_at?: string
+          id?: string
+          integration_id?: string | null
+          last_message_at?: string
+          message_count?: number
+          owner_user_id?: string
+          provider_thread_id?: string | null
+          status?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversations_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       drafts: {
         Row: {
           body_text: string
@@ -105,6 +341,56 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      integrations: {
+        Row: {
+          created_at: string
+          credentials_encrypted: string | null
+          id: string
+          is_active: boolean
+          last_sync_at: string | null
+          provider_account_id: string | null
+          type: Database["public"]["Enums"]["integration_type"]
+          updated_at: string
+          user_id: string
+          webhook_verify_token: string | null
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          credentials_encrypted?: string | null
+          id?: string
+          is_active?: boolean
+          last_sync_at?: string | null
+          provider_account_id?: string | null
+          type: Database["public"]["Enums"]["integration_type"]
+          updated_at?: string
+          user_id: string
+          webhook_verify_token?: string | null
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          credentials_encrypted?: string | null
+          id?: string
+          is_active?: boolean
+          last_sync_at?: string | null
+          provider_account_id?: string | null
+          type?: Database["public"]["Enums"]["integration_type"]
+          updated_at?: string
+          user_id?: string
+          webhook_verify_token?: string | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrations_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       interactions: {
         Row: {
@@ -499,6 +785,74 @@ export type Database = {
           },
         ]
       }
+      messages: {
+        Row: {
+          body_ciphertext: string | null
+          conversation_id: string
+          created_at: string
+          direction: Database["public"]["Enums"]["message_direction"]
+          expires_at: string
+          id: string
+          media_type: string | null
+          provider_message_id: string | null
+          sender_identity_id: string | null
+          workspace_id: string
+        }
+        Insert: {
+          body_ciphertext?: string | null
+          conversation_id: string
+          created_at?: string
+          direction: Database["public"]["Enums"]["message_direction"]
+          expires_at?: string
+          id?: string
+          media_type?: string | null
+          provider_message_id?: string | null
+          sender_identity_id?: string | null
+          workspace_id: string
+        }
+        Update: {
+          body_ciphertext?: string | null
+          conversation_id?: string
+          created_at?: string
+          direction?: Database["public"]["Enums"]["message_direction"]
+          expires_at?: string
+          id?: string
+          media_type?: string | null
+          provider_message_id?: string | null
+          sender_identity_id?: string | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "manager_conversation_metrics"
+            referencedColumns: ["conversation_id"]
+          },
+          {
+            foreignKeyName: "messages_sender_identity_id_fkey"
+            columns: ["sender_identity_id"]
+            isOneToOne: false
+            referencedRelation: "contact_identities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       oauth_states: {
         Row: {
           created_at: string
@@ -756,6 +1110,38 @@ export type Database = {
           },
         ]
       }
+      workspace_members: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["workspace_role"]
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["workspace_role"]
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["workspace_role"]
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_members_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspace_profiles: {
         Row: {
           allowed_claims: string[] | null
@@ -819,16 +1205,89 @@ export type Database = {
         }
         Relationships: []
       }
+      workspaces: {
+        Row: {
+          billing_email: string | null
+          created_at: string
+          id: string
+          name: string
+          plan: string
+          updated_at: string
+        }
+        Insert: {
+          billing_email?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          plan?: string
+          updated_at?: string
+        }
+        Update: {
+          billing_email?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          plan?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
-      [_ in never]: never
+      manager_conversation_metrics: {
+        Row: {
+          channel: Database["public"]["Enums"]["integration_type"] | null
+          contact_company: string | null
+          contact_id: string | null
+          contact_name: string | null
+          contact_status: Database["public"]["Enums"]["contact_status"] | null
+          conversation_id: string | null
+          last_message_at: string | null
+          latest_features: Json | null
+          latest_sentiment: string | null
+          latest_summary: string | null
+          latest_topics: string[] | null
+          message_count: number | null
+          owner_user_id: string | null
+          status: string | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversations_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      get_workspace_role: {
+        Args: { _user_id: string; _workspace_id: string }
+        Returns: Database["public"]["Enums"]["workspace_role"]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      is_workspace_admin: {
+        Args: { _user_id: string; _workspace_id: string }
+        Returns: boolean
+      }
+      is_workspace_member: {
+        Args: { _user_id: string; _workspace_id: string }
         Returns: boolean
       }
       match_knowledge_chunks:
@@ -866,6 +1325,11 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "sales"
+      contact_status: "unclassified" | "lead" | "customer" | "blocked"
+      identity_type: "phone" | "email" | "whatsapp"
+      integration_type: "gmail" | "whatsapp"
+      message_direction: "inbound" | "outbound"
+      workspace_role: "admin" | "manager" | "rep"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -994,6 +1458,11 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "sales"],
+      contact_status: ["unclassified", "lead", "customer", "blocked"],
+      identity_type: ["phone", "email", "whatsapp"],
+      integration_type: ["gmail", "whatsapp"],
+      message_direction: ["inbound", "outbound"],
+      workspace_role: ["admin", "manager", "rep"],
     },
   },
 } as const
