@@ -54,6 +54,7 @@ export default function Leads() {
     company: "",
     email: "",
     strategy: "fast",
+    source_type: "manual_entry",
   });
 
   const handleReconnectGmail = async () => {
@@ -203,7 +204,7 @@ export default function Leads() {
       await createLead(newLead);
       toast.success("Lead created!");
       setIsAddOpen(false);
-      setNewLead({ name: "", company: "", email: "", strategy: "fast" });
+      setNewLead({ name: "", company: "", email: "", strategy: "fast", source_type: "manual_entry" });
       loadLeads();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create lead");
@@ -293,6 +294,28 @@ export default function Leads() {
                   <SelectContent>
                     <SelectItem value="fast">Fast</SelectItem>
                     <SelectItem value="nurture">Nurture</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="source_type">Source</Label>
+                <Select
+                  value={newLead.source_type || "manual_entry"}
+                  onValueChange={(value) =>
+                    setNewLead({ ...newLead, source_type: value as CreateLeadInput["source_type"] })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual_entry">Manual Entry</SelectItem>
+                    <SelectItem value="outbound_prospecting">Outbound Prospecting</SelectItem>
+                    <SelectItem value="contact_form">Contact Form</SelectItem>
+                    <SelectItem value="gmail_inbound">Inbound Email</SelectItem>
+                    <SelectItem value="event_lead">Event Lead</SelectItem>
+                    <SelectItem value="referral">Referral</SelectItem>
+                    <SelectItem value="csv_import">CSV Import</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

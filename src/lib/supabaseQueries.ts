@@ -161,6 +161,7 @@ export interface CreateLeadInput {
   company: string;
   email: string;
   strategy: 'fast' | 'nurture';
+  source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry';
 }
 
 export async function createLead(form: CreateLeadInput): Promise<{ id: string }> {
@@ -173,6 +174,7 @@ export async function createLead(form: CreateLeadInput): Promise<{ id: string }>
     company: form.company?.trim(),
     email: form.email?.trim().toLowerCase(),
     strategy: form.strategy,
+    source_type: form.source_type || 'manual_entry',
     owner_user_id: user.id,
     last_activity_at: new Date().toISOString(),
   };
