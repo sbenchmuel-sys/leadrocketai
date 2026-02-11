@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { generateDraft } from "@/lib/generateDraft";
 
 // ============================================
 // Types
@@ -82,7 +83,21 @@ const CHAR_LIMITS: Partial<Record<ComposerIntent, number>> = {
   short_answer: 400,
 };
 
-// ============================================
+// Map composer intents to AITaskType for pipeline override
+const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
+  follow_up: "pre_email_2_followup",
+  inbound_response: "pre_email_1_intro",
+  reply_to_thread: "reply_to_thread",
+  post_meeting_recap: "post_meeting_followup_email",
+  closing_nudge: "pre_email_3_followup",
+  nurture_email: "nurture_email_single",
+  connection_request: "linkedin_connect",
+  follow_up_message: "linkedin_followup",
+  quick_follow_up: "pre_email_2_followup",
+  meeting_reminder: "pre_email_2_followup",
+  short_answer: "answer_questions",
+};
+
 // Auto-Intent Logic
 // ============================================
 
@@ -258,128 +273,106 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   // ============================================
 
   const handleGenerate = async () => {
-    switch (channel) {
-      case "email":
-        return generateEmail(selectedIntent as EmailIntent);
-      case "linkedin":
-        return generateLinkedIn(selectedIntent as LinkedInIntent);
-      case "whatsapp":
-        return generateWhatsApp(selectedIntent as WhatsAppIntent);
-    }
-  };
+    // Phase 7: Use unified generateDraft() pipeline for all channels
+    try {
+      // Map composer intent to pipeline motion override
+      const motionOverride = selectedIntent === "post_meeting_recap" ? "post_meeting" as const
+        : selectedIntent === "closing_nudge" ? "closing" as const
+        : selectedIntent === "nurture_email" ? "nurture" as const
+        : null;
 
-  const generateEmail = async (intent: EmailIntent) => {
-    let task: AITaskType;
-    const payload: Record<string, unknown> = {
-      lead_context: buildLeadContext(),
-      meeting_link: lead.meeting_link || "",
-      lead_id: lead.id,
-    };
+      // Map composer intent to pipeline override_intent
+      const intentOverride = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || null;
 
-    switch (intent) {
-      case "follow_up": {
-        task = "pre_email_2_followup";
-        payload.previous_email_summary = composerNote || "Previous outreach introducing our solution.";
-        break;
-      }
-      case "inbound_response": {
-        task = lead.strategy === "fast" ? "email_intro_fast" : "email_intro_nurture";
+      const pipelineResult = await generateDraft({
+        lead_id: lead.id,
+        channel: channel,
+        instructions: composerNote.trim() || null,
+        motion_override: motionOverride,
+        override_intent: intentOverride,
+      });
+
+      console.log("[DraftsTab] Pipeline result:", {
+        intent: pipelineResult.recommended_intent,
+        playbook: pipelineResult.recommended_playbook,
+        step: pipelineResult.sequence_step,
+        model: pipelineResult.model_used,
+        complexity: pipelineResult.complexity_score,
+      });
+
+      // Now call AI with the pipeline's recommended intent
+      const taskType = pipelineResult.recommended_intent;
+      const payload: Record<string, unknown> = {
+        lead_context: buildLeadContext(),
+        meeting_link: lead.meeting_link || "",
+        lead_id: lead.id,
+        custom_instructions: composerNote.trim() || undefined,
+      };
+
+      // Add context based on intent
+      if (taskType === "reply_to_thread" || taskType === "pre_email_1_intro") {
         const interactions = await getLeadInteractions(lead.id);
         const lastInbound = interactions.find((i) => i.type === "email_inbound");
         payload.email_text = lastInbound?.body_text || "";
-        payload.custom_instructions = composerNote || undefined;
-        break;
+        payload.email_thread = pipelineResult.resolved_context.thread_summary || "";
+        payload.latest_inbound = lastInbound?.body_text || "";
       }
-      case "reply_to_thread": {
-        task = "reply_to_thread";
-        const interactions = await getLeadInteractions(lead.id);
-        const lastInbound = interactions.find((i) => i.type === "email_inbound");
-        payload.email_text = lastInbound?.body_text || "";
-        payload.custom_instructions = composerNote || undefined;
-        break;
+
+      if (taskType.includes("pre_email")) {
+        payload.previous_email_summary = pipelineResult.resolved_context.thread_summary || composerNote || "Previous outreach.";
       }
-      case "post_meeting_recap": {
-        task = "post_meeting_followup_email";
+
+      if (taskType === "post_meeting_followup_email") {
         const packs = await getLeadMeetingPacks(lead.id);
         payload.meeting_summary_brief = packs[0]?.internal_recap_bullets?.join(". ") || composerNote || "";
-        break;
+        payload.previous_emails = pipelineResult.resolved_context.thread_summary || "";
       }
-      case "closing_nudge": {
-        task = "pre_email_3_followup";
-        payload.previous_email_summary = composerNote || "Post-meeting follow-up sent. Deal in closing stage.";
-        break;
-      }
-      case "nurture_email": {
-        task = "nurture_email_single";
+
+      if (taskType === "nurture_email_single") {
         payload.theme = "use_case";
-        payload.email_number = 1;
-        payload.previous_emails = "None";
-        break;
+        payload.email_number = pipelineResult.resolved_context.nurture_outbound_count + 1;
+        payload.previous_emails = pipelineResult.resolved_context.thread_summary || "";
+        payload.nurture_theme = pipelineResult.resolved_context.nurture_theme || "balanced";
       }
-      default:
-        return;
-    }
 
-    const result = await runTask(task, payload);
-    if (result.ok && result.content) {
-      setGeneratedContent(result.content);
-      setGeneratedSubject(intent === "post_meeting_recap" ? `Great speaking today — ${lead.company}` : "");
-      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
-    }
-  };
+      if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
+        payload.prospect_name = lead.name;
+        payload.title = lead.job_title || "";
+        payload.company = lead.company;
+        payload.context = buildLinkedInContext();
+      }
 
-  const generateLinkedIn = async (intent: LinkedInIntent) => {
-    const task: AITaskType = intent === "connection_request" ? "linkedin_connect" : "linkedin_followup";
-    const payload: Record<string, unknown> = {
-      prospect_name: lead.name,
-      title: lead.job_title || "",
-      company: lead.company,
-      context: buildLinkedInContext(),
-    };
-    if (intent === "follow_up_message") {
-      payload.lead_id = lead.id;
-    }
+      // WhatsApp: add short-form instructions
+      if (channel === "whatsapp") {
+        payload.custom_instructions = (payload.custom_instructions || "") + " Write for WhatsApp: informal, short (under 100 words), no subject line.";
+      }
 
-    const result = await runTask(task, payload);
-    if (result.ok && result.content) {
-      setGeneratedContent(result.content);
-      setGeneratedSubject("");
-      setKnowledgeUsed(intent === "follow_up_message" && !!(result.raw as any)?.knowledge_context_used);
-    }
-  };
+      const result = await runTask(taskType, payload);
+      if (result.ok && result.content) {
+        setGeneratedContent(result.content);
+        setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
 
-  const generateWhatsApp = async (intent: WhatsAppIntent) => {
-    // WhatsApp uses the same AI tasks but with shorter constraints via custom instructions
-    let task: AITaskType = "pre_email_2_followup";
-    const payload: Record<string, unknown> = {
-      lead_context: buildLeadContext(),
-      lead_id: lead.id,
-      meeting_link: lead.meeting_link || "",
-    };
+        // Generate subject for email
+        if (channel === "email") {
+          const leadFirstName = lead.name.split(' ')[0];
+          const companyName = lead.company && lead.company !== 'Unknown Company' ? lead.company : null;
 
-    switch (intent) {
-      case "quick_follow_up":
-        task = "pre_email_2_followup";
-        payload.previous_email_summary = composerNote || "Quick WhatsApp follow-up.";
-        payload.custom_instructions = "Write for WhatsApp: informal, short (under 100 words), no subject line. Just the message body.";
-        break;
-      case "meeting_reminder":
-        task = "pre_email_2_followup";
-        payload.previous_email_summary = "Meeting reminder";
-        payload.custom_instructions = "Write a very short WhatsApp meeting reminder (under 60 words). Casual, friendly. Just the message.";
-        break;
-      case "short_answer":
-        task = "answer_questions";
-        payload.questions_list = composerNote || "Quick question follow-up";
-        payload.custom_instructions = "Answer for WhatsApp: short, casual, under 80 words. No subject line.";
-        break;
-    }
-
-    const result = await runTask(task, payload);
-    if (result.ok && result.content) {
-      setGeneratedContent(result.content);
-      setGeneratedSubject("");
-      setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
+          if (taskType === "reply_to_thread") {
+            setGeneratedSubject(`Re: ${leadFirstName}`);
+          } else if (taskType === "post_meeting_followup_email") {
+            setGeneratedSubject(`Great speaking today — ${lead.company}`);
+          } else if (taskType === "nurture_email_single") {
+            setGeneratedSubject(`Thought you'd find this valuable${companyName ? `, ${leadFirstName}` : ''}`);
+          } else {
+            setGeneratedSubject(companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`);
+          }
+        } else {
+          setGeneratedSubject("");
+        }
+      }
+    } catch (err) {
+      console.error("[DraftsTab] Generation error:", err);
+      toast.error("Failed to generate draft");
     }
   };
 

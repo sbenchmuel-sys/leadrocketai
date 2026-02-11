@@ -27,24 +27,27 @@ interface FieldUpdate {
 }
 
 function getFieldUpdatesForIntent(intent: AITaskType): FieldUpdate {
+  // Phase 6: Automation OFF by default — never auto-queue next steps.
+  // Sequence progression is recorded but no future emails are scheduled
+  // unless automation is explicitly enabled (future phase).
   switch (intent) {
     case "pre_email_1_intro":
       return {
         stage: "contacted",
-        next_action_key: "send_pre_2_followup",
-        next_action_label: "Follow-up #2",
+        next_action_key: null,
+        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_2_followup":
       return {
-        next_action_key: "send_pre_3_followup",
-        next_action_label: "Follow-up #3",
+        next_action_key: null,
+        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_3_followup":
       return {
-        next_action_key: "send_pre_4_breakup",
-        next_action_label: "Breakup email",
+        next_action_key: null,
+        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_4_breakup":
