@@ -114,29 +114,57 @@ export async function updateSequenceState(
   recommendedIntent?: AITaskType | null,
   overrideIntent?: AITaskType | null,
   channel: "email" | "linkedin" | "whatsapp" = "email",
-  previousSequenceStep?: string | null
+  previousSequenceStep?: string | null,
+  motionOverride?: string | null
 ): Promise<SequenceUpdateResult> {
   console.log("[updateSequenceState] Updating for lead", leadId, "intent:", intentUsed, "channel:", channel);
+
+  // Step 0: Fetch pre-update lead state for automation eligibility check
+  let wasAutomationActive = false;
+  if (channel === "email" && isOutboundSequenceIntent(intentUsed)) {
+    try {
+      const { data: preLead } = await supabase
+        .from("leads")
+        .select("eligible_at, needs_action, last_inbound_at, has_future_meeting, motion, stage")
+        .eq("id", leadId)
+        .single();
+      wasAutomationActive = !!(preLead?.eligible_at) && !!(preLead?.needs_action);
+    } catch (err) {
+      console.warn("[updateSequenceState] Pre-check failed:", err);
+    }
+  }
 
   // Step 1: Get field updates based on intent
   const fieldUpdates = getFieldUpdatesForIntent(intentUsed);
 
   // Build update payload
-  // WhatsApp sends should NOT advance email sequence steps (next_action_key stays unchanged)
-  // but they DO influence motion, stage, and activity timestamps
   const updatePayload: Record<string, unknown> = {
     last_outbound_at: new Date().toISOString(),
     last_activity_at: new Date().toISOString(),
   };
 
   if (channel === "whatsapp") {
-    // WhatsApp: only update motion/stage, NOT email sequence fields
     if (fieldUpdates.motion) updatePayload.motion = fieldUpdates.motion;
     if (fieldUpdates.stage) updatePayload.stage = fieldUpdates.stage;
     updatePayload.needs_action = false;
-    // Do NOT touch next_action_key or next_action_label — email sequence stays independent
   } else {
     Object.assign(updatePayload, fieldUpdates);
+  }
+
+  // Apply motion override if provided (from composer dropdown)
+  if (motionOverride) {
+    updatePayload.motion = motionOverride;
+    // Reset sequence fields on motion change
+    updatePayload.next_action_key = null;
+    updatePayload.next_action_label = null;
+    updatePayload.needs_action = false;
+    if (motionOverride === "closed") {
+      updatePayload.nurture_status = "inactive";
+    }
+    if (motionOverride === "nurture") {
+      updatePayload.nurture_status = "active";
+      updatePayload.nurture_mode = "review";
+    }
   }
 
   // Set first_outbound_at if this is the first outbound
@@ -167,14 +195,12 @@ export async function updateSequenceState(
     updatePayload.nurture_outbound_count = nextCount;
     updatePayload.last_nurture_outbound_at = new Date().toISOString();
 
-    // In review mode, don't auto-queue — user must manually generate next
     const mode = (lead as any)?.nurture_mode || "review";
     if (mode === "review") {
       updatePayload.next_action_key = null;
       updatePayload.next_action_label = null;
       updatePayload.needs_action = false;
     } else {
-      // Automatic mode: queue next nurture
       updatePayload.next_action_key = nextStepKey;
       updatePayload.next_action_label = `Send nurture email #${nextCount + 1}`;
       updatePayload.needs_action = true;
@@ -188,7 +214,7 @@ export async function updateSequenceState(
     });
   }
 
-  // Step 2: Apply updates
+  // Step 2: Apply updates (single atomic write)
   const { error } = await supabase
     .from("leads")
     .update(updatePayload)
@@ -201,60 +227,69 @@ export async function updateSequenceState(
 
   console.log("[updateSequenceState] Lead updated:", updatePayload);
 
-  // Step 2b: If automation was active, schedule next step (with safety re-check)
-  if (channel === "email" && isOutboundSequenceIntent(intentUsed)) {
+  // Log motion override event if applicable
+  if (motionOverride) {
+    try {
+      await supabase.from("interactions").insert({
+        lead_id: leadId,
+        type: "system_note",
+        source: "composer",
+        body_text: `Motion override → "${motionOverride}" (sequence reset)`,
+        occurred_at: new Date().toISOString(),
+      });
+      console.log("[updateSequenceState] Motion override event logged");
+    } catch (logErr) {
+      console.warn("[updateSequenceState] Failed to log motion override:", logErr);
+    }
+  }
+
+  // Step 2b: If automation WAS active before send, schedule next step (with safety re-check)
+  if (wasAutomationActive) {
     try {
       const freshLead = await getLeadDetail(leadId);
-      const automationActive = !!(freshLead as any).eligible_at && freshLead.needs_action;
+      const hasReply = !!freshLead.last_inbound_at;
+      const hasMeeting = freshLead.has_future_meeting;
+      const motionChanged = freshLead.motion !== "outbound_prospecting";
+      const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
 
-      if (automationActive) {
-        // Pre-send safety re-checks
-        const hasReply = !!freshLead.last_inbound_at;
-        const hasMeeting = freshLead.has_future_meeting;
-        const motionChanged = freshLead.motion !== "outbound_prospecting";
-        const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
+      if (hasReply || hasMeeting || motionChanged || isClosed) {
+        await supabase
+          .from("leads")
+          .update({ needs_action: false, eligible_at: null })
+          .eq("id", leadId);
+        console.log("[updateSequenceState] Automation paused — engagement detected:", {
+          hasReply, hasMeeting, motionChanged, isClosed,
+        });
+      } else {
+        const nextStep = getNextOutboundStep(intentUsed);
+        if (nextStep) {
+          const FAST_INTERVALS = [2, 3, 3, 4];
+          const stepIdx = parseInt(nextStep.replace("send_pre_", ""), 10) - 1;
+          const daysUntil = FAST_INTERVALS[stepIdx] || 3;
+          const eligibleAt = addDays(new Date(), daysUntil);
+          eligibleAt.setHours(9, 30, 0, 0);
 
-        if (hasReply || hasMeeting || motionChanged || isClosed) {
-          // Pause automation
+          const STEP_LABELS: Record<string, string> = {
+            send_pre_2: "Follow-up 1",
+            send_pre_3: "Follow-up 2",
+            send_pre_4: "Breakup Email",
+          };
+
           await supabase
             .from("leads")
-            .update({ needs_action: false, eligible_at: null })
+            .update({
+              next_action_key: nextStep,
+              next_action_label: STEP_LABELS[nextStep] || "Follow-up",
+              needs_action: true,
+              eligible_at: eligibleAt.toISOString(),
+              action_reason_code: "FOLLOWUP_DUE",
+            })
             .eq("id", leadId);
-          console.log("[updateSequenceState] Automation paused — engagement detected:", {
-            hasReply, hasMeeting, motionChanged, isClosed,
+
+          console.log("[updateSequenceState] Automation: next step scheduled:", {
+            nextStep,
+            eligibleAt: eligibleAt.toISOString(),
           });
-        } else {
-          // Schedule next step
-          const nextStep = getNextOutboundStep(intentUsed);
-          if (nextStep) {
-            const FAST_INTERVALS = [2, 3, 3, 4];
-            const stepIdx = parseInt(nextStep.replace("send_pre_", ""), 10) - 1;
-            const daysUntil = FAST_INTERVALS[stepIdx] || 3;
-            const eligibleAt = addDays(new Date(), daysUntil);
-            eligibleAt.setHours(9, 30, 0, 0);
-
-            const STEP_LABELS: Record<string, string> = {
-              send_pre_2: "Follow-up 1",
-              send_pre_3: "Follow-up 2",
-              send_pre_4: "Breakup Email",
-            };
-
-            await supabase
-              .from("leads")
-              .update({
-                next_action_key: nextStep,
-                next_action_label: STEP_LABELS[nextStep] || "Follow-up",
-                needs_action: true,
-                eligible_at: eligibleAt.toISOString(),
-                action_reason_code: "FOLLOWUP_DUE",
-              })
-              .eq("id", leadId);
-
-            console.log("[updateSequenceState] Automation: next step scheduled:", {
-              nextStep,
-              eligibleAt: eligibleAt.toISOString(),
-            });
-          }
         }
       }
     } catch (err) {

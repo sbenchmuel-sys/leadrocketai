@@ -52,27 +52,12 @@ import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowl
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
-import { generateDraft } from "@/lib/generateDraft";
+import { generateDraft, resolveEmailPlaceholders } from "@/lib/generateDraft";
 import { contextResolver } from "@/lib/contextResolver";
 import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 
-// ============================================
-// Placeholder Resolution
-// ============================================
-
-function resolveEmailPlaceholders(text: string, repName: string | null): string {
-  const firstName = repName?.split(' ')[0] || '';
-  return text
-    .replace(/\{Rep'?s?\s*first\s*name\}/gi, firstName)
-    .replace(/\[Rep'?s?\s*first\s*name\]/gi, firstName)
-    .replace(/\{Your\s*Name\}/gi, firstName)
-    .replace(/\[Your\s*Name\]/gi, firstName)
-    .replace(/\{Sender\s*Name\}/gi, firstName)
-    .replace(/\[Sender\s*Name\]/gi, firstName)
-    .replace(/\{First\s*Name\}/gi, firstName)
-    .replace(/\[First\s*Name\]/gi, firstName);
-}
+// resolveEmailPlaceholders is imported from @/lib/generateDraft
 // Minimal lead interface for this dialog
 interface MinimalLead {
   id: string;
@@ -557,53 +542,9 @@ Calendar Link: ${repProfile.calendar_link || ''}
     }
   }
 
-  // Apply motion override if changed
-  async function applyMotionOverride() {
-    if (selectedMotion !== leadMotion) {
-      try {
-        const newSequenceType = getSequenceTypeForMotion(selectedMotion);
-        const updatePayload: Record<string, unknown> = {
-          motion: selectedMotion,
-          last_activity_at: new Date().toISOString(),
-          // Reset sequence fields based on new motion
-          next_action_key: null,
-          next_action_label: null,
-          needs_action: false,
-        };
-        // If moving to closed, disable automation
-        if (selectedMotion === "closed") {
-          updatePayload.nurture_status = "inactive";
-        }
-        // If moving to nurture, set nurture defaults
-        if (selectedMotion === "nurture") {
-          updatePayload.nurture_status = "active";
-          updatePayload.nurture_mode = "review";
-        }
-        await supabase
-          .from("leads")
-          .update(updatePayload)
-          .eq("id", lead.id);
-
-        // Log motion_override_event as an interaction
-        try {
-          await supabase.from("interactions").insert({
-            lead_id: lead.id,
-            type: "system_note",
-            source: "composer",
-            body_text: `Motion override: "${leadMotion}" → "${selectedMotion}" (sequence reset to ${newSequenceType})`,
-            occurred_at: new Date().toISOString(),
-          });
-          console.log("[Composer] Motion override event logged:", leadMotion, "→", selectedMotion);
-        } catch (logErr) {
-          console.warn("[Composer] Failed to log motion override event:", logErr);
-        }
-
-        const motionLabel = MOTION_LABELS[selectedMotion] || selectedMotion;
-        toast.success(`Motion updated to ${motionLabel}. Sequence reset.`);
-      } catch (err) {
-        console.error("Failed to update motion:", err);
-      }
-    }
+  // Get motion override value (null if unchanged)
+  function getMotionOverrideValue(): string | null {
+    return selectedMotion !== leadMotion ? selectedMotion : null;
   }
 
   async function handleSend() {
@@ -623,20 +564,22 @@ Calendar Link: ${repProfile.calendar_link || ''}
       replyToMessageId || undefined
     );
     if (result.ok) {
-      await applyMotionOverride();
-      
-      // Update sequence state after successful send (with override logging)
+      // Update sequence state after successful send (single atomic update including motion override)
       try {
         const effectiveActionKeyForSeq = actionKey || lead.next_action_key || null;
         const hasThreadForSeq = threadEmails.length > 0;
         const intentUsed = getAITaskForAction(effectiveActionKeyForSeq, hasThreadForSeq);
         const recommended = resolvedIntent as AITaskType | null;
         const isOverride = recommended && intentUsed !== recommended;
+        const motionOvr = getMotionOverrideValue();
         await updateSequenceState(
           lead.id,
           intentUsed,
           recommended,
           isOverride ? intentUsed : undefined,
+          "email",
+          resolvedStep,
+          motionOvr,
         );
         if (isOverride) {
           console.log("[EmailActionDialog] Intent override logged:", {
@@ -702,10 +645,9 @@ Calendar Link: ${repProfile.calendar_link || ''}
     const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, connection?.gmail_email);
     window.open(gmailUrl, '_blank');
     
-    await applyMotionOverride();
-
-    // Update sequence state after Gmail compose (with override logging)
+    // Update sequence state after Gmail compose (single atomic update including motion override)
     try {
+      const motionOvr = getMotionOverrideValue();
       const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0);
       const recommended = resolvedIntent as AITaskType | null;
       const isOverride = recommended && intentUsed !== recommended;
@@ -714,6 +656,9 @@ Calendar Link: ${repProfile.calendar_link || ''}
         intentUsed,
         recommended,
         isOverride ? intentUsed : undefined,
+        "email",
+        resolvedStep,
+        motionOvr,
       );
       if (isOverride) {
         console.log("[EmailActionDialog] Intent override logged (Gmail):", {
