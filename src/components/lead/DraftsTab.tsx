@@ -98,6 +98,16 @@ const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
   short_answer: "answer_questions",
 };
 
+// Map email intents to EmailActionDialog action keys
+const EMAIL_INTENT_TO_ACTION_KEY: Record<EmailIntent, string> = {
+  follow_up: "send_pre_2_followup",
+  inbound_response: "reply_now",
+  reply_to_thread: "reply_now",
+  post_meeting_recap: "generate_post_meeting_recap",
+  closing_nudge: "send_pre_3_followup",
+  nurture_email: "send_nurture_1",
+};
+
 // Auto-Intent Logic
 // ============================================
 
@@ -179,9 +189,9 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   const [hasOutboundAfterMeeting, setHasOutboundAfterMeeting] = useState(false);
   const { runTask, isLoading: isGenerating } = useAITask();
 
-  // Dialog state
+  // Dialog state for full composer
   const [showEmailDialog, setShowEmailDialog] = useState(false);
-  const [emailDialogData, setEmailDialogData] = useState<{ subject: string; body: string } | null>(null);
+  const [emailDialogActionKey, setEmailDialogActionKey] = useState<string | undefined>(undefined);
 
   // Auto-intent
   const autoSuggestion = useMemo(() => {
@@ -273,15 +283,21 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   // ============================================
 
   const handleGenerate = async () => {
-    // Phase 7: Use unified generateDraft() pipeline for all channels
+    // For email channel, open full EmailActionDialog composer
+    if (channel === "email") {
+      const actionKey = EMAIL_INTENT_TO_ACTION_KEY[selectedIntent as EmailIntent] || "send_pre_2_followup";
+      setEmailDialogActionKey(actionKey);
+      setShowEmailDialog(true);
+      return;
+    }
+
+    // For LinkedIn/WhatsApp: keep inline generation
     try {
-      // Map composer intent to pipeline motion override
       const motionOverride = selectedIntent === "post_meeting_recap" ? "post_meeting" as const
         : selectedIntent === "closing_nudge" ? "closing" as const
         : selectedIntent === "nurture_email" ? "nurture" as const
         : null;
 
-      // Map composer intent to pipeline override_intent
       const intentOverride = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || null;
 
       const pipelineResult = await generateDraft({
@@ -292,15 +308,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         override_intent: intentOverride,
       });
 
-      console.log("[DraftsTab] Pipeline result:", {
-        intent: pipelineResult.recommended_intent,
-        playbook: pipelineResult.recommended_playbook,
-        step: pipelineResult.sequence_step,
-        model: pipelineResult.model_used,
-        complexity: pipelineResult.complexity_score,
-      });
-
-      // Now call AI with the pipeline's recommended intent
       const taskType = pipelineResult.recommended_intent;
       const payload: Record<string, unknown> = {
         lead_context: buildLeadContext(),
@@ -309,32 +316,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         custom_instructions: composerNote.trim() || undefined,
       };
 
-      // Add context based on intent
-      if (taskType === "reply_to_thread" || taskType === "pre_email_1_intro") {
-        const interactions = await getLeadInteractions(lead.id);
-        const lastInbound = interactions.find((i) => i.type === "email_inbound");
-        payload.email_text = lastInbound?.body_text || "";
-        payload.email_thread = pipelineResult.resolved_context.thread_summary || "";
-        payload.latest_inbound = lastInbound?.body_text || "";
-      }
-
-      if (taskType.includes("pre_email")) {
-        payload.previous_email_summary = pipelineResult.resolved_context.thread_summary || composerNote || "Previous outreach.";
-      }
-
-      if (taskType === "post_meeting_followup_email") {
-        const packs = await getLeadMeetingPacks(lead.id);
-        payload.meeting_summary_brief = packs[0]?.internal_recap_bullets?.join(". ") || composerNote || "";
-        payload.previous_emails = pipelineResult.resolved_context.thread_summary || "";
-      }
-
-      if (taskType === "nurture_email_single") {
-        payload.theme = "use_case";
-        payload.email_number = pipelineResult.resolved_context.nurture_outbound_count + 1;
-        payload.previous_emails = pipelineResult.resolved_context.thread_summary || "";
-        payload.nurture_theme = pipelineResult.resolved_context.nurture_theme || "balanced";
-      }
-
       if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
         payload.prospect_name = lead.name;
         payload.title = lead.job_title || "";
@@ -342,7 +323,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         payload.context = buildLinkedInContext();
       }
 
-      // WhatsApp: add short-form instructions
       if (channel === "whatsapp") {
         payload.custom_instructions = (payload.custom_instructions || "") + " Write for WhatsApp: informal, short (under 100 words), no subject line.";
       }
@@ -351,24 +331,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       if (result.ok && result.content) {
         setGeneratedContent(result.content);
         setKnowledgeUsed(!!(result.raw as any)?.knowledge_context_used);
-
-        // Generate subject for email
-        if (channel === "email") {
-          const leadFirstName = lead.name.split(' ')[0];
-          const companyName = lead.company && lead.company !== 'Unknown Company' ? lead.company : null;
-
-          if (taskType === "reply_to_thread") {
-            setGeneratedSubject(`Re: ${leadFirstName}`);
-          } else if (taskType === "post_meeting_followup_email") {
-            setGeneratedSubject(`Great speaking today — ${lead.company}`);
-          } else if (taskType === "nurture_email_single") {
-            setGeneratedSubject(`Thought you'd find this valuable${companyName ? `, ${leadFirstName}` : ''}`);
-          } else {
-            setGeneratedSubject(companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`);
-          }
-        } else {
-          setGeneratedSubject("");
-        }
+        setGeneratedSubject("");
       }
     } catch (err) {
       console.error("[DraftsTab] Generation error:", err);
@@ -614,24 +577,20 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         </CardContent>
       </Card>
 
-      {/* Email Action Dialog */}
-      {showEmailDialog && emailDialogData && (
-        <EmailActionDialog
-          lead={lead}
-          actionKey="email_intro_fast"
-          open={showEmailDialog}
-          onOpenChange={(open) => {
-            setShowEmailDialog(open);
-            if (!open) setEmailDialogData(null);
-          }}
-          onSuccess={() => {
-            onUpdate();
-            loadDrafts();
-          }}
-          prefilledSubject={emailDialogData.subject}
-          prefilledBody={emailDialogData.body}
-        />
-      )}
+      {/* Email Action Dialog — full composer */}
+      <EmailActionDialog
+        lead={lead}
+        actionKey={emailDialogActionKey}
+        open={showEmailDialog}
+        onOpenChange={(open) => {
+          setShowEmailDialog(open);
+        }}
+        onSuccess={() => {
+          onUpdate();
+          loadDrafts();
+        }}
+        initialInstructions={composerNote}
+      />
     </div>
   );
 }

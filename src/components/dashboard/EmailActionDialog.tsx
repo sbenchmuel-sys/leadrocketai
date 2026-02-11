@@ -55,6 +55,22 @@ import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashbo
 import { generateDraft } from "@/lib/generateDraft";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 
+// ============================================
+// Placeholder Resolution
+// ============================================
+
+function resolveEmailPlaceholders(text: string, repName: string | null): string {
+  const firstName = repName?.split(' ')[0] || '';
+  return text
+    .replace(/\{Rep'?s?\s*first\s*name\}/gi, firstName)
+    .replace(/\[Rep'?s?\s*first\s*name\]/gi, firstName)
+    .replace(/\{Your\s*Name\}/gi, firstName)
+    .replace(/\[Your\s*Name\]/gi, firstName)
+    .replace(/\{Sender\s*Name\}/gi, firstName)
+    .replace(/\[Sender\s*Name\]/gi, firstName)
+    .replace(/\{First\s*Name\}/gi, firstName)
+    .replace(/\[First\s*Name\]/gi, firstName);
+}
 // Minimal lead interface for this dialog
 interface MinimalLead {
   id: string;
@@ -432,7 +448,8 @@ Calendar Link: ${repProfile.calendar_link || ''}
       const result = await runTask(taskType, payload);
 
       if (result.ok && result.content) {
-        setBody(result.content);
+        const resolvedContent = resolveEmailPlaceholders(result.content, repProfile?.full_name || null);
+        setBody(resolvedContent);
         setKnowledgeUsed(!!(result as any).knowledge_context_used);
         
         // Generate subject based on pipeline intent
@@ -499,7 +516,8 @@ Calendar Link: ${repProfile.calendar_link || ''}
       const result = await runTask(taskType, payload);
       
       if (result.ok && result.content) {
-        setBody(result.content);
+        const resolvedContent = resolveEmailPlaceholders(result.content, repProfile?.full_name || null);
+        setBody(resolvedContent);
         setShowUndo(true);
         toast.success(`${actionName} applied`, {
           action: {
