@@ -200,6 +200,64 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         body_text: bodyText,
       });
 
+      // Auto-update lead state based on interaction type
+      const now = new Date().toISOString();
+      if (type === "email_inbound") {
+        // Update timestamps and elevate stage to at least 'engaged'
+        const { data: currentLead } = await supabase
+          .from("leads")
+          .select("stage, last_inbound_at, motion")
+          .eq("id", leadId)
+          .single();
+
+        const stageHierarchy: Record<string, number> = {
+          new: 0, contacted: 1, engaged: 2, post_meeting: 3, closing: 4, closed: 5,
+        };
+        const currentStageRank = stageHierarchy[currentLead?.stage || "new"] ?? 0;
+        const newStage = currentStageRank < 2 ? "engaged" : currentLead?.stage;
+
+        await supabase
+          .from("leads")
+          .update({
+            last_inbound_at: now,
+            stage: newStage,
+            last_activity_at: now,
+          })
+          .eq("id", leadId);
+      } else if (type === "email_outbound") {
+        // Update outbound timestamps
+        const { data: currentLead } = await supabase
+          .from("leads")
+          .select("first_outbound_at, stage")
+          .eq("id", leadId)
+          .single();
+
+        const stageHierarchy: Record<string, number> = {
+          new: 0, contacted: 1, engaged: 2, post_meeting: 3, closing: 4, closed: 5,
+        };
+        const currentStageRank = stageHierarchy[currentLead?.stage || "new"] ?? 0;
+        const newStage = currentStageRank < 1 ? "contacted" : currentLead?.stage;
+
+        await supabase
+          .from("leads")
+          .update({
+            last_outbound_at: now,
+            first_outbound_at: currentLead?.first_outbound_at || now,
+            stage: newStage,
+            last_activity_at: now,
+          })
+          .eq("id", leadId);
+      } else if (type === "meeting") {
+        // Update stage to post_meeting
+        await supabase
+          .from("leads")
+          .update({
+            stage: "post_meeting",
+            last_activity_at: now,
+          })
+          .eq("id", leadId);
+      }
+
       // If inbound email, run intent router
       if (type === "email_inbound") {
         toast.info("Analyzing email...");

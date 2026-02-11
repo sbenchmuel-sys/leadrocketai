@@ -12,7 +12,9 @@ import {
   updateLeadMilestoneStatus,
   getLeadMeetingSummaries,
   MeetingSummaryItem,
-  createMeetingPack
+  createMeetingPack,
+  getLeadDetail,
+  getKnowledgeChunks
 } from "@/lib/supabaseQueries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -100,7 +102,93 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   const [reassignSummary, setReassignSummary] = useState<MeetingSummaryItem | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string>("");
   const [isReassigning, setIsReassigning] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addTitle, setAddTitle] = useState("");
+  const [addDate, setAddDate] = useState(new Date().toISOString().split("T")[0]);
+  const [addNotes, setAddNotes] = useState("");
+  const [isAddingMeeting, setIsAddingMeeting] = useState(false);
   const { runTask } = useAITask();
+
+  const extractJson = (content: string): string => {
+    const trimmed = content.trim();
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    return (fenced?.[1] ?? trimmed).trim();
+  };
+
+  const handleAddMeetingSummary = async () => {
+    if (!addNotes.trim()) {
+      toast.error("Please enter meeting notes");
+      return;
+    }
+    setIsAddingMeeting(true);
+    try {
+      const lead = await getLeadDetail(leadId);
+      const leadContext = `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nStrategy: ${lead.strategy}\nStatus: ${lead.status}`;
+      const kb = await getKnowledgeChunks(true);
+      const knowledgeContext = kb.slice(0, 5).map(k => k.content.slice(0, 500)).join("\n---\n");
+      const cleanedNotes = addNotes.split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0].slice(0, 3000).trim();
+
+      // Step 1: Generate recap
+      toast.info("Step 1/2: Generating meeting recap...");
+      const recapResult = await runTask("post_meeting_recap", {
+        mode: lead.strategy,
+        lead_context: leadContext,
+        meeting_summary: cleanedNotes,
+        knowledge_context: knowledgeContext,
+        meeting_link: lead.meeting_link || "",
+      });
+
+      let recapData: Record<string, unknown> | null = null;
+      if (recapResult.ok && recapResult.content) {
+        try { recapData = JSON.parse(extractJson(recapResult.content)); } catch (e) { console.error("Failed to parse recap:", e); }
+      }
+
+      // Step 2: Extract milestones
+      toast.info("Step 2/2: Extracting milestones...");
+      const milestonesResult = await runTask("extract_milestones_risks", {
+        lead_context: leadContext,
+        interactions_text: cleanedNotes,
+      });
+
+      let milestonesData: { milestones: Array<{ description: string; status?: string; date?: string }>; risks: unknown[] } = { milestones: [], risks: [] };
+      if (milestonesResult.ok && milestonesResult.content) {
+        try { milestonesData = JSON.parse(extractJson(milestonesResult.content)); } catch (e) { console.error("Failed to parse milestones:", e); }
+      }
+
+      // Create meeting pack
+      await createMeetingPack({
+        lead_id: leadId,
+        title: addTitle.trim() || `Meeting — ${format(parseISO(addDate), "MMM d, yyyy")}`,
+        meeting_date: addDate,
+        raw_notes: addNotes,
+        internal_recap_bullets: (recapData?.internal_recap_bullets as string[]) || [],
+        open_questions: (recapData?.open_questions as string[]) || [],
+        milestones: (milestonesData.milestones || []).map(m => ({
+          description: m.description,
+          status: (m.status || "pending") as "completed" | "pending",
+          date: m.date || null,
+        })),
+        follow_up_email_subject: (recapData?.customer_email as Record<string, string>)?.subject || null,
+        follow_up_email_body: (recapData?.customer_email as Record<string, string>)?.body || null,
+      });
+
+      // Update lead stage to post_meeting
+      await supabase.from("leads").update({ stage: "post_meeting", last_activity_at: new Date().toISOString() }).eq("id", leadId);
+
+      toast.success("Meeting summary added with AI analysis!");
+      setShowAddForm(false);
+      setAddTitle("");
+      setAddDate(new Date().toISOString().split("T")[0]);
+      setAddNotes("");
+      loadData();
+      onMilestonesAdded?.();
+    } catch (err) {
+      console.error("Failed to add meeting summary:", err);
+      toast.error("Failed to add meeting summary");
+    } finally {
+      setIsAddingMeeting(false);
+    }
+  };
 
   // Map to quickly find meeting pack for a processed zoom summary
   const zoomSummaryToPackMap = useMemo(() => {
@@ -361,23 +449,71 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     );
   }
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0) {
+  const addMeetingForm = showAddForm && (
+    <Card className="border-primary/20">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Add Meeting Summary</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Title (optional)</label>
+            <Input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="e.g. Discovery Call" />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Date</label>
+            <Input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Meeting Notes</label>
+          <Textarea value={addNotes} onChange={e => setAddNotes(e.target.value)} placeholder="Paste meeting notes, key discussion points, and action items..." rows={8} />
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={handleAddMeetingSummary} disabled={isAddingMeeting || !addNotes.trim()}>
+            {isAddingMeeting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+            {isAddingMeeting ? "Analyzing..." : "Add & Analyze"}
+          </Button>
+          <Button variant="outline" onClick={() => setShowAddForm(false)} disabled={isAddingMeeting}>Cancel</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && !showAddForm) {
     return (
       <Card>
         <CardContent className="py-12 text-center">
           <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
           <h3 className="font-medium text-lg mb-2">No Meetings Yet</h3>
-          <p className="text-muted-foreground text-sm max-w-md mx-auto">
-            When you generate a follow-up email or recap from meeting notes, or when Zoom meeting 
-            summaries are synced from Gmail, they will appear here.
+          <p className="text-muted-foreground text-sm max-w-md mx-auto mb-4">
+            Add meeting summaries to trigger AI analysis — recap, milestones, and follow-up email generation.
           </p>
+          <Button onClick={() => setShowAddForm(true)}>
+            <PlusCircle className="h-4 w-4 mr-2" />
+            Add Meeting Summary
+          </Button>
         </CardContent>
       </Card>
     );
   }
 
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && showAddForm) {
+    return <div className="space-y-6">{addMeetingForm}</div>;
+  }
+
   return (
     <div className="space-y-6">
+      {/* Add Meeting Summary button + form */}
+      <div className="flex justify-end">
+        {!showAddForm && (
+          <Button variant="outline" onClick={() => setShowAddForm(true)}>
+            <PlusCircle className="h-4 w-4 mr-2" />
+            Add Meeting Summary
+          </Button>
+        )}
+      </div>
+      {addMeetingForm}
       {/* Zoom Meeting Summaries Section */}
       {zoomSummaries.length > 0 && (
         <div className="space-y-3">
