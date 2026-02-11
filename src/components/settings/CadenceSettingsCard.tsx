@@ -9,10 +9,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Clock, Shield, Calendar, Mail, X, Plus, AlertCircle } from "lucide-react";
+import { Loader2, Clock, Shield, Calendar, Mail, X, Plus, AlertCircle, MessageSquare } from "lucide-react";
 import { getCadenceSettings, updateCadenceSettings, CadenceSettingsV1 } from "@/lib/workspaceProfileQueries";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { WhatsAppCadenceSettings } from "@/lib/cadenceSettingsTypes";
 
 // Helper component for editing day sequences as chips
 function DaySequenceInput({
@@ -166,6 +167,73 @@ function HourSequenceInput({
   );
 }
 
+// Visual sequence summary component
+function SequenceSummary({ settings, mode }: { settings: CadenceSettingsV1; mode: "fast" | "nurture" }) {
+  const modeSettings = settings.modes[mode];
+  const wa = settings.whatsapp;
+
+  const emailSteps = mode === "fast"
+    ? ["Intro", ...modeSettings.outbound_followups_days.map((d, i) => `FU${i + 1}`), "Breakup"]
+    : ["Insight", "Case Study", "Resource", "..."];
+
+  const emailIntervals = mode === "fast"
+    ? modeSettings.outbound_followups_days.map(d => `${d}d`)
+    : modeSettings.outbound_followups_days.map(d => `${d}d`);
+
+  const waSteps = mode === "fast"
+    ? ["Intro", "Follow-up", "Nudge", "Pause"]
+    : ["Short Insight", "Soft Reconnect", "Pause"];
+
+  const waIntervals = mode === "fast"
+    ? wa.outbound_followups_hours.map(h => `${h}h`)
+    : wa.nurture_cadence_days.map(d => `${d}d`);
+
+  const buildFlow = (steps: string[], intervals: string[]) => {
+    const parts: string[] = [];
+    steps.forEach((step, i) => {
+      parts.push(step);
+      if (i < intervals.length) parts.push(intervals[i]);
+    });
+    return parts;
+  };
+
+  return (
+    <div className="p-3 border rounded-lg bg-muted/20 space-y-2 text-xs">
+      <div className="font-medium text-sm text-muted-foreground uppercase tracking-wide">
+        {mode === "fast" ? "Outbound (Fast)" : "Nurture"} — Active Sequences
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-1 flex-wrap">
+          <Mail className="h-3.5 w-3.5 text-primary shrink-0" />
+          <span className="font-medium text-muted-foreground mr-1">Email:</span>
+          {buildFlow(emailSteps, emailIntervals).map((part, i) => (
+            <span key={i}>
+              {emailSteps.includes(part) ? (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">{part}</Badge>
+              ) : (
+                <span className="text-muted-foreground mx-0.5">→ {part} →</span>
+              )}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 flex-wrap">
+          <MessageSquare className="h-3.5 w-3.5 text-green-600 shrink-0" />
+          <span className="font-medium text-muted-foreground mr-1">WhatsApp:</span>
+          {buildFlow(waSteps, waIntervals).map((part, i) => (
+            <span key={i}>
+              {waSteps.includes(part) ? (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-600/30">{part}</Badge>
+              ) : (
+                <span className="text-muted-foreground mx-0.5">→ {part} →</span>
+              )}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CadenceSettingsCard() {
   const [settings, setSettings] = useState<CadenceSettingsV1 | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -173,6 +241,7 @@ export function CadenceSettingsCard() {
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState("modes");
   const [selectedMode, setSelectedMode] = useState<"fast" | "nurture">("fast");
+  const [selectedChannel, setSelectedChannel] = useState<"email" | "whatsapp">("email");
 
   useEffect(() => {
     loadSettings();
@@ -193,7 +262,6 @@ export function CadenceSettingsCard() {
   const handleSave = async () => {
     if (!settings) return;
 
-    // Validation
     const { time_rules, guardrails } = settings;
     if (time_rules.send_window_local.start >= time_rules.send_window_local.end) {
       toast.error("Send window start must be before end");
@@ -222,10 +290,7 @@ export function CadenceSettingsCard() {
       ...settings,
       modes: {
         ...settings.modes,
-        [mode]: {
-          ...settings.modes[mode],
-          [key]: value,
-        },
+        [mode]: { ...settings.modes[mode], [key]: value },
       },
     });
   };
@@ -238,10 +303,7 @@ export function CadenceSettingsCard() {
         ...settings.modes,
         [mode]: {
           ...settings.modes[mode],
-          breakup_trigger: {
-            ...settings.modes[mode].breakup_trigger,
-            [key]: value,
-          },
+          breakup_trigger: { ...settings.modes[mode].breakup_trigger, [key]: value },
         },
       },
     });
@@ -255,52 +317,35 @@ export function CadenceSettingsCard() {
         ...settings.modes,
         [mode]: {
           ...settings.modes[mode],
-          post_meeting: {
-            ...settings.modes[mode].post_meeting,
-            [key]: value,
-          },
+          post_meeting: { ...settings.modes[mode].post_meeting, [key]: value },
         },
       },
+    });
+  };
+
+  const updateWhatsAppSetting = <K extends keyof WhatsAppCadenceSettings>(key: K, value: WhatsAppCadenceSettings[K]) => {
+    if (!settings) return;
+    setSettings({
+      ...settings,
+      whatsapp: { ...settings.whatsapp, [key]: value },
     });
   };
 
   const updateGuardrail = (key: keyof typeof settings.guardrails, value: unknown) => {
     if (!settings) return;
-    setSettings({
-      ...settings,
-      guardrails: {
-        ...settings.guardrails,
-        [key]: value,
-      },
-    });
+    setSettings({ ...settings, guardrails: { ...settings.guardrails, [key]: value } });
   };
 
   const updateTimeRule = (key: keyof typeof settings.time_rules, value: unknown) => {
     if (!settings) return;
-    setSettings({
-      ...settings,
-      time_rules: {
-        ...settings.time_rules,
-        [key]: value,
-      },
-    });
+    setSettings({ ...settings, time_rules: { ...settings.time_rules, [key]: value } });
   };
 
-  const updateFlow = (
-    flowKey: keyof typeof settings.flows,
-    key: string,
-    value: unknown
-  ) => {
+  const updateFlow = (flowKey: keyof typeof settings.flows, key: string, value: unknown) => {
     if (!settings) return;
     setSettings({
       ...settings,
-      flows: {
-        ...settings.flows,
-        [flowKey]: {
-          ...settings.flows[flowKey],
-          [key]: value,
-        },
-      },
+      flows: { ...settings.flows, [flowKey]: { ...settings.flows[flowKey], [key]: value } },
     });
   };
 
@@ -312,10 +357,7 @@ export function CadenceSettingsCard() {
         ...settings.flows,
         nurture_campaigns: {
           ...settings.flows.nurture_campaigns,
-          cadences_days: {
-            ...settings.flows.nurture_campaigns.cadences_days,
-            [cadence]: value,
-          },
+          cadences_days: { ...settings.flows.nurture_campaigns.cadences_days, [cadence]: value },
         },
       },
     });
@@ -327,7 +369,7 @@ export function CadenceSettingsCard() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            Email Cadence Settings
+            Sequence & Cadence Settings
           </CardTitle>
         </CardHeader>
         <CardContent className="flex justify-center py-8">
@@ -343,7 +385,7 @@ export function CadenceSettingsCard() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            Email Cadence Settings
+            Sequence & Cadence Settings
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -363,10 +405,10 @@ export function CadenceSettingsCard() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Clock className="h-5 w-5" />
-                Email Cadence Settings
+                Sequence & Cadence Settings
               </CardTitle>
               <CardDescription>
-                Configure timing for email suggestions and follow-ups
+                Configure Email & WhatsApp timing and sequence rules
               </CardDescription>
             </div>
             <CollapsibleTrigger asChild>
@@ -401,7 +443,11 @@ export function CadenceSettingsCard() {
 
               {/* MODES TAB */}
               <TabsContent value="modes" className="space-y-6 mt-4">
-                <div className="flex items-center gap-2 mb-4">
+                {/* Visual Sequence Summary */}
+                <SequenceSummary settings={settings} mode={selectedMode} />
+
+                {/* Mode Toggle */}
+                <div className="flex items-center gap-2">
                   <Label>Editing Mode:</Label>
                   <div className="flex gap-2">
                     <Button
@@ -421,100 +467,200 @@ export function CadenceSettingsCard() {
                   </div>
                 </div>
 
-                <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
-                  <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground">
-                    {selectedMode === "fast" ? "Fast Mode" : "Nurture Mode"} — 
-                    {selectedMode === "fast" 
-                      ? " For hot leads who need quick responses" 
-                      : " For long-cycle deals with patient cadence"}
-                  </h4>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor={`reply-pending-${selectedMode}`}>Reply Alert After (hours)</Label>
-                      <Input
-                        id={`reply-pending-${selectedMode}`}
-                        type="number"
-                        value={currentMode.reply_pending_hours}
-                        onChange={(e) =>
-                          updateModeSettings(selectedMode, "reply_pending_hours", parseInt(e.target.value, 10) || 1)
-                        }
-                        min={1}
-                        className="w-24"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Flag as "needs reply" after this many hours
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor={`post-recap-${selectedMode}`}>Post-Meeting Recap (hours)</Label>
-                      <Input
-                        id={`post-recap-${selectedMode}`}
-                        type="number"
-                        value={currentMode.post_meeting.recap_suggest_after_hours}
-                        onChange={(e) =>
-                          updatePostMeeting(selectedMode, "recap_suggest_after_hours", parseInt(e.target.value, 10) || 1)
-                        }
-                        min={1}
-                        className="w-24"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Suggest recap email after meeting
-                      </p>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <DaySequenceInput
-                    value={currentMode.outbound_followups_days}
-                    onChange={(val) => updateModeSettings(selectedMode, "outbound_followups_days", val)}
-                    label="Follow-up Sequence (days between emails)"
-                    maxItems={8}
-                    minItems={1}
-                  />
-
-                  <DaySequenceInput
-                    value={currentMode.post_meeting.checkins_days}
-                    onChange={(val) => updatePostMeeting(selectedMode, "checkins_days", val)}
-                    label="Post-Meeting Check-ins (days after recap)"
-                    maxItems={5}
-                    minItems={1}
-                  />
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <h5 className="text-sm font-medium">Breakup Email Trigger</h5>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Days since first outbound</Label>
-                        <Input
-                          type="number"
-                          value={currentMode.breakup_trigger.days_since_first_outbound}
-                          onChange={(e) =>
-                            updateBreakupTrigger(selectedMode, "days_since_first_outbound", parseInt(e.target.value, 10) || 1)
-                          }
-                          min={1}
-                          className="w-24"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Days since last outbound</Label>
-                        <Input
-                          type="number"
-                          value={currentMode.breakup_trigger.days_since_last_outbound}
-                          onChange={(e) =>
-                            updateBreakupTrigger(selectedMode, "days_since_last_outbound", parseInt(e.target.value, 10) || 1)
-                          }
-                          min={1}
-                          className="w-24"
-                        />
-                      </div>
-                    </div>
+                {/* Channel Sub-tabs */}
+                <div className="flex items-center gap-2">
+                  <Label>Channel:</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={selectedChannel === "email" ? "default" : "outline"}
+                      onClick={() => setSelectedChannel("email")}
+                      className="flex items-center gap-1"
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      Email
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={selectedChannel === "whatsapp" ? "default" : "outline"}
+                      onClick={() => setSelectedChannel("whatsapp")}
+                      className="flex items-center gap-1"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      WhatsApp
+                    </Button>
                   </div>
                 </div>
+
+                {/* Email Channel */}
+                {selectedChannel === "email" && (
+                  <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
+                    <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+                      <Mail className="h-4 w-4" />
+                      {selectedMode === "fast" ? "Fast Mode" : "Nurture Mode"} — Email
+                    </h4>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor={`reply-pending-${selectedMode}`}>Reply Alert After (hours)</Label>
+                        <Input
+                          id={`reply-pending-${selectedMode}`}
+                          type="number"
+                          value={currentMode.reply_pending_hours}
+                          onChange={(e) =>
+                            updateModeSettings(selectedMode, "reply_pending_hours", parseInt(e.target.value, 10) || 1)
+                          }
+                          min={1}
+                          className="w-24"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Flag as "needs reply" after this many hours
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`post-recap-${selectedMode}`}>Post-Meeting Recap (hours)</Label>
+                        <Input
+                          id={`post-recap-${selectedMode}`}
+                          type="number"
+                          value={currentMode.post_meeting.recap_suggest_after_hours}
+                          onChange={(e) =>
+                            updatePostMeeting(selectedMode, "recap_suggest_after_hours", parseInt(e.target.value, 10) || 1)
+                          }
+                          min={1}
+                          className="w-24"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Suggest recap email after meeting
+                        </p>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <DaySequenceInput
+                      value={currentMode.outbound_followups_days}
+                      onChange={(val) => updateModeSettings(selectedMode, "outbound_followups_days", val)}
+                      label="Follow-up Sequence (days between emails)"
+                      maxItems={8}
+                      minItems={1}
+                    />
+
+                    <DaySequenceInput
+                      value={currentMode.post_meeting.checkins_days}
+                      onChange={(val) => updatePostMeeting(selectedMode, "checkins_days", val)}
+                      label="Post-Meeting Check-ins (days after recap)"
+                      maxItems={5}
+                      minItems={1}
+                    />
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <h5 className="text-sm font-medium">Breakup Email Trigger</h5>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Days since first outbound</Label>
+                          <Input
+                            type="number"
+                            value={currentMode.breakup_trigger.days_since_first_outbound}
+                            onChange={(e) =>
+                              updateBreakupTrigger(selectedMode, "days_since_first_outbound", parseInt(e.target.value, 10) || 1)
+                            }
+                            min={1}
+                            className="w-24"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Days since last outbound</Label>
+                          <Input
+                            type="number"
+                            value={currentMode.breakup_trigger.days_since_last_outbound}
+                            onChange={(e) =>
+                              updateBreakupTrigger(selectedMode, "days_since_last_outbound", parseInt(e.target.value, 10) || 1)
+                            }
+                            min={1}
+                            className="w-24"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* WhatsApp Channel */}
+                {selectedChannel === "whatsapp" && (
+                  <div className="p-4 border rounded-lg space-y-4 bg-muted/30">
+                    <h4 className="font-medium text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+                      <MessageSquare className="h-4 w-4 text-green-600" />
+                      {selectedMode === "fast" ? "Fast Mode" : "Nurture Mode"} — WhatsApp
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                      WhatsApp uses conversational nudges — shorter, lighter cadences than email.
+                    </p>
+
+                    <HourSequenceInput
+                      value={settings.whatsapp.outbound_followups_hours}
+                      onChange={(val) => updateWhatsAppSetting("outbound_followups_hours", val)}
+                      label="Outbound Follow-up Intervals (hours)"
+                      maxItems={5}
+                    />
+
+                    <div className="space-y-2">
+                      <Label>Max messages before pause</Label>
+                      <Input
+                        type="number"
+                        value={settings.whatsapp.max_messages_before_pause}
+                        onChange={(e) =>
+                          updateWhatsAppSetting("max_messages_before_pause", parseInt(e.target.value, 10) || 1)
+                        }
+                        min={1}
+                        max={10}
+                        className="w-24"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Auto-pause WhatsApp sequence after this many unanswered messages
+                      </p>
+                    </div>
+
+                    <Separator />
+
+                    <HourSequenceInput
+                      value={settings.whatsapp.post_meeting_hours}
+                      onChange={(val) => updateWhatsAppSetting("post_meeting_hours", val)}
+                      label="Post-Meeting Nudge Timing (hours)"
+                      maxItems={4}
+                    />
+
+                    {selectedMode === "nurture" && (
+                      <>
+                        <Separator />
+                        <DaySequenceInput
+                          value={settings.whatsapp.nurture_cadence_days}
+                          onChange={(val) => updateWhatsAppSetting("nurture_cadence_days", val)}
+                          label="Nurture Touch Intervals (days)"
+                          maxItems={4}
+                          minItems={1}
+                        />
+                      </>
+                    )}
+
+                    <Separator />
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label>Automation enabled</Label>
+                        <p className="text-xs text-muted-foreground">
+                          WhatsApp is manual-only for now
+                        </p>
+                      </div>
+                      <Switch
+                        checked={settings.whatsapp.automation_enabled}
+                        onCheckedChange={(checked) => updateWhatsAppSetting("automation_enabled", checked)}
+                      />
+                    </div>
+                  </div>
+                )}
               </TabsContent>
 
               {/* GUARDRAILS TAB */}
