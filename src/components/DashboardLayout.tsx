@@ -15,13 +15,13 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/dashboard/inbox", icon: Inbox, label: "Inbox" },
-  { to: "/dashboard/leads", icon: Users, label: "Leads" },
-  { to: "/dashboard/analytics", icon: BarChart3, label: "Team Analytics", managerOnly: true },
-  { to: "/dashboard/knowledge", icon: BookOpen, label: "Knowledge Base" },
-  { to: "/dashboard/settings", icon: Settings, label: "Settings" },
-];
+{ to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+{ to: "/dashboard/inbox", icon: Inbox, label: "Inbox" },
+{ to: "/dashboard/leads", icon: Users, label: "Leads" },
+{ to: "/dashboard/analytics", icon: BarChart3, label: "Team Analytics", managerOnly: true },
+{ to: "/dashboard/knowledge", icon: BookOpen, label: "Knowledge Base" },
+{ to: "/dashboard/settings", icon: Settings, label: "Settings" }];
+
 
 export default function DashboardLayout() {
   const { signOut, user } = useAuth();
@@ -33,14 +33,14 @@ export default function DashboardLayout() {
 
   useEffect(() => {
     if (!user) return;
-    supabase
-      .from("workspace_members")
-      .select("role")
-      .eq("user_id", user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        setIsManagerOrAdmin(data?.role === "admin" || data?.role === "manager");
-      });
+    supabase.
+    from("workspace_members").
+    select("role").
+    eq("user_id", user.id).
+    maybeSingle().
+    then(({ data }) => {
+      setIsManagerOrAdmin(data?.role === "admin" || data?.role === "manager");
+    });
   }, [user]);
 
   const visibleNavItems = navItems.filter(
@@ -52,27 +52,27 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <aside className="w-64 border-r border-border bg-card hidden md:flex flex-col">
         <div className="p-4 border-b border-border">
-          <h1 className="text-xl font-bold text-foreground">Deal Assistant</h1>
+          <h1 className="text-xl font-bold text-foreground">Lead Rocket AI</h1>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           {visibleNavItems.map((item) => {
-            const isActive = location.pathname === item.to || 
-              (item.to !== "/dashboard" && location.pathname.startsWith(item.to));
+            const isActive = location.pathname === item.to ||
+            item.to !== "/dashboard" && location.pathname.startsWith(item.to);
             return (
               <Link
                 key={item.to}
                 to={item.to}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
+                  isActive ?
+                  "bg-primary text-primary-foreground" :
+                  "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}>
+
                 <item.icon className="h-4 w-4" />
                 {item.label}
-              </Link>
-            );
+              </Link>);
+
           })}
         </nav>
         <div className="p-4 border-t border-border">
@@ -91,8 +91,8 @@ export default function DashboardLayout() {
         <h1 className="font-bold">Deal Assistant</h1>
         <nav className="flex-1 flex gap-2 overflow-x-auto">
           {visibleNavItems.map((item) => {
-            const isActive = location.pathname === item.to || 
-              (item.to !== "/dashboard" && location.pathname.startsWith(item.to));
+            const isActive = location.pathname === item.to ||
+            item.to !== "/dashboard" && location.pathname.startsWith(item.to);
             return (
               <Link
                 key={item.to}
@@ -100,12 +100,12 @@ export default function DashboardLayout() {
                 className={cn(
                   "flex items-center gap-1 px-2 py-1 rounded text-xs whitespace-nowrap",
                   isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground"
-                )}
-              >
+                )}>
+
                 <item.icon className="h-3 w-3" />
                 {item.label}
-              </Link>
-            );
+              </Link>);
+
           })}
         </nav>
         <Button variant="ghost" size="sm" onClick={signOut}>
@@ -119,6 +119,6 @@ export default function DashboardLayout() {
           <Outlet />
         </div>
       </main>
-    </div>
-  );
+    </div>);
+
 }
