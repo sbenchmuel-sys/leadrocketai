@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { getLeadInteractions, InteractionItem } from "@/lib/supabaseQueries";
+import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { format, differenceInDays } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface TimelineTabProps {
   leadId: string;
+  onWhatsAppReply?: () => void;
 }
 
 /* ── Dedupe ── */
@@ -395,16 +400,60 @@ function WhatsAppEntry({ item }: { item: InteractionItem }) {
 }
 
 /* ── Main Component ── */
-export default function TimelineTab({ leadId }: TimelineTabProps) {
+export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProps) {
   const [interactions, setInteractions] = useState<InteractionItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showReplyForm, setShowReplyForm] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [isSavingReply, setIsSavingReply] = useState(false);
 
-  useEffect(() => {
+  const loadInteractions = () => {
     getLeadInteractions(leadId)
       .then((items) => setInteractions(dedupeTimelineItems(items)))
       .catch(console.error)
       .finally(() => setIsLoading(false));
+  };
+
+  useEffect(() => {
+    loadInteractions();
   }, [leadId]);
+
+  const handleLogWhatsAppReply = async () => {
+    if (!replyText.trim()) return;
+    setIsSavingReply(true);
+    try {
+      // 1. Create inbound WhatsApp interaction
+      await supabase.from("interactions").insert({
+        lead_id: leadId,
+        type: "whatsapp_inbound",
+        source: "manual",
+        body_text: replyText.trim(),
+        direction: "inbound",
+        occurred_at: new Date().toISOString(),
+      });
+
+      // 2. Update lead: pause automation, set engaged, update last_inbound_at
+      await supabase.from("leads").update({
+        last_inbound_at: new Date().toISOString(),
+        last_activity_at: new Date().toISOString(),
+        stage: "engaged",
+        needs_action: true,
+        next_action_key: "reply_now",
+        next_action_label: "Reply to WhatsApp message",
+      }).eq("id", leadId);
+
+      toast.success("WhatsApp reply logged — automation paused");
+      setReplyText("");
+      setShowReplyForm(false);
+      loadInteractions();
+      onWhatsAppReply?.();
+    } catch (err) {
+      console.error("[TimelineTab] WhatsApp reply log error:", err);
+      toast.error("Failed to log reply");
+    } finally {
+      setIsSavingReply(false);
+    }
+  };
 
   const entries = useMemo(() => groupIntoThreads(interactions), [interactions]);
   const autoExpand = useMemo(() => getAutoExpandIds(entries), [entries]);
@@ -425,6 +474,42 @@ export default function TimelineTab({ leadId }: TimelineTabProps) {
 
   return (
     <div className="space-y-0">
+      {/* Log WhatsApp Reply button */}
+      <div className="flex justify-end pb-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs"
+          onClick={() => setShowReplyForm(!showReplyForm)}
+        >
+          <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+          Log WhatsApp Reply
+        </Button>
+      </div>
+
+      {/* Inline reply form */}
+      {showReplyForm && (
+        <div className="bg-accent/50 rounded-lg p-3 mb-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Paste or type the inbound WhatsApp message:</p>
+          <Textarea
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            placeholder="e.g. Will review and revert by Monday..."
+            rows={3}
+            className="text-sm"
+          />
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" size="sm" onClick={() => { setShowReplyForm(false); setReplyText(""); }}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={!replyText.trim() || isSavingReply} onClick={handleLogWhatsAppReply}>
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              {isSavingReply ? "Saving..." : "Log Reply"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {entries.map((entry, idx) => {
         const key = isThread(entry) ? entry.key : entry.id;
         const isExpanded = autoExpand.has(key);
