@@ -46,11 +46,12 @@ import {
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useGmailSync } from "@/hooks/useGmailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { supabase } from "@/integrations/supabase/client";
 import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem } from "@/lib/supabaseQueries";
 import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile, RepProfile } from "@/lib/repProfileQueries";
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
-import { EnrichedLead, getActionType } from "@/lib/dashboardUtils";
+import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 
 // Minimal lead interface for this dialog
 interface MinimalLead {
@@ -67,6 +68,7 @@ interface MinimalLead {
   next_action_key?: string | null;
   next_action_label?: string | null;
   initial_message?: string | null;
+  motion?: string;
 }
 
 interface EmailActionDialogProps {
@@ -79,6 +81,42 @@ interface EmailActionDialogProps {
   prefilledSubject?: string;
   prefilledBody?: string;
   actionKey?: string;
+}
+
+// Motion options for the override dropdown
+const MOTION_OPTIONS: { value: Motion; label: string }[] = [
+  { value: "outbound_prospecting", label: "Prospecting" },
+  { value: "inbound_response", label: "Engaged" },
+  { value: "pre_meeting", label: "Pre-Meeting" },
+  { value: "post_meeting", label: "Post-Meeting" },
+  { value: "closing", label: "Closing" },
+  { value: "nurture", label: "Nurture" },
+  { value: "closed", label: "Closed" },
+];
+
+// Derive playbook label from action key
+function getPlaybookLabel(actionKey: string | null, motion: Motion): string {
+  const motionLabel = MOTION_LABELS[motion] || "Prospecting";
+  const actionType = getActionType(actionKey);
+  
+  const stepMap: Record<string, string> = {
+    reply: "Reply",
+    recap: "Post-Meeting Recap",
+    follow_up: "Follow-up",
+    nurture: "Nurture Email",
+    closing: "Closing",
+    view: "Outreach",
+  };
+  
+  // Derive step number from action key
+  let stepInfo = "";
+  if (actionKey?.startsWith("send_pre_1")) stepInfo = "Step 1 of 4";
+  else if (actionKey?.startsWith("send_pre_2")) stepInfo = "Step 2 of 4";
+  else if (actionKey?.startsWith("send_pre_3")) stepInfo = "Step 3 of 4";
+  else if (actionKey?.startsWith("send_pre_4")) stepInfo = "Step 4 of 4";
+  else if (actionKey?.startsWith("send_nurture_")) stepInfo = "Nurture";
+  
+  return `${motionLabel}${stepInfo ? ` · ${stepInfo}` : ` · ${stepMap[actionType] || "Email"}`}`;
 }
 
 // Map action types to AI tasks
@@ -196,6 +234,11 @@ export function EmailActionDialog({
   const [previousBody, setPreviousBody] = useState<string | null>(null);
   const [previousSubject, setPreviousSubject] = useState<string | null>(null);
   const [showUndo, setShowUndo] = useState(false);
+  
+  // Motion override state
+  const leadMotion = (lead.motion as Motion) || "outbound_prospecting";
+  const [selectedMotion, setSelectedMotion] = useState<Motion>(leadMotion);
+  const suggestedMotion = leadMotion;
   
   // One-click action loading states
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -511,6 +554,32 @@ Calendar Link: ${repProfile.calendar_link || ''}
     return body;
   }
 
+  // Apply motion override if changed
+  async function applyMotionOverride() {
+    if (selectedMotion !== leadMotion) {
+      try {
+        const updatePayload: Record<string, unknown> = {
+          motion: selectedMotion,
+          last_activity_at: new Date().toISOString(),
+        };
+        // If moving to closed, disable automation
+        if (selectedMotion === "closed") {
+          updatePayload.nurture_status = "inactive";
+          updatePayload.needs_action = false;
+        }
+        await supabase
+          .from("leads")
+          .update(updatePayload)
+          .eq("id", lead.id);
+        
+        const motionLabel = MOTION_LABELS[selectedMotion] || selectedMotion;
+        toast.success(`Motion updated to ${motionLabel}.`);
+      } catch (err) {
+        console.error("Failed to update motion:", err);
+      }
+    }
+  }
+
   async function handleSend() {
     if (!to.trim() || !subject.trim() || !body.trim()) {
       toast.error("Please fill in all fields");
@@ -528,6 +597,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
       replyToMessageId || undefined
     );
     if (result.ok) {
+      await applyMotionOverride();
       onOpenChange(false);
       toast.success("Email sent successfully!");
       onSuccess?.();
@@ -580,6 +650,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
     const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, connection?.gmail_email);
     window.open(gmailUrl, '_blank');
     
+    await applyMotionOverride();
     toast.success("Opening Gmail compose...");
     onOpenChange(false);
     onSuccess?.();
@@ -612,6 +683,10 @@ Calendar Link: ${repProfile.calendar_link || ''}
       <DialogContent className="max-w-3xl max-h-[95vh] flex flex-col p-0 gap-0">
         {/* Sticky Header */}
         <DialogHeader className="px-6 py-4 border-b shrink-0">
+          {/* Playbook context strip */}
+          <div className="text-[11px] text-muted-foreground/70 tracking-wide mb-1">
+            Playbook: {getPlaybookLabel(effectiveActionKey, selectedMotion)}
+          </div>
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5" />
@@ -955,6 +1030,28 @@ Calendar Link: ${repProfile.calendar_link || ''}
         {/* Sticky Footer */}
         <DialogFooter className="px-6 py-4 border-t shrink-0 flex-row gap-2 sm:justify-between">
           <div className="flex items-center gap-2">
+            {/* Motion override — subtle metadata-style dropdown */}
+            <div className="flex flex-col">
+              <Select value={selectedMotion} onValueChange={(v) => setSelectedMotion(v as Motion)}>
+                <SelectTrigger className="h-8 w-auto gap-1.5 border-0 bg-transparent px-2 text-xs text-muted-foreground hover:bg-muted/50 focus:ring-0 focus:ring-offset-0">
+                  <span className="text-[11px]">Motion:</span>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MOTION_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedMotion !== suggestedMotion && (
+                <span className="text-[10px] text-muted-foreground/60 pl-2">
+                  Suggested: {MOTION_LABELS[suggestedMotion]}
+                </span>
+              )}
+            </div>
+
             {/* Attachments selector */}
             <Select 
               value={selectedAttachments.length > 0 ? "selected" : ""} 
