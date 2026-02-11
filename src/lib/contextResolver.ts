@@ -48,6 +48,13 @@ export interface ResolvedContext {
   industry_kb: unknown;
   persona_kb: KnowledgeDocument[];
 
+  // Nurture state
+  nurture_mode: "review" | "automatic" | null;
+  nurture_status: "active" | "paused" | "inactive";
+  nurture_theme: string | null;
+  nurture_cadence: string | null;
+  nurture_outbound_count: number;
+
   // Profiles
   rep_profile: RepProfile | null;
   workspace_profile: WorkspaceProfile | null;
@@ -223,6 +230,12 @@ export async function contextResolver(leadId: string): Promise<ResolvedContext> 
     company_kb: companyKb,
     industry_kb: industryKb,
     persona_kb: knowledgeDocs,
+
+    nurture_mode: ((lead as any).nurture_mode as "review" | "automatic") || null,
+    nurture_status: ((lead as any).nurture_status as "active" | "paused" | "inactive") || "inactive",
+    nurture_theme: ((lead as any).nurture_theme as string) || null,
+    nurture_cadence: lead.nurture_cadence || null,
+    nurture_outbound_count: (lead as any).nurture_outbound_count || 0,
 
     rep_profile: repProfile,
     workspace_profile: workspaceProfile,

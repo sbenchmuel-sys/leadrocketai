@@ -47,10 +47,13 @@ export function playbookResolver(ctx: ResolvedContext): PlaybookRecommendation {
 
   // Rule 3: Nurture motion
   if (ctx.motion === "nurture") {
+    const nextStep = ctx.nurture_outbound_count + 1;
+    const STEP_LABELS = ["Industry Insight", "Case Study", "Value-Add Resource"];
+    const stepLabel = STEP_LABELS[(nextStep - 1) % STEP_LABELS.length];
     return {
       recommended_intent: "nurture_email_single",
-      recommended_playbook: "Nurture",
-      next_sequence_step: `Nurture Email ${ctx.sequence_step || 1}`,
+      recommended_playbook: `Nurture · ${ctx.nurture_theme || "balanced"}`,
+      next_sequence_step: `Email ${nextStep}: ${stepLabel}`,
     };
   }
 

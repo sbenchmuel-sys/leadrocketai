@@ -68,6 +68,7 @@ function getFieldUpdatesForIntent(intent: AITaskType): FieldUpdate {
         needs_action: false,
       };
     case "nurture_email_single":
+      // Nurture step increment handled separately in updateSequenceState
       return {
         motion: "nurture",
         needs_action: false,
@@ -103,7 +104,6 @@ export async function updateSequenceState(
 
   // Set first_outbound_at if this is the first outbound
   if (intentUsed === "pre_email_1_intro") {
-    // Only set if not already set — use a conditional update
     const { data: lead } = await supabase
       .from("leads")
       .select("first_outbound_at")
@@ -113,6 +113,42 @@ export async function updateSequenceState(
     if (lead && !lead.first_outbound_at) {
       updatePayload.first_outbound_at = new Date().toISOString();
     }
+  }
+
+  // Nurture: increment outbound count and queue next step
+  if (intentUsed === "nurture_email_single") {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("nurture_outbound_count, nurture_mode")
+      .eq("id", leadId)
+      .single();
+
+    const currentCount = (lead as any)?.nurture_outbound_count || 0;
+    const nextCount = currentCount + 1;
+    const nextStepKey = `send_nurture_${nextCount + 1}`;
+
+    updatePayload.nurture_outbound_count = nextCount;
+    updatePayload.last_nurture_outbound_at = new Date().toISOString();
+
+    // In review mode, don't auto-queue — user must manually generate next
+    const mode = (lead as any)?.nurture_mode || "review";
+    if (mode === "review") {
+      updatePayload.next_action_key = null;
+      updatePayload.next_action_label = null;
+      updatePayload.needs_action = false;
+    } else {
+      // Automatic mode: queue next nurture
+      updatePayload.next_action_key = nextStepKey;
+      updatePayload.next_action_label = `Send nurture email #${nextCount + 1}`;
+      updatePayload.needs_action = true;
+    }
+
+    console.log("[updateSequenceState] Nurture step incremented:", {
+      previousCount: currentCount,
+      newCount: nextCount,
+      mode,
+      nextStep: mode === "review" ? "manual" : nextStepKey,
+    });
   }
 
   // Step 2: Apply updates
