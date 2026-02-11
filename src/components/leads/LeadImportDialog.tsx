@@ -109,6 +109,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
+        source_type: "csv_import" as const,
         last_activity_at: new Date().toISOString(),
       }));
 
