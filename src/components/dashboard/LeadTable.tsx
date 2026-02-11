@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2 } from "lucide-react";
-import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER } from "@/lib/dashboardUtils";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, MOTION_LABELS, SourceType, Motion } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
@@ -507,8 +507,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   />
                 </TableHead>
                 <TableHead>Lead</TableHead>
-                <TableHead>Stage</TableHead>
+                <TableHead>Phase</TableHead>
                 <TableHead className="hidden sm:table-cell">Mode</TableHead>
+                <TableHead className="hidden md:table-cell">Source</TableHead>
                 <TableHead className="hidden md:table-cell">Last Email</TableHead>
                 <TableHead className="hidden lg:table-cell">Next Action</TableHead>
                 <TableHead className="text-right">Action</TableHead>
@@ -558,31 +559,34 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </div>
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Select
-                        value={lead.stage}
-                        onValueChange={(value) => handleStageChange(lead.id, value as DealStage)}
-                        disabled={isUpdatingThis}
-                      >
-                        <SelectTrigger 
-                          className={cn(
-                            "w-[130px] h-7 border-0 font-medium text-xs",
-                            stageBadgeVariants[lead.stage]
-                          )}
+                      <div className="flex flex-col gap-0.5">
+                        <Select
+                          value={lead.stage}
+                          onValueChange={(value) => handleStageChange(lead.id, value as DealStage)}
+                          disabled={isUpdatingThis}
                         >
-                          {isUpdatingThis ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <SelectValue />
-                          )}
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ALL_STAGES.map((stage) => (
-                            <SelectItem key={stage} value={stage}>
-                              {STAGE_LABELS[stage]}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                          <SelectTrigger 
+                            className={cn(
+                              "w-[130px] h-7 border-0 font-medium text-xs",
+                              stageBadgeVariants[lead.stage]
+                            )}
+                          >
+                            {isUpdatingThis ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <SelectValue />
+                            )}
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ALL_STAGES.map((stage) => (
+                              <SelectItem key={stage} value={stage}>
+                                {STAGE_LABELS[stage]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-[10px] text-muted-foreground ml-1">{lead.displayPhase}</span>
+                      </div>
                     </TableCell>
                     <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
                       <Button
@@ -611,6 +615,11 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                           </>
                         )}
                       </Button>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        {SOURCE_TYPE_LABELS[lead.source_type] || lead.source_type}
+                      </Badge>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       <span className={`text-sm ${lastEmail.className}`}>

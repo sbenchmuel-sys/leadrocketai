@@ -43,7 +43,7 @@ export default function Dashboard() {
           created_at, last_activity_at, next_step, deal_outlook, country,
           stage, needs_action, next_action_key, next_action_label, action_reason_code,
           meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
-          nurture_cadence, auto_nurture_eligible
+          nurture_cadence, auto_nurture_eligible, source_type, motion
         `)
         .order("last_activity_at", { ascending: false })
         .limit(200);
