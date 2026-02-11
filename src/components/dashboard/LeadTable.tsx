@@ -192,6 +192,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
         .update({
           strategy: "fast",
           nurture_cadence: null,
+          nurture_mode: "review",
+          nurture_status: "inactive",
+          nurture_theme: null,
+          auto_nurture_eligible: false,
+          motion: (lead as any).last_inbound_at ? "inbound_response" : "outbound_prospecting",
+          needs_action: false,
+          next_action_key: null,
+          next_action_label: null,
+          action_reason_code: null,
           mode_changed_at: new Date().toISOString(),
         })
         .eq("id", lead.id);
