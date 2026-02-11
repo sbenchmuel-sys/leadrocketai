@@ -411,7 +411,6 @@ Calendar Link: ${repProfile.calendar_link || ''}
     setReplyToMessageId(null);
 
     try {
-      // Phase 7: Use unified generateDraft() pipeline as the primary path
       const pipelineResult = await generateDraft({
         lead_id: lead.id,
         channel: "email",
@@ -420,7 +419,6 @@ Calendar Link: ${repProfile.calendar_link || ''}
       });
 
       const ctx = pipelineResult.resolved_context;
-      const taskType = pipelineResult.recommended_intent;
 
       // Set thread state from pipeline context
       setThreadEmails(ctx.thread_emails);
@@ -430,88 +428,22 @@ Calendar Link: ${repProfile.calendar_link || ''}
         setReplyToMessageId(latestInbound.gmail_message_id);
       }
 
-      console.log("[EmailActionDialog] Pipeline-driven generation:", {
-        intent: taskType,
+      // Update resolved intent badge
+      setResolvedIntent(pipelineResult.recommended_intent);
+      setResolvedStep(pipelineResult.sequence_step);
+
+      console.log("[EmailActionDialog] Pipeline result:", {
+        intent: pipelineResult.recommended_intent,
         playbook: pipelineResult.recommended_playbook,
         step: pipelineResult.sequence_step,
         model: pipelineResult.model_used,
         complexity: pipelineResult.complexity_score,
+        hasDraft: !!pipelineResult.draft_text,
       });
 
-      // Build payload using pipeline context
-      const leadContext = buildLeadContext();
-      const repContext = buildRepContext();
-      const workspaceContext = formatWorkspaceContext(workspaceProfile);
-
-      const payload: Record<string, unknown> = {
-        lead_id: lead.id,
-        lead_context: leadContext,
-        rep_context: repContext,
-        workspace_context: workspaceContext,
-        meeting_link: ctx.lead.meeting_link || repProfile?.calendar_link || '',
-        custom_instructions: instructions.trim() || undefined,
-      };
-
-      // Add thread context for replies
-      if (ctx.thread_emails.length > 0 && taskType === "reply_to_thread") {
-        payload.email_thread = ctx.thread_summary;
-        payload.latest_inbound = latestInbound?.body_text || '';
-      }
-
-      // Add lead card context for new outreach
-      if (ctx.thread_emails.length === 0 && lead.initial_message) {
-        payload.lead_card_message = lead.initial_message;
-      }
-
-      // Add previous email summary for follow-ups
-      if (taskType.includes("pre_email")) {
-        payload.previous_email_summary = ctx.thread_summary || "No previous emails sent yet.";
-      }
-
-      // For nurture emails
-      if (taskType === "nurture_email_single") {
-        payload.theme = ctx.nurture_theme || "use_case";
-        payload.email_number = ctx.nurture_outbound_count + 1;
-        payload.previous_emails = ctx.thread_summary || "";
-      }
-
-      // For post-meeting follow-ups
-      if (taskType === "post_meeting_followup_email") {
-        const meetingBullets = ctx.last_meeting_summary?.internal_recap_bullets;
-        payload.meeting_summary_brief = Array.isArray(meetingBullets) ? meetingBullets.join(". ") : "Recent meeting with lead.";
-        payload.previous_emails = ctx.thread_summary || "";
-        payload.last_outbound = ctx.last_outbound_email?.body_text || "";
-      }
-
-      const result = await runTask(taskType, payload);
-
-      if (result.ok && result.content) {
-        const resolvedContent = resolveEmailPlaceholders(result.content, repProfile?.full_name || null);
-        setBody(resolvedContent);
-        setKnowledgeUsed(!!(result as any).knowledge_context_used);
-        
-        // Generate subject based on pipeline intent
-        const leadFirstName = lead.name.split(' ')[0];
-        const companyName = lead.company && lead.company !== 'Unknown Company' ? lead.company : null;
-        
-        if (taskType === "reply_to_thread" && ctx.thread_emails[0]?.subject) {
-          setSubject(`Re: ${ctx.thread_emails[0].subject.replace(/^Re:\s*/i, '')}`);
-        } else if (taskType === "post_meeting_followup_email") {
-          setSubject(`Following up on our conversation${companyName ? ` - ${companyName}` : ''}`);
-        } else if (taskType === "pre_email_2_followup") {
-          setSubject(`Following up - ${leadFirstName}`);
-        } else if (taskType === "pre_email_3_followup") {
-          setSubject(`Checking in - ${leadFirstName}`);
-        } else if (taskType === "pre_email_4_breakup") {
-          setSubject(`Closing the loop - ${leadFirstName}`);
-        } else if (taskType === "nurture_email_single") {
-          setSubject(`Thought you'd find this valuable${companyName ? `, ${leadFirstName}` : ''}`);
-        } else {
-          setSubject(companyName 
-            ? `Introduction - ${companyName}` 
-            : `Connecting with you, ${leadFirstName}`
-          );
-        }
+      if (pipelineResult.draft_text) {
+        setBody(pipelineResult.draft_text);
+        setSubject(pipelineResult.suggested_subject || "");
       } else {
         toast.error("Failed to generate email");
       }
