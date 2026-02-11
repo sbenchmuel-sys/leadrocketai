@@ -78,8 +78,64 @@ export const MOTION_COLORS: Record<Motion, { bg: string; text: string }> = {
 };
 
 // ============================================
-// DISPLAY PHASE MAPPER (visual layer only)
+// ORIGIN CATEGORY (derived, simplifies UI logic)
 // ============================================
+
+export type OriginCategory = "outbound" | "inbound";
+
+export function getOriginCategory(sourceType: SourceType): OriginCategory {
+  switch (sourceType) {
+    case "contact_form":
+    case "gmail_inbound":
+    case "referral":
+      return "inbound";
+    default:
+      return "outbound";
+  }
+}
+
+// Source presets: auto-assign motion + strategy based on source selection
+export interface SourcePreset {
+  source_type: SourceType;
+  motion: Motion;
+  strategy: "fast" | "nurture";
+  origin: OriginCategory;
+}
+
+export const SOURCE_PRESETS: Record<string, SourcePreset> = {
+  outbound: {
+    source_type: "outbound_prospecting",
+    motion: "outbound_prospecting",
+    strategy: "fast",
+    origin: "outbound",
+  },
+  inbound_website: {
+    source_type: "contact_form",
+    motion: "inbound_response",
+    strategy: "fast",
+    origin: "inbound",
+  },
+  event: {
+    source_type: "event_lead",
+    motion: "outbound_prospecting",
+    strategy: "fast",
+    origin: "outbound",
+  },
+  referral: {
+    source_type: "referral",
+    motion: "inbound_response",
+    strategy: "fast",
+    origin: "inbound",
+  },
+  other: {
+    source_type: "manual_entry",
+    motion: "outbound_prospecting",
+    strategy: "fast",
+    origin: "outbound",
+  },
+};
+
+
 
 export type DisplayPhase = "Prospecting" | "Engaged" | "Post-Meeting" | "Closing" | "Nurture" | "Closed";
 
@@ -123,6 +179,7 @@ export interface EnrichedLead extends LeadListItem {
   source_type: SourceType;
   motion: Motion;
   displayPhase: DisplayPhase;
+  origin_category: OriginCategory;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
@@ -154,6 +211,7 @@ export function enrichLead(lead: LeadListItem & {
     source_type: sourceType,
     motion,
     displayPhase: getDisplayPhase(stage, motion),
+    origin_category: getOriginCategory(sourceType),
   };
 }
 
