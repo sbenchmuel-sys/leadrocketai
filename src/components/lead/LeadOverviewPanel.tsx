@@ -14,6 +14,7 @@ import {
 import { getLeadMeetingPacks, getLeadInteractions, MeetingPackItem } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
+import NurturePreviewCard from "@/components/lead/NurturePreviewCard";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface LeadOverviewPanelProps {
@@ -68,9 +69,11 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
   const signalCount = buyingSignals.length + risks.length;
 
   // Auto-collapse logic
-  const automationMotionAllowed = motion === "outbound_prospecting" || motion === "nurture";
+  const isNurtureMotion = motion === "nurture";
+  const automationMotionAllowed = motion === "outbound_prospecting";
   const hasAutomation = automationMotionAllowed && stage !== "closed_won" && stage !== "closed_lost";
   const automationPaused = hasAutomation && (!!lead.last_inbound_at || lead.has_future_meeting);
+  const hasNurture = isNurtureMotion && ((lead as any).nurture_status === "active" || (lead as any).nurture_status === "paused");
 
   const isPostMeeting = motion === "post_meeting" || stage === "post_meeting";
 
@@ -114,8 +117,16 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
   return (
     <div className="space-y-3 sticky top-4">
 
-      {/* AUTOMATION — expanded if active, collapsed if paused, hidden if N/A */}
-      {hasAutomation && (
+      {/* NURTURE — shown for nurture motion leads */}
+      {hasNurture && (
+        <>
+          <NurturePreviewCard lead={lead} onUpdate={onUpdate || (() => {})} />
+          <Separator className="bg-border/40" />
+        </>
+      )}
+
+      {/* AUTOMATION — expanded if active, collapsed if paused, hidden if N/A or nurture */}
+      {hasAutomation && !isNurtureMotion && (
         <>
           <Collapsible open={automationOpen} onOpenChange={setAutomationOpen}>
             <CollapsibleTrigger className="flex items-center justify-between w-full py-2 group">

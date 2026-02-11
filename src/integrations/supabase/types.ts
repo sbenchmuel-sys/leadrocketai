@@ -257,7 +257,10 @@ export type Database = {
           next_step: string | null
           next_step_reason: string | null
           nurture_cadence: string | null
+          nurture_mode: string
           nurture_outbound_count: number
+          nurture_status: string
+          nurture_theme: string | null
           owner_user_id: string
           personal_notes: string | null
           phone: string | null
@@ -304,7 +307,10 @@ export type Database = {
           next_step?: string | null
           next_step_reason?: string | null
           nurture_cadence?: string | null
+          nurture_mode?: string
           nurture_outbound_count?: number
+          nurture_status?: string
+          nurture_theme?: string | null
           owner_user_id: string
           personal_notes?: string | null
           phone?: string | null
@@ -351,7 +357,10 @@ export type Database = {
           next_step?: string | null
           next_step_reason?: string | null
           nurture_cadence?: string | null
+          nurture_mode?: string
           nurture_outbound_count?: number
+          nurture_status?: string
+          nurture_theme?: string | null
           owner_user_id?: string
           personal_notes?: string | null
           phone?: string | null
