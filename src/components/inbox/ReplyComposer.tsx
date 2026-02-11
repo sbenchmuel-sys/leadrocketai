@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Send, Paperclip, MessageSquare, Mail, X, Pencil, Check } from "lucide-react";
+import { Send, Paperclip, MessageSquare, Mail, X, Pencil, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 import type { ConversationListItem, ReplySuggestion } from "@/lib/inboxQueries";
 
 type Props = {
@@ -57,14 +58,52 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
     if (!body.trim()) return;
     setIsSending(true);
 
-    // Phase 1: Manual send only — just show confirmation
-    // In production, this would call whatsapp-send or gmail-send edge functions
-    toast({
-      title: "Ready to send",
-      description: `Message prepared for ${channel}. Sending integration coming in Phase 2.`,
-    });
+    try {
+      if (channel === "whatsapp") {
+        // Look up the contact's phone identity
+        const { data: identity, error: idErr } = await supabase
+          .from("contact_identities")
+          .select("value")
+          .eq("contact_id", conversation.contact_id)
+          .in("type", ["phone", "whatsapp"])
+          .limit(1)
+          .maybeSingle();
 
-    setIsSending(false);
+        if (idErr || !identity?.value) {
+          throw new Error("No phone number found for this contact.");
+        }
+
+        const { data, error } = await supabase.functions.invoke("whatsapp-send", {
+          body: {
+            conversation_id: conversation.id,
+            to: identity.value,
+            message_text: body.trim(),
+          },
+        });
+
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+
+        toast({ title: "Message sent", description: "WhatsApp message delivered." });
+        setBody("");
+        setAttachments([]);
+      } else {
+        // Email send — placeholder for gmail-send integration
+        toast({
+          title: "Ready to send",
+          description: "Email sending integration coming soon.",
+        });
+      }
+    } catch (err: any) {
+      console.error("[ReplyComposer] Send error:", err);
+      toast({
+        title: "Send failed",
+        description: err.message || "Could not send message.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
@@ -225,7 +264,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
           disabled={!body.trim() || isSending}
           onClick={handleSend}
         >
-          <Send className="h-4 w-4" />
+          {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
       </div>
 
