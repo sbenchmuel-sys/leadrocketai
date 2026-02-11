@@ -625,12 +625,26 @@ Calendar Link: ${repProfile.calendar_link || ''}
     if (result.ok) {
       await applyMotionOverride();
       
-      // Phase 3: Update sequence state after successful send
+      // Update sequence state after successful send (with override logging)
       try {
         const effectiveActionKeyForSeq = actionKey || lead.next_action_key || null;
         const hasThreadForSeq = threadEmails.length > 0;
         const intentUsed = getAITaskForAction(effectiveActionKeyForSeq, hasThreadForSeq);
-        await updateSequenceState(lead.id, intentUsed);
+        const recommended = resolvedIntent as AITaskType | null;
+        const isOverride = recommended && intentUsed !== recommended;
+        await updateSequenceState(
+          lead.id,
+          intentUsed,
+          recommended,
+          isOverride ? intentUsed : undefined,
+        );
+        if (isOverride) {
+          console.log("[EmailActionDialog] Intent override logged:", {
+            suggested_intent: recommended,
+            chosen_intent: intentUsed,
+            previous_sequence_step: resolvedStep,
+          });
+        }
         console.log("[EmailActionDialog] Sequence state updated after send");
       } catch (seqErr) {
         console.warn("[EmailActionDialog] Sequence update failed (non-blocking):", seqErr);
@@ -690,10 +704,24 @@ Calendar Link: ${repProfile.calendar_link || ''}
     
     await applyMotionOverride();
 
-    // Phase 3: Update sequence state after Gmail compose
+    // Update sequence state after Gmail compose (with override logging)
     try {
       const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0);
-      await updateSequenceState(lead.id, intentUsed);
+      const recommended = resolvedIntent as AITaskType | null;
+      const isOverride = recommended && intentUsed !== recommended;
+      await updateSequenceState(
+        lead.id,
+        intentUsed,
+        recommended,
+        isOverride ? intentUsed : undefined,
+      );
+      if (isOverride) {
+        console.log("[EmailActionDialog] Intent override logged (Gmail):", {
+          suggested_intent: recommended,
+          chosen_intent: intentUsed,
+          previous_sequence_step: resolvedStep,
+        });
+      }
       console.log("[EmailActionDialog] Sequence state updated after Gmail compose");
     } catch (seqErr) {
       console.warn("[EmailActionDialog] Sequence update failed (non-blocking):", seqErr);
