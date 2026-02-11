@@ -506,9 +506,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
         <CardContent className="p-0">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="text-xs">
                 <TableHead className="w-1 p-0" />
-                <TableHead className="w-10">
+                <TableHead className="w-10 py-2">
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={handleSelectAll}
@@ -516,133 +516,86 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead>Lead</TableHead>
-                <TableHead>Phase</TableHead>
-                <TableHead className="hidden sm:table-cell">Mode</TableHead>
-                <TableHead className="hidden md:table-cell">Source</TableHead>
-                <TableHead className="hidden md:table-cell">Last Email</TableHead>
-                <TableHead className="hidden lg:table-cell">Next Action</TableHead>
-                <TableHead className="text-right">Action</TableHead>
+                <TableHead className="py-2">Lead</TableHead>
+                <TableHead className="py-2">Phase</TableHead>
+                <TableHead className="py-2 hidden sm:table-cell">Momentum</TableHead>
+                <TableHead className="py-2 hidden md:table-cell">Source</TableHead>
+                <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
+                <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
+                <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                <TableHead className="py-2 text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {leads.map((lead, index) => {
-                const lastEmail = formatLastEmail(lead.last_outbound_at);
+                const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
-                const isUpdatingThis = updatingStage === lead.id;
-                const isUpdatingStrategyThis = updatingStrategy === lead.id;
-                const strategy = (lead as any).strategy || "fast";
-                const nurtureCadence = (lead as any).nurture_cadence;
-                
+                const nurtureMode = (lead as any).nurture_mode;
+                const nurtureStatus = (lead as any).nurture_status;
+                const isAutoRunning = nurtureMode === "auto" && nurtureStatus === "active";
+                const isReview = nurtureMode === "review" && nurtureStatus === "active";
+
+                // Derive momentum label from motion
+                const motionLabel = MOTION_LABELS[lead.motion] || lead.motion;
+                const motionColor = MOTION_COLORS[lead.motion];
+
                 return (
                   <TableRow
                     key={lead.id}
                     className={cn(
-                      "cursor-pointer transition-colors group relative",
-                      isSelected && "bg-muted/50",
-                      index % 2 === 1 && !isSelected && "bg-muted/20"
+                      "cursor-pointer transition-colors",
+                      "hover:bg-muted/50",
+                      isSelected && "bg-muted/40",
                     )}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("button, a, [role='dialog'], input, [role='combobox']")) return;
                       navigate(`/dashboard/leads/${lead.id}`);
                     }}
                   >
-                    {/* Color bar indicator */}
+                    {/* Color bar */}
                     <td className="w-0 p-0 relative">
                       <div className={cn(
                         "absolute left-0 top-0 bottom-0 w-1 rounded-r",
                         SOURCE_TYPE_COLORS[lead.source_type]?.bar || "bg-muted-foreground/30"
                       )} />
                     </td>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
                         aria-label={`Select ${lead.name}`}
                       />
                     </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <LeadAvatar 
-                          name={lead.name} 
-                          company={lead.company} 
-                          leadId={lead.id}
-                          size="sm"
-                        />
-                        <div>
-                          <p className="font-medium text-foreground">{lead.name}</p>
-                          <p className="text-sm text-muted-foreground">{lead.company}</p>
+
+                    {/* Lead */}
+                    <TableCell className="py-2">
+                      <div className="flex items-center gap-2">
+                        <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-xs font-semibold text-foreground">{lead.displayPhase}</span>
-                        <div className="flex items-center gap-1">
-                          <span className={cn(
-                            "text-[10px] px-1.5 py-0.5 rounded-sm inline-flex items-center gap-1",
-                            MOTION_COLORS[lead.motion]?.bg,
-                            MOTION_COLORS[lead.motion]?.text
-                          )}>
-                            <span>{MOTION_ICONS[lead.motion]}</span>
-                            {MOTION_LABELS[lead.motion]}
-                          </span>
-                        </div>
-                        <Select
-                          value={lead.stage}
-                          onValueChange={(value) => handleStageChange(lead.id, value as DealStage)}
-                          disabled={isUpdatingThis}
-                        >
-                          <SelectTrigger 
-                            className={cn(
-                              "w-[110px] h-5 border-0 font-normal text-[10px] text-muted-foreground p-0 pl-1",
-                            )}
-                          >
-                            {isUpdatingThis ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <SelectValue />
-                            )}
-                          </SelectTrigger>
-                          <SelectContent>
-                            {ALL_STAGES.map((stage) => (
-                              <SelectItem key={stage} value={stage}>
-                                {STAGE_LABELS[stage]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+
+                    {/* Phase */}
+                    <TableCell className="py-2">
+                      <span className="text-xs font-medium text-foreground">{lead.displayPhase}</span>
                     </TableCell>
-                    <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className={cn(
-                          "h-7 px-2 text-xs font-medium gap-1",
-                          strategy === "fast" 
-                            ? "text-info hover:bg-info/10" 
-                            : "text-primary hover:bg-primary/10"
-                        )}
-                        onClick={() => handleStrategyToggle(lead)}
-                        disabled={isUpdatingStrategyThis}
-                      >
-                        {isUpdatingStrategyThis ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : strategy === "fast" ? (
-                          <>
-                            <Zap className="h-3 w-3" />
-                            Fast
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCw className="h-3 w-3" />
-                            {nurtureCadence ? nurtureCadence.charAt(0).toUpperCase() + nurtureCadence.slice(1) : "Nurture"}
-                          </>
-                        )}
-                      </Button>
+
+                    {/* Momentum */}
+                    <TableCell className="py-2 hidden sm:table-cell">
+                      <span className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded-sm inline-flex items-center gap-1",
+                        motionColor?.bg, motionColor?.text
+                      )}>
+                        <span>{MOTION_ICONS[lead.motion]}</span>
+                        {motionLabel}
+                      </span>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell">
+
+                    {/* Source */}
+                    <TableCell className="py-2 hidden md:table-cell">
                       <span className={cn(
                         "text-[10px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1",
                         SOURCE_TYPE_COLORS[lead.source_type]?.bg,
@@ -652,17 +605,38 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                         {SOURCE_TYPE_LABELS[lead.source_type] || lead.source_type}
                       </span>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <span className={`text-sm ${lastEmail.className}`}>
+
+                    {/* Last Activity */}
+                    <TableCell className="py-2 hidden md:table-cell">
+                      <span className={cn("text-xs", lastEmail.className)}>
                         {lastEmail.text}
                       </span>
                     </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+
+                    {/* Next Action */}
+                    <TableCell className="py-2 hidden lg:table-cell">
+                      <p className="text-xs text-muted-foreground truncate max-w-[180px]">
                         {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                       </p>
                     </TableCell>
-                    <TableCell className="text-right">{getActionButton(lead)}</TableCell>
+
+                    {/* Automation Status */}
+                    <TableCell className="py-2 hidden lg:table-cell">
+                      {isAutoRunning ? (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
+                          <Zap className="h-3 w-3 mr-0.5" /> Auto
+                        </Badge>
+                      ) : isReview ? (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-warning/10 text-warning border-0">
+                          Review
+                        </Badge>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">Off</span>
+                      )}
+                    </TableCell>
+
+                    {/* Action */}
+                    <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
                   </TableRow>
                 );
               })}
