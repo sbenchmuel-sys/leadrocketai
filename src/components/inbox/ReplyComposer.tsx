@@ -75,8 +75,8 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
               onClick={() => handleSuggestionClick(s.text)}
               className="shrink-0 text-xs px-3 py-1.5 rounded-full border border-border hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
             >
-              {s.style === "professional" ? "💼" : s.style === "consultative" ? "🤝" : "⚡"}{" "}
-              {s.style}
+              {s.style === "direct" ? "⚡" : s.style === "consultative" ? "🤝" : "💪"}{" "}
+              {s.style === "direct" ? "Direct" : s.style === "consultative" ? "Consultative" : "Assertive"}
             </button>
           ))}
         </div>
