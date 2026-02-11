@@ -10,6 +10,7 @@ import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
 import DashboardLayout from "@/components/DashboardLayout";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import Inbox from "./pages/Inbox";
 import Leads from "./pages/Leads";
 import LeadDetail from "./pages/LeadDetail";
 import Knowledge from "./pages/Knowledge";
@@ -47,6 +48,7 @@ const App = () => (
               }
             >
               <Route index element={<Dashboard />} />
+              <Route path="inbox" element={<Inbox />} />
               <Route path="leads" element={<Leads />} />
               <Route path="leads/:id" element={<LeadDetail />} />
               <Route path="knowledge" element={<Knowledge />} />
