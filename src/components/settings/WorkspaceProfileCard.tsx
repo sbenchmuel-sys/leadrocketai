@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Loader2, Plus, X, Save, Sparkles } from "lucide-react";
+import { Building2, Loader2, Plus, X, Save, Sparkles, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { 
   getWorkspaceProfile, 
@@ -14,6 +14,7 @@ import {
   WorkspaceProfile, 
   WorkspaceProfileInput 
 } from "@/lib/workspaceProfileQueries";
+import { useProfileSync, getHighConfidenceValue } from "@/hooks/useProfileSync";
 
 interface CompanyKb {
   differentiators?: { text: string }[];
@@ -60,6 +61,7 @@ export function WorkspaceProfileCard() {
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<WorkspaceProfile | null>(null);
   const [autoFilledFields, setAutoFilledFields] = useState<string[]>([]);
+  const { isSyncing, syncFromKB } = useProfileSync();
   
   // Form state
   const [companyName, setCompanyName] = useState("");
@@ -160,6 +162,36 @@ export function WorkspaceProfileCard() {
             Some fields were auto-filled from your knowledge base. Review and save to confirm.
           </div>
         )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          disabled={isSyncing}
+          onClick={async () => {
+            const result = await syncFromKB("workspace");
+            if (!result?.workspace) {
+              toast.info("No workspace data found in knowledge base");
+              return;
+            }
+            const ws = result.workspace;
+            const filled: string[] = [];
+            const v = getHighConfidenceValue;
+            if (!companyName && v(ws.company_name)) { setCompanyName(v(ws.company_name)!); filled.push("company_name"); }
+            if (!productName && v(ws.product_name)) { setProductName(v(ws.product_name)!); filled.push("product_name"); }
+            if (!productDescription && v(ws.product_description)) { setProductDescription(v(ws.product_description)!); filled.push("product_description"); }
+            if (valueProps.length === 0 && v(ws.primary_value_props)) { setValueProps(v(ws.primary_value_props)!); filled.push("value_props"); }
+            if (!meetingTimezone && v(ws.meeting_timezone)) { setMeetingTimezone(v(ws.meeting_timezone)!); filled.push("timezone"); }
+            if (filled.length > 0) {
+              setAutoFilledFields(prev => [...prev, ...filled]);
+              toast.success(`Synced ${filled.length} field(s) from knowledge base. Review and save.`);
+            } else {
+              toast.info("All fields already populated or no high-confidence data found.");
+            }
+          }}
+        >
+          {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Sync from KB
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
