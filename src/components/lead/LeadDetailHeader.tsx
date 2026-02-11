@@ -26,11 +26,18 @@ interface LeadDetailHeaderProps {
 }
 
 // Derive automation status from lead fields
+// Rules: Email automation allowed ONLY in outbound_prospecting (pre-1st meeting) and nurture motions.
+// LinkedIn and WhatsApp NEVER auto-send. Paused on reply detection.
 function getAutomationStatus(lead: LeadDetail): { label: string; color: string; icon: typeof Zap } {
   const stage = lead.stage as DealStage;
+  const motion = (lead.motion as Motion) || "outbound_prospecting";
+
+  // Terminal stages
   if (stage === "closed_won" || stage === "closed_lost") {
     return { label: "Completed", color: "text-muted-foreground bg-muted", icon: CheckCircle2 };
   }
+
+  // Paused: reply detected (inbound newer than outbound)
   if (lead.last_inbound_at && lead.last_outbound_at) {
     const inbound = new Date(lead.last_inbound_at).getTime();
     const outbound = new Date(lead.last_outbound_at).getTime();
@@ -38,9 +45,18 @@ function getAutomationStatus(lead: LeadDetail): { label: string; color: string; 
       return { label: "Paused – Reply Detected", color: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40", icon: Pause };
     }
   }
+
+  // Paused: meeting scheduled
   if (lead.has_future_meeting) {
     return { label: "Paused – Meeting Scheduled", color: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40", icon: Pause };
   }
+
+  // Automation only allowed in outbound_prospecting or nurture
+  const automationAllowed = motion === "outbound_prospecting" || motion === "nurture";
+  if (!automationAllowed) {
+    return { label: "Manual Only", color: "text-muted-foreground bg-muted/60", icon: Pause };
+  }
+
   return { label: "Active", color: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40", icon: Zap };
 }
 
