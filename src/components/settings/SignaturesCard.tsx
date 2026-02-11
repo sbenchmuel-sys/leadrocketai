@@ -163,7 +163,7 @@ export function SignaturesCard() {
                     toast.info("No signatures found in outbound emails");
                     return;
                   }
-                  const highConf = result.signatures.filter(s => s.confidence >= 0.8);
+                  const highConf = result.signatures.filter(s => s.confidence >= 0.7);
                   if (highConf.length === 0) {
                     toast.info("Found signatures but confidence was too low to auto-populate.");
                     return;

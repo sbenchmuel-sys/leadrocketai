@@ -34,6 +34,8 @@ serve(async (req) => {
     }
 
     const { target } = await req.json(); // "workspace" | "rep_profile" | "signatures" | "all"
+    const userEmail = user.email || "";
+    const userDomain = userEmail.split("@")[1] || "";
 
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
@@ -90,7 +92,7 @@ serve(async (req) => {
     const industryPack = existingWsProfile?.industry_pack ? JSON.stringify(existingWsProfile.industry_pack).slice(0, 2000) : "";
 
     // Build the AI prompt based on target
-    const prompt = buildExtractionPrompt(target, kbContext, outboundEmailContext, companyKb, industryPack, existingRepProfile, existingWsProfile);
+    const prompt = buildExtractionPrompt(target, kbContext, outboundEmailContext, companyKb, industryPack, existingRepProfile, existingWsProfile, userEmail, userDomain);
 
     // Call the Lovable AI gateway
     const apiKey = Deno.env.get("LOVABLE_API_KEY");
@@ -162,13 +164,23 @@ function buildExtractionPrompt(
   companyKb: string,
   industryPack: string,
   existingRepProfile: Record<string, unknown> | null,
-  existingWsProfile: Record<string, unknown> | null
+  existingWsProfile: Record<string, unknown> | null,
+  userEmail: string,
+  userDomain: string
 ): string {
   const parts: string[] = [];
 
   parts.push(`TASK: Extract profile information from the provided knowledge base documents and email history.
-IMPORTANT: Only include a field if you are at least 80% confident in the extracted value. For uncertain fields, set them to null.
-Each field must also include a "confidence" score (0.0-1.0). Only fields with confidence >= 0.8 should have non-null values.`);
+The user's email is: ${userEmail}
+The user's company domain is: ${userDomain}
+The documents in the knowledge base were uploaded BY this user about THEIR company/product.
+
+IMPORTANT RULES:
+- Include a field if you are at least 70% confident in the extracted value. For uncertain fields, set them to null.
+- Each field must include a "confidence" score (0.0-1.0). Only fields with confidence >= 0.7 should have non-null values.
+- The KB documents describe the user's OWN company and products. Extract company/product info from these documents.
+- For rep profile, look at email signatures, from fields, and any personal information in the documents.
+- Be generous with confidence if the information clearly appears in the documents - these are the user's own documents.`);
 
   if (target === "all" || target === "workspace") {
     parts.push(`
