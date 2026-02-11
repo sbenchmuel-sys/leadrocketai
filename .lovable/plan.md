@@ -1,59 +1,82 @@
 
 
-## Fix: Dashboard Top Row Filter Connections
+## Simplify Cadence: Remove Strategy, Keep Motion-Based Intervals
 
-### Problem
-The four executive tiles in the top row (Active Leads, Needs Action, Warming Up, Automation Running) should all be clickable to filter the leads table. Currently, only "Warming Up" has click-to-filter wired up. The other three cards are completely inert -- clicking them does nothing.
+### Overview
+Replace the current dual-strategy model (`fast` / `nurture`) with a simpler motion-based interval system. Intervals are determined by the lead's **motion**, not a separate "strategy" field.
+
+### New Motion Intervals
+
+| Motion | Email Intervals |
+|--------|----------------|
+| Outbound | 0d, 2d, 4d, 7d |
+| Inbound | 0d, 2d, 4d |
+| Nurture | Weekly (7d), Biweekly (14d, default), Monthly (30d) |
 
 ### What Changes
 
-**1. SummaryCards component** (`src/components/dashboard/SummaryCards.tsx`)
-- Add a single generic `onCardClick` callback prop that receives the card key as a filter type
-- Make ALL four cards clickable with `cursor-pointer`
-- Show active ring styling on whichever card matches `activeFilter`:
-  - "active" filter highlights "Active Leads"
-  - "needs_action" highlights "Needs Action"
-  - "warming_up" highlights "Warming Up"
-  - "automation" highlights "Automation Running" (new filter type)
-- Remove the separate `onWarmingUpClick` prop in favor of the unified callback
+**1. Cadence Settings Types** (`src/lib/cadenceSettingsTypes.ts`)
+- Replace `modes: { fast: ModeSettings; nurture: ModeSettings }` with `motions: { outbound: MotionIntervals; inbound: MotionIntervals; nurture: NurtureIntervals }`
+- New `MotionIntervals` interface: `{ email_intervals_days: number[] }`
+- New `NurtureIntervals` interface: `{ cadences: { weekly: number; biweekly: number; monthly: number } }`
+- Update `DEFAULT_CADENCE_SETTINGS` to use the new intervals: outbound `[0, 2, 4, 7]`, inbound `[0, 2, 4]`, nurture cadences `{ weekly: 7, biweekly: 14, monthly: 30 }`
+- Remove `ModeSettings` interface (no longer needed)
+- Remove `modes` from `CadenceSettingsV1`
+- Keep `time_rules`, `guardrails`, `stop_pause_rules`, `whatsapp`, `flows`, `signals` unchanged
 
-**2. FilterType update** (`src/components/dashboard/SummaryCards.tsx`)
-- Add `"automation"` to the `FilterType` union so it can be used as a filter value
+**2. Sequence Updater** (`src/lib/sequenceUpdater.ts`)
+- Replace hardcoded `FAST_INTERVALS = [2, 3, 3, 4]` with motion-based lookup from the new defaults
+- For outbound leads: use `[0, 2, 4, 7]` (intervals between steps, so step 1 at 0d, step 2 at 2d, step 3 at 4d, step 4 at 7d)
+- For inbound leads: use `[0, 2, 4]`
 
-**3. Dashboard page** (`src/pages/Dashboard.tsx`)
-- Replace `onWarmingUpClick` with a unified `onCardClick` handler that calls `setActiveFilter` with the appropriate filter and resets `activeStage`
-- Remove the standalone `handleWarmingUpClick` function
-- Add filtering logic for `"automation"` in the `filteredLeads` memo: filter leads where `nurture_mode === "auto"` and `nurture_status === "active"`
-- Map card keys to filter types: `active` -> `"active"`, `needs_action` -> `"needs_action"`, `warming_up` -> `"warming_up"`, `automation` -> `"automation"`
+**3. AutomationPreviewCard** (`src/components/lead/AutomationPreviewCard.tsx`)
+- Replace `FAST_INTERVALS = [2, 3, 3, 4]` with motion-based intervals from defaults
+- Determine intervals based on `lead.motion` instead of strategy
+- Update step labels to match new interval count (4 steps for outbound, 3 for inbound)
 
-### How Filtering Works After Fix
+**4. Dashboard Metrics** (`src/lib/dashboardMetricsService.ts`)
+- Update `getNurtureReadyLeads` to stop checking `strategy === "fast"` -- instead check motion is `outbound_prospecting` or `inbound_response`
 
-| Card Clicked | Filter Applied | Leads Shown |
-|---|---|---|
-| Active Leads | `active` | Leads not in closed_won / closed_lost |
-| Needs Action | `needs_action` | Leads with `needs_action = true` |
-| Warming Up | `warming_up` | Leads from `warmingUpLeads` array |
-| Automation Running | `automation` | Leads with `nurture_mode=auto` and `nurture_status=active` |
+**5. Dashboard Utils** (`src/lib/dashboardUtils.ts`)
+- Remove `strategy` from `SourcePreset` interface
+- Remove `strategy` from all source preset entries
+- Update `getNurtureCandidates` to stop checking `strategy === "fast"` -- check motion instead
 
-Clicking the same card again toggles back to "all" (show everything).
+**6. Lead Queries** (`src/lib/supabaseQueries.ts`)
+- Remove `strategy` from `CreateLeadForm` interface (no longer a required field)
+- Remove `strategy` from `createLead` payload
+- Keep `strategy` in `LeadDetail` and `LeadListItem` select queries for backwards compatibility (old leads may still have it) but stop using it for logic
 
-### Technical Details
+**7. Lead Detail Header** (`src/components/lead/LeadDetailHeader.tsx`)
+- Remove `strategyLabel` display ("Fast Strategy" / "Nurture Strategy")
+- Replace with motion-based label if needed, or simply remove
 
-```text
-SummaryCards props (before):
-  onWarmingUpClick?: () => void
+**8. Edit Lead Dialog** (`src/components/lead/EditLeadDialog.tsx`)
+- Remove `strategy` field from the form schema and UI
 
-SummaryCards props (after):
-  onCardClick?: (filter: FilterType) => void
-```
+**9. Settings Card** (`src/components/settings/CadenceSettingsCard.tsx`)
+- Refactor from "Fast / Nurture" mode tabs to "Outbound / Inbound / Nurture" motion tabs
+- Show the correct intervals for each motion
+- Update visual sequence summary to reflect new step counts
 
-The `filteredLeads` memo gains one new branch:
+**10. Prompt Files** (`src/prompts/emailPrompts.ts`, `src/prompts/intentRouter.ts`)
+- Remove `suggested_strategy` from intent router output
+- Update `getIntroEmailPrompt` to take motion instead of strategy
 
-```text
-else if (activeFilter === "automation") {
-  result = result.filter(l => l.nurture_mode === "auto" && l.nurture_status === "active")
-}
-```
+**11. LLM Output Schemas** (`src/schemas/llmOutputSchemas.ts`)
+- Remove `suggested_strategy` field from the analysis schema
 
-No changes to underlying data fetching, metric derivation, Intelligence Cards, Deal Flow Bar, or Action Required panel.
+**12. Generate Draft** (`src/lib/generateDraft.ts`)
+- Replace `Strategy: ${lead.strategy}` context line with `Motion: ${lead.motion}`
+
+### What Does NOT Change
+- The `strategy` column in the database is left alone (no migration needed, just ignored)
+- Composer, sequence engine core, automation safety logic untouched
+- WhatsApp cadence settings unchanged
+- Time rules, guardrails, stop/pause rules unchanged
+
+### Key Design Decisions
+- Intervals are now **cumulative offsets from first send** (0d, 2d, 4d, 7d) rather than gaps between steps
+- Nurture keeps its existing cadence profile system (weekly/biweekly/monthly)
+- Strategy field becomes a no-op -- existing data preserved, just not read for logic
 
