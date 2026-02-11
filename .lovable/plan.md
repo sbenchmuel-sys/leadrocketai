@@ -1,80 +1,94 @@
 
-# Fix: Route DraftsTab Through Full Composer + Resolve Rep Name Placeholders
+# Update Settings: Add WhatsApp Cadence + Channel-Aware Sequence Display
 
-## Problem
-1. The "Generate Draft" button in DraftsTab runs AI inline and shows results in a basic textarea, bypassing the full EmailActionDialog composer which provides signatures, KB attachments, shorten/rewrite tools, thread context, and motion controls.
-2. Generated emails sometimes contain `{Rep's first name}` or similar placeholders instead of the actual rep name.
+## Overview
+The current Cadence Settings card only shows email-specific sequence configuration. We need to update it to reflect the new dual-channel architecture (Email + WhatsApp) with their distinct cadence models for Outbound, Inbound, and Nurture flows.
 
-## Solution
+## Changes
 
-### 1. DraftsTab: Open EmailActionDialog Instead of Inline Generation
+### 1. Update Types (`src/lib/cadenceSettingsTypes.ts`)
 
-**File: `src/components/lead/DraftsTab.tsx`**
+Add a new `WhatsAppCadenceSettings` interface and include it in `CadenceSettingsV1`:
 
-- Remove the inline `handleGenerate()` function that calls `generateDraft()` + `runTask()` directly
-- Remove the inline generated content card (the textarea showing generated email)
-- When user clicks "Generate Draft", open the `EmailActionDialog` with the selected intent and composer note as initial instructions
-- The EmailActionDialog already has all the features: signatures, KB, shorten, rewrite, thread display, motion override, send/Gmail buttons
-- Pass the selected channel intent as the `actionKey` so the dialog generates the right type of email
-- Pass `composerNote` as `initialInstructions`
-
-**Changes:**
-- The "Generate Draft" button sets `showEmailDialog = true` with the appropriate action key mapped from the selected intent
-- Remove `generatedContent`, `generatedSubject`, `knowledgeUsed` state variables and the generated content card UI
-- Keep the channel toggle and intent selector as they feed into the dialog
-- Map `ComposerIntent` to an `actionKey` string that EmailActionDialog understands (e.g., `follow_up` maps to `send_pre_2_followup`, `post_meeting_recap` maps to `generate_post_meeting_recap`)
-
-### 2. Post-Process AI Output to Replace Placeholders
-
-**File: `src/components/dashboard/EmailActionDialog.tsx`**
-
-After the AI returns `result.content`, run a placeholder replacement pass:
-- Replace `{Rep's first name}`, `[Rep's first name]`, `{Your Name}`, `[Your Name]`, `{Sender Name}`, `[Sender Name]` with the actual rep first name from `repProfile.full_name`
-- Replace `{Rep's First Name}` (case variants) similarly
-- If no rep profile exists, fall back to an empty string (remove the placeholder entirely)
-
-This ensures every email is ready to send with the actual name signed.
-
-**File: `src/lib/generateDraft.ts`** (or a new utility)
-
-Add a `resolveEmailPlaceholders(text, repProfile)` function:
 ```
-function resolveEmailPlaceholders(text: string, repName: string | null): string {
-  const firstName = repName?.split(' ')[0] || '';
-  return text
-    .replace(/\{Rep's\s*first\s*name\}/gi, firstName)
-    .replace(/\[Rep's\s*first\s*name\]/gi, firstName)
-    .replace(/\{Your\s*Name\}/gi, firstName)
-    .replace(/\[Your\s*Name\]/gi, firstName)
-    .replace(/\{Sender\s*Name\}/gi, firstName)
-    .replace(/\[Sender\s*Name\]/gi, firstName);
+WhatsAppCadenceSettings {
+  outbound_followups_hours: number[];  // [24, 48, 72] then pause
+  nurture_cadence_days: number[];      // [7, 14] (light touches)
+  post_meeting_hours: number[];        // [4, 48] (reminder, check-in)
+  max_messages_before_pause: number;   // default: 3
+  automation_enabled: boolean;         // default: false (manual only)
 }
 ```
 
-Apply this in `EmailActionDialog.generateEmail()` right after `result.content` is received, before setting it into the body state.
+Add defaults:
+- `outbound_followups_hours: [24, 48, 72]`
+- `nurture_cadence_days: [7, 14]`
+- `post_meeting_hours: [4, 48]`
+- `max_messages_before_pause: 3`
+- `automation_enabled: false`
+
+### 2. Redesign Modes Tab in CadenceSettingsCard (`src/components/settings/CadenceSettingsCard.tsx`)
+
+**Current**: Single "Fast / Nurture" toggle showing one mode's email settings at a time.
+
+**New**: A two-level structure:
+1. Keep the Fast / Nurture mode toggle at the top
+2. Below it, add a channel sub-section showing **Email** and **WhatsApp** side by side (or as sub-tabs)
+
+For each mode (Fast/Nurture), display:
+
+**Email Channel Section:**
+- Reply Alert After (hours) -- existing
+- Follow-up Sequence (days) -- existing chips: [2,3,3,4] for Fast, [5,7,7,10] for Nurture
+- Breakup Trigger -- existing
+- Post-Meeting settings -- existing
+
+**WhatsApp Channel Section (new):**
+- Follow-up Intervals (hours) -- chip input: [24, 48, 72]
+- Max messages before pause -- number input (default 3)
+- Post-Meeting nudge timing (hours) -- chip input: [4, 48]
+- Nurture touch intervals (days) -- chip input: [7, 14] (only shown in Nurture mode)
+- Automation enabled toggle -- Switch (default off, with helper text "WhatsApp is manual-only for now")
+
+### 3. Add Visual Sequence Summary
+
+At the top of the Modes tab, add a compact read-only summary showing the active sequences:
+
+```
+Outbound (Fast):
+  Email:    Intro -> 2d -> FU1 -> 3d -> FU2 -> 3d -> FU3 -> 4d -> Breakup
+  WhatsApp: Intro -> 24h -> Follow-up -> 48h -> Nudge -> Pause
+
+Nurture:
+  Email:    Insight -> 5d -> Case Study -> 7d -> Resource -> 7d -> ...
+  WhatsApp: Short Insight -> 7d -> Soft Reconnect -> Pause
+```
+
+This is a simple text/badge display, not editable -- just for clarity.
+
+### 4. Update Settings Page Accordion Label
+
+In `src/pages/Settings.tsx`, rename the accordion item from "Email Cadence Settings" to "Sequence & Cadence Settings" to reflect that it now covers both channels.
 
 ## Technical Details
 
-### DraftsTab changes
-- Remove: `generatedContent`, `generatedSubject`, `knowledgeUsed` state
-- Remove: `handleGenerate()` function (lines 275-377)
-- Remove: generated content Card (lines 507-588)
-- Keep: channel toggle, intent selector, composer note input, saved drafts list
-- Modify: "Generate Draft" button now opens EmailActionDialog with mapped action key
-- Add intent-to-actionKey mapping:
-  - `follow_up` -> `send_pre_2_followup`
-  - `inbound_response` -> `reply_now`
-  - `reply_to_thread` -> `reply_now`
-  - `post_meeting_recap` -> `generate_post_meeting_recap`
-  - `closing_nudge` -> `send_pre_3_followup`
-  - `nurture_email` -> `send_nurture_1`
-- For LinkedIn/WhatsApp: keep inline generation since EmailActionDialog is email-only
+### Files Modified
 
-### EmailActionDialog changes
-- Add `resolveEmailPlaceholders()` utility function
-- Apply it after AI content is set (in `generateEmail()` and `runOneClickAction()`)
-- The rep profile is already loaded in `loadData()` so the name is available
+1. **`src/lib/cadenceSettingsTypes.ts`**
+   - Add `WhatsAppCadenceSettings` interface
+   - Add `whatsapp` field to `CadenceSettingsV1` type
+   - Add WhatsApp defaults to `DEFAULT_CADENCE_SETTINGS`
 
-### Files modified
-1. `src/components/lead/DraftsTab.tsx` -- route email generation to EmailActionDialog
-2. `src/components/dashboard/EmailActionDialog.tsx` -- add placeholder resolution post-processing
+2. **`src/components/settings/CadenceSettingsCard.tsx`**
+   - Add WhatsApp section inside the Modes tab beneath the existing email fields
+   - Add helper functions: `updateWhatsAppSetting()` for state updates
+   - Add `HourSequenceInput` usage for WhatsApp follow-up intervals
+   - Add a compact sequence summary component at top of Modes tab
+   - Update card title from "Email Cadence Settings" to "Sequence & Cadence Settings"
+
+3. **`src/pages/Settings.tsx`**
+   - Update accordion title and description for the cadence section
+   - Change icon or label to reflect multi-channel scope
+
+4. **`src/lib/workspaceProfileQueries.ts`** (if needed)
+   - Ensure `getCadenceSettings` and `updateCadenceSettings` handle the new `whatsapp` field via deep merge with defaults (backward compatible)
