@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, MOTION_LABELS, MOTION_ICONS, MOTION_COLORS, SourceType, Motion, getDisplayPhase, DealStage } from "@/lib/dashboardUtils";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,7 +16,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2, ArrowUpRight, Activity } from "lucide-react";
+import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
@@ -115,24 +117,53 @@ export default function LeadDetail() {
             <h1 className="text-2xl font-bold text-foreground">{lead.name}</h1>
             <Badge variant="outline">{lead.strategy}</Badge>
             <Badge variant="secondary">{lead.status}</Badge>
-            {(lead as any).source_type && (lead as any).source_type !== "manual_entry" && (
-              <Badge variant="outline" className="text-xs">
-                <ArrowUpRight className="h-3 w-3 mr-1" />
-                {(lead as any).source_type?.replace(/_/g, ' ')}
-              </Badge>
-            )}
-            {(lead as any).motion && (
-              <Badge variant="outline" className="text-xs">
-                <Activity className="h-3 w-3 mr-1" />
-                {(lead as any).motion?.replace(/_/g, ' ')}
-              </Badge>
-            )}
             {lead.deal_outlook && (
               <Badge className={getOutlookColor(lead.deal_outlook)}>
                 {lead.deal_outlook}
               </Badge>
             )}
           </div>
+          
+          {/* Phase / Motion / Source bar */}
+          <div className="flex items-center gap-3 mt-2 flex-wrap">
+            {/* Display Phase */}
+            <span className="text-sm font-semibold text-foreground">
+              {getDisplayPhase(
+                ((lead as any).stage || "new") as DealStage,
+                (lead as any).motion as Motion
+              )}
+            </span>
+            
+            {/* Motion badge */}
+            {(lead as any).motion && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-md inline-flex items-center gap-1",
+                MOTION_COLORS[(lead as any).motion as Motion]?.bg,
+                MOTION_COLORS[(lead as any).motion as Motion]?.text,
+              )}>
+                <span>{MOTION_ICONS[(lead as any).motion as Motion]}</span>
+                {MOTION_LABELS[(lead as any).motion as Motion]}
+              </span>
+            )}
+            
+            {/* Source badge */}
+            {(lead as any).source_type && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1.5",
+                SOURCE_TYPE_COLORS[(lead as any).source_type as SourceType]?.bg,
+                SOURCE_TYPE_COLORS[(lead as any).source_type as SourceType]?.text,
+              )}>
+                <span className={cn("w-1.5 h-1.5 rounded-full", SOURCE_TYPE_COLORS[(lead as any).source_type as SourceType]?.dot)} />
+                {SOURCE_TYPE_LABELS[(lead as any).source_type as SourceType]}
+              </span>
+            )}
+            
+            {/* Internal stage (subtle) */}
+            <span className="text-[10px] text-muted-foreground">
+              stage: {(lead as any).stage || "new"}
+            </span>
+          </div>
+          
           <p className="text-muted-foreground mt-1">
             {lead.company} • {lead.email}
           </p>

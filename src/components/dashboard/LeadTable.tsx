@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2 } from "lucide-react";
-import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, MOTION_LABELS, SourceType, Motion } from "@/lib/dashboardUtils";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, MOTION_LABELS, MOTION_ICONS, MOTION_COLORS, SourceType, Motion } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
@@ -498,6 +498,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-1 p-0" />
                 <TableHead className="w-10">
                   <Checkbox
                     checked={allSelected}
@@ -528,7 +529,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   <TableRow
                     key={lead.id}
                     className={cn(
-                      "cursor-pointer transition-colors group",
+                      "cursor-pointer transition-colors group relative",
                       isSelected && "bg-muted/50",
                       index % 2 === 1 && !isSelected && "bg-muted/20"
                     )}
@@ -537,6 +538,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       navigate(`/dashboard/leads/${lead.id}`);
                     }}
                   >
+                    {/* Color bar indicator */}
+                    <td className="w-0 p-0 relative">
+                      <div className={cn(
+                        "absolute left-0 top-0 bottom-0 w-1 rounded-r",
+                        SOURCE_TYPE_COLORS[lead.source_type]?.bar || "bg-muted-foreground/30"
+                      )} />
+                    </td>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
@@ -560,6 +568,17 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex flex-col gap-0.5">
+                        <span className="text-xs font-semibold text-foreground">{lead.displayPhase}</span>
+                        <div className="flex items-center gap-1">
+                          <span className={cn(
+                            "text-[10px] px-1.5 py-0.5 rounded-sm inline-flex items-center gap-1",
+                            MOTION_COLORS[lead.motion]?.bg,
+                            MOTION_COLORS[lead.motion]?.text
+                          )}>
+                            <span>{MOTION_ICONS[lead.motion]}</span>
+                            {MOTION_LABELS[lead.motion]}
+                          </span>
+                        </div>
                         <Select
                           value={lead.stage}
                           onValueChange={(value) => handleStageChange(lead.id, value as DealStage)}
@@ -567,8 +586,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                         >
                           <SelectTrigger 
                             className={cn(
-                              "w-[130px] h-7 border-0 font-medium text-xs",
-                              stageBadgeVariants[lead.stage]
+                              "w-[110px] h-5 border-0 font-normal text-[10px] text-muted-foreground p-0 pl-1",
                             )}
                           >
                             {isUpdatingThis ? (
@@ -585,7 +603,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                             ))}
                           </SelectContent>
                         </Select>
-                        <span className="text-[10px] text-muted-foreground ml-1">{lead.displayPhase}</span>
                       </div>
                     </TableCell>
                     <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
@@ -617,9 +634,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </Button>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge variant="outline" className="text-[10px] font-normal">
+                      <span className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1",
+                        SOURCE_TYPE_COLORS[lead.source_type]?.bg,
+                        SOURCE_TYPE_COLORS[lead.source_type]?.text
+                      )}>
+                        <span className={cn("w-1.5 h-1.5 rounded-full", SOURCE_TYPE_COLORS[lead.source_type]?.dot)} />
                         {SOURCE_TYPE_LABELS[lead.source_type] || lead.source_type}
-                      </Badge>
+                      </span>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       <span className={`text-sm ${lastEmail.className}`}>

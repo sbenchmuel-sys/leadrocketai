@@ -26,25 +26,55 @@ export const STAGE_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_me
 export type SourceType = "outbound_prospecting" | "contact_form" | "gmail_inbound" | "event_lead" | "referral" | "csv_import" | "manual_entry";
 
 export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
-  outbound_prospecting: "Outbound",
-  contact_form: "Contact Form",
-  gmail_inbound: "Inbound Email",
-  event_lead: "Event",
+  outbound_prospecting: "Outbound Prospect",
+  contact_form: "Inbound – Website",
+  gmail_inbound: "Inbound – Direct Email",
+  event_lead: "Event Lead",
   referral: "Referral",
-  csv_import: "CSV Import",
+  csv_import: "Outbound – CSV",
   manual_entry: "Manual",
+};
+
+export const SOURCE_TYPE_COLORS: Record<SourceType, { dot: string; bg: string; text: string; bar: string }> = {
+  outbound_prospecting: { dot: "bg-blue-500", bg: "bg-blue-50 dark:bg-blue-950/40", text: "text-blue-700 dark:text-blue-300", bar: "bg-blue-500" },
+  contact_form:         { dot: "bg-green-500", bg: "bg-green-50 dark:bg-green-950/40", text: "text-green-700 dark:text-green-300", bar: "bg-green-500" },
+  gmail_inbound:        { dot: "bg-green-500", bg: "bg-green-50 dark:bg-green-950/40", text: "text-green-700 dark:text-green-300", bar: "bg-green-500" },
+  event_lead:           { dot: "bg-purple-500", bg: "bg-purple-50 dark:bg-purple-950/40", text: "text-purple-700 dark:text-purple-300", bar: "bg-purple-500" },
+  referral:             { dot: "bg-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950/40", text: "text-yellow-700 dark:text-yellow-300", bar: "bg-yellow-500" },
+  csv_import:           { dot: "bg-blue-500", bg: "bg-blue-50 dark:bg-blue-950/40", text: "text-blue-700 dark:text-blue-300", bar: "bg-blue-500" },
+  manual_entry:         { dot: "bg-muted-foreground", bg: "bg-muted/50", text: "text-muted-foreground", bar: "bg-muted-foreground/50" },
 };
 
 export type Motion = "outbound_prospecting" | "inbound_response" | "pre_meeting" | "post_meeting" | "closing" | "nurture" | "closed";
 
 export const MOTION_LABELS: Record<Motion, string> = {
-  outbound_prospecting: "Outbound",
-  inbound_response: "Inbound",
+  outbound_prospecting: "Prospecting",
+  inbound_response: "Engaged",
   pre_meeting: "Pre-Meeting",
   post_meeting: "Post-Meeting",
   closing: "Closing",
   nurture: "Nurture",
   closed: "Closed",
+};
+
+export const MOTION_ICONS: Record<Motion, string> = {
+  outbound_prospecting: "🚀",
+  inbound_response: "💬",
+  pre_meeting: "📅",
+  post_meeting: "📝",
+  closing: "🤝",
+  nurture: "🌱",
+  closed: "🏁",
+};
+
+export const MOTION_COLORS: Record<Motion, { bg: string; text: string }> = {
+  outbound_prospecting: { bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-800 dark:text-blue-200" },
+  inbound_response: { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-800 dark:text-emerald-200" },
+  pre_meeting: { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-800 dark:text-indigo-200" },
+  post_meeting: { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-800 dark:text-violet-200" },
+  closing: { bg: "bg-amber-100 dark:bg-amber-900/40", text: "text-amber-800 dark:text-amber-200" },
+  nurture: { bg: "bg-teal-100 dark:bg-teal-900/40", text: "text-teal-800 dark:text-teal-200" },
+  closed: { bg: "bg-muted", text: "text-muted-foreground" },
 };
 
 // ============================================
