@@ -13,8 +13,9 @@ import {
   SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, MOTION_LABELS, MOTION_ICONS, MOTION_COLORS,
   SourceType, Motion, getDisplayPhase, DealStage,
 } from "@/lib/dashboardUtils";
-import { getLeadMeetingPacks, MeetingPackItem } from "@/lib/supabaseQueries";
+import { getLeadMeetingPacks, getLeadInteractions, MeetingPackItem } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
+import { Mail } from "lucide-react";
 
 interface LeadOverviewPanelProps {
   lead: LeadDetail;
@@ -57,6 +58,8 @@ function detectBuyingSignals(milestones: Milestone[]): string[] {
 export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOverviewPanelProps) {
   const [lastMeeting, setLastMeeting] = useState<MeetingPackItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [recapAlreadySent, setRecapAlreadySent] = useState(false);
+  const [recapSentDate, setRecapSentDate] = useState<string | null>(null);
 
   const sourceType = (lead.source_type as SourceType) || "manual_entry";
   const motion = (lead.motion as Motion) || "outbound_prospecting";
@@ -70,8 +73,22 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOv
   useEffect(() => {
     const load = async () => {
       try {
-        const packs = await getLeadMeetingPacks(lead.id);
-        if (packs.length > 0) setLastMeeting(packs[0]);
+        const [packs, interactions] = await Promise.all([
+          getLeadMeetingPacks(lead.id),
+          getLeadInteractions(lead.id),
+        ]);
+        if (packs.length > 0) {
+          setLastMeeting(packs[0]);
+          // Check if outbound email exists after last meeting
+          const meetingDate = new Date(packs[0].meeting_date || packs[0].created_at);
+          const outboundAfter = interactions.find(
+            (i) => i.type === "email_outbound" && new Date(i.occurred_at) > meetingDate
+          );
+          if (outboundAfter) {
+            setRecapAlreadySent(true);
+            setRecapSentDate(outboundAfter.occurred_at);
+          }
+        }
       } catch (err) {
         console.error("Failed to load meeting packs:", err);
       } finally {
@@ -177,6 +194,23 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOv
                   <span className="font-medium text-foreground">{lastMeeting.open_questions.length}</span> open question{lastMeeting.open_questions.length !== 1 ? "s" : ""}
                 </div>
               )}
+              {/* Recap status indicator */}
+              {recapAlreadySent ? (
+                <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 rounded-md px-2 py-1.5">
+                  <Mail className="h-3 w-3" />
+                  <span className="font-medium">Post-meeting email sent</span>
+                  {recapSentDate && (
+                    <span className="text-muted-foreground ml-auto">
+                      {format(parseISO(recapSentDate), "MMM d")}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 rounded-md px-2 py-1.5">
+                  <AlertTriangle className="h-3 w-3" />
+                  <span className="font-medium">Post-meeting recap pending</span>
+                </div>
+              )}
               <Button variant="ghost" size="sm" onClick={onNavigateToMeetings} className="w-full text-primary text-xs h-7">
                 View all meetings <ArrowRight className="h-3 w-3 ml-1" />
               </Button>
@@ -229,8 +263,8 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOv
         </CardContent>
       </Card>
 
-      {/* D) Recommended Next Action */}
-      {lead.next_step && (
+      {/* D) Recommended Next Action — hide recap suggestion if already sent */}
+      {lead.next_step && !(recapAlreadySent && /recap|post.?meeting/i.test(lead.next_step)) && (
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="pt-4 space-y-1">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
