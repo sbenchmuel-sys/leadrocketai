@@ -97,7 +97,8 @@ export async function updateSequenceState(
   intentUsed: AITaskType,
   recommendedIntent?: AITaskType | null,
   overrideIntent?: AITaskType | null,
-  channel: "email" | "linkedin" | "whatsapp" = "email"
+  channel: "email" | "linkedin" | "whatsapp" = "email",
+  previousSequenceStep?: string | null
 ): Promise<SequenceUpdateResult> {
   console.log("[updateSequenceState] Updating for lead", leadId, "intent:", intentUsed, "channel:", channel);
 
@@ -188,8 +189,9 @@ export async function updateSequenceState(
   let overrideLogged = false;
   if (overrideIntent && recommendedIntent && overrideIntent !== recommendedIntent) {
     console.log("[updateSequenceState] Override detected:", {
-      recommended: recommendedIntent,
-      used: overrideIntent,
+      suggested_intent: recommendedIntent,
+      chosen_intent: overrideIntent,
+      previous_sequence_step: previousSequenceStep || "unknown",
     });
 
     // Record as an interaction for audit trail
@@ -198,7 +200,12 @@ export async function updateSequenceState(
         lead_id: leadId,
         type: "system_note",
         source: "pipeline",
-        body_text: `Intent override: recommended "${recommendedIntent}" → used "${overrideIntent}"`,
+        body_text: JSON.stringify({
+          event: "intent_override",
+          suggested_intent: recommendedIntent,
+          chosen_intent: overrideIntent,
+          previous_sequence_step: previousSequenceStep || null,
+        }),
         occurred_at: new Date().toISOString(),
       });
       overrideLogged = true;
