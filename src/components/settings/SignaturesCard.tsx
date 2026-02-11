@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash2, Check, Edit2, PenLine } from "lucide-react";
+import { Loader2, Plus, Trash2, Check, Edit2, PenLine, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { 
   getSignatures, 
@@ -15,6 +15,7 @@ import {
   setDefaultSignature,
   RepSignature 
 } from "@/lib/repProfileQueries";
+import { useProfileSync } from "@/hooks/useProfileSync";
 import {
   Dialog,
   DialogContent,
@@ -30,6 +31,7 @@ export function SignaturesCard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSignature, setEditingSignature] = useState<RepSignature | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const { isSyncing, syncFromKB } = useProfileSync();
 
   // Form state
   const [name, setName] = useState("");
@@ -149,10 +151,42 @@ export function SignaturesCard() {
                 Create and manage email signatures for your outreach
               </CardDescription>
             </div>
-            <Button onClick={openCreateDialog} size="sm">
-              <Plus className="h-4 w-4 mr-1" />
-              New Signature
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                disabled={isSyncing}
+                onClick={async () => {
+                  const result = await syncFromKB("signatures");
+                  if (!result?.signatures || result.signatures.length === 0) {
+                    toast.info("No signatures found in outbound emails");
+                    return;
+                  }
+                  const highConf = result.signatures.filter(s => s.confidence >= 0.8);
+                  if (highConf.length === 0) {
+                    toast.info("Found signatures but confidence was too low to auto-populate.");
+                    return;
+                  }
+                  for (const sig of highConf) {
+                    try {
+                      await createSignature({ name: sig.name, signature_text: sig.signature_text });
+                    } catch (e) {
+                      console.error("Failed to create extracted signature:", e);
+                    }
+                  }
+                  toast.success(`Added ${highConf.length} signature(s) from emails. Review them below.`);
+                  loadSignatures();
+                }}
+              >
+                {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                Sync from Emails
+              </Button>
+              <Button onClick={openCreateDialog} size="sm">
+                <Plus className="h-4 w-4 mr-1" />
+                New Signature
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

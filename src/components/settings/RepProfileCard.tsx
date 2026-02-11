@@ -3,14 +3,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Save, User } from "lucide-react";
+import { Loader2, Save, User, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { getRepProfile, upsertRepProfile, RepProfile } from "@/lib/repProfileQueries";
+import { useProfileSync, getHighConfidenceValue } from "@/hooks/useProfileSync";
 
 export function RepProfileCard() {
   const [profile, setProfile] = useState<RepProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const { isSyncing, syncFromKB } = useProfileSync();
 
   // Form state
   const [fullName, setFullName] = useState("");
@@ -96,6 +98,38 @@ export function RepProfileCard() {
         <CardDescription>
           Your information for email signatures and personalization
         </CardDescription>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          disabled={isSyncing}
+          onClick={async () => {
+            const result = await syncFromKB("rep_profile");
+            if (!result?.rep_profile) {
+              toast.info("No profile data found in knowledge base or emails");
+              return;
+            }
+            const rp = result.rep_profile;
+            const v = getHighConfidenceValue;
+            let count = 0;
+            if (!fullName && v(rp.full_name)) { setFullName(v(rp.full_name)!); count++; }
+            if (!email && v(rp.email)) { setEmail(v(rp.email)!); count++; }
+            if (!phone && v(rp.phone)) { setPhone(v(rp.phone)!); count++; }
+            if (!jobTitle && v(rp.job_title)) { setJobTitle(v(rp.job_title)!); count++; }
+            if (!companyName && v(rp.company_name)) { setCompanyName(v(rp.company_name)!); count++; }
+            if (!linkedinUrl && v(rp.linkedin_url)) { setLinkedinUrl(v(rp.linkedin_url)!); count++; }
+            if (!calendarLink && v(rp.calendar_link)) { setCalendarLink(v(rp.calendar_link)!); count++; }
+            if (!officeAddress && v(rp.office_address)) { setOfficeAddress(v(rp.office_address)!); count++; }
+            if (count > 0) {
+              toast.success(`Synced ${count} field(s). Review and save.`);
+            } else {
+              toast.info("All fields already populated or no high-confidence data found.");
+            }
+          }}
+        >
+          {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Sync from KB & Emails
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
