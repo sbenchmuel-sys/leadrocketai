@@ -125,27 +125,10 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
         </>
       )}
 
-      {/* AUTOMATION — expanded if active, collapsed if paused, hidden if N/A or nurture */}
+      {/* AUTOMATION — Phase 6: hidden by default. AutomationPreviewCard returns null until automation is explicitly enabled. */}
       {hasAutomation && !isNurtureMotion && (
         <>
-          <Collapsible open={automationOpen} onOpenChange={setAutomationOpen}>
-            <CollapsibleTrigger className="flex items-center justify-between w-full py-2 group">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-                {automationPaused ? (
-                  <><Pause className="h-3 w-3 text-amber-500" /> Automation Paused</>
-                ) : (
-                  <><Zap className="h-3 w-3 text-emerald-500" /> Automation Active</>
-                )}
-              </span>
-              <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", automationOpen && "rotate-180")} />
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="pb-2">
-                <AutomationPreviewCard lead={lead} onUpdate={onUpdate || (() => {})} />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-          <Separator className="bg-border/40" />
+          <AutomationPreviewCard lead={lead} onUpdate={onUpdate || (() => {})} />
         </>
       )}
 

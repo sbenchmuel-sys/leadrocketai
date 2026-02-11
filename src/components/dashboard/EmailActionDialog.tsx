@@ -357,92 +357,76 @@ Calendar Link: ${repProfile.calendar_link || ''}
     setReplyToMessageId(null);
 
     try {
-      // === NEW PIPELINE: run alongside legacy for verification ===
-      try {
-        const pipelineResult = await generateDraft({
-          lead_id: lead.id,
-          channel: "email",
-          instructions: instructions.trim() || null,
-          motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
-        });
-        const effectiveActionKeyForLog = actionKey || lead.next_action_key || null;
-        const legacyTaskType = getAITaskForAction(effectiveActionKeyForLog, pipelineResult.resolved_context.thread_emails.length > 0);
-        console.log("[generateDraft] Actual (legacy):", {
-          actionKey: effectiveActionKeyForLog,
-          taskType: legacyTaskType,
-        });
-      } catch (pipelineErr) {
-        console.warn("[generateDraft] Pipeline error (non-blocking):", pipelineErr);
-      }
-      // === END NEW PIPELINE ===
+      // Phase 7: Use unified generateDraft() pipeline as the primary path
+      const pipelineResult = await generateDraft({
+        lead_id: lead.id,
+        channel: "email",
+        instructions: instructions.trim() || null,
+        motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
+      });
 
-      // Fetch full email thread
-      const { emails, threadSummary } = await getLeadEmailThread(lead.id, 10);
-      setThreadEmails(emails);
-      
-      // Extract threading info from the most recent inbound email
-      const latestInbound = emails.find(e => e.direction === 'inbound');
+      const ctx = pipelineResult.resolved_context;
+      const taskType = pipelineResult.recommended_intent;
+
+      // Set thread state from pipeline context
+      setThreadEmails(ctx.thread_emails);
+      const latestInbound = ctx.last_inbound_email;
       if (latestInbound) {
         setReplyThreadId(latestInbound.gmail_thread_id);
         setReplyToMessageId(latestInbound.gmail_message_id);
       }
 
-      const hasThread = emails.length > 0;
-      const effectiveActionKey = actionKey || lead.next_action_key || null;
-      const taskType = getAITaskForAction(effectiveActionKey, hasThread);
-      
-      // Get lead details
-      let leadDetail;
-      try {
-        leadDetail = await getLeadDetail(lead.id);
-      } catch {
-        leadDetail = lead;
-      }
+      console.log("[EmailActionDialog] Pipeline-driven generation:", {
+        intent: taskType,
+        playbook: pipelineResult.recommended_playbook,
+        step: pipelineResult.sequence_step,
+        model: pipelineResult.model_used,
+        complexity: pipelineResult.complexity_score,
+      });
 
+      // Build payload using pipeline context
       const leadContext = buildLeadContext();
       const repContext = buildRepContext();
       const workspaceContext = formatWorkspaceContext(workspaceProfile);
 
-      // Prepare payload based on task type
       const payload: Record<string, unknown> = {
         lead_id: lead.id,
         lead_context: leadContext,
         rep_context: repContext,
         workspace_context: workspaceContext,
-        meeting_link: leadDetail.meeting_link || repProfile?.calendar_link || '',
+        meeting_link: ctx.lead.meeting_link || repProfile?.calendar_link || '',
         custom_instructions: instructions.trim() || undefined,
       };
 
       // Add thread context for replies
-      if (hasThread && taskType === "reply_to_thread") {
-        payload.email_thread = threadSummary;
+      if (ctx.thread_emails.length > 0 && taskType === "reply_to_thread") {
+        payload.email_thread = ctx.thread_summary;
         payload.latest_inbound = latestInbound?.body_text || '';
       }
 
       // Add lead card context for new outreach
-      if (!hasThread && lead.initial_message) {
+      if (ctx.thread_emails.length === 0 && lead.initial_message) {
         payload.lead_card_message = lead.initial_message;
       }
 
       // Add previous email summary for follow-ups
       if (taskType.includes("pre_email")) {
-        payload.previous_email_summary = threadSummary || "No previous emails sent yet.";
+        payload.previous_email_summary = ctx.thread_summary || "No previous emails sent yet.";
       }
 
       // For nurture emails
       if (taskType === "nurture_email_single") {
-        payload.theme = "use_case";
-        payload.email_number = 1;
-        payload.previous_emails = threadSummary || "";
+        payload.theme = ctx.nurture_theme || "use_case";
+        payload.email_number = ctx.nurture_outbound_count + 1;
+        payload.previous_emails = ctx.thread_summary || "";
       }
 
-      // For post-meeting follow-ups - include thread context so AI knows what was already sent
+      // For post-meeting follow-ups
       if (taskType === "post_meeting_followup_email") {
-        payload.meeting_summary_brief = "Recent meeting with lead - follow up on discussed items.";
-        payload.previous_emails = threadSummary || "";
-        // Find the most recent outbound email to check if follow-up was already sent
-        const lastOutboundEmail = emails.find(e => e.direction === 'outbound');
-        payload.last_outbound = lastOutboundEmail?.body_text || "";
+        const meetingBullets = ctx.last_meeting_summary?.internal_recap_bullets;
+        payload.meeting_summary_brief = Array.isArray(meetingBullets) ? meetingBullets.join(". ") : "Recent meeting with lead.";
+        payload.previous_emails = ctx.thread_summary || "";
+        payload.last_outbound = ctx.last_outbound_email?.body_text || "";
       }
 
       const result = await runTask(taskType, payload);
@@ -451,22 +435,21 @@ Calendar Link: ${repProfile.calendar_link || ''}
         setBody(result.content);
         setKnowledgeUsed(!!(result as any).knowledge_context_used);
         
-        // Generate subject
-        const actionType = getActionType(effectiveActionKey);
+        // Generate subject based on pipeline intent
         const leadFirstName = lead.name.split(' ')[0];
         const companyName = lead.company && lead.company !== 'Unknown Company' ? lead.company : null;
         
-        if (actionType === "reply" && emails[0]?.subject) {
-          setSubject(`Re: ${emails[0].subject.replace(/^Re:\s*/i, '')}`);
-        } else if (actionType === "recap") {
+        if (taskType === "reply_to_thread" && ctx.thread_emails[0]?.subject) {
+          setSubject(`Re: ${ctx.thread_emails[0].subject.replace(/^Re:\s*/i, '')}`);
+        } else if (taskType === "post_meeting_followup_email") {
           setSubject(`Following up on our conversation${companyName ? ` - ${companyName}` : ''}`);
-        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_2")) {
+        } else if (taskType === "pre_email_2_followup") {
           setSubject(`Following up - ${leadFirstName}`);
-        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_3")) {
+        } else if (taskType === "pre_email_3_followup") {
           setSubject(`Checking in - ${leadFirstName}`);
-        } else if (actionType === "follow_up" && effectiveActionKey?.includes("pre_4")) {
+        } else if (taskType === "pre_email_4_breakup") {
           setSubject(`Closing the loop - ${leadFirstName}`);
-        } else if (actionType === "nurture") {
+        } else if (taskType === "nurture_email_single") {
           setSubject(`Thought you'd find this valuable${companyName ? `, ${leadFirstName}` : ''}`);
         } else {
           setSubject(companyName 
