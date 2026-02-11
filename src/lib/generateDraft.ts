@@ -141,7 +141,7 @@ function deriveSubject(ctx: ResolvedContext, taskType: AITaskType): string {
 // PLACEHOLDER RESOLUTION
 // ============================================
 
-function resolveEmailPlaceholders(text: string, repName: string | null): string {
+export function resolveEmailPlaceholders(text: string, repName: string | null): string {
   const firstName = repName?.split(" ")[0] || "";
   return text
     .replace(/\{Rep'?s?\s*first\s*name\}/gi, firstName)
