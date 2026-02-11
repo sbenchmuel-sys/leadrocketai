@@ -308,7 +308,8 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         override_intent: intentOverride,
       });
 
-      const taskType = pipelineResult.recommended_intent;
+      // For WhatsApp: use dedicated whatsapp_message task
+      const taskType = channel === "whatsapp" ? "whatsapp_message" as const : pipelineResult.recommended_intent;
       const payload: Record<string, unknown> = {
         lead_context: buildLeadContext(),
         meeting_link: lead.meeting_link || "",
@@ -321,11 +322,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         payload.title = lead.job_title || "";
         payload.company = lead.company;
         payload.context = buildLinkedInContext();
-      }
-
-      if (channel === "whatsapp") {
-        payload.custom_instructions = ((payload.custom_instructions as string) || "") +
-          "\n\nIMPORTANT: Write a short, natural WhatsApp message. Keep it under 100 words. No subject line. No signature block. Max 3-5 short paragraphs. Conversational tone. Optional emoji allowed but keep it professional.";
       }
 
       const result = await runTask(taskType, payload);

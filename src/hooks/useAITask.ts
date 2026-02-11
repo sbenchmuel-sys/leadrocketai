@@ -26,7 +26,8 @@ export type AITaskType =
   | "match_email_to_milestones"
   | "dedupe_milestones"
   | "reply_to_thread"
-  | "analyze_outgoing_email";
+  | "analyze_outgoing_email"
+  | "whatsapp_message";
 
 export interface AITaskResponse {
   ok: boolean;

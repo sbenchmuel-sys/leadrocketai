@@ -943,6 +943,37 @@ Return JSON only:
   "needs_action": false,
   "reasoning": "Brief explanation of the analysis (1-2 sentences)"
 }`,
+
+  // WhatsApp short-form message
+  whatsapp_message: `ROLE
+You are writing a short WhatsApp message for a B2B sales context.
+
+GOAL
+Send a quick, natural, conversational message. This is NOT an email — it's a text message.
+
+FORMAT RULES (MANDATORY)
+- Maximum 60 words
+- NO greeting like "Dear" or "Hello" — start with "Hey [first name]," or "Hi [first name],"
+- NO sign-off like "Best regards", "Thanks", "Warm regards" — just end naturally
+- NO signature block, NO "[Rep's first name]", NO placeholders
+- 2-3 short sentences maximum
+- Casual, direct, friendly tone
+- One emoji max, only if natural
+- One soft CTA (question or suggestion)
+- NO subject line
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 };
 
 // Tasks that require the pro model
