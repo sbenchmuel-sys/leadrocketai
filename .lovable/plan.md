@@ -1,35 +1,41 @@
 
-# Auto-populate Workspace Profile & Remove Meeting Summary Sections
 
-## What will change
+## Plan: Auto-Update Lead State on Email Upload + Meeting Summary Upload
 
-### 1. Remove "Unmatched Meeting Summaries" and "Reassign Meeting Summaries" sections
-Both accordion items and their component imports will be removed from the Settings page. The component files themselves will be kept (not deleted) in case they're needed later, but they won't be rendered anywhere.
+### Problem 1: Lead card doesn't auto-update after uploading email history
 
-### 2. Auto-populate Workspace Profile from Knowledge Base
-When the Workspace Profile card loads and fields are empty, it will check the `company_kb` and `industry_pack` data already stored in `workspace_profiles` (populated during onboarding). If there's enough data to be 80%+ confident in a value, it will pre-fill the empty form fields.
+When you upload interactions (e.g., inbound/outbound emails) via the Upload tab, the lead's `motion`, `stage`, `strategy`, and timestamps (`last_inbound_at`, `last_outbound_at`, `first_outbound_at`) are NOT recalculated. The lead keeps whatever defaults it was imported with.
 
-**Mapping logic:**
-- `company_name` -- from `company_kb` if it contains a company name reference
-- `product_name` -- from `company_kb` if identifiable
-- `product_description` -- synthesized from `company_kb.differentiators` + `target_customers` if both exist
-- `primary_value_props` -- already populated from onboarding extraction (direct use)
-- Fields that already have user-entered values will NOT be overwritten
+**Fix:** After inserting an interaction in the Upload tab, run a stage-derivation update on the lead:
+- If an **inbound email** is uploaded: set `last_inbound_at`, derive stage to at least `engaged`, and if the lead was `outbound_prospecting` with no prior inbound, the automation should reflect "Paused - Reply Received"
+- If an **outbound email** is uploaded: set `last_outbound_at` / `first_outbound_at`
+- If **email history is present** (any inbound exists): automation status should show paused/off accordingly
+- Recalculate `stage` using the existing priority hierarchy (closed > closing > post_meeting > engaged > contacted > new)
+- Refresh the lead data after update so the header and overview panel reflect changes immediately
 
-The auto-fill will only apply to empty fields, and the user still needs to click "Save" to persist -- nothing is saved automatically.
+### Problem 2: No place to upload meeting summaries in the Meetings tab
+
+Currently meeting notes can only be added via the Upload tab (interaction type "meeting"), but the Meetings tab shows "No Meetings Yet" with no upload option. Users expect to add meeting summaries directly from the Meetings tab.
+
+**Fix:** Add a "Add Meeting Summary" button to the Meetings tab that opens an inline form or dialog for pasting meeting notes. When submitted, it runs the same AI pipeline (recap generation, milestone extraction, deal factors, next steps) that already exists in the Upload tab's `runMeetingPipeline` function, and creates a meeting pack.
 
 ---
 
-## Technical Details
+### Technical Details
 
-### Files modified:
+#### File: `src/components/lead/UploadTab.tsx`
+- After `insertInteraction` succeeds, add a lead update step:
+  - For `email_inbound`: update `last_inbound_at`, set `stage` to at least `engaged`
+  - For `email_outbound`: update `last_outbound_at`, `first_outbound_at` (if null)
+  - For `meeting`: update `stage` to `post_meeting`, set `meeting_summary_count` increment
+- Call `onSuccess()` to trigger `handleUpdate` which reloads the lead and refreshes the header/overview panel
 
-**`src/pages/Settings.tsx`**
-- Remove imports for `UnmatchedMeetingSummariesCard` and `MatchedMeetingSummariesCard`
-- Remove the two `AccordionItem` blocks for "unmatched" and "reassign" (lines 116-144)
-- Remove unused icon imports (`AlertCircle`, `ArrowRightLeft`)
+#### File: `src/components/lead/MeetingsTab.tsx`
+- Add an "Add Meeting Summary" button (visible in both empty state and header area)
+- When clicked, show a form with: Title (optional), Date, and Notes textarea
+- On submit, call `createMeetingPack` with raw notes, then run the AI pipeline (reuse the same recap/milestones/factors/recommendations flow from UploadTab)
+- Refresh the meetings list after completion
 
-**`src/components/settings/WorkspaceProfileCard.tsx`**
-- Update `loadProfile()` to check `company_kb` and `industry_pack` from the workspace profile
-- When form fields are empty and knowledge base has relevant data, pre-fill the form state
-- Add a small info badge/note indicating "Auto-filled from knowledge base" when fields were populated this way, so the user knows to review before saving
+#### File: `src/components/lead/LeadDetailHeader.tsx`
+- No changes needed — it already derives automation status from lead fields. Once the lead fields are updated correctly, it will auto-reflect.
+
