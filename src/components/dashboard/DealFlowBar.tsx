@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { DealStage, STAGE_LABELS, STAGE_ORDER } from "@/lib/dashboardUtils";
-import { ChevronRight } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 
 interface DealFlowBarProps {
   stageCounts: Record<DealStage, number>;
@@ -8,111 +8,58 @@ interface DealFlowBarProps {
   onStageClick: (stage: DealStage | null) => void;
 }
 
-const stageColors: Record<DealStage, { bg: string; text: string; glow: string }> = {
-  new: { 
-    bg: "bg-secondary", 
-    text: "text-secondary-foreground",
-    glow: "shadow-secondary/30"
-  },
-  contacted: { 
-    bg: "bg-blue-500", 
-    text: "text-white",
-    glow: "shadow-blue-500/30"
-  },
-  engaged: { 
-    bg: "bg-green-500", 
-    text: "text-white",
-    glow: "shadow-green-500/30"
-  },
-  post_meeting: { 
-    bg: "bg-purple-500", 
-    text: "text-white",
-    glow: "shadow-purple-500/30"
-  },
-  closing: { 
-    bg: "bg-orange-500", 
-    text: "text-white",
-    glow: "shadow-orange-500/30"
-  },
-  closed_won: { 
-    bg: "bg-emerald-500", 
-    text: "text-white",
-    glow: "shadow-emerald-500/30"
-  },
-  closed_lost: { 
-    bg: "bg-red-500", 
-    text: "text-white",
-    glow: "shadow-red-500/30"
-  },
+const stageAccent: Record<DealStage, string> = {
+  new: "bg-muted-foreground",
+  contacted: "bg-info",
+  engaged: "bg-success",
+  post_meeting: "bg-purple-500",
+  closing: "bg-warning",
+  closed_won: "bg-emerald-500",
+  closed_lost: "bg-destructive",
 };
 
 export function DealFlowBar({ stageCounts, activeStage, onStageClick }: DealFlowBarProps) {
-  const totalInPipeline = STAGE_ORDER.reduce((sum, stage) => sum + stageCounts[stage], 0);
+  const total = STAGE_ORDER.reduce((sum, s) => sum + stageCounts[s], 0);
 
   return (
-    <div className="relative">
-      {/* Background track */}
-      <div className="absolute inset-0 bg-muted/30 rounded-xl" />
-      
-      {/* Progress indicator */}
-      <div className="relative flex items-center justify-between bg-card/50 backdrop-blur-sm rounded-xl p-1.5 border border-border/50 overflow-x-auto">
-        {STAGE_ORDER.map((stage, index) => {
-          const isActive = activeStage === stage;
-          const colors = stageColors[stage];
-          const count = stageCounts[stage];
-          const percentage = totalInPipeline > 0 ? Math.round((count / totalInPipeline) * 100) : 0;
-          
-          return (
-            <div key={stage} className="flex items-center flex-1 min-w-0">
-              <button
-                onClick={() => onStageClick(activeStage === stage ? null : stage)}
-                className={cn(
-                  "flex-1 flex flex-col items-center py-3 px-3 rounded-lg transition-all duration-200 text-center min-w-0 relative group",
-                  isActive
-                    ? `${colors.bg} ${colors.text} shadow-lg ${colors.glow}`
-                    : "hover:bg-muted/80 text-foreground"
-                )}
-              >
-                {/* Count with animation */}
-                <span 
-                  className={cn(
-                    "text-2xl font-bold tabular-nums animate-count-up",
-                    isActive ? colors.text : "text-foreground"
-                  )}
-                  style={{ animationDelay: `${index * 75}ms` }}
-                >
-                  {count}
-                </span>
-                
-                {/* Label */}
-                <span 
-                  className={cn(
-                    "text-xs font-medium truncate w-full",
-                    isActive ? `${colors.text} opacity-90` : "text-muted-foreground"
-                  )}
-                >
-                  {STAGE_LABELS[stage]}
-                </span>
-                
-                {/* Percentage bar indicator (only when not active) */}
-                {!isActive && percentage > 0 && (
-                  <div className="absolute bottom-1 left-3 right-3 h-0.5 bg-muted-foreground/20 rounded-full overflow-hidden">
-                    <div 
-                      className={cn("h-full rounded-full transition-all duration-500", colors.bg)}
-                      style={{ width: `${percentage}%` }}
-                    />
-                  </div>
-                )}
-              </button>
-              
-              {/* Chevron separator */}
-              {index < STAGE_ORDER.length - 1 && (
-                <ChevronRight className="h-4 w-4 text-muted-foreground/30 flex-shrink-0 mx-0.5" />
-              )}
+    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+      {STAGE_ORDER.map((stage) => {
+        const count = stageCounts[stage];
+        const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+        const isActive = activeStage === stage;
+
+        return (
+          <button
+            key={stage}
+            onClick={() => onStageClick(isActive ? null : stage)}
+            className={cn(
+              "flex flex-col gap-1.5 rounded-lg px-3 py-2.5 text-left transition-all duration-200",
+              "hover:bg-muted/60",
+              isActive
+                ? "bg-muted ring-1 ring-border shadow-sm"
+                : "bg-transparent"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground truncate">
+                {STAGE_LABELS[stage]}
+              </span>
+              <span className="text-sm font-bold tabular-nums text-foreground">
+                {count}
+              </span>
             </div>
-          );
-        })}
-      </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all duration-500",
+                  stageAccent[stage]
+                )}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
