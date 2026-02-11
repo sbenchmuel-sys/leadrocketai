@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 import {
   EnrichedLead,
   DealStage,
@@ -24,6 +25,8 @@ import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const [, setTick] = useState(0); // force re-render for relative time
   const location = useLocation();
 
   // Filters
@@ -34,6 +37,7 @@ export default function Dashboard() {
     try {
       const m = await getDashboardMetrics();
       setMetrics(m);
+      setLastRefreshedAt(new Date());
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -50,8 +54,15 @@ export default function Dashboard() {
   useEffect(() => {
     const unsub = onDashboardRefresh((_reason, m) => {
       setMetrics(m);
+      setLastRefreshedAt(new Date());
     });
     return unsub;
+  }, []);
+
+  // Tick every 30s to update the relative time label
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   const leads = metrics?.leads ?? [];
@@ -146,7 +157,14 @@ export default function Dashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground">Your B2B Deal Assistant</p>
+          <div className="flex items-center gap-2">
+            <p className="text-muted-foreground">Your B2B Deal Assistant</p>
+            {lastRefreshedAt && (
+              <span className="text-xs text-muted-foreground/60">
+                · Updated {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
+              </span>
+            )}
+          </div>
         </div>
         <Button asChild>
           <Link to="/dashboard/leads">
