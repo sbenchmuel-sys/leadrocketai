@@ -56,16 +56,13 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  // Calculate summary stats
-  const stats = useMemo(() => {
-    const total = leads.length;
-    const active = leads.filter(
-      (l) => l.stage !== "closed_won" && l.stage !== "closed_lost"
-    ).length;
-    const needsAction = metrics?.needs_action_count ?? 0;
-    const meetings = leads.filter((l) => l.hasMeeting).length;
-    return { total, active, needsAction, meetings };
-  }, [leads, metrics?.needs_action_count]);
+  // Executive card stats from metrics service
+  const execStats = useMemo(() => ({
+    needsAction: metrics?.needs_action_count ?? 0,
+    closing: metrics?.closing_count ?? 0,
+    automationRunning: metrics?.automation_running_count ?? 0,
+    momentum: metrics?.momentum_score ?? 0,
+  }), [metrics]);
 
   // Intelligence metrics from service
   const intelligenceMetrics = useMemo(() => {
@@ -152,14 +149,12 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      {/* Summary Cards */}
+      {/* Executive Metric Cards */}
       <SummaryCards
-        total={stats.total}
-        active={stats.active}
-        needsAction={stats.needsAction}
-        meetings={stats.meetings}
-        activeFilter={activeFilter}
-        onFilterChange={handleFilterChange}
+        needsAction={execStats.needsAction}
+        closing={execStats.closing}
+        automationRunning={execStats.automationRunning}
+        momentum={execStats.momentum}
         isLoading={isLoading}
       />
 
