@@ -2,13 +2,23 @@ import { Outlet, Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox } from "lucide-react";
+import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3 } from "lucide-react";
 import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
-const navItems = [
+type NavItem = {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  managerOnly?: boolean;
+};
+
+const navItems: NavItem[] = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/dashboard/inbox", icon: Inbox, label: "Inbox" },
   { to: "/dashboard/leads", icon: Users, label: "Leads" },
+  { to: "/dashboard/analytics", icon: BarChart3, label: "Team Analytics", managerOnly: true },
   { to: "/dashboard/knowledge", icon: BookOpen, label: "Knowledge Base" },
   { to: "/dashboard/settings", icon: Settings, label: "Settings" },
 ];
@@ -16,9 +26,26 @@ const navItems = [
 export default function DashboardLayout() {
   const { signOut, user } = useAuth();
   const location = useLocation();
+  const [isManagerOrAdmin, setIsManagerOrAdmin] = useState(false);
 
   // Initialize background Gmail auto-sync (every 20 minutes)
   useGmailAutoSync();
+
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from("workspace_members")
+      .select("role")
+      .eq("user_id", user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setIsManagerOrAdmin(data?.role === "admin" || data?.role === "manager");
+      });
+  }, [user]);
+
+  const visibleNavItems = navItems.filter(
+    (item) => !item.managerOnly || isManagerOrAdmin
+  );
 
   return (
     <div className="min-h-screen flex bg-background">
@@ -28,7 +55,7 @@ export default function DashboardLayout() {
           <h1 className="text-xl font-bold text-foreground">Deal Assistant</h1>
         </div>
         <nav className="flex-1 p-4 space-y-1">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = location.pathname === item.to || 
               (item.to !== "/dashboard" && location.pathname.startsWith(item.to));
             return (
@@ -63,7 +90,7 @@ export default function DashboardLayout() {
       <div className="md:hidden fixed top-0 left-0 right-0 h-14 border-b border-border bg-card z-50 flex items-center px-4 gap-4">
         <h1 className="font-bold">Deal Assistant</h1>
         <nav className="flex-1 flex gap-2 overflow-x-auto">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = location.pathname === item.to || 
               (item.to !== "/dashboard" && location.pathname.startsWith(item.to));
             return (

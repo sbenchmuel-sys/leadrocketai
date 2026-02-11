@@ -669,6 +669,86 @@ export type Database = {
         }
         Relationships: []
       }
+      manager_views: {
+        Row: {
+          active_conversations: number | null
+          avg_response_time_minutes: number | null
+          channel_metrics: Json | null
+          computed_at: string
+          created_at: string
+          ghost_risk_contacts: Json | null
+          high_ghost_risk_count: number | null
+          id: string
+          median_response_time_minutes: number | null
+          medium_ghost_risk_count: number | null
+          needs_reply_count: number | null
+          objection_frequency: Json | null
+          rep_user_id: string
+          sentiment_distribution: Json | null
+          stage_distribution: Json | null
+          top_topics: Json | null
+          total_conversations: number | null
+          total_messages_received: number | null
+          total_messages_sent: number | null
+          urgency_distribution: Json | null
+          workspace_id: string
+        }
+        Insert: {
+          active_conversations?: number | null
+          avg_response_time_minutes?: number | null
+          channel_metrics?: Json | null
+          computed_at?: string
+          created_at?: string
+          ghost_risk_contacts?: Json | null
+          high_ghost_risk_count?: number | null
+          id?: string
+          median_response_time_minutes?: number | null
+          medium_ghost_risk_count?: number | null
+          needs_reply_count?: number | null
+          objection_frequency?: Json | null
+          rep_user_id: string
+          sentiment_distribution?: Json | null
+          stage_distribution?: Json | null
+          top_topics?: Json | null
+          total_conversations?: number | null
+          total_messages_received?: number | null
+          total_messages_sent?: number | null
+          urgency_distribution?: Json | null
+          workspace_id: string
+        }
+        Update: {
+          active_conversations?: number | null
+          avg_response_time_minutes?: number | null
+          channel_metrics?: Json | null
+          computed_at?: string
+          created_at?: string
+          ghost_risk_contacts?: Json | null
+          high_ghost_risk_count?: number | null
+          id?: string
+          median_response_time_minutes?: number | null
+          medium_ghost_risk_count?: number | null
+          needs_reply_count?: number | null
+          objection_frequency?: Json | null
+          rep_user_id?: string
+          sentiment_distribution?: Json | null
+          stage_distribution?: Json | null
+          top_topics?: Json | null
+          total_conversations?: number | null
+          total_messages_received?: number | null
+          total_messages_sent?: number | null
+          urgency_distribution?: Json | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manager_views_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_packs: {
         Row: {
           created_at: string
