@@ -16,10 +16,12 @@ import {
 import { getLeadMeetingPacks, getLeadInteractions, MeetingPackItem } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { Mail } from "lucide-react";
+import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 
 interface LeadOverviewPanelProps {
   lead: LeadDetail;
   onNavigateToMeetings: () => void;
+  onUpdate?: () => void;
 }
 
 interface Milestone {
@@ -55,7 +57,7 @@ function detectBuyingSignals(milestones: Milestone[]): string[] {
   return signals;
 }
 
-export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOverviewPanelProps) {
+export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate }: LeadOverviewPanelProps) {
   const [lastMeeting, setLastMeeting] = useState<MeetingPackItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [recapAlreadySent, setRecapAlreadySent] = useState(false);
@@ -143,6 +145,9 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings }: LeadOv
           </div>
         </CardContent>
       </Card>
+
+      {/* Automation Preview */}
+      <AutomationPreviewCard lead={lead} onUpdate={onUpdate || (() => {})} />
 
       {/* B) Most Recent Meeting Recap */}
       <Card>

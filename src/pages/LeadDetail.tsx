@@ -124,6 +124,7 @@ export default function LeadDetail() {
           <LeadOverviewPanel
             lead={lead}
             onNavigateToMeetings={() => setActiveTab("meetings")}
+            onUpdate={handleUpdate}
           />
         </div>
       </div>
