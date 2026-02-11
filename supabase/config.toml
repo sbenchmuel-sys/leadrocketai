@@ -9,5 +9,8 @@ verify_jwt = false
 [functions.whatsapp-health]
 verify_jwt = false
 
+[functions.whatsapp-send]
+verify_jwt = false
+
 [functions.conversation-analyze]
 verify_jwt = false
