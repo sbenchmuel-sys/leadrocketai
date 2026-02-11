@@ -307,7 +307,7 @@ export async function insertInteraction(leadId: string, form: InsertInteractionI
 
 export interface SaveDraftInput {
   lead_id?: string;
-  channel: 'email' | 'linkedin';
+  channel: 'email' | 'linkedin' | 'whatsapp';
   draft_type: string;
   to_recipient?: string;
   subject?: string;

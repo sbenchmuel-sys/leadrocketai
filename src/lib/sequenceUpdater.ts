@@ -83,6 +83,11 @@ function getFieldUpdatesForIntent(intent: AITaskType): FieldUpdate {
   }
 }
 
+// WhatsApp-specific intent detection
+function isWhatsAppIntent(intent: AITaskType): boolean {
+  return intent === "pre_email_2_followup" || intent === "pre_email_1_intro";
+}
+
 // ============================================
 // MAIN: updateSequenceState
 // ============================================

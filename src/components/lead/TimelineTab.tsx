@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getLeadInteractions, InteractionItem } from "@/lib/supabaseQueries";
 import { Badge } from "@/components/ui/badge";
 import { format, differenceInDays } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -91,10 +91,10 @@ function getSignalTags(item: InteractionItem): string[] {
   return [...new Set(tags)];
 }
 
-/* ── Auto-collapse: expand latest inbound, latest outbound, latest meeting ── */
+/* ── Auto-collapse: expand latest inbound, latest outbound, latest meeting, latest whatsapp ── */
 function getAutoExpandIds(entries: (InteractionItem | ThreadGroup)[]): Set<string> {
   const ids = new Set<string>();
-  let foundInbound = false, foundOutbound = false, foundMeeting = false;
+  let foundInbound = false, foundOutbound = false, foundMeeting = false, foundWhatsApp = false;
 
   for (const entry of entries) {
     if (isThread(entry)) {
@@ -105,8 +105,9 @@ function getAutoExpandIds(entries: (InteractionItem | ThreadGroup)[]): Set<strin
       if (!foundInbound && entry.type === "email_inbound") { ids.add(entry.id); foundInbound = true; }
       if (!foundOutbound && entry.type === "email_outbound") { ids.add(entry.id); foundOutbound = true; }
       if (!foundMeeting && entry.type === "meeting") { ids.add(entry.id); foundMeeting = true; }
+      if (!foundWhatsApp && (entry.type === "whatsapp_inbound" || entry.type === "whatsapp_outbound")) { ids.add(entry.id); foundWhatsApp = true; }
     }
-    if (foundInbound && foundOutbound && foundMeeting) break;
+    if (foundInbound && foundOutbound && foundMeeting && foundWhatsApp) break;
   }
   return ids;
 }
@@ -118,6 +119,8 @@ function ChannelBadge({ type }: { type: string }) {
     email_outbound: { icon: <Mail className="h-3 w-3" />, label: "Outbound", className: "text-blue-600 bg-blue-500/10 border-blue-500/20" },
     meeting: { icon: <Calendar className="h-3 w-3" />, label: "Meeting", className: "text-purple-600 bg-purple-500/10 border-purple-500/20" },
     call: { icon: <Phone className="h-3 w-3" />, label: "Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
+    whatsapp_outbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
+    whatsapp_inbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     note: { icon: <StickyNote className="h-3 w-3" />, label: "Note", className: "text-muted-foreground bg-muted border-border" },
   };
   const c = config[type] || config.note;
@@ -366,6 +369,31 @@ function SystemEvent({ text }: { text: string }) {
   );
 }
 
+/* ── WhatsApp Entry (chat-bubble style) ── */
+function WhatsAppEntry({ item }: { item: InteractionItem }) {
+  const isOutbound = item.type === "whatsapp_outbound";
+  return (
+    <div className={cn("py-3 px-3 -mx-3", isOutbound ? "flex justify-end" : "flex justify-start")}>
+      <div className={cn(
+        "max-w-[80%] rounded-2xl px-4 py-2.5 space-y-1",
+        isOutbound
+          ? "bg-primary/10 rounded-br-md"
+          : "bg-accent rounded-bl-md"
+      )}>
+        <div className="flex items-center gap-2">
+          <ChannelBadge type={item.type} />
+          <span className="text-[11px] text-muted-foreground">
+            {format(new Date(item.occurred_at), "MMM d · h:mm a")}
+          </span>
+        </div>
+        <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">
+          {item.body_text}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Component ── */
 export default function TimelineTab({ leadId }: TimelineTabProps) {
   const [interactions, setInteractions] = useState<InteractionItem[]>([]);
@@ -400,6 +428,7 @@ export default function TimelineTab({ leadId }: TimelineTabProps) {
       {entries.map((entry, idx) => {
         const key = isThread(entry) ? entry.key : entry.id;
         const isExpanded = autoExpand.has(key);
+        const isWhatsApp = !isThread(entry) && (entry.type === "whatsapp_inbound" || entry.type === "whatsapp_outbound");
 
         return (
           <div key={key}>
@@ -408,6 +437,8 @@ export default function TimelineTab({ leadId }: TimelineTabProps) {
               <ThreadEntry thread={entry} defaultOpen={isExpanded} />
             ) : entry.type === "meeting" ? (
               <MeetingEntry item={entry} defaultOpen={isExpanded} />
+            ) : isWhatsApp ? (
+              <WhatsAppEntry item={entry} />
             ) : (
               <TimelineEntry item={entry} defaultOpen={isExpanded} />
             )}

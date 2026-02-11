@@ -67,6 +67,13 @@ export function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
   if (stage === "closing") {
     factors.push({ label: "Closing stage", points: 10 }); score += 10;
   }
+
+  // WhatsApp engagement bonus — multi-channel engagement is a positive signal
+  const hasWhatsApp = milestones.some(m => m.description?.toLowerCase().includes("whatsapp"));
+  if (hasWhatsApp) {
+    factors.push({ label: "WhatsApp engaged", points: 5 }); score += 5;
+  }
+
   return { total: Math.max(0, Math.min(100, score)), factors };
 }
 
