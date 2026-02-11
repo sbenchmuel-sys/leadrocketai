@@ -324,7 +324,8 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       }
 
       if (channel === "whatsapp") {
-        payload.custom_instructions = (payload.custom_instructions || "") + " Write for WhatsApp: informal, short (under 100 words), no subject line.";
+        payload.custom_instructions = ((payload.custom_instructions as string) || "") +
+          "\n\nIMPORTANT: Write a short, natural WhatsApp message. Keep it under 100 words. No subject line. No signature block. Max 3-5 short paragraphs. Conversational tone. Optional emoji allowed but keep it professional.";
       }
 
       const result = await runTask(taskType, payload);
@@ -349,10 +350,9 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
   };
 
   const saveAsDraft = async () => {
-    const isLinkedIn = channel === "linkedin";
     try {
       await saveDraft(lead.id, {
-        channel: isLinkedIn ? "linkedin" : "email",
+        channel: channel,
         draft_type: selectedIntent,
         subject: generatedSubject || undefined,
         body_text: generatedContent,
