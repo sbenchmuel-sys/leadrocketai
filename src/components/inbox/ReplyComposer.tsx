@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Send, Paperclip, MessageSquare, Mail, X } from "lucide-react";
+import { Send, Paperclip, MessageSquare, Mail, X, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,10 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editedSuggestions, setEditedSuggestions] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSuggestionClick = (text: string) => {
     setBody(text);
@@ -68,17 +71,87 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
     <div className="shrink-0 border-t border-border p-3 space-y-2">
       {/* Suggestion chips */}
       {suggestions.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {suggestions.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => handleSuggestionClick(s.text)}
-              className="shrink-0 text-xs px-3 py-1.5 rounded-full border border-border hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-            >
-              {s.style === "direct" ? "⚡" : s.style === "consultative" ? "🤝" : "💪"}{" "}
-              {s.style === "direct" ? "Direct" : s.style === "consultative" ? "Consultative" : "Assertive"}
-            </button>
-          ))}
+        <div className="space-y-2">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {suggestions.map((s, i) => {
+              const isEditing = editingIndex === i;
+              const displayText = editedSuggestions[i] ?? s.text;
+              const icon = s.style === "direct" ? "⚡" : s.style === "consultative" ? "🤝" : "💪";
+              const label = s.style === "direct" ? "Direct" : s.style === "consultative" ? "Consultative" : "Assertive";
+
+              return (
+                <button
+                  key={i}
+                  onClick={() => {
+                    if (!isEditing) handleSuggestionClick(displayText);
+                  }}
+                  className={cn(
+                    "shrink-0 text-xs px-3 py-1.5 rounded-full border border-border transition-colors text-muted-foreground",
+                    isEditing
+                      ? "bg-accent/50 text-foreground ring-1 ring-primary/30"
+                      : "hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-1.5">
+                    {icon} {label}
+                    <Pencil
+                      className="h-3 w-3 opacity-50 hover:opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingIndex(isEditing ? null : i);
+                        if (!isEditing) {
+                          // Initialize edit text if not already edited
+                          setEditedSuggestions((prev) => ({
+                            ...prev,
+                            [i]: prev[i] ?? s.text,
+                          }));
+                          setTimeout(() => editRef.current?.focus(), 50);
+                        }
+                      }}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Inline editor */}
+          {editingIndex !== null && (
+            <div className="rounded-md border border-border bg-muted/30 p-2 space-y-2">
+              <Textarea
+                ref={editRef}
+                value={editedSuggestions[editingIndex] ?? suggestions[editingIndex]?.text ?? ""}
+                onChange={(e) =>
+                  setEditedSuggestions((prev) => ({ ...prev, [editingIndex]: e.target.value }))
+                }
+                className="text-sm min-h-[60px] max-h-48 resize-none bg-background"
+                rows={3}
+              />
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setEditingIndex(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={() => {
+                    const text = editedSuggestions[editingIndex];
+                    if (text?.trim()) {
+                      setBody(text);
+                      setEditingIndex(null);
+                    }
+                  }}
+                >
+                  <Check className="h-3 w-3" /> Use this draft
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
