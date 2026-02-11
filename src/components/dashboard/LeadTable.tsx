@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2 } from "lucide-react";
-import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, MOTION_LABELS, MOTION_ICONS, MOTION_COLORS, SourceType, Motion } from "@/lib/dashboardUtils";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
@@ -518,7 +518,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
                 <TableHead className="py-2">Phase</TableHead>
-                <TableHead className="py-2 hidden sm:table-cell">Momentum</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Source</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
@@ -535,9 +534,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 const isAutoRunning = nurtureMode === "auto" && nurtureStatus === "active";
                 const isReview = nurtureMode === "review" && nurtureStatus === "active";
 
-                // Derive momentum label from motion
-                const motionLabel = MOTION_LABELS[lead.motion] || lead.motion;
-                const motionColor = MOTION_COLORS[lead.motion];
+                // Direction indicator based on activity recency
+                const directionArrow = (() => {
+                  if (lead.stage === "closed_won" || lead.stage === "closed_lost") return "";
+                  if (!lead.last_activity_at) return "";
+                  const daysSince = (Date.now() - new Date(lead.last_activity_at).getTime()) / (1000 * 60 * 60 * 24);
+                  if (daysSince <= 3 && (lead.last_inbound_at || lead.stage !== "new")) return " ↑";
+                  if (daysSince > 14) return " ↓";
+                  return " →";
+                })();
 
                 return (
                   <TableRow
@@ -578,19 +583,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </div>
                     </TableCell>
 
-                    {/* Phase */}
+                    {/* Phase with direction indicator */}
                     <TableCell className="py-2">
-                      <span className="text-xs font-medium text-foreground">{lead.displayPhase}</span>
-                    </TableCell>
-
-                    {/* Momentum */}
-                    <TableCell className="py-2 hidden sm:table-cell">
-                      <span className={cn(
-                        "text-[10px] px-1.5 py-0.5 rounded-sm inline-flex items-center gap-1",
-                        motionColor?.bg, motionColor?.text
-                      )}>
-                        <span>{MOTION_ICONS[lead.motion]}</span>
-                        {motionLabel}
+                      <span className="text-xs font-medium text-foreground">
+                        {lead.displayPhase}
+                        {directionArrow && (
+                          <span className="text-muted-foreground/60 ml-0.5">{directionArrow}</span>
+                        )}
                       </span>
                     </TableCell>
 

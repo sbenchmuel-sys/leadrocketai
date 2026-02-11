@@ -25,21 +25,24 @@ export type RefreshReason =
 export interface DashboardMetrics {
   /** Leads with needs_action = true */
   needs_action_count: number;
-  /** Leads in closing stage */
-  closing_count: number;
+  /** Leads not in closed states */
+  active_count: number;
   /** Leads with active automation (nurture_mode = 'auto' & nurture_status = 'active') */
   automation_running_count: number;
-  /** Net forward-momentum score (positive = healthy pipeline) */
+  /** Net forward-momentum score (positive = healthy pipeline) — kept for sub-components */
   momentum_score: number;
   /** Leads with no outbound in >14 days, not closed */
   stale_count: number;
   /** Leads eligible for nurture switch (fast strategy, no reply, 10+ days) */
   nurture_ready_count: number;
+  /** Leads showing engagement + buying progress signals */
+  warming_up_count: number;
 
   // Underlying data for components that still need it
   leads: EnrichedLead[];
   staleLeads: EnrichedLead[];
   nurtureCandidates: EnrichedLead[];
+  warmingUpLeads: EnrichedLead[];
 }
 
 // ============================================
@@ -148,6 +151,62 @@ function deriveAutomationRunningCount(leads: EnrichedLead[]): number {
   }).length;
 }
 
+/**
+ * Derive "Warming Up" leads — deterministic, rule-based.
+ * Requires BOTH an engagement signal AND a progress signal.
+ */
+function deriveWarmingUpLeads(leads: EnrichedLead[]): EnrichedLead[] {
+  const now = new Date();
+
+  return leads.filter((lead) => {
+    if (lead.stage === "closed_won" || lead.stage === "closed_lost") return false;
+
+    // --- Engagement signals (at least one) ---
+    let hasEngagement = false;
+
+    // Reply within last 72 hours
+    if (lead.last_inbound_at) {
+      const hoursSinceReply = (now.getTime() - new Date(lead.last_inbound_at).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceReply <= 72) hasEngagement = true;
+    }
+
+    // Fast reply latency (<24h between outbound and inbound)
+    if (!hasEngagement && lead.last_outbound_at && lead.last_inbound_at) {
+      const outbound = new Date(lead.last_outbound_at).getTime();
+      const inbound = new Date(lead.last_inbound_at).getTime();
+      if (inbound > outbound && (inbound - outbound) / (1000 * 60 * 60) < 24) {
+        hasEngagement = true;
+      }
+    }
+
+    // Recent activity burst (proxy: last_activity within 3 days AND has inbound)
+    if (!hasEngagement && lead.last_activity_at && lead.last_inbound_at) {
+      const hoursSinceActivity = (now.getTime() - new Date(lead.last_activity_at).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceActivity <= 72) hasEngagement = true;
+    }
+
+    if (!hasEngagement) return false;
+
+    // --- Progress signals (at least one) ---
+    // Meeting scheduled / post-meeting
+    if (lead.hasMeeting || lead.stage === "post_meeting") return true;
+    // Closing stage = pricing/proposal discussed
+    if (lead.stage === "closing") return true;
+    // Deal outlook contains progress keywords
+    const outlook = ((lead as any).deal_outlook || "").toLowerCase();
+    const progressKeywords = ["pricing", "decision", "budget", "procurement", "security", "follow-up", "proposal", "contract"];
+    if (progressKeywords.some((kw) => outlook.includes(kw))) return true;
+    // Deal factors contain progress signals
+    const factors = (lead as any).deal_factors_json;
+    if (factors && typeof factors === "object") {
+      const factorStr = JSON.stringify(factors).toLowerCase();
+      if (progressKeywords.some((kw) => factorStr.includes(kw))) return true;
+    }
+
+    return false;
+  });
+}
+
 // ============================================
 // PUBLIC API
 // ============================================
@@ -164,17 +223,23 @@ export async function getDashboardMetrics(
 
   const staleLeads = deriveStaleLeads(leads);
   const nurtureCandidates = deriveNurtureCandidates(leads);
+  const warmingUpLeads = deriveWarmingUpLeads(leads);
+  const activeCount = leads.filter(
+    (l) => l.stage !== "closed_won" && l.stage !== "closed_lost"
+  ).length;
 
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,
-    closing_count: leads.filter((l) => l.stage === "closing").length,
+    active_count: activeCount,
     automation_running_count: deriveAutomationRunningCount(leads),
     momentum_score: deriveMomentumScore(leads),
     stale_count: staleLeads.length,
     nurture_ready_count: nurtureCandidates.length,
+    warming_up_count: warmingUpLeads.length,
     leads,
     staleLeads,
     nurtureCandidates,
+    warmingUpLeads,
   };
 }
 

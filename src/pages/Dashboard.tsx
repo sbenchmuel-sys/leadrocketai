@@ -6,7 +6,6 @@ import { formatDistanceToNow } from "date-fns";
 import {
   EnrichedLead,
   DealStage,
-  getAIRecommendation,
   calculateReplyRate,
 } from "@/lib/dashboardUtils";
 import {
@@ -26,10 +25,9 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
-  const [, setTick] = useState(0); // force re-render for relative time
+  const [, setTick] = useState(0);
   const location = useLocation();
 
-  // Filters
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [activeStage, setActiveStage] = useState<DealStage | null>(null);
 
@@ -45,12 +43,10 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Load data on mount and when navigating back to dashboard
   useEffect(() => {
     loadData();
   }, [loadData, location.key]);
 
-  // Subscribe to refresh events from other parts of the app
   useEffect(() => {
     const unsub = onDashboardRefresh((_reason, m) => {
       setMetrics(m);
@@ -59,7 +55,6 @@ export default function Dashboard() {
     return unsub;
   }, []);
 
-  // Tick every 30s to update the relative time label
   useEffect(() => {
     const interval = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(interval);
@@ -67,15 +62,15 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  // Executive card stats from metrics service
+  // Executive card stats
   const execStats = useMemo(() => ({
+    activeLeads: metrics?.active_count ?? 0,
     needsAction: metrics?.needs_action_count ?? 0,
-    closing: metrics?.closing_count ?? 0,
+    warmingUp: metrics?.warming_up_count ?? 0,
     automationRunning: metrics?.automation_running_count ?? 0,
-    momentum: metrics?.momentum_score ?? 0,
   }), [metrics]);
 
-  // Intelligence metrics from service
+  // Intelligence metrics
   const intelligenceMetrics = useMemo(() => {
     if (!metrics) return { staleCount: 0, staleLeads: [], nurtureCandidateCount: 0, nurtureCandidates: [], momentum: 0, replyRate: 0 };
     return {
@@ -88,7 +83,7 @@ export default function Dashboard() {
     };
   }, [metrics, leads]);
 
-  // Calculate stage counts
+  // Stage counts
   const stageCounts = useMemo(() => {
     const counts: Record<DealStage, number> = {
       new: 0, contacted: 0, engaged: 0, post_meeting: 0, closing: 0, closed_won: 0, closed_lost: 0,
@@ -99,7 +94,18 @@ export default function Dashboard() {
     return counts;
   }, [leads]);
 
-  // Filter leads based on active filters
+  // Cooling down: leads that were recently active but momentum is stalling
+  const coolingDownCount = useMemo(() => {
+    const now = new Date();
+    return leads.filter((l) => {
+      if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
+      if (!l.last_activity_at) return false;
+      const daysSince = (now.getTime() - new Date(l.last_activity_at).getTime()) / (1000 * 60 * 60 * 24);
+      return daysSince >= 7 && daysSince < 14 && l.stage !== "new";
+    }).length;
+  }, [leads]);
+
+  // Filter leads
   const filteredLeads = useMemo(() => {
     let result = leads;
 
@@ -113,6 +119,8 @@ export default function Dashboard() {
       result = intelligenceMetrics.staleLeads;
     } else if (activeFilter === "nurture_candidates") {
       result = intelligenceMetrics.nurtureCandidates;
+    } else if (activeFilter === "warming_up") {
+      result = metrics?.warmingUpLeads ?? [];
     }
 
     if (activeStage) {
@@ -120,17 +128,7 @@ export default function Dashboard() {
     }
 
     return result;
-  }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads, intelligenceMetrics.nurtureCandidates]);
-
-  // AI insights
-  const aiInsights = useMemo(() => {
-    const warmingUp = leads.filter(
-      (l) => l.stage === "engaged" || l.stage === "post_meeting"
-    ).length;
-    const atRisk = intelligenceMetrics.staleCount;
-    const recs = getAIRecommendation(leads);
-    return { warmingUp, atRisk, topRecommendation: recs[0] ?? null };
-  }, [leads, intelligenceMetrics.staleCount]);
+  }, [leads, activeFilter, activeStage, intelligenceMetrics.staleLeads, intelligenceMetrics.nurtureCandidates, metrics?.warmingUpLeads]);
 
   const handleFilterChange = (filter: FilterType) => {
     setActiveFilter(filter);
@@ -148,6 +146,11 @@ export default function Dashboard() {
 
   const handleNurtureClick = () => {
     setActiveFilter(activeFilter === "nurture_candidates" ? "all" : "nurture_candidates");
+    setActiveStage(null);
+  };
+
+  const handleWarmingUpClick = () => {
+    setActiveFilter(activeFilter === "warming_up" ? "all" : "warming_up");
     setActiveStage(null);
   };
 
@@ -176,11 +179,13 @@ export default function Dashboard() {
 
       {/* Executive Metric Cards */}
       <SummaryCards
+        activeLeads={execStats.activeLeads}
         needsAction={execStats.needsAction}
-        closing={execStats.closing}
+        warmingUp={execStats.warmingUp}
         automationRunning={execStats.automationRunning}
-        momentum={execStats.momentum}
         isLoading={isLoading}
+        onWarmingUpClick={handleWarmingUpClick}
+        activeFilter={activeFilter}
       />
 
       {/* Intelligence Cards */}
@@ -208,10 +213,10 @@ export default function Dashboard() {
         </div>
         <div>
           <AIRecommendation
-            warmingUp={aiInsights.warmingUp}
-            atRisk={aiInsights.atRisk}
+            warmingUpLeads={metrics?.warmingUpLeads ?? []}
+            coolingDownCount={coolingDownCount}
             nurtureCandidates={intelligenceMetrics.nurtureCandidateCount}
-            topRecommendation={aiInsights.topRecommendation}
+            atRisk={intelligenceMetrics.staleCount}
           />
         </div>
       </div>
