@@ -94,9 +94,9 @@ const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
   nurture_email: "nurture_email_single",
   connection_request: "linkedin_connect",
   follow_up_message: "linkedin_followup",
-  quick_follow_up: "pre_email_2_followup",
-  meeting_reminder: "pre_email_2_followup",
-  short_answer: "answer_questions",
+  quick_follow_up: "whatsapp_message",
+  meeting_reminder: "whatsapp_message",
+  short_answer: "whatsapp_message",
 };
 
 // Map email intents to EmailActionDialog action keys
