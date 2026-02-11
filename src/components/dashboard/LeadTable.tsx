@@ -37,6 +37,7 @@ import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOUR
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { LeadAvatar } from "./LeadAvatar";
+import { ModeDropdown } from "./ModeDropdown";
 import { updateLeadStage, bulkUpdateLeadStage, deleteLead } from "@/lib/supabaseQueries";
 import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -583,14 +584,16 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </div>
                     </TableCell>
 
-                    {/* Phase with direction indicator */}
-                    <TableCell className="py-2">
-                      <span className="text-xs font-medium text-foreground">
-                        {lead.displayPhase}
-                        {directionArrow && (
-                          <span className="text-muted-foreground/60 ml-0.5">{directionArrow}</span>
-                        )}
-                      </span>
+                    {/* Phase with mode dropdown */}
+                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                      <ModeDropdown
+                        leadId={lead.id}
+                        leadName={lead.name}
+                        currentPhase={lead.displayPhase}
+                        directionArrow={directionArrow}
+                        onNurtureSelect={() => setNurtureSwitchLead(lead)}
+                        onUpdated={onLeadUpdated}
+                      />
                     </TableCell>
 
                     {/* Source */}
