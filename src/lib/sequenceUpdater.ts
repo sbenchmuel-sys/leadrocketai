@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { AITaskType } from "@/hooks/useAITask";
 import { calculateClosingPower } from "@/lib/closingPowerUtils";
 import { getLeadDetail } from "@/lib/supabaseQueries";
+import { addDays } from "date-fns";
 
 // ============================================
 // TYPES
@@ -86,6 +87,21 @@ function getFieldUpdatesForIntent(intent: AITaskType): FieldUpdate {
 // WhatsApp-specific intent detection
 function isWhatsAppIntent(intent: AITaskType): boolean {
   return intent === "pre_email_2_followup" || intent === "pre_email_1_intro";
+}
+
+// Check if intent is part of the outbound email sequence
+function isOutboundSequenceIntent(intent: AITaskType): boolean {
+  return ["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup"].includes(intent);
+}
+
+// Get the next step key in the outbound sequence
+function getNextOutboundStep(intent: AITaskType): string | null {
+  const progression: Record<string, string> = {
+    pre_email_1_intro: "send_pre_2",
+    pre_email_2_followup: "send_pre_3",
+    pre_email_3_followup: "send_pre_4",
+  };
+  return progression[intent] || null; // pre_email_4_breakup has no next step
 }
 
 // ============================================
@@ -184,6 +200,68 @@ export async function updateSequenceState(
   }
 
   console.log("[updateSequenceState] Lead updated:", updatePayload);
+
+  // Step 2b: If automation was active, schedule next step (with safety re-check)
+  if (channel === "email" && isOutboundSequenceIntent(intentUsed)) {
+    try {
+      const freshLead = await getLeadDetail(leadId);
+      const automationActive = !!(freshLead as any).eligible_at && freshLead.needs_action;
+
+      if (automationActive) {
+        // Pre-send safety re-checks
+        const hasReply = !!freshLead.last_inbound_at;
+        const hasMeeting = freshLead.has_future_meeting;
+        const motionChanged = freshLead.motion !== "outbound_prospecting";
+        const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
+
+        if (hasReply || hasMeeting || motionChanged || isClosed) {
+          // Pause automation
+          await supabase
+            .from("leads")
+            .update({ needs_action: false, eligible_at: null })
+            .eq("id", leadId);
+          console.log("[updateSequenceState] Automation paused — engagement detected:", {
+            hasReply, hasMeeting, motionChanged, isClosed,
+          });
+        } else {
+          // Schedule next step
+          const nextStep = getNextOutboundStep(intentUsed);
+          if (nextStep) {
+            const FAST_INTERVALS = [2, 3, 3, 4];
+            const stepIdx = parseInt(nextStep.replace("send_pre_", ""), 10) - 1;
+            const daysUntil = FAST_INTERVALS[stepIdx] || 3;
+            const eligibleAt = addDays(new Date(), daysUntil);
+            eligibleAt.setHours(9, 30, 0, 0);
+
+            const STEP_LABELS: Record<string, string> = {
+              send_pre_2: "Follow-up 1",
+              send_pre_3: "Follow-up 2",
+              send_pre_4: "Breakup Email",
+            };
+
+            await supabase
+              .from("leads")
+              .update({
+                next_action_key: nextStep,
+                next_action_label: STEP_LABELS[nextStep] || "Follow-up",
+                needs_action: true,
+                eligible_at: eligibleAt.toISOString(),
+                action_reason_code: "FOLLOWUP_DUE",
+              })
+              .eq("id", leadId);
+
+            console.log("[updateSequenceState] Automation: next step scheduled:", {
+              nextStep,
+              eligibleAt: eligibleAt.toISOString(),
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[updateSequenceState] Automation scheduling failed (non-blocking):", err);
+    }
+  }
+
 
   // Step 3: Log override event if intent was overridden
   let overrideLogged = false;
