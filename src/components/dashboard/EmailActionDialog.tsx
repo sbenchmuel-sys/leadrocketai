@@ -546,26 +546,60 @@ Calendar Link: ${repProfile.calendar_link || ''}
     return body;
   }
 
+  // Derive sequence_type from motion
+  function getSequenceTypeForMotion(motion: Motion): string {
+    switch (motion) {
+      case "nurture": return "nurture";
+      case "post_meeting": return "post_meeting";
+      case "closing": return "closing";
+      case "closed": return "closed";
+      default: return "outbound";
+    }
+  }
+
   // Apply motion override if changed
   async function applyMotionOverride() {
     if (selectedMotion !== leadMotion) {
       try {
+        const newSequenceType = getSequenceTypeForMotion(selectedMotion);
         const updatePayload: Record<string, unknown> = {
           motion: selectedMotion,
           last_activity_at: new Date().toISOString(),
+          // Reset sequence fields based on new motion
+          next_action_key: null,
+          next_action_label: null,
+          needs_action: false,
         };
         // If moving to closed, disable automation
         if (selectedMotion === "closed") {
           updatePayload.nurture_status = "inactive";
-          updatePayload.needs_action = false;
+        }
+        // If moving to nurture, set nurture defaults
+        if (selectedMotion === "nurture") {
+          updatePayload.nurture_status = "active";
+          updatePayload.nurture_mode = "review";
         }
         await supabase
           .from("leads")
           .update(updatePayload)
           .eq("id", lead.id);
-        
+
+        // Log motion_override_event as an interaction
+        try {
+          await supabase.from("interactions").insert({
+            lead_id: lead.id,
+            type: "system_note",
+            source: "composer",
+            body_text: `Motion override: "${leadMotion}" → "${selectedMotion}" (sequence reset to ${newSequenceType})`,
+            occurred_at: new Date().toISOString(),
+          });
+          console.log("[Composer] Motion override event logged:", leadMotion, "→", selectedMotion);
+        } catch (logErr) {
+          console.warn("[Composer] Failed to log motion override event:", logErr);
+        }
+
         const motionLabel = MOTION_LABELS[selectedMotion] || selectedMotion;
-        toast.success(`Motion updated to ${motionLabel}.`);
+        toast.success(`Motion updated to ${motionLabel}. Sequence reset.`);
       } catch (err) {
         console.error("Failed to update motion:", err);
       }
