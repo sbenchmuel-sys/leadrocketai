@@ -5,7 +5,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2, Zap, Pause, CheckCircle2, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2, Zap, Pause, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, MOTION_LABELS, MOTION_ICONS, MOTION_COLORS,
@@ -14,7 +14,7 @@ import {
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
-import { differenceInDays, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
 
 interface LeadDetailHeaderProps {
   lead: LeadDetail;
@@ -60,119 +60,6 @@ function getAutomationStatus(lead: LeadDetail): { label: string; color: string; 
   return { label: "Active", color: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40", icon: Zap };
 }
 
-// Momentum derivation from activity recency + stage progression
-function getMomentum(lead: LeadDetail): { label: string; icon: typeof TrendingUp; color: string } {
-  if (!lead.last_activity_at) return { label: "Stalled", icon: TrendingDown, color: "text-red-600 dark:text-red-400" };
-  const daysSinceActivity = differenceInDays(new Date(), parseISO(lead.last_activity_at));
-  
-  // Check for recent inbound (strong rising signal)
-  const hasRecentInbound = lead.last_inbound_at && differenceInDays(new Date(), parseISO(lead.last_inbound_at)) <= 3;
-  const stage = lead.stage as DealStage;
-  
-  if (hasRecentInbound || (daysSinceActivity <= 2 && (stage === "closing" || stage === "post_meeting"))) {
-    return { label: "Rising", icon: TrendingUp, color: "text-emerald-600 dark:text-emerald-400" };
-  }
-  if (daysSinceActivity <= 5) return { label: "Stable", icon: Minus, color: "text-muted-foreground" };
-  return { label: "Stalled", icon: TrendingDown, color: "text-red-600 dark:text-red-400" };
-}
-
-// ============================================
-// CLOSING POWER SCORE (0–100)
-// Criteria-based scoring with breakdown
-// ============================================
-
-interface ScoreBreakdown {
-  total: number;
-  factors: { label: string; points: number }[];
-}
-
-interface Milestone { description: string; status: string; }
-interface Risk { issue: string; level: string; }
-
-// Known buying signal keywords
-const SIGNAL_PATTERNS = {
-  pricing: /pric|cost|quote|proposal/i,
-  decision_maker: /decision.?maker|dm\b|c-level|ceo|cfo|cto|vp\b|director/i,
-  docs_requested: /proposal|contract|agreement|sow\b|scope|nda/i,
-};
-
-function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
-  const factors: { label: string; points: number }[] = [];
-  let score = 10; // base
-
-  const stage = lead.stage as DealStage;
-  const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
-  const risks: Risk[] = lead.risks_json ? (lead.risks_json as unknown as Risk[]) : [];
-  const allMilestoneText = milestones.map(m => m.description).join(" ");
-
-  // Meeting booked (+20)
-  if (lead.has_future_meeting || stage === "post_meeting" || stage === "closing") {
-    factors.push({ label: "Meeting booked", points: 20 });
-    score += 20;
-  }
-
-  // Pricing mentioned (+15)
-  if (SIGNAL_PATTERNS.pricing.test(allMilestoneText) || lead.deal_outlook === "positive") {
-    factors.push({ label: "Pricing mentioned", points: 15 });
-    score += 15;
-  }
-
-  // Decision maker involvement (+15)
-  if (SIGNAL_PATTERNS.decision_maker.test(allMilestoneText)) {
-    factors.push({ label: "Decision maker involved", points: 15 });
-    score += 15;
-  }
-
-  // Docs requested (+10)
-  if (SIGNAL_PATTERNS.docs_requested.test(allMilestoneText)) {
-    factors.push({ label: "Docs requested", points: 10 });
-    score += 10;
-  }
-
-  // Reply speed signals
-  if (lead.last_inbound_at && lead.last_outbound_at) {
-    const inbound = parseISO(lead.last_inbound_at).getTime();
-    const outbound = parseISO(lead.last_outbound_at).getTime();
-    const replyGapHours = Math.abs(inbound - outbound) / (1000 * 60 * 60);
-    
-    if (inbound > outbound && replyGapHours < 24) {
-      factors.push({ label: "Fast reply (<24h)", points: 10 });
-      score += 10;
-    } else if (inbound < outbound) {
-      // We sent last — check how long ago
-      const daysSinceOutbound = differenceInDays(new Date(), parseISO(lead.last_outbound_at));
-      if (daysSinceOutbound > 10) {
-        factors.push({ label: "No reply after 10d", points: -15 });
-        score -= 15;
-      } else if (daysSinceOutbound > 7) {
-        factors.push({ label: "Slow reply (>7d)", points: -10 });
-        score -= 10;
-      }
-    }
-  } else if (lead.last_outbound_at && !lead.last_inbound_at) {
-    const daysSinceOutbound = differenceInDays(new Date(), parseISO(lead.last_outbound_at));
-    if (daysSinceOutbound > 10) {
-      factors.push({ label: "No reply after 10d", points: -15 });
-      score -= 15;
-    }
-  }
-
-  // Risk flags (-5 each, max -15)
-  const riskPenalty = Math.min(risks.length * 5, 15);
-  if (riskPenalty > 0) {
-    factors.push({ label: `${risks.length} risk flag${risks.length > 1 ? "s" : ""}`, points: -riskPenalty });
-    score -= riskPenalty;
-  }
-
-  // Stage bonus
-  if (stage === "closing") {
-    factors.push({ label: "Closing stage", points: 10 });
-    score += 10;
-  }
-
-  return { total: Math.max(0, Math.min(100, score)), factors };
-}
-
 export default function LeadDetailHeader({ lead, isConnected, isDeleting, onDelete, onUpdate, onSyncComplete }: LeadDetailHeaderProps) {
   const sourceType = (lead.source_type as SourceType) || "manual_entry";
   const motion = (lead.motion as Motion) || "outbound_prospecting";
@@ -180,11 +67,7 @@ export default function LeadDetailHeader({ lead, isConnected, isDeleting, onDele
   const phase = getDisplayPhase(stage, motion);
   const origin = getOriginCategory(sourceType);
   const automation = getAutomationStatus(lead);
-  const momentum = getMomentum(lead);
-  const closingPowerData = calculateClosingPower(lead);
-  const closingPower = closingPowerData.total;
   const AutoIcon = automation.icon;
-  const MomentumIcon = momentum.icon;
 
   return (
     <div className="space-y-4">
@@ -261,76 +144,31 @@ export default function LeadDetailHeader({ lead, isConnected, isDeleting, onDele
           </div>
         </div>
 
-        {/* CENTER — State */}
-        <div className="flex flex-col items-center justify-center space-y-3 border-x border-border px-4">
-          {/* Phase — large */}
-          <div className="text-center">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Phase</span>
-            <div className="text-lg font-bold text-foreground">{phase}</div>
+        {/* CENTER — State (compact inline) */}
+        <div className="flex flex-col items-center justify-center space-y-2 border-x border-border px-4">
+          {/* Phase — primary */}
+          <div className="text-lg font-bold text-foreground">{phase}</div>
+          {/* Inline context: Motion · Strategy */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className={cn(
+              "px-2 py-0.5 rounded-md inline-flex items-center gap-1 font-medium",
+              MOTION_COLORS[motion]?.bg, MOTION_COLORS[motion]?.text,
+            )}>
+              {MOTION_ICONS[motion]} {MOTION_LABELS[motion]}
+            </span>
+            <span className="text-border">·</span>
+            <span>{lead.strategy === "fast" ? "⚡ Fast" : "🌱 Nurture"}</span>
           </div>
-          {/* Motion badge */}
-          <span className={cn(
-            "text-xs px-2.5 py-1 rounded-md inline-flex items-center gap-1.5 font-medium",
-            MOTION_COLORS[motion]?.bg, MOTION_COLORS[motion]?.text,
-          )}>
-            <span>{MOTION_ICONS[motion]}</span>
-            {MOTION_LABELS[motion]}
-          </span>
-          {/* Cadence step */}
-          {lead.next_action_label && (
-            <div className="text-center">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Next Step</span>
-              <p className="text-xs font-medium text-foreground">{lead.next_action_label}</p>
-            </div>
+          {/* Action badge */}
+          {lead.needs_action && (
+            <Badge variant="default" className="text-xs">⚡ Action Required</Badge>
           )}
-          {/* Needs action */}
-          <Badge variant={lead.needs_action ? "default" : "secondary"} className="text-xs">
-            {lead.needs_action ? "⚡ Action Required" : "No Action"}
-          </Badge>
-          {/* Internal stage */}
-          <span className="text-[10px] text-muted-foreground">stage: {stage}</span>
+          {/* Internal stage — subtle */}
+          <span className="text-[10px] text-muted-foreground/60">stage: {stage}</span>
         </div>
 
-        {/* RIGHT — Metrics */}
+        {/* RIGHT — Quick Metrics */}
         <div className="flex flex-col items-end justify-center space-y-3">
-          {/* Closing Power Score with gauge */}
-          <div className="text-right">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Closing Power</span>
-            <div className="flex items-center gap-2 justify-end mt-1">
-              {/* Mini gauge bar */}
-              <div className="w-20 h-2 rounded-full bg-muted overflow-hidden">
-                <div
-                  className={cn("h-full rounded-full transition-all duration-500",
-                    closingPower >= 60 ? "bg-emerald-500" : closingPower >= 30 ? "bg-amber-500" : "bg-red-500"
-                  )}
-                  style={{ width: `${closingPower}%` }}
-                />
-              </div>
-              <span className={cn("text-xl font-bold tabular-nums",
-                closingPower >= 60 ? "text-emerald-600 dark:text-emerald-400" : closingPower >= 30 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"
-              )}>
-                {closingPower}
-              </span>
-            </div>
-            {/* Top contributing factors */}
-            <div className="flex flex-wrap gap-1 justify-end mt-1">
-              {closingPowerData.factors.slice(0, 3).map((f, i) => (
-                <span key={i} className={cn("text-[10px] px-1.5 py-0.5 rounded",
-                  f.points > 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
-                )}>
-                  {f.points > 0 ? "+" : ""}{f.points} {f.label}
-                </span>
-              ))}
-            </div>
-          </div>
-          {/* Momentum */}
-          <div className="text-right">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Momentum</span>
-            <div className={cn("flex items-center gap-1 justify-end text-sm font-medium", momentum.color)}>
-              <MomentumIcon className="h-3.5 w-3.5" />
-              {momentum.label}
-            </div>
-          </div>
           {/* Automation status */}
           <div className="text-right">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Automation</span>
@@ -341,13 +179,23 @@ export default function LeadDetailHeader({ lead, isConnected, isDeleting, onDele
           </div>
           {/* Deal outlook */}
           {lead.deal_outlook && (
-            <Badge className={cn("text-xs",
-              lead.deal_outlook === "positive" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
-              lead.deal_outlook === "negative" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" :
-              "bg-secondary text-secondary-foreground"
-            )}>
-              {lead.deal_outlook}
-            </Badge>
+            <div className="text-right">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Outlook</span>
+              <Badge className={cn("text-xs mt-0.5",
+                lead.deal_outlook === "positive" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
+                lead.deal_outlook === "negative" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" :
+                "bg-secondary text-secondary-foreground"
+              )}>
+                {lead.deal_outlook}
+              </Badge>
+            </div>
+          )}
+          {/* Next action label */}
+          {lead.next_action_label && (
+            <div className="text-right">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Next</span>
+              <p className="text-xs font-medium text-foreground mt-0.5">{lead.next_action_label}</p>
+            </div>
           )}
         </div>
       </div>
