@@ -117,9 +117,12 @@ export type Database = {
           message_window_end: string | null
           message_window_start: string | null
           model_used: string | null
+          recommended_reply_channel: string | null
           sentiment: string | null
+          summary_short: string | null
           summary_text: string | null
           topics: string[] | null
+          urgency: string | null
           workspace_id: string
         }
         Insert: {
@@ -132,9 +135,12 @@ export type Database = {
           message_window_end?: string | null
           message_window_start?: string | null
           model_used?: string | null
+          recommended_reply_channel?: string | null
           sentiment?: string | null
+          summary_short?: string | null
           summary_text?: string | null
           topics?: string[] | null
+          urgency?: string | null
           workspace_id: string
         }
         Update: {
@@ -147,9 +153,12 @@ export type Database = {
           message_window_end?: string | null
           message_window_start?: string | null
           model_used?: string | null
+          recommended_reply_channel?: string | null
           sentiment?: string | null
+          summary_short?: string | null
           summary_text?: string | null
           topics?: string[] | null
+          urgency?: string | null
           workspace_id?: string
         }
         Relationships: [
