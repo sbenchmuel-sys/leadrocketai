@@ -73,7 +73,7 @@ const LINKEDIN_INTENT_LABELS: Record<LinkedInIntent, string> = {
 const WHATSAPP_INTENT_LABELS: Record<WhatsAppIntent, string> = {
   quick_follow_up: "Quick Follow-up",
   meeting_reminder: "Meeting Reminder",
-  short_answer: "Short Answer",
+  short_answer: "Soft Nudge",
 };
 
 const CHAR_LIMITS: Partial<Record<ComposerIntent, number>> = {
@@ -451,6 +451,13 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
             />
           </div>
 
+          {/* WhatsApp helper hint */}
+          {channel === "whatsapp" && (
+            <p className="text-xs text-muted-foreground italic px-1">
+              💬 WhatsApp works best for short follow-ups and conversational nudges.
+            </p>
+          )}
+
           {/* Generate Button */}
           <Button onClick={handleGenerate} disabled={isGenerating} className="w-full">
             {isGenerating ? (
@@ -579,7 +586,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                       });
                       // 2. Run sequence engine — same as email
                       const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
-                      await updateSequenceState(lead.id, intentUsed);
+                      await updateSequenceState(lead.id, intentUsed, null, null, "whatsapp");
                       toast.success("WhatsApp message logged & sequence updated");
                       setGeneratedContent("");
                       onUpdate();
