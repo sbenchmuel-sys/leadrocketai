@@ -15,7 +15,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2 } from "lucide-react";
+import { ArrowLeft, Mail, Briefcase, Phone, Building2, Globe, MessageSquare, Trash2, ArrowUpRight, Activity } from "lucide-react";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
@@ -115,6 +115,18 @@ export default function LeadDetail() {
             <h1 className="text-2xl font-bold text-foreground">{lead.name}</h1>
             <Badge variant="outline">{lead.strategy}</Badge>
             <Badge variant="secondary">{lead.status}</Badge>
+            {(lead as any).source_type && (lead as any).source_type !== "manual_entry" && (
+              <Badge variant="outline" className="text-xs">
+                <ArrowUpRight className="h-3 w-3 mr-1" />
+                {(lead as any).source_type?.replace(/_/g, ' ')}
+              </Badge>
+            )}
+            {(lead as any).motion && (
+              <Badge variant="outline" className="text-xs">
+                <Activity className="h-3 w-3 mr-1" />
+                {(lead as any).motion?.replace(/_/g, ' ')}
+              </Badge>
+            )}
             {lead.deal_outlook && (
               <Badge className={getOutlookColor(lead.deal_outlook)}>
                 {lead.deal_outlook}

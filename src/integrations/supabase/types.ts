@@ -249,6 +249,7 @@ export type Database = {
           meeting_summary_count: number
           milestones_json: Json | null
           mode_changed_at: string | null
+          motion: string
           name: string
           needs_action: boolean
           next_action_key: string | null
@@ -263,6 +264,7 @@ export type Database = {
           pref_email_drafts: boolean
           pref_linkedin_drafts: boolean
           risks_json: Json | null
+          source_type: string
           stage: string
           status: string
           strategy: string
@@ -294,6 +296,7 @@ export type Database = {
           meeting_summary_count?: number
           milestones_json?: Json | null
           mode_changed_at?: string | null
+          motion?: string
           name: string
           needs_action?: boolean
           next_action_key?: string | null
@@ -308,6 +311,7 @@ export type Database = {
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null
+          source_type?: string
           stage?: string
           status?: string
           strategy: string
@@ -339,6 +343,7 @@ export type Database = {
           meeting_summary_count?: number
           milestones_json?: Json | null
           mode_changed_at?: string | null
+          motion?: string
           name?: string
           needs_action?: boolean
           next_action_key?: string | null
@@ -353,6 +358,7 @@ export type Database = {
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
           risks_json?: Json | null
+          source_type?: string
           stage?: string
           status?: string
           strategy?: string

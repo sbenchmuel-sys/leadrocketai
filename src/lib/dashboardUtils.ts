@@ -3,7 +3,7 @@
 import type { LeadListItem } from "./supabaseQueries";
 import { differenceInDays, subDays, parseISO } from "date-fns";
 
-// Deal flow stages
+// Deal flow stages (internal)
 export type DealStage = "new" | "contacted" | "engaged" | "post_meeting" | "closing" | "closed_won" | "closed_lost";
 
 export const STAGE_LABELS: Record<DealStage, string> = {
@@ -19,6 +19,65 @@ export const STAGE_LABELS: Record<DealStage, string> = {
 // Only show these stages in the flow bar (exclude closed states)
 export const STAGE_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_meeting", "closing"];
 
+// ============================================
+// SOURCE TYPE & MOTION
+// ============================================
+
+export type SourceType = "outbound_prospecting" | "contact_form" | "gmail_inbound" | "event_lead" | "referral" | "csv_import" | "manual_entry";
+
+export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
+  outbound_prospecting: "Outbound",
+  contact_form: "Contact Form",
+  gmail_inbound: "Inbound Email",
+  event_lead: "Event",
+  referral: "Referral",
+  csv_import: "CSV Import",
+  manual_entry: "Manual",
+};
+
+export type Motion = "outbound_prospecting" | "inbound_response" | "pre_meeting" | "post_meeting" | "closing" | "nurture" | "closed";
+
+export const MOTION_LABELS: Record<Motion, string> = {
+  outbound_prospecting: "Outbound",
+  inbound_response: "Inbound",
+  pre_meeting: "Pre-Meeting",
+  post_meeting: "Post-Meeting",
+  closing: "Closing",
+  nurture: "Nurture",
+  closed: "Closed",
+};
+
+// ============================================
+// DISPLAY PHASE MAPPER (visual layer only)
+// ============================================
+
+export type DisplayPhase = "Prospecting" | "Engaged" | "Post-Meeting" | "Closing" | "Nurture" | "Closed";
+
+export function getDisplayPhase(stage: DealStage, motion?: Motion): DisplayPhase {
+  // If motion is nurture, always show Nurture
+  if (motion === "nurture") return "Nurture";
+  if (motion === "closed") return "Closed";
+
+  switch (stage) {
+    case "new":
+    case "contacted":
+      return "Prospecting";
+    case "engaged":
+      return "Engaged";
+    case "post_meeting":
+      return "Post-Meeting";
+    case "closing":
+      return "Closing";
+    case "closed_won":
+    case "closed_lost":
+      return "Closed";
+    default:
+      return "Prospecting";
+  }
+}
+
+export const DISPLAY_PHASE_ORDER: DisplayPhase[] = ["Prospecting", "Engaged", "Post-Meeting", "Closing", "Nurture", "Closed"];
+
 // Stage progression order for momentum calculation
 const STAGE_PROGRESSION_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won"];
 
@@ -31,6 +90,9 @@ export interface EnrichedLead extends LeadListItem {
   last_outbound_at: string | null;
   last_inbound_at?: string | null;
   first_outbound_at?: string | null;
+  source_type: SourceType;
+  motion: Motion;
+  displayPhase: DisplayPhase;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
@@ -43,10 +105,15 @@ export function enrichLead(lead: LeadListItem & {
   last_outbound_at?: string | null;
   last_inbound_at?: string | null;
   first_outbound_at?: string | null;
+  source_type?: string;
+  motion?: string;
 }): EnrichedLead {
+  const stage = (lead.stage as DealStage) || "new";
+  const sourceType = (lead.source_type as SourceType) || "manual_entry";
+  const motion = (lead.motion as Motion) || "outbound_prospecting";
   return {
     ...lead,
-    stage: (lead.stage as DealStage) || "new",
+    stage,
     needs_action: lead.needs_action || false,
     next_action_key: lead.next_action_key || null,
     next_action_label: lead.next_action_label || null,
@@ -54,6 +121,9 @@ export function enrichLead(lead: LeadListItem & {
     last_outbound_at: lead.last_outbound_at || null,
     last_inbound_at: lead.last_inbound_at || null,
     first_outbound_at: lead.first_outbound_at || null,
+    source_type: sourceType,
+    motion,
+    displayPhase: getDisplayPhase(stage, motion),
   };
 }
 
