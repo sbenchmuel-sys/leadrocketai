@@ -53,6 +53,7 @@ import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 import { generateDraft } from "@/lib/generateDraft";
+import { contextResolver } from "@/lib/contextResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 
 // ============================================
@@ -275,6 +276,29 @@ export function EmailActionDialog({
     if (open && profilesLoaded) {
       setTo(lead.email);
       setInstructions(initialInstructions);
+
+      // Log resolved context when Composer opens
+      contextResolver(lead.id).then((ctx) => {
+        console.log("[Composer] Resolved context on open:", {
+          source_type: ctx.source_type,
+          motion: ctx.motion,
+          sequence_type: ctx.sequence_type,
+          sequence_step: ctx.sequence_step,
+          sequence_status: ctx.sequence_status,
+          last_outbound_email: ctx.last_outbound_email ? { subject: ctx.last_outbound_email.subject, date: ctx.last_outbound_email.occurred_at } : null,
+          last_inbound_email: ctx.last_inbound_email ? { subject: ctx.last_inbound_email.subject, date: ctx.last_inbound_email.occurred_at } : null,
+          last_meeting_summary: ctx.last_meeting_summary ? { title: ctx.last_meeting_summary.title, date: ctx.last_meeting_summary.meeting_date } : null,
+          buying_signals: ctx.buying_signals,
+          risk_signals: ctx.risk_signals,
+          engagement_level: ctx.engagement_level,
+          closing_power: ctx.closing_power,
+          kb_slices: {
+            company: ctx.company_kb ? "present" : "none",
+            industry: ctx.industry_kb ? "present" : "none",
+            persona_docs: ctx.persona_kb.length,
+          },
+        });
+      }).catch((err) => console.error("[Composer] Context resolve failed:", err));
       
       if (prefilledSubject || prefilledBody) {
         setSubject(prefilledSubject || "");
