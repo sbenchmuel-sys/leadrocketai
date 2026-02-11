@@ -16,7 +16,11 @@ export interface PlaybookRecommendation {
 // RESOLVER (priority-ordered rules)
 // ============================================
 
-export function playbookResolver(ctx: ResolvedContext): PlaybookRecommendation {
+export function playbookResolver(ctx: ResolvedContext, channel: "email" | "linkedin" | "whatsapp" = "email"): PlaybookRecommendation {
+  // WhatsApp uses a separate micro-playbook — light conversational cadence
+  if (channel === "whatsapp") {
+    return whatsappMicroPlaybook(ctx);
+  }
   // Rule 1: Meeting exists and recap not sent
   if (ctx.meeting_packs.length > 0 && ctx.has_unsent_recap) {
     return {
@@ -178,5 +182,77 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
     recommended_intent: "pre_email_2_followup",
     recommended_playbook: "Outbound Prospecting",
     next_sequence_step: "Follow-up",
+  };
+}
+
+// ============================================
+// WHATSAPP MICRO-PLAYBOOK (light conversational cadence)
+// ============================================
+
+function whatsappMicroPlaybook(ctx: ResolvedContext): PlaybookRecommendation {
+  const motion = ctx.motion;
+
+  // Post-meeting WhatsApp
+  if (motion === "post_meeting" || ctx.meeting_packs.length > 0) {
+    if (ctx.has_unsent_recap) {
+      return {
+        recommended_intent: "whatsapp_message" as AITaskType,
+        recommended_playbook: "WhatsApp · Post-Meeting",
+        next_sequence_step: "Meeting Reminder",
+      };
+    }
+    return {
+      recommended_intent: "whatsapp_message" as AITaskType,
+      recommended_playbook: "WhatsApp · Post-Meeting",
+      next_sequence_step: "Quick Check-in",
+    };
+  }
+
+  // Nurture WhatsApp — light touches only
+  if (motion === "nurture") {
+    const step = ctx.nurture_outbound_count + 1;
+    const NURTURE_WA_STEPS = ["Short Insight", "Soft Reconnect"];
+    const stepLabel = NURTURE_WA_STEPS[(step - 1) % NURTURE_WA_STEPS.length];
+    return {
+      recommended_intent: "whatsapp_message" as AITaskType,
+      recommended_playbook: "WhatsApp · Nurture Light",
+      next_sequence_step: stepLabel,
+    };
+  }
+
+  // Inbound reply exists — reply context
+  if (ctx.last_inbound_email && (!ctx.last_outbound_email ||
+    new Date(ctx.last_inbound_email.occurred_at).getTime() > new Date(ctx.last_outbound_email.occurred_at).getTime())) {
+    return {
+      recommended_intent: "whatsapp_message" as AITaskType,
+      recommended_playbook: "WhatsApp · Reply",
+      next_sequence_step: "Quick Follow-up",
+    };
+  }
+
+  // Closing motion
+  if (motion === "closing") {
+    return {
+      recommended_intent: "whatsapp_message" as AITaskType,
+      recommended_playbook: "WhatsApp · Closing",
+      next_sequence_step: "Light Reminder",
+    };
+  }
+
+  // Default outbound WhatsApp — 3-step micro-sequence
+  // Step 1: WhatsApp Intro, Step 2: Quick Follow-up, Step 3: Light Nudge, then Pause
+  const outboundCount = ctx.thread_emails.filter(e => e.direction === "outbound").length;
+  const WA_OUTBOUND_STEPS = ["WhatsApp Intro", "Quick Follow-up", "Light Nudge"];
+  if (outboundCount >= WA_OUTBOUND_STEPS.length) {
+    return {
+      recommended_intent: "whatsapp_message" as AITaskType,
+      recommended_playbook: "WhatsApp · Outbound",
+      next_sequence_step: "Pause — sequence complete",
+    };
+  }
+  return {
+    recommended_intent: "whatsapp_message" as AITaskType,
+    recommended_playbook: "WhatsApp · Outbound",
+    next_sequence_step: WA_OUTBOUND_STEPS[outboundCount] || "Quick Follow-up",
   };
 }

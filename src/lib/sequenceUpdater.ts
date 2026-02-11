@@ -96,19 +96,31 @@ export async function updateSequenceState(
   leadId: string,
   intentUsed: AITaskType,
   recommendedIntent?: AITaskType | null,
-  overrideIntent?: AITaskType | null
+  overrideIntent?: AITaskType | null,
+  channel: "email" | "linkedin" | "whatsapp" = "email"
 ): Promise<SequenceUpdateResult> {
-  console.log("[updateSequenceState] Updating for lead", leadId, "intent:", intentUsed);
+  console.log("[updateSequenceState] Updating for lead", leadId, "intent:", intentUsed, "channel:", channel);
 
   // Step 1: Get field updates based on intent
   const fieldUpdates = getFieldUpdatesForIntent(intentUsed);
 
   // Build update payload
+  // WhatsApp sends should NOT advance email sequence steps (next_action_key stays unchanged)
+  // but they DO influence motion, stage, and activity timestamps
   const updatePayload: Record<string, unknown> = {
     last_outbound_at: new Date().toISOString(),
     last_activity_at: new Date().toISOString(),
-    ...fieldUpdates,
   };
+
+  if (channel === "whatsapp") {
+    // WhatsApp: only update motion/stage, NOT email sequence fields
+    if (fieldUpdates.motion) updatePayload.motion = fieldUpdates.motion;
+    if (fieldUpdates.stage) updatePayload.stage = fieldUpdates.stage;
+    updatePayload.needs_action = false;
+    // Do NOT touch next_action_key or next_action_label — email sequence stays independent
+  } else {
+    Object.assign(updatePayload, fieldUpdates);
+  }
 
   // Set first_outbound_at if this is the first outbound
   if (intentUsed === "pre_email_1_intro") {

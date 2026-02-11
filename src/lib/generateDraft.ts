@@ -48,8 +48,8 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     (resolvedContext as any).motion = motion_override;
   }
 
-  // Step 2: Determine playbook
-  const playbook = playbookResolver(resolvedContext);
+  // Step 2: Determine playbook (channel-aware)
+  const playbook = playbookResolver(resolvedContext, channel);
 
   // Step 3: Apply override intent if provided
   const finalIntent = override_intent || playbook.recommended_intent;
