@@ -1,10 +1,10 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { format, parseISO, differenceInDays } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  Calendar, Target, AlertTriangle, CheckCircle2, ArrowRight,
-  Zap, TrendingUp, TrendingDown, Minus, ShieldAlert, ChevronDown,
+  Calendar, AlertTriangle, CheckCircle2, ArrowRight,
+  Zap, TrendingUp, TrendingDown, ShieldAlert, ChevronDown,
   Pause, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,75 +44,6 @@ const BUYING_SIGNAL_KEYWORDS = [
   { match: /poc|proof.?of.?concept|pilot|trial/i, label: "POC / trial requested" },
 ];
 
-// Closing Power Score
-const SIGNAL_PATTERNS = {
-  pricing: /pric|cost|quote|proposal/i,
-  decision_maker: /decision.?maker|dm\b|c-level|ceo|cfo|cto|vp\b|director/i,
-  docs_requested: /proposal|contract|agreement|sow\b|scope|nda/i,
-};
-
-interface ScoreBreakdown {
-  total: number;
-  factors: { label: string; points: number }[];
-}
-
-function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
-  const factors: { label: string; points: number }[] = [];
-  let score = 10;
-  const stage = lead.stage as DealStage;
-  const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
-  const risks: Risk[] = lead.risks_json ? (lead.risks_json as unknown as Risk[]) : [];
-  const allText = milestones.map(m => m.description).join(" ");
-
-  if (lead.has_future_meeting || stage === "post_meeting" || stage === "closing") {
-    factors.push({ label: "Meeting booked", points: 20 }); score += 20;
-  }
-  if (SIGNAL_PATTERNS.pricing.test(allText) || lead.deal_outlook === "positive") {
-    factors.push({ label: "Pricing mentioned", points: 15 }); score += 15;
-  }
-  if (SIGNAL_PATTERNS.decision_maker.test(allText)) {
-    factors.push({ label: "Decision maker involved", points: 15 }); score += 15;
-  }
-  if (SIGNAL_PATTERNS.docs_requested.test(allText)) {
-    factors.push({ label: "Docs requested", points: 10 }); score += 10;
-  }
-  if (lead.last_inbound_at && lead.last_outbound_at) {
-    const inbound = parseISO(lead.last_inbound_at).getTime();
-    const outbound = parseISO(lead.last_outbound_at).getTime();
-    const replyGapHours = Math.abs(inbound - outbound) / (1000 * 60 * 60);
-    if (inbound > outbound && replyGapHours < 24) {
-      factors.push({ label: "Fast reply (<24h)", points: 10 }); score += 10;
-    } else if (inbound < outbound) {
-      const d = differenceInDays(new Date(), parseISO(lead.last_outbound_at));
-      if (d > 10) { factors.push({ label: "No reply after 10d", points: -15 }); score -= 15; }
-      else if (d > 7) { factors.push({ label: "Slow reply (>7d)", points: -10 }); score -= 10; }
-    }
-  } else if (lead.last_outbound_at && !lead.last_inbound_at) {
-    const d = differenceInDays(new Date(), parseISO(lead.last_outbound_at));
-    if (d > 10) { factors.push({ label: "No reply after 10d", points: -15 }); score -= 15; }
-  }
-  const riskPenalty = Math.min(risks.length * 5, 15);
-  if (riskPenalty > 0) {
-    factors.push({ label: `${risks.length} risk flag${risks.length > 1 ? "s" : ""}`, points: -riskPenalty }); score -= riskPenalty;
-  }
-  if (stage === "closing") {
-    factors.push({ label: "Closing stage", points: 10 }); score += 10;
-  }
-  return { total: Math.max(0, Math.min(100, score)), factors };
-}
-
-function getMomentum(lead: LeadDetail): { label: string; icon: typeof TrendingUp; color: string } {
-  if (!lead.last_activity_at) return { label: "Stalled", icon: TrendingDown, color: "text-red-600 dark:text-red-400" };
-  const daysSinceActivity = differenceInDays(new Date(), parseISO(lead.last_activity_at));
-  const hasRecentInbound = lead.last_inbound_at && differenceInDays(new Date(), parseISO(lead.last_inbound_at)) <= 3;
-  const stage = lead.stage as DealStage;
-  if (hasRecentInbound || (daysSinceActivity <= 2 && (stage === "closing" || stage === "post_meeting"))) {
-    return { label: "Rising", icon: TrendingUp, color: "text-emerald-600 dark:text-emerald-400" };
-  }
-  if (daysSinceActivity <= 5) return { label: "Stable", icon: Minus, color: "text-muted-foreground" };
-  return { label: "Stalled", icon: TrendingDown, color: "text-red-600 dark:text-red-400" };
-}
-
 function detectBuyingSignals(milestones: Milestone[]): string[] {
   const signals: string[] = [];
   const allText = milestones.map(m => m.description).join(" ");
@@ -136,29 +67,22 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
   const buyingSignals = detectBuyingSignals(milestones);
   const signalCount = buyingSignals.length + risks.length;
 
-  const closingPower = useMemo(() => calculateClosingPower(lead), [lead]);
-  const momentum = useMemo(() => getMomentum(lead), [lead]);
-  const MomentumIcon = momentum.icon;
-
   // Auto-collapse logic
   const automationMotionAllowed = motion === "outbound_prospecting" || motion === "nurture";
   const hasAutomation = automationMotionAllowed && stage !== "closed_won" && stage !== "closed_lost";
   const automationPaused = hasAutomation && (!!lead.last_inbound_at || lead.has_future_meeting);
 
-  const needsAction = lead.needs_action && !!lead.next_step;
   const isPostMeeting = motion === "post_meeting" || stage === "post_meeting";
 
   // Section open states
   const [automationOpen, setAutomationOpen] = useState(!automationPaused && hasAutomation);
-  const [actionOpen, setActionOpen] = useState(!!needsAction);
   const [meetingOpen, setMeetingOpen] = useState(isPostMeeting);
   const [signalsOpen, setSignalsOpen] = useState(false);
 
   useEffect(() => {
     setAutomationOpen(!automationPaused && hasAutomation);
-    setActionOpen(!!needsAction);
     setMeetingOpen(isPostMeeting);
-  }, [lead.id, automationPaused, hasAutomation, needsAction, isPostMeeting]);
+  }, [lead.id, automationPaused, hasAutomation, isPostMeeting]);
 
   useEffect(() => {
     const load = async () => {
@@ -187,75 +111,8 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
     load();
   }, [lead.id]);
 
-  // Determine section order based on priority
-  const showAction = needsAction && lead.next_step && !(recapAlreadySent && /recap|post.?meeting/i.test(lead.next_step || ""));
-
   return (
     <div className="space-y-3 sticky top-4">
-      {/* 1. CLOSING POWER — Always Expanded */}
-      <div className="space-y-2 py-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Closing Power</span>
-          <div className={cn("flex items-center gap-1.5 text-sm font-medium", momentum.color)}>
-            <MomentumIcon className="h-3.5 w-3.5" />
-            <span className="text-xs">{momentum.label}</span>
-          </div>
-        </div>
-        {/* Score bar */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
-            <div
-              className={cn("h-full rounded-full transition-all duration-500",
-                closingPower.total >= 60 ? "bg-emerald-500" : closingPower.total >= 30 ? "bg-amber-500" : "bg-red-500"
-              )}
-              style={{ width: `${closingPower.total}%` }}
-            />
-          </div>
-          <span className={cn("text-2xl font-bold tabular-nums leading-none",
-            closingPower.total >= 60 ? "text-emerald-600 dark:text-emerald-400" : closingPower.total >= 30 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"
-          )}>
-            {closingPower.total}
-          </span>
-        </div>
-        {/* Micro-text score breakdown */}
-        <div className="space-y-0.5">
-          {closingPower.factors.map((f, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <span className={cn("font-medium tabular-nums",
-                f.points > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-              )}>
-                {f.points > 0 ? "+" : ""}{f.points}
-              </span>
-              <span>{f.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <Separator className="bg-border/40" />
-
-      {/* 2/3. RECOMMENDED ACTION — auto-promotes above automation when needs_action */}
-      {showAction && (
-        <>
-          <Collapsible open={actionOpen} onOpenChange={setActionOpen}>
-            <CollapsibleTrigger className="flex items-center justify-between w-full py-2 group">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-                <Zap className="h-3 w-3 text-primary" /> Recommended Action
-              </span>
-              <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", actionOpen && "rotate-180")} />
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="pb-3">
-                <p className="text-sm font-medium text-foreground leading-snug">{lead.next_step}</p>
-                {lead.next_step_reason && (
-                  <p className="text-xs text-muted-foreground mt-1">{lead.next_step_reason}</p>
-                )}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-          <Separator className="bg-border/40" />
-        </>
-      )}
 
       {/* AUTOMATION — expanded if active, collapsed if paused, hidden if N/A */}
       {hasAutomation && (
