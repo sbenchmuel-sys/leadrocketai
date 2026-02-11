@@ -14,7 +14,7 @@ interface Risk {
   level: "low" | "medium" | "high";
 }
 
-const SIGNAL_PATTERNS = {
+export const SIGNAL_PATTERNS = {
   pricing: /pric|cost|quote|proposal/i,
   decision_maker: /decision.?maker|dm\b|c-level|ceo|cfo|cto|vp\b|director/i,
   docs_requested: /proposal|contract|agreement|sow\b|scope|nda/i,

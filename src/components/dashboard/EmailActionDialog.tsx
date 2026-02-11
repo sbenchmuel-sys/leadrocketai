@@ -52,6 +52,7 @@ import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowl
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
+import { generateDraft } from "@/lib/generateDraft";
 
 // Minimal lead interface for this dialog
 interface MinimalLead {
@@ -355,6 +356,25 @@ Calendar Link: ${repProfile.calendar_link || ''}
     setReplyToMessageId(null);
 
     try {
+      // === NEW PIPELINE: run alongside legacy for verification ===
+      try {
+        const pipelineResult = await generateDraft({
+          lead_id: lead.id,
+          channel: "email",
+          instructions: instructions.trim() || null,
+          motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
+        });
+        const effectiveActionKeyForLog = actionKey || lead.next_action_key || null;
+        const legacyTaskType = getAITaskForAction(effectiveActionKeyForLog, pipelineResult.resolved_context.thread_emails.length > 0);
+        console.log("[generateDraft] Actual (legacy):", {
+          actionKey: effectiveActionKeyForLog,
+          taskType: legacyTaskType,
+        });
+      } catch (pipelineErr) {
+        console.warn("[generateDraft] Pipeline error (non-blocking):", pipelineErr);
+      }
+      // === END NEW PIPELINE ===
+
       // Fetch full email thread
       const { emails, threadSummary } = await getLeadEmailThread(lead.id, 10);
       setThreadEmails(emails);
