@@ -53,6 +53,7 @@ import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 import { generateDraft } from "@/lib/generateDraft";
+import { updateSequenceState } from "@/lib/sequenceUpdater";
 
 // Minimal lead interface for this dialog
 interface MinimalLead {
@@ -618,6 +619,18 @@ Calendar Link: ${repProfile.calendar_link || ''}
     );
     if (result.ok) {
       await applyMotionOverride();
+      
+      // Phase 3: Update sequence state after successful send
+      try {
+        const effectiveActionKeyForSeq = actionKey || lead.next_action_key || null;
+        const hasThreadForSeq = threadEmails.length > 0;
+        const intentUsed = getAITaskForAction(effectiveActionKeyForSeq, hasThreadForSeq);
+        await updateSequenceState(lead.id, intentUsed);
+        console.log("[EmailActionDialog] Sequence state updated after send");
+      } catch (seqErr) {
+        console.warn("[EmailActionDialog] Sequence update failed (non-blocking):", seqErr);
+      }
+
       onOpenChange(false);
       toast.success("Email sent successfully!");
       onSuccess?.();
@@ -671,6 +684,16 @@ Calendar Link: ${repProfile.calendar_link || ''}
     window.open(gmailUrl, '_blank');
     
     await applyMotionOverride();
+
+    // Phase 3: Update sequence state after Gmail compose
+    try {
+      const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0);
+      await updateSequenceState(lead.id, intentUsed);
+      console.log("[EmailActionDialog] Sequence state updated after Gmail compose");
+    } catch (seqErr) {
+      console.warn("[EmailActionDialog] Sequence update failed (non-blocking):", seqErr);
+    }
+
     toast.success("Opening Gmail compose...");
     onOpenChange(false);
     onSuccess?.();
