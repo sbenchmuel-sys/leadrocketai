@@ -81,7 +81,6 @@ export default function LeadDetailHeader({
   const momentum = useMemo(() => getMomentum(lead), [lead]);
   const MomentumIcon = momentum.icon;
 
-  const strategyLabel = lead.strategy === "fast" ? "Fast Strategy" : "Nurture Strategy";
   const originLabel = origin === "inbound" ? "Inbound" : "Outbound";
 
   return (
@@ -145,8 +144,6 @@ export default function LeadDetailHeader({
             {phase}
           </span>
           <span className="text-border">·</span>
-          <span>{strategyLabel}</span>
-          <span className="text-border">·</span>
           <span>{originLabel}</span>
           <span className="text-border">·</span>
           <span className={cn("font-medium", automation.color)}>
@@ -189,8 +186,6 @@ export default function LeadDetailHeader({
         )}>
           {phase}
         </span>
-        <span className="text-border">·</span>
-        <span>{strategyLabel}</span>
         <span className="text-border">·</span>
         <span className={cn("font-medium", automation.color)}>
           {automation.label}

@@ -263,9 +263,14 @@ export async function updateSequenceState(
       } else {
         const nextStep = getNextOutboundStep(intentUsed);
         if (nextStep) {
-          const FAST_INTERVALS = [2, 3, 3, 4];
+          // Motion-based intervals: use cumulative offsets
+          const { getMotionIntervals } = await import("@/lib/cadenceSettingsTypes");
+          const intervals = getMotionIntervals(freshLead.motion || "outbound_prospecting");
           const stepIdx = parseInt(nextStep.replace("send_pre_", ""), 10) - 1;
-          const daysUntil = FAST_INTERVALS[stepIdx] || 3;
+          // Convert cumulative offsets to gap: intervals[stepIdx] - intervals[stepIdx-1]
+          const daysUntil = stepIdx > 0 && stepIdx < intervals.length
+            ? intervals[stepIdx] - intervals[stepIdx - 1]
+            : intervals[1] || 2;
           const eligibleAt = addDays(new Date(), daysUntil);
           eligibleAt.setHours(9, 30, 0, 0);
 

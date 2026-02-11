@@ -94,11 +94,10 @@ export function getOriginCategory(sourceType: SourceType): OriginCategory {
   }
 }
 
-// Source presets: auto-assign motion + strategy based on source selection
+// Source presets: auto-assign motion based on source selection
 export interface SourcePreset {
   source_type: SourceType;
   motion: Motion;
-  strategy: "fast" | "nurture";
   origin: OriginCategory;
 }
 
@@ -106,31 +105,26 @@ export const SOURCE_PRESETS: Record<string, SourcePreset> = {
   outbound: {
     source_type: "outbound_prospecting",
     motion: "outbound_prospecting",
-    strategy: "fast",
     origin: "outbound",
   },
   inbound_website: {
     source_type: "contact_form",
     motion: "inbound_response",
-    strategy: "fast",
     origin: "inbound",
   },
   event: {
     source_type: "event_lead",
     motion: "outbound_prospecting",
-    strategy: "fast",
     origin: "outbound",
   },
   referral: {
     source_type: "referral",
     motion: "inbound_response",
-    strategy: "fast",
     origin: "inbound",
   },
   other: {
     source_type: "manual_entry",
     motion: "outbound_prospecting",
-    strategy: "fast",
     origin: "outbound",
   },
 };
@@ -246,8 +240,8 @@ export function getActionType(actionKey: string | null): "reply" | "follow_up" |
  */
 export function getNurtureCandidates(leads: EnrichedLead[]): EnrichedLead[] {
   return leads.filter((lead) => {
-    // Must be in fast strategy
-    if ((lead as any).strategy !== "fast") {
+    // Must be in outbound or inbound motion (not already nurture)
+    if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response") {
       return false;
     }
     

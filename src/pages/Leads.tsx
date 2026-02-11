@@ -53,7 +53,6 @@ export default function Leads() {
     name: "",
     company: "",
     email: "",
-    strategy: "fast",
     source_type: "manual_entry",
   });
 
@@ -204,7 +203,7 @@ export default function Leads() {
       await createLead(newLead);
       toast.success("Lead created!");
       setIsAddOpen(false);
-      setNewLead({ name: "", company: "", email: "", strategy: "fast", source_type: "manual_entry" });
+      setNewLead({ name: "", company: "", email: "", source_type: "manual_entry" });
       loadLeads();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create lead");
@@ -279,23 +278,6 @@ export default function Leads() {
                   placeholder="john@acme.com"
                   required
                 />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="strategy">Strategy</Label>
-                <Select
-                  value={newLead.strategy}
-                  onValueChange={(value: "fast" | "nurture") =>
-                    setNewLead({ ...newLead, strategy: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fast">Fast</SelectItem>
-                    <SelectItem value="nurture">Nurture</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="source_type">Source</Label>
@@ -444,7 +426,7 @@ export default function Leads() {
                       <TableCell className="text-muted-foreground">{lead.country || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{lead.company}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{lead.strategy}</Badge>
+                        <Badge variant="outline">{(lead as any).motion?.replace(/_/g, ' ') || "outbound"}</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{lead.status}</Badge>

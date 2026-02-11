@@ -127,7 +127,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
         owner_user_id: user.id,
         source_type: preset.source_type,
         motion: preset.motion,
-        strategy: preset.strategy,
+        strategy: 'fast' as const, // kept for DB compatibility
         last_activity_at: new Date().toISOString(),
       }));
 
@@ -345,8 +345,8 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Strategy</span>
-                  <span className="font-medium text-foreground capitalize">{preset.strategy}</span>
+                  <span className="text-muted-foreground">Motion</span>
+                  <span className="font-medium text-foreground capitalize">{preset.motion.replace(/_/g, ' ')}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Motion</span>

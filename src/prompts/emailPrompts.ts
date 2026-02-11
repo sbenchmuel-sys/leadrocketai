@@ -170,9 +170,13 @@ export interface PostMeetingRecapOutput {
   customer_email: CustomerEmail;
 }
 
-// Helper to select intro email prompt based on strategy
-export function getIntroEmailPrompt(strategy: 'fast' | 'nurture'): string {
-  return strategy === 'fast' ? EMAIL_INTRO_FAST_PROMPT : EMAIL_INTRO_NURTURE_PROMPT;
+// Helper to select intro email prompt based on motion
+export function getIntroEmailPrompt(motion: string): string {
+  // Inbound/nurture motions use the nurture-style intro; outbound uses fast
+  if (motion === "nurture" || motion === "inbound_response") {
+    return EMAIL_INTRO_NURTURE_PROMPT;
+  }
+  return EMAIL_INTRO_FAST_PROMPT;
 }
 
 // ============================================

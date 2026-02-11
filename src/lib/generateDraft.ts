@@ -43,7 +43,7 @@ function buildLeadContext(ctx: ResolvedContext): string {
     `Name: ${lead.name}`,
     `Company: ${lead.company}`,
     `Email: ${lead.email}`,
-    `Strategy: ${lead.strategy || "not set"}`,
+    `Motion: ${(lead as any).motion || "outbound_prospecting"}`,
     `Stage: ${lead.stage}`,
     lead.job_title ? `Title: ${lead.job_title}` : "",
     lead.industry ? `Industry: ${lead.industry}` : "",

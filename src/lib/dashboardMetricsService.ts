@@ -50,7 +50,7 @@ export interface DashboardMetrics {
 // ============================================
 
 const DASHBOARD_LEAD_COLUMNS = `
-  id, company, name, email, strategy, status, owner_user_id,
+  id, company, name, email, status, owner_user_id,
   created_at, last_activity_at, next_step, deal_outlook, country,
   stage, needs_action, next_action_key, next_action_label, action_reason_code,
   meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
@@ -103,7 +103,8 @@ function deriveNurtureCandidates(leads: EnrichedLead[]): EnrichedLead[] {
   const now = new Date();
 
   return leads.filter((lead) => {
-    if ((lead as any).strategy !== "fast") return false;
+    // Must be in outbound or inbound motion (not already nurture)
+    if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response") return false;
     if (lead.stage === "closed_won" || lead.stage === "closed_lost" || lead.stage === "closing") return false;
     if (!lead.first_outbound_at) return false;
     if (lead.last_inbound_at) return false;

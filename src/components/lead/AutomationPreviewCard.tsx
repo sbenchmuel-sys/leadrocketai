@@ -10,6 +10,7 @@ import { format, addDays } from "date-fns";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { getMotionIntervals } from "@/lib/cadenceSettingsTypes";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
@@ -24,11 +25,28 @@ const OUTBOUND_STEP_LABELS: Record<string, string> = {
   send_pre_4: "Breakup Email",
 };
 
-// Intervals in days for fast strategy
-const FAST_INTERVALS = [2, 3, 3, 4];
+const INBOUND_STEP_LABELS: Record<string, string> = {
+  send_pre_1: "Intro Reply",
+  send_pre_2: "Follow-up 1",
+  send_pre_3: "Follow-up 2",
+};
+
+function getStepLabels(motion: string): Record<string, string> {
+  if (motion === "inbound_response") return INBOUND_STEP_LABELS;
+  return OUTBOUND_STEP_LABELS;
+}
+
+function getMaxSteps(motion: string): number {
+  const intervals = getMotionIntervals(motion);
+  return intervals.length;
+}
 
 function getNextTwoSteps(lead: LeadDetail) {
-  // Determine current step from next_action_key or infer from outbound count
+  const motion = lead.motion || "outbound_prospecting";
+  const intervals = getMotionIntervals(motion);
+  const stepLabels = getStepLabels(motion);
+  const maxSteps = intervals.length;
+
   const actionKey = lead.next_action_key || "send_pre_1";
   const stepMatch = actionKey.match(/send_pre_(\d)/);
   const stepNum = stepMatch ? parseInt(stepMatch[1], 10) : 1;
@@ -38,11 +56,12 @@ function getNextTwoSteps(lead: LeadDetail) {
 
   for (let i = 0; i < 2; i++) {
     const idx = stepNum - 1 + i;
-    if (idx >= 4) break;
+    if (idx >= maxSteps) break;
     const key = `send_pre_${idx + 1}`;
-    const label = OUTBOUND_STEP_LABELS[key] || `Step ${idx + 1}`;
-    const daysOffset = FAST_INTERVALS.slice(0, idx + 1).reduce((a, b) => a + b, 0);
-    const date = addDays(baseDate, i === 0 ? 0 : daysOffset);
+    const label = stepLabels[key] || `Step ${idx + 1}`;
+    // intervals are cumulative offsets; gap from previous step
+    const gapDays = idx > 0 ? intervals[idx] - intervals[idx - 1] : 0;
+    const date = addDays(baseDate, i === 0 ? 0 : gapDays);
     date.setHours(9, 30, 0, 0);
     steps.push({ key, label, date });
   }
@@ -55,7 +74,7 @@ function getAutomationBlockers(lead: LeadDetail): string[] {
   const blockers: string[] = [];
   if (lead.last_inbound_at) blockers.push("Lead has replied");
   if (lead.has_future_meeting) blockers.push("Meeting scheduled");
-  if (lead.motion !== "outbound_prospecting") blockers.push("Motion changed");
+  if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response") blockers.push("Motion changed");
   const stage = lead.stage;
   if (stage === "closed_won" || stage === "closed_lost") blockers.push("Deal closed");
   return blockers;
@@ -73,8 +92,11 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const isPaused = blockers.length > 0;
   const steps = useMemo(() => getNextTwoSteps(lead), [lead]);
 
-  // Only show for outbound_prospecting motion, non-closed stages
-  const isEligible = motion === "outbound_prospecting" &&
+  const intervals = getMotionIntervals(motion || "outbound_prospecting");
+  const stepLabels = getStepLabels(motion || "outbound_prospecting");
+
+  // Only show for outbound/inbound motion, non-closed stages
+  const isEligible = (motion === "outbound_prospecting" || motion === "inbound_response") &&
     stage !== "closed_won" && stage !== "closed_lost";
 
   if (!isEligible) return null;
@@ -99,10 +121,11 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           onClick={async () => {
             setIsEnabling(true);
             try {
-              // Determine next step
               const nextKey = lead.next_action_key || "send_pre_2";
-              const nextLabel = OUTBOUND_STEP_LABELS[nextKey] || "Follow-up";
-              const eligibleAt = addDays(new Date(), FAST_INTERVALS[0]);
+              const nextLabel = stepLabels[nextKey] || "Follow-up";
+              // Use gap between step 1 and 2 from intervals
+              const gapDays = intervals.length > 1 ? intervals[1] - intervals[0] : 2;
+              const eligibleAt = addDays(new Date(), gapDays);
               eligibleAt.setHours(9, 30, 0, 0);
 
               await supabase
@@ -201,15 +224,15 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           setIsPausing(true);
           try {
             if (isPaused) {
-              // Resume — re-check safety first
               const freshBlockers = getAutomationBlockers(lead);
               if (freshBlockers.length > 0) {
                 toast.error(`Cannot resume: ${freshBlockers[0]}`);
                 return;
               }
               const nextKey = lead.next_action_key || "send_pre_2";
-              const nextLabel = OUTBOUND_STEP_LABELS[nextKey] || "Follow-up";
-              const eligibleAt = addDays(new Date(), FAST_INTERVALS[0]);
+              const nextLabel = stepLabels[nextKey] || "Follow-up";
+              const gapDays = intervals.length > 1 ? intervals[1] - intervals[0] : 2;
+              const eligibleAt = addDays(new Date(), gapDays);
               eligibleAt.setHours(9, 30, 0, 0);
 
               await supabase
@@ -223,7 +246,6 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 .eq("id", lead.id);
               toast.success("Automation resumed");
             } else {
-              // Pause
               await supabase
                 .from("leads")
                 .update({
