@@ -65,7 +65,13 @@ Deno.serve(async (req) => {
         .eq("id", convo.contact_id)
         .maybeSingle();
 
-      const prompt = `You are a B2B sales assistant. Generate exactly 3 reply suggestions in different tones for a sales conversation.
+      const recChannel = analysis.recommended_reply_channel ?? convo.channel;
+
+      const channelGuidance = recChannel === "whatsapp"
+        ? `Channel: WhatsApp\nFORMAT RULES:\n- Conversational, friendly tone\n- Keep messages SHORT (2-4 sentences max)\n- No subject line\n- Use natural language, avoid corporate jargon\n- OK to use line breaks for readability`
+        : `Channel: Email\nFORMAT RULES:\n- Include a subject line (prefix with "Subject: ")\n- Professional, structured formatting\n- Use paragraphs and proper greeting/sign-off\n- Clear call-to-action`;
+
+      const prompt = `You are a B2B sales assistant. Generate exactly 3 reply drafts for a sales conversation. These are DRAFTS ONLY — they will NOT be sent automatically. The rep will review and edit before sending.
 
 Context:
 - Contact: ${contact?.display_name ?? "Unknown"} at ${contact?.company ?? "Unknown"}
@@ -73,21 +79,21 @@ Context:
 - Sentiment: ${analysis.sentiment ?? "neutral"}
 - Urgency: ${analysis.urgency ?? "medium"}
 - Topics: ${(analysis.topics ?? []).join(", ")}
-- Channel: ${convo.channel}
+- ${channelGuidance}
 
-Generate 3 replies:
-1. Professional & direct
-2. Warm & consultative  
-3. Brief & action-oriented
+Generate 3 drafts with these EXACT styles:
+1. "direct" — Short & direct. Get to the point fast. Minimal fluff.
+2. "consultative" — Warm & consultative. Ask questions, show empathy, position as advisor.
+3. "assertive" — Assertive but professional. Confident, creates urgency without being pushy.
 
 Return a JSON object with this exact structure:
 {
   "replies": [
-    {"style": "professional", "text": "..."},
+    {"style": "direct", "text": "..."},
     {"style": "consultative", "text": "..."},
-    {"style": "brief", "text": "..."}
+    {"style": "assertive", "text": "..."}
   ],
-  "recommended_channel": "${analysis.recommended_reply_channel ?? convo.channel}"
+  "recommended_channel": "${recChannel}"
 }`;
 
       try {
