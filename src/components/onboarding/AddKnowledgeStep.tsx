@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { setOnboardingStep } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, ArrowLeft, Upload, FileText, Keyboard } from "lucide-react";
+import { Loader2, ArrowLeft, Upload, FileText, Keyboard, X, CheckCircle2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AddKnowledgeStepProps {
@@ -17,6 +17,11 @@ interface AddKnowledgeStepProps {
 
 type InputMode = "choose" | "manual" | "upload";
 
+interface UploadedDoc {
+  name: string;
+  chunks: number;
+}
+
 export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<InputMode>("choose");
@@ -25,7 +30,8 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
     content: "",
     customerFacing: true,
   });
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -58,9 +64,12 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Reset input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = "";
 
     const validTypes = [
       "application/pdf",
@@ -77,26 +86,21 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
       return;
     }
 
-    setUploadedFile(file);
-  };
-
-  const handleFileUpload = async () => {
-    if (!uploadedFile) return;
-
-    setIsLoading(true);
+    // Upload immediately
+    setIsUploading(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
       if (!accessToken) throw new Error("You must be logged in");
 
-      const formData = new FormData();
-      formData.append("file", uploadedFile);
+      const fd = new FormData();
+      fd.append("file", file);
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const parseResponse = await fetch(`${supabaseUrl}/functions/v1/parse-document`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
-        body: formData,
+        body: fd,
       });
 
       if (!parseResponse.ok) {
@@ -110,8 +114,8 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
       const { data: processData, error: processError } = await supabase.functions.invoke("process-knowledge-document", {
         body: {
           text: parseData.text,
-          title: parseData.title || uploadedFile.name.replace(/\.(pdf|docx)$/i, ""),
-          source: uploadedFile.name,
+          title: parseData.title || file.name.replace(/\.(pdf|docx)$/i, ""),
+          source: file.name,
           allowed_customer_facing: true,
         },
       });
@@ -119,12 +123,23 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
       if (processError) throw processError;
       if (!processData.ok) throw new Error(processData.error || "Failed to process document");
 
-      await setOnboardingStep(3);
-      toast.success(`Document processed: ${processData.chunks_created} chunks created`);
-      onNext();
+      setUploadedDocs((prev) => [...prev, { name: file.name, chunks: processData.chunks_created }]);
+      toast.success(`"${file.name}" processed (${processData.chunks_created} chunks)`);
     } catch (err: any) {
       console.error("Upload error:", err);
       toast.error(err.message || "Failed to process document");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleContinue = async () => {
+    setIsLoading(true);
+    try {
+      await setOnboardingStep(3);
+      onNext();
+    } catch (err) {
+      console.error("Failed to advance:", err);
     } finally {
       setIsLoading(false);
     }
@@ -151,6 +166,10 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
     }
   };
 
+  const removeDoc = (index: number) => {
+    setUploadedDocs((prev) => prev.filter((_, i) => i !== index));
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-2 text-center">
@@ -165,16 +184,13 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => {
-                setMode("upload");
-                setTimeout(() => fileInputRef.current?.click(), 100);
-              }}
+              onClick={() => setMode("upload")}
               className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-border bg-card hover:border-primary/50 hover:bg-accent/50 transition-all cursor-pointer"
             >
               <Upload className="h-8 w-8 text-muted-foreground" />
               <div className="text-center">
-                <p className="font-medium text-foreground text-sm">Upload a file</p>
-                <p className="text-xs text-muted-foreground mt-1">PDF or Word doc</p>
+                <p className="font-medium text-foreground text-sm">Upload files</p>
+                <p className="text-xs text-muted-foreground mt-1">PDF or Word docs</p>
               </div>
             </button>
             <button
@@ -228,42 +244,84 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
             className="hidden"
           />
 
+          {/* Uploaded documents list */}
+          {uploadedDocs.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Uploaded documents
+              </p>
+              <div className="space-y-1.5">
+                {uploadedDocs.map((doc, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/60 border border-border"
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="text-sm text-foreground truncate flex-1">{doc.name}</span>
+                    <span className="text-[11px] text-muted-foreground shrink-0">{doc.chunks} chunks</span>
+                    <button
+                      type="button"
+                      onClick={() => removeDoc(i)}
+                      className="text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Upload area */}
           <div
             className={cn(
-              "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
-              uploadedFile ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+              "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
+              isUploading ? "border-primary/50 bg-primary/5 pointer-events-none" : "border-border hover:border-primary/50"
             )}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => !isUploading && fileInputRef.current?.click()}
           >
-            {uploadedFile ? (
+            {isUploading ? (
               <div className="flex flex-col items-center gap-2">
-                <FileText className="h-10 w-10 text-primary" />
-                <p className="text-sm font-medium text-foreground">{uploadedFile.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {(uploadedFile.size / 1024).toFixed(0)} KB — click to change
-                </p>
+                <Loader2 className="h-8 w-8 text-primary animate-spin" />
+                <p className="text-sm text-muted-foreground">Processing document...</p>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-2">
-                <Upload className="h-10 w-10 text-muted-foreground" />
-                <p className="text-sm font-medium text-foreground">Click to select a file</p>
-                <p className="text-xs text-muted-foreground">PDF or DOCX, up to 6MB</p>
+                {uploadedDocs.length > 0 ? (
+                  <>
+                    <Plus className="h-8 w-8 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">Add another document</p>
+                    <p className="text-xs text-muted-foreground">PDF or DOCX, up to 6MB</p>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-8 w-8 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">Click to select a file</p>
+                    <p className="text-xs text-muted-foreground">PDF or DOCX, up to 6MB</p>
+                  </>
+                )}
               </div>
             )}
           </div>
 
           <div className="flex gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => { setMode("choose"); setUploadedFile(null); }} disabled={isLoading}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => { setMode("choose"); setUploadedDocs([]); }}
+              disabled={isLoading || isUploading}
+            >
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
             </Button>
             <Button
               className="flex-1"
-              onClick={handleFileUpload}
-              disabled={isLoading || !uploadedFile}
+              onClick={handleContinue}
+              disabled={isLoading || isUploading || uploadedDocs.length === 0}
             >
               {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Upload & Continue
+              Continue
             </Button>
           </div>
         </>
