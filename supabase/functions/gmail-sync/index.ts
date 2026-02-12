@@ -1001,9 +1001,6 @@ serve(async (req) => {
         const headers = message.payload.headers;
         const threadId = message.threadId;
         
-        // Lock this thread to this lead
-        lockedThreadIds.add(threadId);
-        
         // Safety check: never attach a message to a lead unless the headers actually include the lead email
         if (!messageInvolvesLead(headers, leadEmailNorm)) {
           console.warn(
@@ -1018,8 +1015,12 @@ serve(async (req) => {
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-        // Determine direction based on whether from contains lead email
-        const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
+        // Lock this thread to this lead ONLY after confirming message involves the lead
+        lockedThreadIds.add(threadId);
+
+        // Determine direction based on whether from contains lead email (exact match)
+        const fromEmails = extractEmailAddresses(from);
+        const isFromLead = fromEmails.some(e => e === leadEmailNorm.toLowerCase());
         const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
         
@@ -1090,7 +1091,8 @@ serve(async (req) => {
           const date = getHeader(headers, "Date");
           const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-          const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
+          const threadFromEmails = extractEmailAddresses(from);
+          const isFromLead = threadFromEmails.some(e => e === leadEmailNorm.toLowerCase());
           const direction = isFromLead ? "inbound" : "outbound";
           const type = isFromLead ? "email_inbound" : "email_outbound";
           
