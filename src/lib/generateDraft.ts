@@ -64,36 +64,55 @@ function buildRepContext(ctx: ResolvedContext): string {
   ].filter(Boolean).join("\n");
 }
 
+const MAX_CONTEXT_CHARS = 1200;
+
+/** Sanitize a value to a plain string — strips raw JSON objects/arrays */
+function sanitizeValue(v: any): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.replace(/\s+/g, ' ').trim();
+  if (typeof v === 'object') {
+    // Convert simple {text:"..."} to its text, otherwise skip
+    if ('text' in v && typeof v.text === 'string') return v.text.trim();
+    return ''; // drop raw JSON
+  }
+  return String(v).trim();
+}
+
+function trimBlock(text: string, max: number = MAX_CONTEXT_CHARS): string {
+  // collapse excessive whitespace / blank lines
+  const cleaned = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
+  return cleaned.length > max ? cleaned.slice(0, max - 3) + '...' : cleaned;
+}
+
 function formatIndustryContext(industryKb: any): string {
   if (!industryKb || typeof industryKb !== 'object') return '';
   const lines: string[] = ['=== INDUSTRY CONTEXT ==='];
   const seen = new Set<string>();
   const addLine = (line: string) => {
-    const trimmed = line.trim();
+    const trimmed = line.replace(/\s+/g, ' ').trim();
     if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
   };
-  if (industryKb.industry_label) addLine(`Industry: ${industryKb.industry_label}`);
+  if (industryKb.industry_label) addLine(`Industry: ${sanitizeValue(industryKb.industry_label)}`);
   if (Array.isArray(industryKb.typical_objections) && industryKb.typical_objections.length > 0) {
     addLine('Typical Objections:');
-    industryKb.typical_objections.slice(0, 5).forEach((o: string) => addLine(`- ${o}`));
+    industryKb.typical_objections.slice(0, 5).forEach((o: any) => { const s = sanitizeValue(o); if (s) addLine(`- ${s}`); });
   }
   if (Array.isArray(industryKb.buying_signals) && industryKb.buying_signals.length > 0) {
     addLine('Buying Signals:');
-    industryKb.buying_signals.slice(0, 5).forEach((s: string) => addLine(`- ${s}`));
+    industryKb.buying_signals.slice(0, 5).forEach((s: any) => { const v = sanitizeValue(s); if (v) addLine(`- ${v}`); });
   }
   if (Array.isArray(industryKb.red_flags) && industryKb.red_flags.length > 0) {
     addLine('Red Flags:');
-    industryKb.red_flags.slice(0, 5).forEach((f: string) => addLine(`- ${f}`));
+    industryKb.red_flags.slice(0, 5).forEach((f: any) => { const v = sanitizeValue(f); if (v) addLine(`- ${v}`); });
   }
   if (Array.isArray(industryKb.jargon) && industryKb.jargon.length > 0) {
-    addLine(`Jargon: ${industryKb.jargon.slice(0, 8).join(', ')}`);
+    addLine(`Jargon: ${industryKb.jargon.slice(0, 8).map(sanitizeValue).filter(Boolean).join(', ')}`);
   }
   if (Array.isArray(industryKb.email_intents) && industryKb.email_intents.length > 0) {
     addLine('Suggested Email Intents:');
-    industryKb.email_intents.slice(0, 4).forEach((i: string) => addLine(`- ${i}`));
+    industryKb.email_intents.slice(0, 4).forEach((i: any) => { const v = sanitizeValue(i); if (v) addLine(`- ${v}`); });
   }
-  const result = lines.join('\n');
-  return result.length > 1000 ? result.slice(0, 997) + '...' : result;
+  return trimBlock(lines.join('\n'));
 }
 
 function formatCompanyKbContext(companyKb: any): string {
@@ -101,28 +120,27 @@ function formatCompanyKbContext(companyKb: any): string {
   const lines: string[] = ['=== COMPANY KB ==='];
   const seen = new Set<string>();
   const addLine = (line: string) => {
-    const trimmed = line.trim();
+    const trimmed = line.replace(/\s+/g, ' ').trim();
     if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
   };
-  if (companyKb.company_name) addLine(`Company: ${companyKb.company_name}`);
-  if (companyKb.product_name) addLine(`Product: ${companyKb.product_name}`);
+  if (companyKb.company_name) addLine(`Company: ${sanitizeValue(companyKb.company_name)}`);
+  if (companyKb.product_name) addLine(`Product: ${sanitizeValue(companyKb.product_name)}`);
   if (Array.isArray(companyKb.differentiators) && companyKb.differentiators.length > 0) {
     addLine('Differentiators:');
-    companyKb.differentiators.slice(0, 5).forEach((d: any) => addLine(`- ${typeof d === 'string' ? d : d.text || ''}`));
+    companyKb.differentiators.slice(0, 5).forEach((d: any) => { const v = sanitizeValue(d); if (v) addLine(`- ${v}`); });
   }
   if (Array.isArray(companyKb.target_customers) && companyKb.target_customers.length > 0) {
     addLine('Target Customers:');
-    companyKb.target_customers.slice(0, 5).forEach((t: any) => addLine(`- ${typeof t === 'string' ? t : t.text || ''}`));
+    companyKb.target_customers.slice(0, 5).forEach((t: any) => { const v = sanitizeValue(t); if (v) addLine(`- ${v}`); });
   }
   if (Array.isArray(companyKb.proof_points) && companyKb.proof_points.length > 0) {
     addLine('Proof Points:');
-    companyKb.proof_points.slice(0, 5).forEach((p: any) => addLine(`- ${typeof p === 'string' ? p : p.text || ''}`));
+    companyKb.proof_points.slice(0, 5).forEach((p: any) => { const v = sanitizeValue(p); if (v) addLine(`- ${v}`); });
   }
   if (Array.isArray(companyKb.competitors) && companyKb.competitors.length > 0) {
-    addLine(`Competitors: ${companyKb.competitors.slice(0, 5).join(', ')}`);
+    addLine(`Competitors: ${companyKb.competitors.slice(0, 5).map(sanitizeValue).filter(Boolean).join(', ')}`);
   }
-  const result = lines.join('\n');
-  return result.length > 1000 ? result.slice(0, 997) + '...' : result;
+  return trimBlock(lines.join('\n'));
 }
 
 function buildAIPayload(
