@@ -164,6 +164,7 @@ export interface CreateLeadInput {
   company: string;
   email: string;
   source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry';
+  motion?: string;
 }
 
 export async function createLead(form: CreateLeadInput): Promise<{ id: string }> {
@@ -176,6 +177,7 @@ export async function createLead(form: CreateLeadInput): Promise<{ id: string }>
     company: form.company?.trim(),
     email: form.email?.trim().toLowerCase(),
     strategy: 'fast' as const, // kept for DB column compatibility, no longer used for logic
+    motion: form.motion || 'outbound_prospecting',
     source_type: form.source_type || 'manual_entry',
     owner_user_id: user.id,
     last_activity_at: new Date().toISOString(),
