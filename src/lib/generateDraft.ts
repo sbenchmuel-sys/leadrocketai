@@ -232,6 +232,25 @@ CTA:
 - Propose a specific next action (meeting, call, details).
 `;
 
+const NURTURE_MOTION_BLOCK = `
+=== MOTION: NURTURE ===
+Objective:
+Maintain relevance without pressure.
+
+Structure:
+- Brief value insight.
+- Reference prior context if available.
+- Soft, optional CTA.
+
+Length:
+- 60–120 words.
+
+Avoid:
+- Urgency
+- Aggressive closing
+- Heavy explanation
+`;
+
 const REPLY_PATTERNS_BLOCK = `
 === REPLY OPTIMIZATION PATTERNS ===
 Rotate one of these CTA patterns per email to maximize reply probability:
@@ -298,6 +317,7 @@ function buildAIPayload(
   // Inbound response motion block
   const motion = (ctx.lead as any).motion || "outbound_prospecting";
   const inboundBlock = motion === "inbound_response" ? INBOUND_RESPONSE_BLOCK : "";
+  const nurtureBlock = motion === "nurture" ? NURTURE_MOTION_BLOCK : "";
 
   // Breakup email enhancement
   const breakupCloser = isBreakupEmail(taskType) ? (BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales) : "";
@@ -343,7 +363,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     industry_context: industryContext,
     company_kb_context: companyKbContext,
-    playbook_context: [playbookContext, coldOutreachBlock, inboundBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
+    playbook_context: [playbookContext, coldOutreachBlock, inboundBlock, nurtureBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
