@@ -145,27 +145,33 @@ function formatCompanyKbContext(companyKb: any): string {
 
 // Cold outreach style blocks — injected for outbound first-touch emails
 const COLD_OUTREACH_STYLE_BLOCK = `
-=== COLD OUTREACH STYLE: HIGH REPLY RATE MODE ===
-Structure:
-- 3-6 sentences max
-- 1 idea per paragraph
-- No large blocks of text
-- No attachments in first email
-Opening:
-- Personalized observation OR relevant trigger OR specific problem hypothesis
-Core:
-- One clear outcome
-- One short proof point (metric, client, example)
-- No feature list
-CTA:
-- Micro-commitment only
-- Yes/No question OR "Worth a quick look?" OR "Open to a short conversation?"
+=== MOTION: OUTBOUND FIRST TOUCH ===
+Objective:
+Trigger a reply. Not to close. Not to fully explain the product.
+
+Structure Constraints:
+- Maximum 90 words.
+- Maximum 5 short paragraphs.
+- One clear idea.
+- One CTA only.
+- No feature lists.
+- No attachments.
+- No calendar links in first email.
+
+KB Usage:
+- Use knowledge only to align positioning.
+- Do NOT include case studies or metrics unless highly specific to the prospect.
+
+CTA Requirements:
+- Use a low-friction micro-commitment question.
+- Make replying easy.
+
 Avoid:
 - Long intros, company history, multiple CTAs
-- Calendar links in first email
 - Generic "just checking in"
+
 Psychology:
-- Reduce pressure, make reply easy, signal relevance, leave room for correction
+- Reduce pressure, signal relevance, leave room for correction
 `;
 
 const COLD_OUTREACH_SAAS_BLOCK = `
