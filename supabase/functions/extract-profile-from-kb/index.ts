@@ -195,8 +195,7 @@ Extract the following company/product info:
     "meeting_timezone": {"value": "string|null", "confidence": 0.0}
   }
 }
-Existing workspace data (do NOT overwrite if already set):
-${existingWsProfile ? `company_name: ${existingWsProfile.company_name || 'empty'}, product_name: ${existingWsProfile.product_name || 'empty'}, product_description: ${existingWsProfile.product_description || 'empty'}` : 'No existing profile'}`);
+IMPORTANT: Extract values ONLY from the Knowledge Base Documents below. Ignore any "existing" data — always replace with what the current KB documents say. If the KB documents mention a company name, product, or value props, use those even if different values were previously stored.`);
   }
 
   if (target === "all" || target === "rep_profile") {
@@ -215,8 +214,7 @@ Extract the sales representative's personal info from emails (signatures, from f
     "office_address": {"value": "string|null", "confidence": 0.0}
   }
 }
-Existing rep data (do NOT overwrite if already set):
-${existingRepProfile ? `full_name: ${(existingRepProfile as any).full_name || 'empty'}, email: ${(existingRepProfile as any).email || 'empty'}, phone: ${(existingRepProfile as any).phone || 'empty'}, job_title: ${(existingRepProfile as any).job_title || 'empty'}` : 'No existing profile'}`);
+Extract from KB documents and emails. Always use what the current documents say, replacing any previously stored values.`);
   }
 
   if (target === "all" || target === "signatures") {
