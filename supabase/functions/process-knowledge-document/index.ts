@@ -71,8 +71,20 @@ serve(async (req) => {
 
     const { text, title, source, allowed_customer_facing = true, lead_id = null } = await req.json();
 
-    if (!text || typeof text !== "string") {
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
       return new Response(JSON.stringify({ ok: false, error: "Missing or invalid text" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // If the extracted text is too short (likely a scanned/image-based PDF), warn the user
+    if (text.trim().length < 50) {
+      console.warn(`[process-knowledge-document] Very short text (${text.trim().length} chars) - likely a scanned/image PDF`);
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: "The document appears to contain very little extractable text. It may be a scanned or image-based PDF. Please try uploading a text-based document instead." 
+      }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
