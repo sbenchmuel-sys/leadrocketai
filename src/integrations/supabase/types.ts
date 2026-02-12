@@ -977,6 +977,7 @@ export type Database = {
           id: string
           industry: string | null
           industry_pack: Json
+          industry_playbook_id: string | null
           messaging_constraints: Json
           primary_goal: string | null
           updated_at: string
@@ -992,6 +993,7 @@ export type Database = {
           id?: string
           industry?: string | null
           industry_pack?: Json
+          industry_playbook_id?: string | null
           messaging_constraints?: Json
           primary_goal?: string | null
           updated_at?: string
@@ -1007,6 +1009,7 @@ export type Database = {
           id?: string
           industry?: string | null
           industry_pack?: Json
+          industry_playbook_id?: string | null
           messaging_constraints?: Json
           primary_goal?: string | null
           updated_at?: string
@@ -1242,6 +1245,7 @@ export type Database = {
           id: string
           industry: string | null
           industry_pack: Json
+          industry_playbook_id: string | null
           meeting_timezone: string | null
           pricing_policy: string
           primary_goal: string | null
@@ -1262,6 +1266,7 @@ export type Database = {
           id?: string
           industry?: string | null
           industry_pack?: Json
+          industry_playbook_id?: string | null
           meeting_timezone?: string | null
           pricing_policy?: string
           primary_goal?: string | null
@@ -1282,6 +1287,7 @@ export type Database = {
           id?: string
           industry?: string | null
           industry_pack?: Json
+          industry_playbook_id?: string | null
           meeting_timezone?: string | null
           pricing_policy?: string
           primary_goal?: string | null
