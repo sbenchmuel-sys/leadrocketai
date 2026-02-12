@@ -18,7 +18,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
     name: "",
     company: "",
     email: "",
-    strategy: "nurture" as "fast" | "nurture",
+    motion: "outbound_prospecting" as string,
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,7 +31,12 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
 
     setIsLoading(true);
     try {
-      await createLead(formData);
+      await createLead({
+        name: formData.name,
+        company: formData.company,
+        email: formData.email,
+        motion: formData.motion,
+      });
       await setOnboardingStep(2);
       toast.success("Lead created successfully!");
       onNext();
@@ -88,25 +93,32 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         </div>
 
         <div className="space-y-3">
-          <Label>Sales Strategy</Label>
+          <Label>Motion</Label>
           <RadioGroup
-            value={formData.strategy}
-            onValueChange={(value) => setFormData({ ...formData, strategy: value as "fast" | "nurture" })}
+            value={formData.motion}
+            onValueChange={(value) => setFormData({ ...formData, motion: value })}
             disabled={isLoading}
-            className="grid grid-cols-2 gap-4"
+            className="grid grid-cols-3 gap-3"
           >
-            <div className="flex items-start space-x-3 p-4 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer">
-              <RadioGroupItem value="fast" id="fast" className="mt-0.5" />
-              <label htmlFor="fast" className="cursor-pointer">
-                <p className="font-medium text-foreground">Fast</p>
-                <p className="text-sm text-muted-foreground">Quick close, direct approach</p>
+            <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
+              <RadioGroupItem value="outbound_prospecting" id="outbound" />
+              <label htmlFor="outbound" className="cursor-pointer">
+                <p className="font-medium text-foreground text-sm">Outbound</p>
+                <p className="text-xs text-muted-foreground">Cold outreach</p>
               </label>
             </div>
-            <div className="flex items-start space-x-3 p-4 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer">
-              <RadioGroupItem value="nurture" id="nurture" className="mt-0.5" />
+            <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
+              <RadioGroupItem value="inbound_response" id="inbound" />
+              <label htmlFor="inbound" className="cursor-pointer">
+                <p className="font-medium text-foreground text-sm">Inbound</p>
+                <p className="text-xs text-muted-foreground">They reached out</p>
+              </label>
+            </div>
+            <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
+              <RadioGroupItem value="nurture" id="nurture" />
               <label htmlFor="nurture" className="cursor-pointer">
-                <p className="font-medium text-foreground">Nurture</p>
-                <p className="text-sm text-muted-foreground">Build relationship over time</p>
+                <p className="font-medium text-foreground text-sm">Nurture</p>
+                <p className="text-xs text-muted-foreground">Long-term play</p>
               </label>
             </div>
           </RadioGroup>
