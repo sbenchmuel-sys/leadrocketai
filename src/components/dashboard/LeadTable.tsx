@@ -36,6 +36,7 @@ import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loa
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
+import { BulkAutomationDialog } from "./BulkAutomationDialog";
 import { LeadAvatar } from "./LeadAvatar";
 import { ModeDropdown } from "./ModeDropdown";
 import { updateLeadStage, bulkUpdateLeadStage, deleteLead } from "@/lib/supabaseQueries";
@@ -101,6 +102,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
   const navigate = useNavigate();
 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
@@ -498,6 +500,17 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={bulkUpdating || bulkDeleting}
+                  onClick={() => setBulkAutomationOpen(true)}
+                >
+                  <Zap className="h-4 w-4 mr-1" />
+                  Enable Automation
+                </Button>
                 
                 {(bulkUpdating || bulkDeleting) && <Loader2 className="h-4 w-4 animate-spin" />}
               </div>
@@ -677,6 +690,16 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
           onSuccess={onLeadUpdated}
         />
       )}
+
+      <BulkAutomationDialog
+        selectedLeads={leads.filter((l) => selectedLeads.has(l.id))}
+        open={bulkAutomationOpen}
+        onOpenChange={setBulkAutomationOpen}
+        onSuccess={() => {
+          setSelectedLeads(new Set());
+          onLeadUpdated?.();
+        }}
+      />
     </>
   );
 }
