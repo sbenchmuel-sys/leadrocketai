@@ -1,4 +1,6 @@
 // Unified Draft Generator — single entry point for all draft generation
+// Client-side: resolves context, determines intent, sends raw data to edge function
+// All prompt assembly happens server-side in the edge function.
 import { supabase } from "@/integrations/supabase/client";
 import type { AITaskType } from "@/hooks/useAITask";
 import type { Motion } from "@/lib/dashboardUtils";
@@ -6,8 +8,6 @@ import { contextResolver, type ResolvedContext } from "@/lib/contextResolver";
 import { playbookResolver, type PlaybookRecommendation } from "@/lib/playbookResolver";
 import { scoreAndSelectModel, type AIModel } from "@/lib/complexityScorer";
 import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
-import { getPlaybookById } from "@/lib/playbooks/registry";
-import { formatPlaybookContext } from "@/lib/playbooks/formatPlaybookContext";
 
 // ============================================
 // TYPES
@@ -36,7 +36,7 @@ export interface DraftPipelineResult {
 }
 
 // ============================================
-// PROMPT PAYLOAD BUILDER
+// CONTEXT BUILDERS (raw data only, no prompt blocks)
 // ============================================
 
 function buildLeadContext(ctx: ResolvedContext): string {
@@ -64,237 +64,9 @@ function buildRepContext(ctx: ResolvedContext): string {
   ].filter(Boolean).join("\n");
 }
 
-const MAX_CONTEXT_CHARS = 1200;
-
-/** Sanitize a value to a plain string — strips raw JSON objects/arrays */
-function sanitizeValue(v: any): string {
-  if (v == null) return '';
-  if (typeof v === 'string') return v.replace(/\s+/g, ' ').trim();
-  if (typeof v === 'object') {
-    // Convert simple {text:"..."} to its text, otherwise skip
-    if ('text' in v && typeof v.text === 'string') return v.text.trim();
-    return ''; // drop raw JSON
-  }
-  return String(v).trim();
-}
-
-function trimBlock(text: string, max: number = MAX_CONTEXT_CHARS): string {
-  // collapse excessive whitespace / blank lines
-  const cleaned = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
-  return cleaned.length > max ? cleaned.slice(0, max - 3) + '...' : cleaned;
-}
-
-function formatIndustryContext(industryKb: any): string {
-  if (!industryKb || typeof industryKb !== 'object') return '';
-  const lines: string[] = ['=== INDUSTRY CONTEXT ==='];
-  const seen = new Set<string>();
-  const addLine = (line: string) => {
-    const trimmed = line.replace(/\s+/g, ' ').trim();
-    if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
-  };
-  if (industryKb.industry_label) addLine(`Industry: ${sanitizeValue(industryKb.industry_label)}`);
-  if (Array.isArray(industryKb.typical_objections) && industryKb.typical_objections.length > 0) {
-    addLine('Typical Objections:');
-    industryKb.typical_objections.slice(0, 5).forEach((o: any) => { const s = sanitizeValue(o); if (s) addLine(`- ${s}`); });
-  }
-  if (Array.isArray(industryKb.buying_signals) && industryKb.buying_signals.length > 0) {
-    addLine('Buying Signals:');
-    industryKb.buying_signals.slice(0, 5).forEach((s: any) => { const v = sanitizeValue(s); if (v) addLine(`- ${v}`); });
-  }
-  if (Array.isArray(industryKb.red_flags) && industryKb.red_flags.length > 0) {
-    addLine('Red Flags:');
-    industryKb.red_flags.slice(0, 5).forEach((f: any) => { const v = sanitizeValue(f); if (v) addLine(`- ${v}`); });
-  }
-  if (Array.isArray(industryKb.jargon) && industryKb.jargon.length > 0) {
-    addLine(`Jargon: ${industryKb.jargon.slice(0, 8).map(sanitizeValue).filter(Boolean).join(', ')}`);
-  }
-  if (Array.isArray(industryKb.email_intents) && industryKb.email_intents.length > 0) {
-    addLine('Suggested Email Intents:');
-    industryKb.email_intents.slice(0, 4).forEach((i: any) => { const v = sanitizeValue(i); if (v) addLine(`- ${v}`); });
-  }
-  return trimBlock(lines.join('\n'));
-}
-
-function formatCompanyKbContext(companyKb: any): string {
-  if (!companyKb || typeof companyKb !== 'object') return '';
-  const lines: string[] = ['=== COMPANY KB ==='];
-  const seen = new Set<string>();
-  const addLine = (line: string) => {
-    const trimmed = line.replace(/\s+/g, ' ').trim();
-    if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
-  };
-  if (companyKb.company_name) addLine(`Company: ${sanitizeValue(companyKb.company_name)}`);
-  if (companyKb.product_name) addLine(`Product: ${sanitizeValue(companyKb.product_name)}`);
-  if (Array.isArray(companyKb.differentiators) && companyKb.differentiators.length > 0) {
-    addLine('Differentiators:');
-    companyKb.differentiators.slice(0, 5).forEach((d: any) => { const v = sanitizeValue(d); if (v) addLine(`- ${v}`); });
-  }
-  if (Array.isArray(companyKb.target_customers) && companyKb.target_customers.length > 0) {
-    addLine('Target Customers:');
-    companyKb.target_customers.slice(0, 5).forEach((t: any) => { const v = sanitizeValue(t); if (v) addLine(`- ${v}`); });
-  }
-  if (Array.isArray(companyKb.proof_points) && companyKb.proof_points.length > 0) {
-    addLine('Proof Points:');
-    companyKb.proof_points.slice(0, 5).forEach((p: any) => { const v = sanitizeValue(p); if (v) addLine(`- ${v}`); });
-  }
-  if (Array.isArray(companyKb.competitors) && companyKb.competitors.length > 0) {
-    addLine(`Competitors: ${companyKb.competitors.slice(0, 5).map(sanitizeValue).filter(Boolean).join(', ')}`);
-  }
-  return trimBlock(lines.join('\n'));
-}
-
-// Cold outreach style blocks — injected for outbound first-touch emails
-const COLD_OUTREACH_STYLE_BLOCK = `
-=== MOTION: OUTBOUND FIRST TOUCH ===
-Objective:
-Trigger a reply. Not to close. Not to fully explain the product.
-
-Structure Constraints:
-- Maximum 90 words.
-- Maximum 5 short paragraphs.
-- One clear idea.
-- One CTA only.
-- No feature lists.
-- No attachments.
-- No calendar links in first email.
-
-KB Usage:
-- Use knowledge only to align positioning.
-- Do NOT include case studies or metrics unless highly specific to the prospect.
-
-CTA Requirements:
-- Use a low-friction micro-commitment question.
-- Make replying easy.
-
-Avoid:
-- Long intros, company history, multiple CTAs
-- Generic "just checking in"
-
-Psychology:
-- Reduce pressure, signal relevance, leave room for correction
-`;
-
-const COLD_OUTREACH_SAAS_BLOCK = `
-=== OUTBOUND STYLE: STANDARD ===
-Opening:
-- Professional and direct.
-- Brief reason for reaching out.
-- Optional light personalization.
-
-Tone:
-- Clear
-- Confident
-- Business-focused
-
-Avoid:
-- Humor
-- Pattern interrupts
-- Emotional tension framing
-`;
-
-const COLD_OUTREACH_HIGH_REPLY_BLOCK = `
-=== OUTBOUND STYLE: HIGH REPLY ===
-Opening Adjustment:
-- Begin with a short disarming line such as:
-  "Quick one —"
-  OR a focused question.
-  OR a clear problem hypothesis.
-- Prefer question-first structure.
-- Keep opening under 2 short lines.
-- Introduce mild tension around a likely pain point.
-
-Do NOT:
-- Add humor unless clearly appropriate.
-- Use sarcasm.
-- Increase total word count.
-- Change compliance tone.
-`;
-
-const INBOUND_RESPONSE_BLOCK = `
-=== MOTION: INBOUND RESPONSE ===
-Objective:
-Convert interest into a scheduled conversation.
-
-Structure:
-- Acknowledge the context or question directly.
-- Provide one helpful and relevant detail.
-- Offer a clear next step.
-
-Length:
-- Up to 150 words allowed.
-
-Tone:
-- Consultative
-- Helpful
-- Slightly more detailed than outbound
-
-CTA:
-- Propose a specific next action (meeting, call, details).
-`;
-
-const NURTURE_MOTION_BLOCK = `
-=== MOTION: NURTURE ===
-Objective:
-Maintain relevance without pressure.
-
-Structure:
-- Brief value insight.
-- Reference prior context if available.
-- Soft, optional CTA.
-
-Length:
-- 60–120 words.
-
-Avoid:
-- Urgency
-- Aggressive closing
-- Heavy explanation
-`;
-
-const REPLY_PATTERNS_BLOCK = `
-=== REPLY OPTIMIZATION PATTERNS ===
-Rotate one of these CTA patterns per email to maximize reply probability:
-
-Permission-Based: "If this isn't relevant, feel free to say so — I'll close the loop."
-Soft Assumption: "If this is already handled internally, happy to step aside."
-Binary Micro-CTA: "Would you say this is: A) Relevant now B) Worth revisiting later C) Not a priority"
-Curiosity Close: "Worth sharing how we've approached this with similar teams?"
-
-Rules:
-- Use ONE pattern per email, do not stack
-- Match pattern to deal stage (permission-based for breakups, curiosity for early touches)
-- Keep the CTA as the final sentence
-`;
-
-// Playbook-specific breakup closers
-const BREAKUP_CLOSERS: Record<string, string> = {
-  b2b_saas: `Breakup style: "I haven't heard back, so I'll assume this isn't a priority right now. If I'm wrong, happy to reconnect. Either way — appreciate the time."`,
-  general_sales: `Breakup style: "Seems like timing may not be right. Should I close the loop for now?"`,
-};
-
-// Map playbook IDs to specialized outreach blocks (fallback to universal)
-const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
-  b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
-  high_reply: COLD_OUTREACH_HIGH_REPLY_BLOCK,
-};
-
-// Determine if cold outreach style should be injected
-// Only for: outbound_prospecting, no prior replies, first or second touch
-function shouldInjectOutreachStyle(ctx: ResolvedContext, taskType: AITaskType): boolean {
-  const motion = (ctx.lead as any).motion || "outbound_prospecting";
-  if (motion !== "outbound_prospecting") return false;
-  const noInbound = !ctx.last_inbound_email;
-  const isEarlyTouch = taskType === "pre_email_1_intro" || taskType === "email_intro_fast" || taskType === "pre_email_2_followup";
-  return noInbound && isEarlyTouch;
-}
-
-function isBreakupEmail(taskType: AITaskType): boolean {
-  return taskType === "pre_email_4_breakup";
-}
-
-function getColdOutreachBlock(playbookId: string): string {
-  return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
-}
+// ============================================
+// PAYLOAD BUILDER (raw data + metadata flags)
+// ============================================
 
 function buildAIPayload(
   ctx: ResolvedContext,
@@ -302,28 +74,12 @@ function buildAIPayload(
   instructions: string | null
 ): Record<string, unknown> {
   const lead = ctx.lead;
+  const motion = (lead as any).motion || "outbound_prospecting";
 
-  const industryContext = formatIndustryContext(ctx.industry_kb);
-  const companyKbContext = formatCompanyKbContext((ctx.workspace_profile as any)?.company_kb);
-
-  // Resolve playbook
+  // Determine metadata flags for edge function
   const playbookId = (ctx.workspace_profile as any)?.industry_playbook_id || "general_sales";
-  const playbook = getPlaybookById(playbookId);
-  const playbookContext = formatPlaybookContext(playbook);
-
-  // Cold outreach style injection — uses playbook-specific block if available
-  const coldOutreachBlock = shouldInjectOutreachStyle(ctx, taskType) ? getColdOutreachBlock(playbookId) : "";
-
-  // Inbound response motion block
-  const motion = (ctx.lead as any).motion || "outbound_prospecting";
-  const inboundBlock = motion === "inbound_response" ? INBOUND_RESPONSE_BLOCK : "";
-  const nurtureBlock = motion === "nurture" ? NURTURE_MOTION_BLOCK : "";
-
-  // Breakup email enhancement
-  const breakupCloser = isBreakupEmail(taskType) ? (BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales) : "";
-
-  // Reply pattern injection for follow-ups (not first touch, not late-stage)
-  const replyPatterns = (taskType === "pre_email_2_followup" || taskType === "pre_email_3_followup" || taskType === "pre_email_4_breakup") ? REPLY_PATTERNS_BLOCK : "";
+  const isFirstTouch = !ctx.last_outbound_email && !ctx.last_inbound_email;
+  const hasLatestInbound = !!ctx.last_inbound_email;
 
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
@@ -337,10 +93,13 @@ function buildAIPayload(
         (lead as any).personal_notes ? `Notes: ${(lead as any).personal_notes}` : "",
         instructions ? `Instructions: ${instructions}` : "",
       ].filter(Boolean).join(". ") || `B2B sales outreach`,
+      // Raw workspace context for edge function
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
-      industry_context: industryContext,
-      company_kb_context: companyKbContext,
-      playbook_context: playbookContext,
+      // Metadata flags
+      playbook_id: playbookId,
+      motion,
+      first_touch: isFirstTouch,
+      has_latest_inbound: hasLatestInbound,
     };
   }
 
@@ -350,22 +109,27 @@ function buildAIPayload(
       lead_context: buildLeadContext(ctx),
       custom_instructions: instructions || undefined,
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
-      industry_context: industryContext,
-      company_kb_context: companyKbContext,
-      playbook_context: playbookContext,
+      // Metadata flags
+      playbook_id: playbookId,
+      motion,
+      first_touch: isFirstTouch,
+      has_latest_inbound: hasLatestInbound,
     };
   }
 
+  // Email payload — raw data only, no prompt blocks
   const payload: Record<string, unknown> = {
     lead_id: lead.id,
     lead_context: buildLeadContext(ctx),
     rep_context: buildRepContext(ctx),
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
-    industry_context: industryContext,
-    company_kb_context: companyKbContext,
-    playbook_context: [playbookContext, coldOutreachBlock, inboundBlock, nurtureBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
+    // Metadata flags for edge function prompt assembly
+    playbook_id: playbookId,
+    motion,
+    first_touch: isFirstTouch,
+    has_latest_inbound: hasLatestInbound,
   };
 
   // Thread context for replies
@@ -485,7 +249,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     factors: complexity.scoring_factors.map((f) => `${f.label} (+${f.points})`).join(", "),
   });
 
-  // Step 5: Build structured prompt payload
+  // Step 5: Build raw payload (no prompt blocks — edge function handles assembly)
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
 
   // Step 6: Call AI edge function
