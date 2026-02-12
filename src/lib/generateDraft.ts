@@ -6,6 +6,8 @@ import { contextResolver, type ResolvedContext } from "@/lib/contextResolver";
 import { playbookResolver, type PlaybookRecommendation } from "@/lib/playbookResolver";
 import { scoreAndSelectModel, type AIModel } from "@/lib/complexityScorer";
 import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
+import { getPlaybookById } from "@/lib/playbooks/registry";
+import { formatPlaybookContext } from "@/lib/playbooks/formatPlaybookContext";
 
 // ============================================
 // TYPES
@@ -133,6 +135,11 @@ function buildAIPayload(
   const industryContext = formatIndustryContext(ctx.industry_kb);
   const companyKbContext = formatCompanyKbContext((ctx.workspace_profile as any)?.company_kb);
 
+  // Resolve playbook
+  const playbookId = (ctx.workspace_profile as any)?.industry_playbook_id || "general_sales";
+  const playbook = getPlaybookById(playbookId);
+  const playbookContext = formatPlaybookContext(playbook);
+
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
     return {
@@ -148,6 +155,7 @@ function buildAIPayload(
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
       industry_context: industryContext,
       company_kb_context: companyKbContext,
+      playbook_context: playbookContext,
     };
   }
 
@@ -159,6 +167,7 @@ function buildAIPayload(
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
       industry_context: industryContext,
       company_kb_context: companyKbContext,
+      playbook_context: playbookContext,
     };
   }
 
@@ -169,6 +178,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     industry_context: industryContext,
     company_kb_context: companyKbContext,
+    playbook_context: playbookContext,
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
