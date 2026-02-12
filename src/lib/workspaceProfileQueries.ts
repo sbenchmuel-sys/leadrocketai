@@ -117,28 +117,45 @@ export async function upsertWorkspaceProfile(input: WorkspaceProfileInput): Prom
 export function formatWorkspaceContext(workspace: WorkspaceProfile | null): string {
   if (!workspace) return '';
   
-  const lines: string[] = [];
+  const lines: string[] = ['=== COMPANY CONTEXT ==='];
   
-  if (workspace.company_name) {
-    lines.push(`Company: ${workspace.company_name}`);
-  }
-  if (workspace.product_name) {
-    lines.push(`Product: ${workspace.product_name}`);
-  }
-  if (workspace.product_description) {
-    lines.push(`Description: ${workspace.product_description}`);
-  }
+  if (workspace.company_name) lines.push(`Company: ${workspace.company_name}`);
+  if (workspace.product_name) lines.push(`Product: ${workspace.product_name}`);
+  if (workspace.product_description) lines.push(`Description: ${workspace.product_description}`);
+  
   if (workspace.primary_value_props.length > 0) {
-    lines.push(`Value Props: ${workspace.primary_value_props.join('; ')}`);
-  }
-  if (workspace.pricing_policy === 'no_pricing_in_email') {
-    lines.push(`Pricing Policy: Do NOT include pricing, discounts, or commercial terms in emails. May propose a meeting to discuss pricing.`);
-  }
-  if (workspace.meeting_timezone) {
-    lines.push(`Timezone: ${workspace.meeting_timezone}`);
+    lines.push('Value Propositions:');
+    workspace.primary_value_props.forEach(v => lines.push(`- ${v}`));
   }
   
-  return lines.join('\n');
+  if (workspace.pricing_policy === 'no_pricing_in_email') {
+    lines.push('Pricing Policy: Do NOT include pricing, discounts, or commercial terms in emails. May propose a meeting to discuss pricing.');
+  } else {
+    lines.push('Pricing Policy: Pricing may be included in emails.');
+  }
+  
+  if (workspace.allowed_claims.length > 0) {
+    lines.push('Allowed Claims:');
+    workspace.allowed_claims.forEach(c => lines.push(`- ${c}`));
+  }
+  
+  if (workspace.disallowed_topics.length > 0) {
+    lines.push('Disallowed Topics:');
+    workspace.disallowed_topics.forEach(t => lines.push(`- ${t}`));
+  }
+  
+  if (workspace.supported_use_cases.length > 0) {
+    lines.push('Supported Use Cases:');
+    workspace.supported_use_cases.forEach(u => lines.push(`- ${u}`));
+  }
+  
+  const wp = workspace as any;
+  if (wp.industry) lines.push(`Industry: ${wp.industry}`);
+  
+  if (workspace.meeting_timezone) lines.push(`Timezone: ${workspace.meeting_timezone}`);
+  
+  const result = lines.join('\n');
+  return result.length > 1200 ? result.slice(0, 1197) + '...' : result;
 }
 
 // ============================================
