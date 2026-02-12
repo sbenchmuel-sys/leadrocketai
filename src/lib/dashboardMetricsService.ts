@@ -55,7 +55,7 @@ const DASHBOARD_LEAD_COLUMNS = `
   stage, needs_action, next_action_key, next_action_label, action_reason_code,
   meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
   nurture_cadence, auto_nurture_eligible, source_type, motion,
-  nurture_mode, nurture_status
+  nurture_mode, nurture_status, eligible_at
 `;
 
 async function fetchLeads(): Promise<EnrichedLead[]> {
@@ -148,7 +148,11 @@ function deriveMomentumScore(leads: EnrichedLead[]): number {
 function deriveAutomationRunningCount(leads: EnrichedLead[]): number {
   return leads.filter((lead) => {
     const raw = lead as any;
-    return raw.nurture_mode === "auto" && raw.nurture_status === "active";
+    // Active automation = has a future eligible_at AND needs_action is true
+    // Also count nurture auto mode as automation running
+    const hasSequenceAutomation = !!raw.eligible_at && raw.needs_action;
+    const hasNurtureAutomation = raw.nurture_mode === "auto" && raw.nurture_status === "active";
+    return hasSequenceAutomation || hasNurtureAutomation;
   }).length;
 }
 

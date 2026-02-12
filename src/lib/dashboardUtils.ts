@@ -176,6 +176,7 @@ export interface EnrichedLead extends LeadListItem {
   origin_category: OriginCategory;
   nurture_mode?: string;
   nurture_status?: string;
+  eligible_at?: string | null;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
@@ -192,6 +193,7 @@ export function enrichLead(lead: LeadListItem & {
   motion?: string;
   nurture_mode?: string;
   nurture_status?: string;
+  eligible_at?: string | null;
 }): EnrichedLead {
   const stage = (lead.stage as DealStage) || "new";
   const sourceType = (lead.source_type as SourceType) || "manual_entry";
@@ -212,6 +214,7 @@ export function enrichLead(lead: LeadListItem & {
     origin_category: getOriginCategory(sourceType),
     nurture_mode: lead.nurture_mode,
     nurture_status: lead.nurture_status,
+    eligible_at: lead.eligible_at,
   };
 }
 
