@@ -1300,17 +1300,18 @@ serve(async (req) => {
     // Build the user prompt with template variables replaced
     let userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
 
-    // Detect playbook from context
-    const pbCtx = String(enhancedPayload.playbook_context || "");
-    const playbookId = pbCtx.includes("B2B SaaS") ? "b2b_saas"
-      : pbCtx.includes("Medical Device") ? "medical_device_rep"
-      : "general";
+    // Use explicit flags from client payload
+    const playbookId = String(enhancedPayload.playbook_id || "general");
+    const motion = String(enhancedPayload.motion || "");
+    const isFirstTouch = enhancedPayload.first_touch === true;
+    const hasInbound = enhancedPayload.has_latest_inbound === true;
+
+    console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
     // Inject cold outreach style block for outbound early-touch emails
     const isEarlyTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "pre_email_2_followup";
-    const isOutboundMotion = String(enhancedPayload.lead_context || "").includes("Motion: outbound_prospecting");
-    const hasNoInbound = !enhancedPayload.latest_inbound;
-    if (isEarlyTouchTask && isOutboundMotion && hasNoInbound) {
+    const isOutboundMotion = motion === "outbound_prospecting";
+    if (isEarlyTouchTask && isOutboundMotion && !hasInbound) {
       const outreachBlock = getColdOutreachBlock(playbookId);
       userPrompt = outreachBlock + "\n\n" + userPrompt;
       console.log(`[ai_task] Injected cold outreach style block (${playbookId})`);
