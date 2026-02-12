@@ -254,6 +254,70 @@ function getColdOutreachBlock(playbookId: string): string {
   return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
 }
 
+// Centralized motion block builder
+function buildMotionBlock({ motion, first_touch }: { motion: string; first_touch: boolean }): string {
+  if (motion === "outbound_prospecting" && first_touch) {
+    return `=== MOTION: OUTBOUND FIRST TOUCH ===
+Objective:
+Trigger a reply. Not to close. Not to explain fully.
+
+STRICT STRUCTURE RULES:
+- Maximum 90 words.
+- Maximum 5 short paragraphs.
+- One idea only.
+- One CTA only.
+- No feature lists.
+- No attachments.
+- No calendar links.
+
+Knowledge usage:
+- Use only for positioning alignment.
+- Do NOT include case studies or long explanations.`;
+  }
+
+  if (motion === "outbound_prospecting") {
+    return `=== MOTION: OUTBOUND FOLLOW-UP ===
+Objective:
+Re-engage the prospect with a new angle or value point.
+
+STRUCTURE RULES:
+- Maximum 120 words.
+- Reference previous outreach naturally.
+- One new insight or angle per email.
+- One CTA only.`;
+  }
+
+  if (motion === "inbound_response") {
+    return `=== MOTION: INBOUND RESPONSE ===
+Objective:
+Convert interest into a scheduled conversation.
+
+Structure:
+- Acknowledge context directly.
+- Provide one helpful detail.
+- Offer a clear next step.
+
+Length:
+- Up to 150 words allowed.`;
+  }
+
+  if (motion === "nurture") {
+    return `=== MOTION: NURTURE ===
+Objective:
+Maintain relevance without pressure.
+
+Structure:
+- Short value insight.
+- Soft CTA.
+- No urgency.
+
+Length:
+- 60–120 words.`;
+  }
+
+  return "";
+}
+
 // Task prompts
 const PROMPTS: Record<string, string> = {
   intent_router: `You are classifying an inbound B2B email for a regulated enterprise sales process.
@@ -1297,9 +1361,6 @@ serve(async (req) => {
       }
     }
 
-    // Build the user prompt with template variables replaced
-    let userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
-
     // Use explicit flags from client payload
     const playbookId = String(enhancedPayload.playbook_id || "general");
     const motion = String(enhancedPayload.motion || "");
@@ -1308,34 +1369,47 @@ serve(async (req) => {
 
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
-    // Inject cold outreach style block for outbound early-touch emails
-    const isEarlyTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "pre_email_2_followup";
+    // Build the task prompt with template variables replaced
+    const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
+
+    // === Single injection pipeline (strict order) ===
+    const promptParts: string[] = [];
+
+    // STEP 1 — MOTION BLOCK
+    const motionBlock = buildMotionBlock({ motion, first_touch: isFirstTouch });
+    if (motionBlock) {
+      promptParts.push(motionBlock);
+      console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
+    }
+
+    // STEP 2 — STYLE MODIFIER (outbound only)
     const isOutboundMotion = motion === "outbound_prospecting";
-    if (isEarlyTouchTask && isOutboundMotion && !hasInbound) {
-      const outreachBlock = getColdOutreachBlock(playbookId);
-      userPrompt = outreachBlock + "\n\n" + userPrompt;
-      console.log(`[ai_task] Injected cold outreach style block (${playbookId})`);
-    }
-
-    // Inject reply patterns for follow-ups and breakups
     const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
-    if (isFollowUp) {
-      userPrompt = REPLY_PATTERNS_BLOCK + "\n\n" + userPrompt;
-      console.log("[ai_task] Injected reply optimization patterns");
+    const isBreakup = task === "pre_email_4_breakup";
+
+    if (isFirstTouch && isOutboundMotion && !hasInbound) {
+      promptParts.push(getColdOutreachBlock(playbookId));
+      console.log(`[ai_task] [2/STYLE] Cold outreach block (${playbookId})`);
+    }
+    if (isFollowUp && isOutboundMotion) {
+      promptParts.push(REPLY_PATTERNS_BLOCK);
+      console.log("[ai_task] [2/STYLE] Reply optimization patterns");
+    }
+    if (isBreakup) {
+      promptParts.push(BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales);
+      console.log(`[ai_task] [2/STYLE] Breakup closer (${playbookId})`);
     }
 
-    // Inject breakup closer for breakup emails
-    if (task === "pre_email_4_breakup") {
-      const closer = BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales;
-      userPrompt = closer + "\n\n" + userPrompt;
-      console.log(`[ai_task] Injected breakup closer (${playbookId})`);
-    }
-
-    // Inject playbook context if provided
+    // STEP 3 — PLAYBOOK CONTEXT
     if (enhancedPayload.playbook_context) {
-      userPrompt = String(enhancedPayload.playbook_context) + "\n\n" + userPrompt;
-      console.log("[ai_task] Injected playbook context");
+      promptParts.push(String(enhancedPayload.playbook_context));
+      console.log("[ai_task] [3/PLAYBOOK] Playbook context");
     }
+
+    // STEP 4 — TASK PROMPT (with workspace + KB already interpolated)
+    promptParts.push(taskBody);
+
+    const userPrompt = promptParts.join("\n\n");
 
     // Select model based on task
     const model = PRO_MODEL_TASKS.includes(task)
