@@ -5,6 +5,7 @@ import { Briefcase, Code2, HeartPulse, Home, Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getAllPlaybooks } from "@/lib/playbooks/registry";
+import { DEFAULT_CADENCE_SETTINGS } from "@/lib/cadenceSettingsTypes";
 
 interface ChoosePlaybookStepProps {
   onNext: () => void;
@@ -37,7 +38,7 @@ export default function ChoosePlaybookStep({ onNext }: ChoosePlaybookStepProps) 
           { onConflict: "user_id" }
         );
 
-      // If workspace_profiles exists, update it too
+      // Ensure workspace_profiles row exists with defaults
       const { data: wp } = await (supabase as any)
         .from("workspace_profiles")
         .select("id")
@@ -49,6 +50,16 @@ export default function ChoosePlaybookStep({ onNext }: ChoosePlaybookStepProps) 
           .from("workspace_profiles")
           .update({ industry_playbook_id: selected })
           .eq("user_id", user.id);
+      } else {
+        const playbook = playbooks.find(p => p.id === selected);
+        await (supabase as any)
+          .from("workspace_profiles")
+          .insert({
+            user_id: user.id,
+            industry_playbook_id: selected,
+            meeting_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            cadence_settings: DEFAULT_CADENCE_SETTINGS,
+          });
       }
 
       onNext();
