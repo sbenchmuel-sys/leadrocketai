@@ -1,0 +1,2 @@
+ALTER TABLE public.onboarding_config ADD COLUMN IF NOT EXISTS industry_playbook_id text DEFAULT 'general_sales';
+ALTER TABLE public.workspace_profiles ADD COLUMN IF NOT EXISTS industry_playbook_id text DEFAULT 'general_sales';

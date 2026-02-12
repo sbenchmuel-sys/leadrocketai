@@ -109,6 +109,31 @@ const PLAYBOOKS: Playbook[] = [
       "All pricing must go through formal quote process",
     ],
   },
+  {
+    id: "real_estate",
+    label: "Real Estate Agent",
+    description: "Playbook for residential and commercial real estate sales.",
+    tone_profile: {
+      voice: "Warm, local-expert, responsive",
+      do: ["Reference neighborhood specifics", "Respond quickly to inquiries", "Highlight lifestyle fit"],
+      dont: ["Pressure urgency artificially", "Guarantee appreciation", "Skip disclosure requirements"],
+    },
+    common_objections: [
+      { name: "Price too high", guidance: "Provide comps and market trend data." },
+      { name: "Bad timing", guidance: "Share rate forecasts; offer to set alerts." },
+      { name: "Want to see more options", guidance: "Curate a focused shortlist matching criteria." },
+    ],
+    buying_signals: [
+      "Asks about mortgage pre-approval",
+      "Requests second showing",
+      "Brings family to viewing",
+    ],
+    red_flags: [
+      "No pre-approval after multiple showings",
+      "Keeps expanding search criteria",
+      "Unresponsive after offer discussion",
+    ],
+  },
 ];
 
 // ============================================

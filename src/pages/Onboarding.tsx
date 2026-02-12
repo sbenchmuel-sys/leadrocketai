@@ -2,12 +2,13 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCurrentProfile } from "@/lib/supabaseQueries";
+import ChoosePlaybookStep from "@/components/onboarding/ChoosePlaybookStep";
 import WelcomeStep from "@/components/onboarding/WelcomeStep";
 import CreateLeadStep from "@/components/onboarding/CreateLeadStep";
 import AddKnowledgeStep from "@/components/onboarding/AddKnowledgeStep";
 import CompletionStep from "@/components/onboarding/CompletionStep";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -15,7 +16,6 @@ export default function Onboarding() {
   const [currentStep, setCurrentStep] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Resume at the correct step if user was mid-onboarding
   useEffect(() => {
     const loadProgress = async () => {
       try {
@@ -24,7 +24,6 @@ export default function Onboarding() {
           navigate("/dashboard", { replace: true });
           return;
         }
-        // Resume at the saved step (0-3)
         setCurrentStep(Math.min(profile.onboarding_step || 0, TOTAL_STEPS - 1));
       } catch (err) {
         console.error("Failed to load onboarding progress:", err);
@@ -49,7 +48,6 @@ export default function Onboarding() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Progress indicator */}
       <div className="p-4 border-b border-border">
         <div className="max-w-md mx-auto">
           <div className="flex items-center justify-between mb-2">
@@ -69,25 +67,27 @@ export default function Onboarding() {
         </div>
       </div>
 
-      {/* Step content */}
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {currentStep === 0 && (
-            <WelcomeStep onNext={() => setCurrentStep(1)} />
+            <ChoosePlaybookStep onNext={() => setCurrentStep(1)} />
           )}
           {currentStep === 1 && (
-            <CreateLeadStep
-              onNext={() => setCurrentStep(2)}
-              onBack={() => setCurrentStep(0)}
-            />
+            <WelcomeStep onNext={() => setCurrentStep(2)} />
           )}
           {currentStep === 2 && (
-            <AddKnowledgeStep
+            <CreateLeadStep
               onNext={() => setCurrentStep(3)}
               onBack={() => setCurrentStep(1)}
             />
           )}
           {currentStep === 3 && (
+            <AddKnowledgeStep
+              onNext={() => setCurrentStep(4)}
+              onBack={() => setCurrentStep(2)}
+            />
+          )}
+          {currentStep === 4 && (
             <CompletionStep onComplete={handleComplete} />
           )}
         </div>
