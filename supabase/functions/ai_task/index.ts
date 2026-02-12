@@ -200,9 +200,32 @@ Psychological triggers:
 - Relevance, specificity, low friction, curiosity gap
 `;
 
+const COLD_OUTREACH_MEDICAL_BLOCK = `
+=== COLD OUTREACH STYLE: MEDICAL DEVICE HIGH REPLY ===
+Length: Under 130 words.
+Opening:
+- Professional introduction
+- Clear context (why reaching out)
+Core:
+- One clinical or operational benefit
+- Avoid exaggerated claims
+- Reference use case
+CTA:
+- "Would it make sense to share more details?"
+- "Open to a brief discussion?"
+- "Who would be best to speak with?"
+Avoid:
+- Urgency pressure
+- Sales-heavy tone
+- Aggressive follow-ups
+Psychological triggers:
+- Professional credibility, safety, process alignment
+`;
+
 // Map playbook IDs to specialized outreach blocks
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
+  medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
 };
 
 function getColdOutreachBlock(playbookId: string): string {
@@ -1260,8 +1283,11 @@ serve(async (req) => {
     const isOutboundMotion = String(enhancedPayload.lead_context || "").includes("Motion: outbound_prospecting");
     const hasNoThread = !enhancedPayload.email_thread && !enhancedPayload.latest_inbound;
     if (isFirstTouchTask && isOutboundMotion && hasNoThread) {
-      // Use playbook-specific outreach block if available
-      const playbookId = String(enhancedPayload.playbook_context || "").includes("B2B SaaS") ? "b2b_saas" : "general";
+      // Detect playbook from context to select outreach block
+      const pbCtx = String(enhancedPayload.playbook_context || "");
+      const playbookId = pbCtx.includes("B2B SaaS") ? "b2b_saas"
+        : pbCtx.includes("Medical Device") ? "medical_device_rep"
+        : "general";
       const outreachBlock = getColdOutreachBlock(playbookId);
       userPrompt = outreachBlock + "\n\n" + userPrompt;
       console.log(`[ai_task] Injected cold outreach style block (${playbookId}) for first-touch outbound`);

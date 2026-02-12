@@ -190,9 +190,32 @@ Psychological triggers:
 - Relevance, specificity, low friction, curiosity gap
 `;
 
+const COLD_OUTREACH_MEDICAL_BLOCK = `
+=== COLD OUTREACH STYLE: MEDICAL DEVICE HIGH REPLY ===
+Length: Under 130 words.
+Opening:
+- Professional introduction
+- Clear context (why reaching out)
+Core:
+- One clinical or operational benefit
+- Avoid exaggerated claims
+- Reference use case
+CTA:
+- "Would it make sense to share more details?"
+- "Open to a brief discussion?"
+- "Who would be best to speak with?"
+Avoid:
+- Urgency pressure
+- Sales-heavy tone
+- Aggressive follow-ups
+Psychological triggers:
+- Professional credibility, safety, process alignment
+`;
+
 // Map playbook IDs to specialized outreach blocks (fallback to universal)
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
+  medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
 };
 
 function isFirstTouchOutbound(ctx: ResolvedContext, taskType: AITaskType): boolean {
