@@ -120,7 +120,7 @@ function getCorsHeaders(req: Request): Record<string, string> {
 }
 
 // System prompt
-const SYSTEM_GLOBAL_PROMPT = `You are a regulated B2B Sales Deal Assistant. Your job is to help sales users manage long-cycle, regulated enterprise deals (healthcare, insurance, pharma, telemedicine).
+const SYSTEM_GLOBAL_PROMPT = `You are a B2B Sales Deal Assistant. Your job is to help sales users manage deals across industries.
 
 HARD RULES
 1) Nothing is ever auto-sent. You only create drafts and suggested actions.
@@ -133,12 +133,65 @@ HARD RULES
 8) If a task requires JSON, output JSON ONLY (no extra text). If output is an email body, output only the body text (no subject unless asked).
 9) If you include "evidence", keep evidence snippets <= 200 characters.
 
+OBJECTION HANDLING
+When an objection is detected in the conversation:
+1) Acknowledge briefly — show you understand their concern.
+2) Provide focused reframing or relevant documentation (max 3-5 sentences).
+3) Offer one low-friction next step.
+Do not argue. Do not over-explain. Do not sound defensive.
+
 STRATEGY MODES
 - FAST: short-cycle, direct, book meeting ASAP, tighter cadence.
 - NURTURE: long-cycle, value-led, patient cadence, credibility-building.
 
+INPUTS YOU MAY RECEIVE
+- Lead context (name, company, strategy, notes, meeting link)
+- Interaction snippets (emails, meeting summaries)
+- Optional Knowledge Context (approved snippets, product decks, FAQs)
+- Playbook Context (industry-specific tone, objections, signals)
+
 YOUR GOAL
 Increase speed and consistency, surface risks early, and guide next steps while staying compliant.`;
+
+// Cold outreach style block — injected for outbound first-touch emails
+const COLD_OUTREACH_STYLE_BLOCK = `
+=== COLD OUTREACH STYLE: HIGH REPLY RATE MODE ===
+
+Structure:
+- 3-6 sentences max
+- 1 idea per paragraph
+- No large blocks of text
+- No attachments in first email
+
+Opening:
+- Personalized observation
+- OR relevant trigger
+- OR specific problem hypothesis
+
+Core:
+- One clear outcome
+- One short proof point (metric, client, example)
+- No feature list
+
+CTA:
+- Micro-commitment only
+- Yes/No question OR
+- "Worth a quick look?" OR
+- "Open to a short conversation?"
+
+Avoid:
+- Long intros
+- Company history
+- Multiple CTAs
+- Calendar links in first email
+- Generic "just checking in"
+
+Psychology:
+- Reduce pressure
+- Make reply easy
+- Signal relevance
+- Leave room for correction
+`;
 
 // Task prompts
 const PROMPTS: Record<string, string> = {
@@ -1184,7 +1237,22 @@ serve(async (req) => {
     }
 
     // Build the user prompt with template variables replaced
-    const userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
+    let userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
+
+    // Inject cold outreach style block for outbound first-touch emails
+    const isFirstTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast";
+    const isOutboundMotion = String(enhancedPayload.lead_context || "").includes("Motion: outbound_prospecting");
+    const hasNoThread = !enhancedPayload.email_thread && !enhancedPayload.latest_inbound;
+    if (isFirstTouchTask && isOutboundMotion && hasNoThread) {
+      userPrompt = COLD_OUTREACH_STYLE_BLOCK + "\n\n" + userPrompt;
+      console.log("[ai_task] Injected cold outreach style block for first-touch outbound");
+    }
+
+    // Inject playbook context if provided
+    if (enhancedPayload.playbook_context) {
+      userPrompt = String(enhancedPayload.playbook_context) + "\n\n" + userPrompt;
+      console.log("[ai_task] Injected playbook context");
+    }
 
     // Select model based on task
     const model = PRO_MODEL_TASKS.includes(task)
