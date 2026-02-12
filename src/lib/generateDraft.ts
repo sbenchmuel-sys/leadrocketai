@@ -175,25 +175,21 @@ Psychology:
 `;
 
 const COLD_OUTREACH_SAAS_BLOCK = `
-=== COLD OUTREACH STYLE: B2B SAAS HIGH REPLY ===
-Length: Under 120 words.
+=== OUTBOUND STYLE: STANDARD ===
 Opening:
-- Reference something specific about their company
-- OR hypothesize a clear bottleneck
-- Example: "Noticed you're hiring for X…" / "Saw you recently launched Y…"
-Core:
-- Tie product to one measurable outcome
-- Use one concrete metric
-- Avoid listing features
-CTA:
-- "Is this something you're exploring?"
-- "Would a 15-min chat make sense?"
-- "Worth sharing a quick breakdown?"
+- Professional and direct.
+- Brief reason for reaching out.
+- Optional light personalization.
+
+Tone:
+- Clear
+- Confident
+- Business-focused
+
 Avoid:
-- Overly polished marketing language
-- Buzzwords like "Revolutionary" / "Best-in-class"
-Psychological triggers:
-- Relevance, specificity, low friction, curiosity gap
+- Humor
+- Pattern interrupts
+- Emotional tension framing
 `;
 
 const COLD_OUTREACH_MEDICAL_BLOCK = `
