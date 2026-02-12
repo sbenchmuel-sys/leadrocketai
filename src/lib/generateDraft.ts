@@ -143,6 +143,39 @@ function formatCompanyKbContext(companyKb: any): string {
   return trimBlock(lines.join('\n'));
 }
 
+// Cold outreach style block — injected for outbound first-touch emails
+const COLD_OUTREACH_STYLE_BLOCK = `
+=== COLD OUTREACH STYLE: HIGH REPLY RATE MODE ===
+Structure:
+- 3-6 sentences max
+- 1 idea per paragraph
+- No large blocks of text
+- No attachments in first email
+Opening:
+- Personalized observation OR relevant trigger OR specific problem hypothesis
+Core:
+- One clear outcome
+- One short proof point (metric, client, example)
+- No feature list
+CTA:
+- Micro-commitment only
+- Yes/No question OR "Worth a quick look?" OR "Open to a short conversation?"
+Avoid:
+- Long intros, company history, multiple CTAs
+- Calendar links in first email
+- Generic "just checking in"
+Psychology:
+- Reduce pressure, make reply easy, signal relevance, leave room for correction
+`;
+
+function isFirstTouchOutbound(ctx: ResolvedContext, taskType: AITaskType): boolean {
+  const motion = (ctx.lead as any).motion || "outbound_prospecting";
+  const isOutbound = motion === "outbound_prospecting";
+  const noThread = ctx.thread_emails.length === 0;
+  const isIntroTask = taskType === "pre_email_1_intro" || taskType === "email_intro_fast";
+  return isOutbound && noThread && isIntroTask;
+}
+
 function buildAIPayload(
   ctx: ResolvedContext,
   taskType: AITaskType,
@@ -157,6 +190,9 @@ function buildAIPayload(
   const playbookId = (ctx.workspace_profile as any)?.industry_playbook_id || "general_sales";
   const playbook = getPlaybookById(playbookId);
   const playbookContext = formatPlaybookContext(playbook);
+
+  // Cold outreach style injection
+  const coldOutreachBlock = isFirstTouchOutbound(ctx, taskType) ? COLD_OUTREACH_STYLE_BLOCK : "";
 
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
@@ -196,7 +232,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     industry_context: industryContext,
     company_kb_context: companyKbContext,
-    playbook_context: playbookContext,
+    playbook_context: playbookContext + coldOutreachBlock,
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
