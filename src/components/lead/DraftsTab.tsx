@@ -261,7 +261,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
       lead.industry && `Industry: ${lead.industry}`,
       lead.country && `Country: ${lead.country}`,
       lead.phone && `Phone: ${lead.phone}`,
-      `Strategy: ${lead.strategy}`,
+      `Motion: ${lead.motion || "outbound_prospecting"}`,
       `Status: ${lead.status}`,
       lead.initial_message && `Initial Message from Lead: ${lead.initial_message}`,
       lead.personal_notes && `Notes: ${lead.personal_notes}`,
