@@ -46,15 +46,29 @@ function getAutomationLabel(lead: LeadDetail): { label: string; color: string } 
     }
     return { label: "Nurture", color: "text-muted-foreground" };
   }
+
+  const automationAllowed = motion === "outbound_prospecting" || motion === "inbound_response";
+  if (!automationAllowed) {
+    return { label: "Manual", color: "text-muted-foreground" };
+  }
+
+  // Check actual automation state from DB fields
+  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
+
+  if (!hasAutomationEnabled) {
+    // No automation running — check if it's off entirely or just not enabled
+    if (lead.next_action_key) {
+      return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
+    }
+    return { label: "Off", color: "text-muted-foreground" };
+  }
+
+  // Automation is enabled — check safety blockers
   if (lead.last_inbound_at) {
     return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
   }
   if (lead.has_future_meeting) {
     return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
-  }
-  const automationAllowed = motion === "outbound_prospecting";
-  if (!automationAllowed) {
-    return { label: "Manual", color: "text-muted-foreground" };
   }
   return { label: "Active", color: "text-emerald-600 dark:text-emerald-400" };
 }

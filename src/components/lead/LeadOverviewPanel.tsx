@@ -70,9 +70,10 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
 
   // Auto-collapse logic
   const isNurtureMotion = motion === "nurture";
-  const automationMotionAllowed = motion === "outbound_prospecting";
+  const automationMotionAllowed = motion === "outbound_prospecting" || motion === "inbound_response";
   const hasAutomation = automationMotionAllowed && stage !== "closed_won" && stage !== "closed_lost";
-  const automationPaused = hasAutomation && (!!lead.last_inbound_at || lead.has_future_meeting);
+  const automationActive = hasAutomation && !!(lead as any).eligible_at && lead.needs_action && !lead.last_inbound_at && !lead.has_future_meeting;
+  const automationPaused = hasAutomation && !automationActive;
   const hasNurture = isNurtureMotion && ((lead as any).nurture_status === "active" || (lead as any).nurture_status === "paused");
 
   const isPostMeeting = motion === "post_meeting" || stage === "post_meeting";
