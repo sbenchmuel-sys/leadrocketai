@@ -210,7 +210,28 @@ Do NOT:
 - Change compliance tone.
 `;
 
-// Psychological reply patterns — rotated into follow-up and breakup emails
+const INBOUND_RESPONSE_BLOCK = `
+=== MOTION: INBOUND RESPONSE ===
+Objective:
+Convert interest into a scheduled conversation.
+
+Structure:
+- Acknowledge the context or question directly.
+- Provide one helpful and relevant detail.
+- Offer a clear next step.
+
+Length:
+- Up to 150 words allowed.
+
+Tone:
+- Consultative
+- Helpful
+- Slightly more detailed than outbound
+
+CTA:
+- Propose a specific next action (meeting, call, details).
+`;
+
 const REPLY_PATTERNS_BLOCK = `
 === REPLY OPTIMIZATION PATTERNS ===
 Rotate one of these CTA patterns per email to maximize reply probability:
@@ -274,6 +295,10 @@ function buildAIPayload(
   // Cold outreach style injection — uses playbook-specific block if available
   const coldOutreachBlock = shouldInjectOutreachStyle(ctx, taskType) ? getColdOutreachBlock(playbookId) : "";
 
+  // Inbound response motion block
+  const motion = (ctx.lead as any).motion || "outbound_prospecting";
+  const inboundBlock = motion === "inbound_response" ? INBOUND_RESPONSE_BLOCK : "";
+
   // Breakup email enhancement
   const breakupCloser = isBreakupEmail(taskType) ? (BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales) : "";
 
@@ -318,7 +343,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     industry_context: industryContext,
     company_kb_context: companyKbContext,
-    playbook_context: [playbookContext, coldOutreachBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
+    playbook_context: [playbookContext, coldOutreachBlock, inboundBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
