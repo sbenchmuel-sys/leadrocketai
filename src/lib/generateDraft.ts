@@ -143,7 +143,7 @@ function formatCompanyKbContext(companyKb: any): string {
   return trimBlock(lines.join('\n'));
 }
 
-// Cold outreach style block — injected for outbound first-touch emails
+// Cold outreach style blocks — injected for outbound first-touch emails
 const COLD_OUTREACH_STYLE_BLOCK = `
 === COLD OUTREACH STYLE: HIGH REPLY RATE MODE ===
 Structure:
@@ -168,12 +168,43 @@ Psychology:
 - Reduce pressure, make reply easy, signal relevance, leave room for correction
 `;
 
+const COLD_OUTREACH_SAAS_BLOCK = `
+=== COLD OUTREACH STYLE: B2B SAAS HIGH REPLY ===
+Length: Under 120 words.
+Opening:
+- Reference something specific about their company
+- OR hypothesize a clear bottleneck
+- Example: "Noticed you're hiring for X…" / "Saw you recently launched Y…"
+Core:
+- Tie product to one measurable outcome
+- Use one concrete metric
+- Avoid listing features
+CTA:
+- "Is this something you're exploring?"
+- "Would a 15-min chat make sense?"
+- "Worth sharing a quick breakdown?"
+Avoid:
+- Overly polished marketing language
+- Buzzwords like "Revolutionary" / "Best-in-class"
+Psychological triggers:
+- Relevance, specificity, low friction, curiosity gap
+`;
+
+// Map playbook IDs to specialized outreach blocks (fallback to universal)
+const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
+  b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
+};
+
 function isFirstTouchOutbound(ctx: ResolvedContext, taskType: AITaskType): boolean {
   const motion = (ctx.lead as any).motion || "outbound_prospecting";
   const isOutbound = motion === "outbound_prospecting";
   const noThread = ctx.thread_emails.length === 0;
   const isIntroTask = taskType === "pre_email_1_intro" || taskType === "email_intro_fast";
   return isOutbound && noThread && isIntroTask;
+}
+
+function getColdOutreachBlock(playbookId: string): string {
+  return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
 }
 
 function buildAIPayload(
@@ -191,8 +222,8 @@ function buildAIPayload(
   const playbook = getPlaybookById(playbookId);
   const playbookContext = formatPlaybookContext(playbook);
 
-  // Cold outreach style injection
-  const coldOutreachBlock = isFirstTouchOutbound(ctx, taskType) ? COLD_OUTREACH_STYLE_BLOCK : "";
+  // Cold outreach style injection — uses playbook-specific block if available
+  const coldOutreachBlock = isFirstTouchOutbound(ctx, taskType) ? getColdOutreachBlock(playbookId) : "";
 
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {

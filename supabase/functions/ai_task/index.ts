@@ -153,45 +153,61 @@ INPUTS YOU MAY RECEIVE
 YOUR GOAL
 Increase speed and consistency, surface risks early, and guide next steps while staying compliant.`;
 
-// Cold outreach style block — injected for outbound first-touch emails
+// Cold outreach style blocks — injected for outbound first-touch emails
 const COLD_OUTREACH_STYLE_BLOCK = `
 === COLD OUTREACH STYLE: HIGH REPLY RATE MODE ===
-
 Structure:
 - 3-6 sentences max
 - 1 idea per paragraph
 - No large blocks of text
 - No attachments in first email
-
 Opening:
-- Personalized observation
-- OR relevant trigger
-- OR specific problem hypothesis
-
+- Personalized observation OR relevant trigger OR specific problem hypothesis
 Core:
 - One clear outcome
 - One short proof point (metric, client, example)
 - No feature list
-
 CTA:
 - Micro-commitment only
-- Yes/No question OR
-- "Worth a quick look?" OR
-- "Open to a short conversation?"
-
+- Yes/No question OR "Worth a quick look?" OR "Open to a short conversation?"
 Avoid:
-- Long intros
-- Company history
-- Multiple CTAs
+- Long intros, company history, multiple CTAs
 - Calendar links in first email
 - Generic "just checking in"
-
 Psychology:
-- Reduce pressure
-- Make reply easy
-- Signal relevance
-- Leave room for correction
+- Reduce pressure, make reply easy, signal relevance, leave room for correction
 `;
+
+const COLD_OUTREACH_SAAS_BLOCK = `
+=== COLD OUTREACH STYLE: B2B SAAS HIGH REPLY ===
+Length: Under 120 words.
+Opening:
+- Reference something specific about their company
+- OR hypothesize a clear bottleneck
+- Example: "Noticed you're hiring for X…" / "Saw you recently launched Y…"
+Core:
+- Tie product to one measurable outcome
+- Use one concrete metric
+- Avoid listing features
+CTA:
+- "Is this something you're exploring?"
+- "Would a 15-min chat make sense?"
+- "Worth sharing a quick breakdown?"
+Avoid:
+- Overly polished marketing language
+- Buzzwords like "Revolutionary" / "Best-in-class"
+Psychological triggers:
+- Relevance, specificity, low friction, curiosity gap
+`;
+
+// Map playbook IDs to specialized outreach blocks
+const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
+  b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
+};
+
+function getColdOutreachBlock(playbookId: string): string {
+  return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
+}
 
 // Task prompts
 const PROMPTS: Record<string, string> = {
@@ -1244,8 +1260,11 @@ serve(async (req) => {
     const isOutboundMotion = String(enhancedPayload.lead_context || "").includes("Motion: outbound_prospecting");
     const hasNoThread = !enhancedPayload.email_thread && !enhancedPayload.latest_inbound;
     if (isFirstTouchTask && isOutboundMotion && hasNoThread) {
-      userPrompt = COLD_OUTREACH_STYLE_BLOCK + "\n\n" + userPrompt;
-      console.log("[ai_task] Injected cold outreach style block for first-touch outbound");
+      // Use playbook-specific outreach block if available
+      const playbookId = String(enhancedPayload.playbook_context || "").includes("B2B SaaS") ? "b2b_saas" : "general";
+      const outreachBlock = getColdOutreachBlock(playbookId);
+      userPrompt = outreachBlock + "\n\n" + userPrompt;
+      console.log(`[ai_task] Injected cold outreach style block (${playbookId}) for first-touch outbound`);
     }
 
     // Inject playbook context if provided
