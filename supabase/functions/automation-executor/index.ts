@@ -25,7 +25,7 @@ serve(async (req) => {
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
-      .in("status", ["active"])
+      .in("status", ["active", "new"])
       .limit(20);
 
     if (queryErr) {
@@ -178,6 +178,7 @@ serve(async (req) => {
             subject,
             body: draftBody,
             leadId: lead.id,
+            ownerUserId: lead.owner_user_id,
           }),
         });
 

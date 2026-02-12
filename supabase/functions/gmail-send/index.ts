@@ -112,19 +112,40 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Check if this is a service-role call (from automation-executor)
+    const token = authHeader.replace("Bearer ", "");
+    const isServiceRole = token === supabaseServiceKey;
+    
+    let userId: string;
+    
+    if (isServiceRole) {
+      // For service-role calls, parse body first to get ownerUserId
+      const bodyText = await req.text();
+      const bodyJson = JSON.parse(bodyText);
+      if (!bodyJson.ownerUserId) {
+        return new Response(JSON.stringify({ ok: false, error: "Service role calls require ownerUserId" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      userId = bodyJson.ownerUserId;
+      // Store parsed body for later use
+      (req as any)._parsedBody = bodyJson;
+    } else {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
       });
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      userId = user.id;
     }
 
-    const { to, subject, body, leadId, draftId, threadId, replyToMessageId } = await req.json();
+    const { to, subject, body, leadId, draftId, threadId, replyToMessageId } = (req as any)._parsedBody || await req.json();
     
     if (!to || !subject || !body) {
       return new Response(JSON.stringify({ ok: false, error: "Missing to, subject, or body" }), {
@@ -140,7 +161,7 @@ serve(async (req) => {
     const { data: connection, error: connError } = await serviceSupabase
       .from("gmail_connections")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .single();
 
     if (connError || !connection) {
