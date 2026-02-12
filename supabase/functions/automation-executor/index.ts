@@ -120,6 +120,20 @@ serve(async (req) => {
         else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
         else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
 
+        // Fetch rep profile and signature for personalization
+        const { data: repProfile } = await supabase
+          .from("rep_profiles")
+          .select("full_name, company_name, job_title, calendar_link, phone, email, linkedin_url")
+          .eq("user_id", lead.owner_user_id)
+          .single();
+
+        const { data: repSignature } = await supabase
+          .from("rep_signatures")
+          .select("signature_text")
+          .eq("user_id", lead.owner_user_id)
+          .eq("is_default", true)
+          .single();
+
         // Generate draft via ai_task
         const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
           method: "POST",
@@ -132,6 +146,7 @@ serve(async (req) => {
             payload: {
               lead_id: lead.id,
               lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
+              rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
               custom_instructions: null,
             },
           }),
@@ -151,8 +166,51 @@ serve(async (req) => {
           continue;
         }
 
-        const draftBody = aiResult.content;
-        const subject = lead.next_action_label || `Following up - ${lead.name.split(" ")[0]}`;
+        // Resolve placeholders in AI content
+        const repFirstName = repProfile?.full_name?.split(" ")[0] || "";
+        let draftBody = aiResult.content
+          .replace(/\{Rep'?s?\s*first\s*name\}/gi, repFirstName)
+          .replace(/\[Rep'?s?\s*first\s*name\]/gi, repFirstName)
+          .replace(/\{Your\s*Name\}/gi, repFirstName)
+          .replace(/\[Your\s*Name\]/gi, repFirstName)
+          .replace(/\{Sender\s*Name\}/gi, repFirstName)
+          .replace(/\[Sender\s*Name\]/gi, repFirstName)
+          .replace(/\{First\s*Name\}/gi, repFirstName)
+          .replace(/\[First\s*Name\]/gi, repFirstName);
+
+        // Append signature if available
+        if (repSignature?.signature_text) {
+          draftBody += `\n\n${repSignature.signature_text}`;
+        } else if (repProfile?.full_name) {
+          // Fallback: simple name signature
+          const sigParts = [repProfile.full_name];
+          if (repProfile.job_title) sigParts.push(repProfile.job_title);
+          if (repProfile.company_name) sigParts.push(repProfile.company_name);
+          if (repProfile.phone) sigParts.push(repProfile.phone);
+          if (repProfile.email) sigParts.push(repProfile.email);
+          draftBody += `\n\n${sigParts.join("\n")}`;
+        }
+
+        // Append unsubscribe footer
+        draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
+
+        // Derive proper subject line (not the action label)
+        const leadFirstName = lead.name.split(" ")[0];
+        const companyName = lead.company !== "Unknown Company" ? lead.company : null;
+        let subject: string;
+        if (aiTask === "pre_email_1_intro") {
+          subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
+        } else if (aiTask === "pre_email_2_followup") {
+          subject = `Following up - ${leadFirstName}`;
+        } else if (aiTask === "pre_email_3_followup") {
+          subject = `Checking in - ${leadFirstName}`;
+        } else if (aiTask === "pre_email_4_breakup") {
+          subject = `Closing the loop - ${leadFirstName}`;
+        } else if (aiTask === "nurture_email_single") {
+          subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+        } else {
+          subject = `Following up - ${leadFirstName}`;
+        }
 
         // Save as draft first (for audit trail)
         await supabase.from("drafts").insert({
