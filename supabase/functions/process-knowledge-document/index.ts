@@ -112,6 +112,26 @@ serve(async (req) => {
 
     console.log(`[process-knowledge-document] Processing document: ${title || 'Untitled'}, text length: ${text.length}, lead_id: ${verified_lead_id || 'global'}`);
 
+    // Use service role for DB operations
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+    // Delete old chunks with the same source name to prevent stale data
+    if (source) {
+      const { data: oldChunks, error: deleteErr } = await supabaseAdmin
+        .from("kb_chunks")
+        .delete()
+        .eq("owner_user_id", user.id)
+        .eq("source", source)
+        .select("id");
+      
+      if (deleteErr) {
+        console.warn(`[process-knowledge-document] Failed to delete old chunks for source "${source}":`, deleteErr);
+      } else if (oldChunks && oldChunks.length > 0) {
+        console.log(`[process-knowledge-document] Deleted ${oldChunks.length} old chunks for source "${source}"`);
+      }
+    }
+
     // Generate a unique document ID to group chunks
     const documentId = crypto.randomUUID();
     
@@ -119,9 +139,7 @@ serve(async (req) => {
     const chunks = chunkText(text, title || "", 600, 100);
     console.log(`[process-knowledge-document] Created ${chunks.length} chunks`);
 
-    // Use service role for inserting chunks
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    // Insert all chunks using service role client
 
     // Insert all chunks - mark as completed since we use text search (no embeddings needed)
     const chunkInserts = chunks.map((content, index) => ({
