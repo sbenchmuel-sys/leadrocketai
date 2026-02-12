@@ -176,16 +176,17 @@ export function WorkspaceProfileCard() {
             const ws = result.workspace;
             const filled: string[] = [];
             const v = getHighConfidenceValue;
-            if (!companyName && v(ws.company_name)) { setCompanyName(v(ws.company_name)!); filled.push("company_name"); }
-            if (!productName && v(ws.product_name)) { setProductName(v(ws.product_name)!); filled.push("product_name"); }
-            if (!productDescription && v(ws.product_description)) { setProductDescription(v(ws.product_description)!); filled.push("product_description"); }
-            if (valueProps.length === 0 && v(ws.primary_value_props)) { setValueProps(v(ws.primary_value_props)!); filled.push("value_props"); }
-            if (!meetingTimezone && v(ws.meeting_timezone)) { setMeetingTimezone(v(ws.meeting_timezone)!); filled.push("timezone"); }
+            // Always replace with KB data (sync = override with latest KB)
+            if (v(ws.company_name)) { setCompanyName(v(ws.company_name)!); filled.push("company_name"); }
+            if (v(ws.product_name)) { setProductName(v(ws.product_name)!); filled.push("product_name"); }
+            if (v(ws.product_description)) { setProductDescription(v(ws.product_description)!); filled.push("product_description"); }
+            if (v(ws.primary_value_props)) { setValueProps(v(ws.primary_value_props)!); filled.push("value_props"); }
+            if (v(ws.meeting_timezone)) { setMeetingTimezone(v(ws.meeting_timezone)!); filled.push("timezone"); }
             if (filled.length > 0) {
               setAutoFilledFields(prev => [...prev, ...filled]);
               toast.success(`Synced ${filled.length} field(s) from knowledge base. Review and save.`);
             } else {
-              toast.info("All fields already populated or no high-confidence data found.");
+              toast.info("No high-confidence data found in knowledge base.");
             }
           }}
         >
