@@ -918,16 +918,8 @@ serve(async (req) => {
 
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
-    // Get existing thread IDs locked to this lead
-    const { data: existingThreads } = await serviceSupabase
-      .from("interactions")
-      .select("gmail_thread_id")
-      .eq("lead_id", leadId)
-      .not("gmail_thread_id", "is", null);
-
-    const lockedThreadIds = new Set<string>(
-      (existingThreads || []).map(i => i.gmail_thread_id).filter(Boolean)
-    );
+    // Note: Thread-based expansion removed — it caused cross-lead contamination.
+    // Gmail search `from:X OR to:X` + per-message `messageInvolvesLead` check is sufficient.
 
     // Search for emails from/to this lead
     const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
@@ -1015,8 +1007,7 @@ serve(async (req) => {
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-        // Lock this thread to this lead ONLY after confirming message involves the lead
-        lockedThreadIds.add(threadId);
+        // Thread ID stored for reference only (no thread expansion)
 
         // Determine direction based on whether from contains lead email (exact match)
         const fromEmails = extractEmailAddresses(from);
@@ -1060,73 +1051,8 @@ serve(async (req) => {
       }
     }
 
-    // Also fetch messages from locked threads (thread lock rule)
-    for (const threadId of lockedThreadIds) {
-      try {
-        const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;
-        const threadResponse = await fetch(threadUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
 
-        if (!threadResponse.ok) continue;
 
-        const threadData = await threadResponse.json();
-        const threadMessages = threadData.messages || [];
-
-        for (const message of threadMessages) {
-          const gmailMessageId = message.id;
-          if (existingMessageIds.has(gmailMessageId)) continue;
-
-          const headers = message.payload?.headers || [];
-          if (!messageInvolvesLead(headers, leadEmailNorm)) {
-            console.warn(
-              `[gmail-sync] Skipping thread message ${gmailMessageId} in thread ${threadId} (does not involve lead email ${leadEmailNorm})`
-            );
-            continue;
-          }
-
-          const from = getHeader(headers, "From") || "";
-          const to = getHeader(headers, "To") || "";
-          const subject = getHeader(headers, "Subject") || "(no subject)";
-          const date = getHeader(headers, "Date");
-          const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
-
-          const threadFromEmails = extractEmailAddresses(from);
-          const isFromLead = threadFromEmails.some(e => e === leadEmailNorm.toLowerCase());
-          const direction = isFromLead ? "inbound" : "outbound";
-          const type = isFromLead ? "email_inbound" : "email_outbound";
-          
-          const bodyText = getMessageBody(message);
-
-          if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
-            hasClosingKeywords = true;
-          }
-
-          const { error: insertError } = await serviceSupabase
-            .from("interactions")
-            .insert({
-              lead_id: leadId,
-              type,
-              source: "gmail",
-              occurred_at: occurredAt,
-              subject,
-              from_email: from,
-              to_email: to,
-              body_text: bodyText.substring(0, 10000),
-              gmail_message_id: gmailMessageId,
-              gmail_thread_id: threadId,
-              direction,
-            });
-
-          if (!insertError) {
-            synced++;
-            existingMessageIds.add(gmailMessageId);
-          }
-        }
-      } catch (err) {
-        console.error(`[gmail-sync] Error fetching thread ${threadId}:`, err);
-      }
-    }
 
     // Now compute derived metrics from all interactions for this lead
     const { data: allInteractions } = await serviceSupabase
