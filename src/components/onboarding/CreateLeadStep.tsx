@@ -137,7 +137,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
-        source_type: "outbound_list",
+        source_type: "csv_import",
         motion: "outbound_prospecting",
         strategy: "fast" as const,
         last_activity_at: new Date().toISOString(),
