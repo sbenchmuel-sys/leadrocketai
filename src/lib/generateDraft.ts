@@ -62,12 +62,76 @@ function buildRepContext(ctx: ResolvedContext): string {
   ].filter(Boolean).join("\n");
 }
 
+function formatIndustryContext(industryKb: any): string {
+  if (!industryKb || typeof industryKb !== 'object') return '';
+  const lines: string[] = ['=== INDUSTRY CONTEXT ==='];
+  const seen = new Set<string>();
+  const addLine = (line: string) => {
+    const trimmed = line.trim();
+    if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
+  };
+  if (industryKb.industry_label) addLine(`Industry: ${industryKb.industry_label}`);
+  if (Array.isArray(industryKb.typical_objections) && industryKb.typical_objections.length > 0) {
+    addLine('Typical Objections:');
+    industryKb.typical_objections.slice(0, 5).forEach((o: string) => addLine(`- ${o}`));
+  }
+  if (Array.isArray(industryKb.buying_signals) && industryKb.buying_signals.length > 0) {
+    addLine('Buying Signals:');
+    industryKb.buying_signals.slice(0, 5).forEach((s: string) => addLine(`- ${s}`));
+  }
+  if (Array.isArray(industryKb.red_flags) && industryKb.red_flags.length > 0) {
+    addLine('Red Flags:');
+    industryKb.red_flags.slice(0, 5).forEach((f: string) => addLine(`- ${f}`));
+  }
+  if (Array.isArray(industryKb.jargon) && industryKb.jargon.length > 0) {
+    addLine(`Jargon: ${industryKb.jargon.slice(0, 8).join(', ')}`);
+  }
+  if (Array.isArray(industryKb.email_intents) && industryKb.email_intents.length > 0) {
+    addLine('Suggested Email Intents:');
+    industryKb.email_intents.slice(0, 4).forEach((i: string) => addLine(`- ${i}`));
+  }
+  const result = lines.join('\n');
+  return result.length > 1000 ? result.slice(0, 997) + '...' : result;
+}
+
+function formatCompanyKbContext(companyKb: any): string {
+  if (!companyKb || typeof companyKb !== 'object') return '';
+  const lines: string[] = ['=== COMPANY KB ==='];
+  const seen = new Set<string>();
+  const addLine = (line: string) => {
+    const trimmed = line.trim();
+    if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
+  };
+  if (companyKb.company_name) addLine(`Company: ${companyKb.company_name}`);
+  if (companyKb.product_name) addLine(`Product: ${companyKb.product_name}`);
+  if (Array.isArray(companyKb.differentiators) && companyKb.differentiators.length > 0) {
+    addLine('Differentiators:');
+    companyKb.differentiators.slice(0, 5).forEach((d: any) => addLine(`- ${typeof d === 'string' ? d : d.text || ''}`));
+  }
+  if (Array.isArray(companyKb.target_customers) && companyKb.target_customers.length > 0) {
+    addLine('Target Customers:');
+    companyKb.target_customers.slice(0, 5).forEach((t: any) => addLine(`- ${typeof t === 'string' ? t : t.text || ''}`));
+  }
+  if (Array.isArray(companyKb.proof_points) && companyKb.proof_points.length > 0) {
+    addLine('Proof Points:');
+    companyKb.proof_points.slice(0, 5).forEach((p: any) => addLine(`- ${typeof p === 'string' ? p : p.text || ''}`));
+  }
+  if (Array.isArray(companyKb.competitors) && companyKb.competitors.length > 0) {
+    addLine(`Competitors: ${companyKb.competitors.slice(0, 5).join(', ')}`);
+  }
+  const result = lines.join('\n');
+  return result.length > 1000 ? result.slice(0, 997) + '...' : result;
+}
+
 function buildAIPayload(
   ctx: ResolvedContext,
   taskType: AITaskType,
   instructions: string | null
 ): Record<string, unknown> {
   const lead = ctx.lead;
+
+  const industryContext = formatIndustryContext(ctx.industry_kb);
+  const companyKbContext = formatCompanyKbContext((ctx.workspace_profile as any)?.company_kb);
 
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
@@ -82,6 +146,8 @@ function buildAIPayload(
         instructions ? `Instructions: ${instructions}` : "",
       ].filter(Boolean).join(". ") || `B2B sales outreach`,
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
+      industry_context: industryContext,
+      company_kb_context: companyKbContext,
     };
   }
 
@@ -91,6 +157,8 @@ function buildAIPayload(
       lead_context: buildLeadContext(ctx),
       custom_instructions: instructions || undefined,
       knowledge_context: formatWorkspaceContext(ctx.workspace_profile),
+      industry_context: industryContext,
+      company_kb_context: companyKbContext,
     };
   }
 
@@ -99,6 +167,8 @@ function buildAIPayload(
     lead_context: buildLeadContext(ctx),
     rep_context: buildRepContext(ctx),
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
+    industry_context: industryContext,
+    company_kb_context: companyKbContext,
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
