@@ -350,6 +350,21 @@ Do NOT:
 - Increase total word count.`;
 }
 
+// Single-pass prompt assembler — enforces strict block order
+function buildFinalUserPrompt({ motionBlock, styleModifier, playbookContext, taskPrompt }: {
+  motionBlock: string;
+  styleModifier: string;
+  playbookContext: string;
+  taskPrompt: string;
+}): string {
+  const parts: string[] = [];
+  if (motionBlock) parts.push(motionBlock);
+  if (styleModifier) parts.push(styleModifier);
+  if (playbookContext) parts.push(playbookContext);
+  parts.push(taskPrompt);
+  return parts.join("\n\n");
+}
+
 // Task prompts
 const PROMPTS: Record<string, string> = {
   intent_router: `You are classifying an inbound B2B email for a regulated enterprise sales process.
@@ -1419,53 +1434,34 @@ serve(async (req) => {
     // Build the task prompt with template variables replaced
     const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
 
-    // === Single injection pipeline (strict order) ===
-    const promptParts: string[] = [];
-
-    // STEP 1 — MOTION BLOCK
-    const motionBlock = buildMotionBlock({ motion, first_touch: isFirstTouch });
-    if (motionBlock) {
-      promptParts.push(motionBlock);
-      console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
-    }
-
-    // STEP 2 — STYLE MODIFIER
+    // Compute all blocks
     const isOutboundMotion = motion === "outbound_prospecting";
     const outboundStyle = String(enhancedPayload.outbound_style || "standard");
     const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
     const isBreakup = task === "pre_email_4_breakup";
 
-    // 2a. Outbound style modifier (first touch only)
+    // 1. Motion block
+    const motionBlock = buildMotionBlock({ motion, first_touch: isFirstTouch });
+
+    // 2. Style modifier (combine all style pieces into one string)
+    const styleParts: string[] = [];
     const styleBlock = buildStyleModifier({ motion, first_touch: isFirstTouch, outbound_style: outboundStyle });
-    if (styleBlock) {
-      promptParts.push(styleBlock);
-      console.log(`[ai_task] [2/STYLE] Outbound style: ${outboundStyle}`);
-    }
+    if (styleBlock) styleParts.push(styleBlock);
+    if (isFirstTouch && isOutboundMotion && !hasInbound) styleParts.push(getColdOutreachBlock(playbookId));
+    if (isFollowUp && isOutboundMotion) styleParts.push(REPLY_PATTERNS_BLOCK);
+    if (isBreakup) styleParts.push(BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales);
+    const styleModifier = styleParts.join("\n\n") || "";
 
-    // 2b. Cold outreach playbook-specific block (first touch only)
-    if (isFirstTouch && isOutboundMotion && !hasInbound) {
-      promptParts.push(getColdOutreachBlock(playbookId));
-      console.log(`[ai_task] [2/STYLE] Cold outreach block (${playbookId})`);
-    }
-    if (isFollowUp && isOutboundMotion) {
-      promptParts.push(REPLY_PATTERNS_BLOCK);
-      console.log("[ai_task] [2/STYLE] Reply optimization patterns");
-    }
-    if (isBreakup) {
-      promptParts.push(BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales);
-      console.log(`[ai_task] [2/STYLE] Breakup closer (${playbookId})`);
-    }
+    // 3. Playbook context
+    const playbookContext = enhancedPayload.playbook_context ? String(enhancedPayload.playbook_context) : "";
 
-    // STEP 3 — PLAYBOOK CONTEXT
-    if (enhancedPayload.playbook_context) {
-      promptParts.push(String(enhancedPayload.playbook_context));
-      console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    }
+    // Build final prompt in one pass
+    const userPrompt = buildFinalUserPrompt({ motionBlock, styleModifier, playbookContext, taskPrompt: taskBody });
 
-    // STEP 4 — TASK PROMPT (with workspace + KB already interpolated)
-    promptParts.push(taskBody);
-
-    const userPrompt = promptParts.join("\n\n");
+    // Log what was assembled
+    if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
+    if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
+    if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
 
     // Select model based on task
     const model = PRO_MODEL_TASKS.includes(task)
