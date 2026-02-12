@@ -1,46 +1,76 @@
 
 
-## Bulk Automation from the Dashboard
+## Demo Reset Feature
 
-### What it does
-Adds a "Enable Automation" bulk action button in the LeadTable toolbar (visible when leads are selected). Clicking it opens a confirmation dialog that:
+A "Reset Demo" button that wipes all user data and restarts the onboarding flow from scratch. This is the safest approach because all data is already scoped by user ID, requiring no schema changes.
 
-1. Lists all selected leads with clear status flags for ones that **cannot** be automated safely
-2. Flags leads that have **already replied** (have `last_inbound_at`) with a warning icon
-3. Flags leads **not in an eligible motion** (not `outbound_prospecting` or `inbound_response`) -- e.g., nurture, post_meeting, closing, closed
-4. Allows the user to deselect flagged leads before confirming
-5. On confirm, enables automation on all eligible (non-flagged) leads in one batch
+### How It Works
 
-### UI Flow
+1. User clicks "Reset Demo" in the sidebar or settings
+2. A confirmation dialog warns that all data will be permanently deleted
+3. A backend function deletes all user-owned data across every table
+4. The profile is reset to `onboarding_done = false`, `onboarding_step = 0`
+5. The user is redirected to the onboarding flow automatically
 
-1. User selects multiple leads via checkboxes
-2. Bulk toolbar shows existing actions (Move to stage, Delete) plus a new **"Enable Automation"** button with a Zap icon
-3. Clicking it opens a **Dialog** (confirmation page) containing:
-   - A summary: "Enable automation on X of Y selected leads"
-   - A scrollable list of leads, each with:
-     - Name / Company
-     - Current phase
-     - A checkbox (pre-checked for eligible leads, unchecked for flagged ones)
-     - Warning badges: "Has replied" (amber) or "Not eligible" (red) for ineligible leads
-   - Footer with Cancel and "Enable Automation" buttons
-4. User can toggle individual leads on/off, then confirm
-5. On confirm: batch update eligible leads with `needs_action=true`, `next_action_key`, `eligible_at` set to the correct future time
+### What Gets Deleted
+
+All data owned by the current user:
+- Leads, contacts, contact identities
+- Conversations, messages, conversation analysis
+- Drafts, interactions, meeting summaries, meeting packs
+- Knowledge base chunks, onboarding config
+- Rep profiles, rep signatures, workspace profiles
+- Gmail connections, integrations, OAuth states
+- Manager views and metrics
+- The workspace itself and workspace membership
+
+### Changes Required
+
+**1. New backend function: `reset-demo`**
+- Accepts authenticated requests only
+- Deletes data from all user-scoped tables in dependency order (children first)
+- Resets the `profiles` row: `onboarding_done = false`, `onboarding_step = 0`
+- Returns success/failure
+
+**2. Updated sidebar (`DashboardLayout.tsx`)**
+- Add a "Reset Demo" button near the Sign Out button
+- Wrapped in an AlertDialog for confirmation ("This will permanently erase all your data")
+- On confirm: calls the `reset-demo` function, refreshes the profile (which triggers redirect to onboarding)
+
+**3. No schema changes needed**
+- All tables already use `owner_user_id` or `workspace_id` linked to the user
+- No migrations required
 
 ### Technical Details
 
-**New component**: `src/components/dashboard/BulkAutomationDialog.tsx`
-- Props: `selectedLeads: EnrichedLead[]`, `open: boolean`, `onOpenChange`, `onSuccess`
-- Categorizes leads into eligible vs flagged
-- Flagging logic:
-  - `lead.last_inbound_at` exists and motion is not `nurture` --> "Has replied"
-  - Motion not in `["outbound_prospecting", "inbound_response"]` --> "Not eligible (motion)"
-  - Stage is `closed_won` or `closed_lost` --> "Not eligible (closed)"
-  - Already has automation enabled (`eligible_at` set + `needs_action`) --> "Already active"
-- Uses same scheduling logic as `AutomationPreviewCard`: calculates `eligible_at` based on whether lead has prior outbound, uses `getMotionIntervals` for gap days
-- Performs a single batch update via `supabase.from("leads").update(...).in("id", ids)`
+Tables to clear (in order to respect dependencies):
 
-**Modified file**: `src/components/dashboard/LeadTable.tsx`
-- Add "Enable Automation" button to the bulk actions toolbar (next to "Move to stage" and "Delete")
-- Import and render `BulkAutomationDialog` when triggered
-- New state: `bulkAutomationOpen: boolean`
+```text
+1. conversation_analysis  (depends on conversations)
+2. messages               (depends on conversations)
+3. conversations          (depends on contacts)
+4. contact_identities     (depends on contacts)
+5. contacts
+6. drafts                 (depends on leads)
+7. interactions           (depends on leads)
+8. meeting_packs          (depends on leads)
+9. meeting_summaries      (depends on leads)
+10. leads
+11. kb_chunks
+12. onboarding_config
+13. rep_signatures
+14. rep_profiles
+15. workspace_profiles
+16. gmail_connections
+17. integrations
+18. oauth_states
+19. manager_conversation_metrics
+20. manager_views
+21. unmatched_meeting_summaries
+22. workspace_members
+23. workspaces
+24. profiles (UPDATE only -- reset onboarding flags)
+```
+
+The edge function will use the service role key and delete by `owner_user_id = user.id` or `workspace_id IN (user's workspaces)` depending on the table's schema.
 
