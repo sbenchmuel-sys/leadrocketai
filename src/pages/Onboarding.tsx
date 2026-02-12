@@ -3,9 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCurrentProfile } from "@/lib/supabaseQueries";
 import ChoosePlaybookStep from "@/components/onboarding/ChoosePlaybookStep";
-import WelcomeStep from "@/components/onboarding/WelcomeStep";
-import CreateLeadStep from "@/components/onboarding/CreateLeadStep";
+import ConnectInboxStep from "@/components/onboarding/ConnectInboxStep";
 import AddKnowledgeStep from "@/components/onboarding/AddKnowledgeStep";
+import CreateLeadStep from "@/components/onboarding/CreateLeadStep";
 import CompletionStep from "@/components/onboarding/CompletionStep";
 
 const TOTAL_STEPS = 5;
@@ -73,16 +73,20 @@ export default function Onboarding() {
             <ChoosePlaybookStep onNext={() => setCurrentStep(1)} />
           )}
           {currentStep === 1 && (
-            <WelcomeStep onNext={() => setCurrentStep(2)} />
+            <ConnectInboxStep
+              onNext={() => setCurrentStep(2)}
+              onBack={() => setCurrentStep(0)}
+              allowSkip
+            />
           )}
           {currentStep === 2 && (
-            <CreateLeadStep
+            <AddKnowledgeStep
               onNext={() => setCurrentStep(3)}
               onBack={() => setCurrentStep(1)}
             />
           )}
           {currentStep === 3 && (
-            <AddKnowledgeStep
+            <CreateLeadStep
               onNext={() => setCurrentStep(4)}
               onBack={() => setCurrentStep(2)}
             />
