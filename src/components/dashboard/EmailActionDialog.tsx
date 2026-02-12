@@ -65,7 +65,6 @@ interface MinimalLead {
   company: string;
   email: string;
   stage: string;
-  strategy?: string;
   job_title?: string | null;
   industry?: string | null;
   personal_notes?: string | null;
@@ -363,7 +362,7 @@ export function EmailActionDialog({
 Name: ${lead.name}
 Company: ${lead.company}
 Email: ${lead.email}
-Strategy: ${lead.strategy || 'not set'}
+Motion: ${lead.motion || 'outbound_prospecting'}
 Stage: ${lead.stage}
 ${lead.job_title ? `Title: ${lead.job_title}` : ''}
 ${lead.industry ? `Industry: ${lead.industry}` : ''}

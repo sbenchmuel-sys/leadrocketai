@@ -34,7 +34,6 @@ interface MotionUpdate {
   action_reason_code?: string | null;
   auto_nurture_eligible?: boolean;
   mode_changed_at: string;
-  strategy?: string;
 }
 
 function buildUpdate(mode: ModeOption): MotionUpdate {
@@ -47,7 +46,6 @@ function buildUpdate(mode: ModeOption): MotionUpdate {
         ...base,
         motion: "outbound_prospecting",
         stage: "contacted",
-        strategy: "fast",
         nurture_mode: "off",
         nurture_status: "inactive",
         nurture_cadence: null,
@@ -92,7 +90,6 @@ function buildUpdate(mode: ModeOption): MotionUpdate {
         ...base,
         motion: "nurture",
         stage: "contacted",
-        strategy: "nurture",
         nurture_cadence: "biweekly",
         nurture_mode: "review",
         nurture_status: "active",

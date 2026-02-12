@@ -88,11 +88,53 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         setBody("");
         setAttachments([]);
       } else {
-        // Email send — placeholder for gmail-send integration
-        toast({
-          title: "Ready to send",
-          description: "Email sending integration coming soon.",
+        // Email send via gmail-send
+        const { data, error } = await supabase.functions.invoke("gmail-send", {
+          body: {
+            to: conversation.contact_name, // Will be resolved below
+            subject: `Re: ${conversation.contact_name}`,
+            body: body.trim(),
+          },
         });
+
+        // We need the contact's email identity
+        const { data: emailIdentity, error: emailIdErr } = await supabase
+          .from("contact_identities")
+          .select("value")
+          .eq("contact_id", conversation.contact_id)
+          .eq("type", "email")
+          .limit(1)
+          .maybeSingle();
+
+        if (emailIdErr || !emailIdentity?.value) {
+          throw new Error("No email address found for this contact.");
+        }
+
+        // Get the conversation's thread info for proper threading
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("provider_thread_id")
+          .eq("id", conversation.id)
+          .single();
+
+        const { data: sendResult, error: sendErr } = await supabase.functions.invoke("gmail-send", {
+          body: {
+            to: emailIdentity.value,
+            subject: `Re: ${conversation.contact_name}`,
+            body: body.trim(),
+            threadId: convData?.provider_thread_id || undefined,
+          },
+        });
+
+        if (sendErr) throw sendErr;
+        if (sendResult?.error) throw new Error(sendResult.error);
+        if (sendResult?.needsReconnect) {
+          throw new Error("Gmail needs reconnection. Please reauthorize in Settings.");
+        }
+
+        toast({ title: "Email sent", description: "Email delivered successfully." });
+        setBody("");
+        setAttachments([]);
       }
     } catch (err: any) {
       console.error("[ReplyComposer] Send error:", err);
