@@ -1297,51 +1297,45 @@ serve(async (req) => {
       }
     }
 
+    // Build the user prompt with template variables replaced
+    let userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
+
     // Use explicit flags from client payload
     const playbookId = String(enhancedPayload.playbook_id || "general");
     const motion = String(enhancedPayload.motion || "");
     const isFirstTouch = enhancedPayload.first_touch === true;
     const hasInbound = enhancedPayload.has_latest_inbound === true;
-    const isOutboundMotion = motion === "outbound_prospecting";
 
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
-    // Build the task prompt with template variables replaced
-    const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
-
-    // === Single injection assembly (strict order) ===
-    // 1. MOTION BLOCK — style modifiers based on motion + task
-    const motionParts: string[] = [];
-
+    // Inject cold outreach style block for outbound early-touch emails
     const isEarlyTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "pre_email_2_followup";
-    const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
-    const isBreakup = task === "pre_email_4_breakup";
-
+    const isOutboundMotion = motion === "outbound_prospecting";
     if (isEarlyTouchTask && isOutboundMotion && !hasInbound) {
-      motionParts.push(getColdOutreachBlock(playbookId));
-      console.log(`[ai_task] [1/MOTION] Cold outreach style (${playbookId})`);
+      const outreachBlock = getColdOutreachBlock(playbookId);
+      userPrompt = outreachBlock + "\n\n" + userPrompt;
+      console.log(`[ai_task] Injected cold outreach style block (${playbookId})`);
     }
 
-    // 2. STYLE MODIFIER — reply patterns & breakup closers (outbound follow-ups only)
+    // Inject reply patterns for follow-ups and breakups
+    const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
     if (isFollowUp) {
-      motionParts.push(REPLY_PATTERNS_BLOCK);
-      console.log("[ai_task] [2/STYLE] Reply optimization patterns");
-    }
-    if (isBreakup) {
-      motionParts.push(BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales);
-      console.log(`[ai_task] [2/STYLE] Breakup closer (${playbookId})`);
+      userPrompt = REPLY_PATTERNS_BLOCK + "\n\n" + userPrompt;
+      console.log("[ai_task] Injected reply optimization patterns");
     }
 
-    // 3. PLAYBOOK CONTEXT
+    // Inject breakup closer for breakup emails
+    if (task === "pre_email_4_breakup") {
+      const closer = BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales;
+      userPrompt = closer + "\n\n" + userPrompt;
+      console.log(`[ai_task] Injected breakup closer (${playbookId})`);
+    }
+
+    // Inject playbook context if provided
     if (enhancedPayload.playbook_context) {
-      motionParts.push(String(enhancedPayload.playbook_context));
-      console.log("[ai_task] [3/PLAYBOOK] Playbook context");
+      userPrompt = String(enhancedPayload.playbook_context) + "\n\n" + userPrompt;
+      console.log("[ai_task] Injected playbook context");
     }
-
-    // 4. TASK PROMPT (with workspace + KB already interpolated)
-    motionParts.push(taskBody);
-
-    const userPrompt = motionParts.join("\n\n");
 
     // Select model based on task
     const model = PRO_MODEL_TASKS.includes(task)
