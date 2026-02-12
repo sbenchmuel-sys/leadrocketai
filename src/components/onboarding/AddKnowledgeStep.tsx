@@ -55,6 +55,16 @@ export default function AddKnowledgeStep({ onNext, onBack }: AddKnowledgeStepPro
   const handleSkip = async () => {
     setIsLoading(true);
     try {
+      // Mark knowledge as skipped in onboarding_config
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await (supabase as any)
+          .from("onboarding_config")
+          .upsert(
+            { user_id: user.id, extraction_status: "skipped" },
+            { onConflict: "user_id" }
+          );
+      }
       await setOnboardingStep(3);
       onNext();
     } catch (err) {
