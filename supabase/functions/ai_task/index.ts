@@ -222,6 +222,26 @@ Psychological triggers:
 - Professional credibility, safety, process alignment
 `;
 
+// Psychological reply patterns — rotated into follow-up and breakup emails
+const REPLY_PATTERNS_BLOCK = `
+=== REPLY OPTIMIZATION PATTERNS ===
+Rotate one of these CTA patterns per email to maximize reply probability:
+Permission-Based: "If this isn't relevant, feel free to say so — I'll close the loop."
+Soft Assumption: "If this is already handled internally, happy to step aside."
+Binary Micro-CTA: "Would you say this is: A) Relevant now B) Worth revisiting later C) Not a priority"
+Curiosity Close: "Worth sharing how we've approached this with similar teams?"
+Rules:
+- Use ONE pattern per email, do not stack
+- Match pattern to deal stage
+- Keep the CTA as the final sentence
+`;
+
+// Playbook-specific breakup closers
+const BREAKUP_CLOSERS: Record<string, string> = {
+  b2b_saas: `Breakup style: "I haven't heard back, so I'll assume this isn't a priority right now. If I'm wrong, happy to reconnect. Either way — appreciate the time."`,
+  general_sales: `Breakup style: "Seems like timing may not be right. Should I close the loop for now?"`,
+};
+
 // Map playbook IDs to specialized outreach blocks
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
@@ -1278,19 +1298,34 @@ serve(async (req) => {
     // Build the user prompt with template variables replaced
     let userPrompt = replaceTemplateVars(taskPrompt, enhancedPayload);
 
-    // Inject cold outreach style block for outbound first-touch emails
-    const isFirstTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast";
+    // Detect playbook from context
+    const pbCtx = String(enhancedPayload.playbook_context || "");
+    const playbookId = pbCtx.includes("B2B SaaS") ? "b2b_saas"
+      : pbCtx.includes("Medical Device") ? "medical_device_rep"
+      : "general";
+
+    // Inject cold outreach style block for outbound early-touch emails
+    const isEarlyTouchTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "pre_email_2_followup";
     const isOutboundMotion = String(enhancedPayload.lead_context || "").includes("Motion: outbound_prospecting");
-    const hasNoThread = !enhancedPayload.email_thread && !enhancedPayload.latest_inbound;
-    if (isFirstTouchTask && isOutboundMotion && hasNoThread) {
-      // Detect playbook from context to select outreach block
-      const pbCtx = String(enhancedPayload.playbook_context || "");
-      const playbookId = pbCtx.includes("B2B SaaS") ? "b2b_saas"
-        : pbCtx.includes("Medical Device") ? "medical_device_rep"
-        : "general";
+    const hasNoInbound = !enhancedPayload.latest_inbound;
+    if (isEarlyTouchTask && isOutboundMotion && hasNoInbound) {
       const outreachBlock = getColdOutreachBlock(playbookId);
       userPrompt = outreachBlock + "\n\n" + userPrompt;
-      console.log(`[ai_task] Injected cold outreach style block (${playbookId}) for first-touch outbound`);
+      console.log(`[ai_task] Injected cold outreach style block (${playbookId})`);
+    }
+
+    // Inject reply patterns for follow-ups and breakups
+    const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
+    if (isFollowUp) {
+      userPrompt = REPLY_PATTERNS_BLOCK + "\n\n" + userPrompt;
+      console.log("[ai_task] Injected reply optimization patterns");
+    }
+
+    // Inject breakup closer for breakup emails
+    if (task === "pre_email_4_breakup") {
+      const closer = BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales;
+      userPrompt = closer + "\n\n" + userPrompt;
+      console.log(`[ai_task] Injected breakup closer (${playbookId})`);
     }
 
     // Inject playbook context if provided
