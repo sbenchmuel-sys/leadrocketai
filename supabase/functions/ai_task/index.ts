@@ -318,6 +318,38 @@ Length:
   return "";
 }
 
+// Centralized style modifier builder
+function buildStyleModifier({ motion, first_touch, outbound_style }: { motion: string; first_touch: boolean; outbound_style: string }): string {
+  if (motion !== "outbound_prospecting" || !first_touch) {
+    return "";
+  }
+
+  if (outbound_style === "high_reply") {
+    return `=== OUTBOUND STYLE: HIGH REPLY ===
+Opening Adjustment:
+- Begin with a short disarming phrase (e.g., "Quick one —") OR start with a focused question.
+- Prefer question-first framing.
+- Keep opening under 2 short lines.
+- Introduce mild tension around a likely pain point.
+
+Do NOT:
+- Increase total word count.
+- Add humor unless clearly appropriate.
+- Change compliance tone.
+- Override motion structure rules.`;
+  }
+
+  return `=== OUTBOUND STYLE: STANDARD ===
+Opening Adjustment:
+- Professional, direct opening.
+- State relevance clearly in the first sentence.
+- No gimmicks.
+
+Do NOT:
+- Override motion structure rules.
+- Increase total word count.`;
+}
+
 // Task prompts
 const PROMPTS: Record<string, string> = {
   intent_router: `You are classifying an inbound B2B email for a regulated enterprise sales process.
@@ -1382,11 +1414,20 @@ serve(async (req) => {
       console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     }
 
-    // STEP 2 — STYLE MODIFIER (outbound only)
+    // STEP 2 — STYLE MODIFIER
     const isOutboundMotion = motion === "outbound_prospecting";
+    const outboundStyle = String(enhancedPayload.outbound_style || "standard");
     const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
     const isBreakup = task === "pre_email_4_breakup";
 
+    // 2a. Outbound style modifier (first touch only)
+    const styleBlock = buildStyleModifier({ motion, first_touch: isFirstTouch, outbound_style: outboundStyle });
+    if (styleBlock) {
+      promptParts.push(styleBlock);
+      console.log(`[ai_task] [2/STYLE] Outbound style: ${outboundStyle}`);
+    }
+
+    // 2b. Cold outreach playbook-specific block (first touch only)
     if (isFirstTouch && isOutboundMotion && !hasInbound) {
       promptParts.push(getColdOutreachBlock(playbookId));
       console.log(`[ai_task] [2/STYLE] Cold outreach block (${playbookId})`);
