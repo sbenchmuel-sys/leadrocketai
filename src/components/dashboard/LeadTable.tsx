@@ -545,8 +545,10 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 const isSelected = selectedLeads.has(lead.id);
                 const nurtureMode = (lead as any).nurture_mode;
                 const nurtureStatus = (lead as any).nurture_status;
-                const isAutoRunning = nurtureMode === "auto" && nurtureStatus === "active";
-                const isReview = nurtureMode === "review" && nurtureStatus === "active";
+                const hasEligibleAt = !!(lead as any).eligible_at;
+                // Active: has eligible_at + needs_action, OR nurture auto mode
+                const isAutoRunning = (hasEligibleAt && lead.needs_action) || (nurtureMode === "auto" && nurtureStatus === "active");
+                const isReview = !isAutoRunning && nurtureMode === "review" && nurtureStatus === "active";
 
                 // Direction indicator based on activity recency
                 const directionArrow = (() => {
