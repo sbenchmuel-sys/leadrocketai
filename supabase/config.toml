@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.nurture-pre-generate]
 verify_jwt = false
+
+[functions.reset-demo]
+verify_jwt = false
