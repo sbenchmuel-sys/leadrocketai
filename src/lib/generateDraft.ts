@@ -192,26 +192,22 @@ Avoid:
 - Emotional tension framing
 `;
 
-const COLD_OUTREACH_MEDICAL_BLOCK = `
-=== COLD OUTREACH STYLE: MEDICAL DEVICE HIGH REPLY ===
-Length: Under 130 words.
-Opening:
-- Professional introduction
-- Clear context (why reaching out)
-Core:
-- One clinical or operational benefit
-- Avoid exaggerated claims
-- Reference use case
-CTA:
-- "Would it make sense to share more details?"
-- "Open to a brief discussion?"
-- "Who would be best to speak with?"
-Avoid:
-- Urgency pressure
-- Sales-heavy tone
-- Aggressive follow-ups
-Psychological triggers:
-- Professional credibility, safety, process alignment
+const COLD_OUTREACH_HIGH_REPLY_BLOCK = `
+=== OUTBOUND STYLE: HIGH REPLY ===
+Opening Adjustment:
+- Begin with a short disarming line such as:
+  "Quick one —"
+  OR a focused question.
+  OR a clear problem hypothesis.
+- Prefer question-first structure.
+- Keep opening under 2 short lines.
+- Introduce mild tension around a likely pain point.
+
+Do NOT:
+- Add humor unless clearly appropriate.
+- Use sarcasm.
+- Increase total word count.
+- Change compliance tone.
 `;
 
 // Psychological reply patterns — rotated into follow-up and breakup emails
@@ -239,7 +235,7 @@ const BREAKUP_CLOSERS: Record<string, string> = {
 // Map playbook IDs to specialized outreach blocks (fallback to universal)
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
-  medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
+  high_reply: COLD_OUTREACH_HIGH_REPLY_BLOCK,
 };
 
 // Determine if cold outreach style should be injected
