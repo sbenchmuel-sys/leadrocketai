@@ -206,57 +206,15 @@ serve(async (req) => {
 
     console.log(`[gmail-callback] Successfully connected Gmail for user ${stateData.user_id}: ${gmailEmail}`);
 
-    // Determine the allowed origin for postMessage
-    // Use the origin from state, or derive from redirect_url
-    let allowedOrigin = stateData.origin || "";
-    if (!allowedOrigin && stateData.redirect_url) {
-      try {
-        allowedOrigin = new URL(stateData.redirect_url).origin;
-      } catch {
-        // If redirect_url is not a valid URL, leave origin empty
-        allowedOrigin = "";
-      }
-    }
+    // Redirect back to the app instead of showing a success page
+    const redirectUrl = new URL(stateData.redirect_url);
+    redirectUrl.searchParams.set("gmail_connected", "true");
 
-    // Escape the email for safe display
-    const safeEmail = escapeHtml(gmailEmail);
-    const safeOrigin = escapeHtml(allowedOrigin);
-
-    // Show success, notify opener via postMessage with specific origin, and close the popup window
-    return new Response(`
-      <html>
-        <head>
-          <style>
-            body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f5f5f5; }
-            .container { text-align: center; padding: 2rem; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #22c55e; margin-bottom: 1rem; }
-            p { color: #666; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>✓ Gmail Connected!</h1>
-            <p>Connected: ${safeEmail}</p>
-            <p>This window will close automatically...</p>
-          </div>
-          <script>
-            // Notify opener that connection succeeded using specific origin
-            if (window.opener) {
-              var allowedOrigin = "${safeOrigin}";
-              if (allowedOrigin) {
-                window.opener.postMessage({ type: "GMAIL_CONNECTED" }, allowedOrigin);
-              } else {
-                // Fallback: Only post to same origin
-                window.opener.postMessage({ type: "GMAIL_CONNECTED" }, window.location.origin);
-              }
-            }
-            // Close popup after brief delay
-            setTimeout(function() { window.close(); }, 1500);
-          </script>
-        </body>
-      </html>
-    `, {
-      headers: getSecureHtmlHeaders(),
+    return new Response(null, {
+      status: 302,
+      headers: {
+        "Location": redirectUrl.toString(),
+      },
     });
   } catch (error) {
     const errorId = crypto.randomUUID();
