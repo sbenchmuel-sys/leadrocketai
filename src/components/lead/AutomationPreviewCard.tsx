@@ -53,16 +53,32 @@ function getNextTwoSteps(lead: LeadDetail) {
 
   const steps: { key: string; label: string; date: Date }[] = [];
   const baseDate = lead.last_outbound_at ? new Date(lead.last_outbound_at) : new Date();
+  // Use eligible_at as the anchor for the first step if available
+  const eligibleAt = (lead as any).eligible_at ? new Date((lead as any).eligible_at) : null;
 
   for (let i = 0; i < 2; i++) {
     const idx = stepNum - 1 + i;
     if (idx >= maxSteps) break;
     const key = `send_pre_${idx + 1}`;
     const label = stepLabels[key] || `Step ${idx + 1}`;
-    // intervals are cumulative offsets; gap from previous step
-    const gapDays = idx > 0 ? intervals[idx] - intervals[idx - 1] : 0;
-    const date = addDays(baseDate, i === 0 ? 0 : gapDays);
-    date.setHours(9, 30, 0, 0);
+    
+    let date: Date;
+    if (i === 0 && eligibleAt) {
+      // First step: use the stored eligible_at timestamp
+      date = eligibleAt;
+    } else {
+      const gapDays = idx > 0 ? intervals[idx] - intervals[idx - 1] : 0;
+      const prevDate = i === 0 ? baseDate : steps[i - 1]?.date || baseDate;
+      date = addDays(prevDate, i === 0 ? 0 : gapDays);
+      date.setHours(9, 30, 0, 0);
+    }
+    
+    // Ensure date is in the future for display
+    if (date.getTime() <= Date.now()) {
+      date = new Date();
+      date.setMinutes(date.getMinutes() + 5);
+    }
+    
     steps.push({ key, label, date });
   }
 
@@ -121,12 +137,29 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           onClick={async () => {
             setIsEnabling(true);
             try {
-              const nextKey = lead.next_action_key || "send_pre_2";
-              const nextLabel = stepLabels[nextKey] || "Follow-up";
-              // Use gap between step 1 and 2 from intervals
-              const gapDays = intervals.length > 1 ? intervals[1] - intervals[0] : 2;
-              const eligibleAt = addDays(new Date(), gapDays);
-              eligibleAt.setHours(9, 30, 0, 0);
+              // If no outbound yet, start with intro (send_pre_1), otherwise next step
+              const hasOutbound = !!(lead as any).last_outbound_at;
+              const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+              const nextLabel = stepLabels[nextKey] || "Intro Email";
+              // Use gap between steps from intervals
+              const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+              const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                ? intervals[stepIdx] - intervals[stepIdx - 1]
+                : (hasOutbound ? intervals[1] - intervals[0] : 0);
+              
+              let eligibleAt: Date;
+              if (gapDays === 0) {
+                // Immediate send — but ensure it's in the future
+                eligibleAt = new Date();
+                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5); // 5 min from now
+              } else {
+                eligibleAt = addDays(new Date(), gapDays);
+                eligibleAt.setHours(9, 30, 0, 0);
+                // If the calculated time is in the past, push to tomorrow
+                if (eligibleAt.getTime() <= Date.now()) {
+                  eligibleAt = addDays(eligibleAt, 1);
+                }
+              }
 
               await supabase
                 .from("leads")
@@ -229,11 +262,24 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 toast.error(`Cannot resume: ${freshBlockers[0]}`);
                 return;
               }
-              const nextKey = lead.next_action_key || "send_pre_2";
+              const hasOutbound = !!(lead as any).last_outbound_at;
+              const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
               const nextLabel = stepLabels[nextKey] || "Follow-up";
-              const gapDays = intervals.length > 1 ? intervals[1] - intervals[0] : 2;
-              const eligibleAt = addDays(new Date(), gapDays);
-              eligibleAt.setHours(9, 30, 0, 0);
+              const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+              const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                ? intervals[stepIdx] - intervals[stepIdx - 1]
+                : (hasOutbound ? 2 : 0);
+              let eligibleAt: Date;
+              if (gapDays === 0) {
+                eligibleAt = new Date();
+                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+              } else {
+                eligibleAt = addDays(new Date(), gapDays);
+                eligibleAt.setHours(9, 30, 0, 0);
+                if (eligibleAt.getTime() <= Date.now()) {
+                  eligibleAt = addDays(eligibleAt, 1);
+                }
+              }
 
               await supabase
                 .from("leads")
