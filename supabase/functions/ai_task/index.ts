@@ -1019,16 +1019,30 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
+    // Check if this is a service-role call (from automation-executor)
+    const token = authHeader.replace("Bearer ", "");
+    const isServiceRole = token === supabaseServiceKey;
+    
+    let user: { id: string } | null = null;
+    
+    if (isServiceRole) {
+      // Service role calls are trusted (from internal edge functions)
+      // Use a system user ID placeholder
+      user = { id: "service-role" };
+    } else {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
       });
+      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+      if (authError || !authUser) {
+        return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      user = authUser;
     }
 
     const { task, payload } = await req.json();
