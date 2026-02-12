@@ -906,7 +906,7 @@ serve(async (req) => {
     // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at")
       .eq("id", leadId)
       .single();
 
@@ -921,8 +921,12 @@ serve(async (req) => {
     // Note: Thread-based expansion removed — it caused cross-lead contamination.
     // Gmail search `from:X OR to:X` + per-message `messageInvolvesLead` check is sufficient.
 
-    // Search for emails from/to this lead
-    const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
+    // Search for emails from/to this lead, scoped to 30 days before lead creation
+    const leadCreatedAt = leadData?.created_at ? new Date(leadData.created_at) : new Date();
+    const syncStartDate = new Date(leadCreatedAt);
+    syncStartDate.setDate(syncStartDate.getDate() - 30);
+    const afterDateStr = `${syncStartDate.getFullYear()}/${String(syncStartDate.getMonth() + 1).padStart(2, '0')}/${String(syncStartDate.getDate()).padStart(2, '0')}`;
+    const query = `(from:${leadEmailNorm} OR to:${leadEmailNorm}) after:${afterDateStr}`;
     const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
     
     const searchResponse = await fetch(searchUrl, {
