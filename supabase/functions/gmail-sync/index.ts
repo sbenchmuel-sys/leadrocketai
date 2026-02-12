@@ -922,11 +922,15 @@ serve(async (req) => {
     // Gmail search `from:X OR to:X` + per-message `messageInvolvesLead` check is sufficient.
 
     // Search for emails from/to this lead, scoped to 30 days before lead creation
+    // IMPORTANT: Quote the email address to force Gmail exact matching (not partial/fuzzy)
     const leadCreatedAt = leadData?.created_at ? new Date(leadData.created_at) : new Date();
     const syncStartDate = new Date(leadCreatedAt);
     syncStartDate.setDate(syncStartDate.getDate() - 30);
     const afterDateStr = `${syncStartDate.getFullYear()}/${String(syncStartDate.getMonth() + 1).padStart(2, '0')}/${String(syncStartDate.getDate()).padStart(2, '0')}`;
-    const query = `(from:${leadEmailNorm} OR to:${leadEmailNorm}) after:${afterDateStr}`;
+    const query = `(from:"${leadEmailNorm}" OR to:"${leadEmailNorm}") after:${afterDateStr}`;
+    
+    // Server-side date cutoff for additional safety (Gmail after: can be unreliable)
+    const syncStartMs = syncStartDate.getTime();
     const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
     
     const searchResponse = await fetch(searchUrl, {
@@ -1001,6 +1005,17 @@ serve(async (req) => {
         if (!messageInvolvesLead(headers, leadEmailNorm)) {
           console.warn(
             `[gmail-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
+          );
+          continue;
+        }
+
+        // Server-side date guard: skip messages older than sync start date
+        const msgDate = getHeader(headers, "Date");
+        const msgInternalDate = parseInt(message.internalDate);
+        const msgTimestamp = msgDate ? new Date(msgDate).getTime() : msgInternalDate;
+        if (msgTimestamp < syncStartMs) {
+          console.warn(
+            `[gmail-sync] Skipping message ${gmailMessageId} (too old: ${new Date(msgTimestamp).toISOString()} < ${syncStartDate.toISOString()})`
           );
           continue;
         }
