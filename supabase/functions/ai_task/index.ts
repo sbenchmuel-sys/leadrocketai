@@ -1358,7 +1358,17 @@ serve(async (req) => {
       console.log(`[ai_task] Injected cadence_days for ${mode} mode: ${JSON.stringify(cadenceDays)}`);
     }
     
+    // Read motion flags early (needed for KB gating)
+    const motion = String(enhancedPayload.motion || "");
+    const isFirstTouch = enhancedPayload.first_touch === true;
+    const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
+
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
+      // Gate KB injection for outbound first touch — cold outreach must NOT be driven by long knowledge dumps
+      if (isOutboundFirstTouch) {
+        console.log(`[ai_task] ⚡ Outbound first touch — skipping full KB search, limiting to 1 chunk (600 char cap)`);
+      }
+
       // Build a query from the available context
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
@@ -1370,7 +1380,6 @@ serve(async (req) => {
       
       if (searchQuery.length > 50) {
         const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        // Pass lead_id for lead-scoped knowledge if available
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
         
@@ -1382,9 +1391,17 @@ serve(async (req) => {
         );
         
         if (textContext) {
-          enhancedPayload.knowledge_context = textContext;
-          knowledgeContextUsed = true;
-          console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
+          // For outbound first touch: cap KB context to 600 chars max
+          if (isOutboundFirstTouch) {
+            const capped = textContext.slice(0, 600);
+            enhancedPayload.knowledge_context = capped;
+            knowledgeContextUsed = true;
+            console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${textContext.length} chars`);
+          } else {
+            enhancedPayload.knowledge_context = textContext;
+            knowledgeContextUsed = true;
+            console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
+          }
         } else {
           console.log(`[ai_task] ⚠️ No text matches found for task ${task}`);
         }
@@ -1393,10 +1410,8 @@ serve(async (req) => {
       }
     }
 
-    // Use explicit flags from client payload
+    // Remaining explicit flags (motion/isFirstTouch already read above)
     const playbookId = String(enhancedPayload.playbook_id || "general");
-    const motion = String(enhancedPayload.motion || "");
-    const isFirstTouch = enhancedPayload.first_touch === true;
     const hasInbound = enhancedPayload.has_latest_inbound === true;
 
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
