@@ -359,14 +359,14 @@ Return JSON ONLY in this exact schema:
   "intent_primary": "book_meeting|pricing|technical_sdk|security_privacy|legal_procurement|partnership|support|not_sure",
   "urgency": "high|medium|low",
   "reply_worthy": true,
-  "suggested_strategy": "fast|nurture",
+  "suggested_motion": "outbound_prospecting|inbound_response|nurture|closing|post_meeting",
   "questions_extracted": ["..."],
   "tone": "positive|neutral|negative"
 }
 
 Rules:
 - reply_worthy=true if the email requires a response from sales (questions, requests, objections, meeting scheduling).
-- suggested_strategy=fast if urgency high OR explicit request for call/demo/pricing/procurement steps.
+- suggested_motion=inbound_response if urgency high OR explicit request for call/demo/pricing/procurement steps.
 - Extract explicit questions verbatim into questions_extracted.
 - If unclear, intent_primary="not_sure" and reply_worthy=true.
 
@@ -378,7 +378,7 @@ Inbound Email:
 {{EMAIL_TEXT}}`,
 
   email_intro_fast: `ROLE
-You are writing a FAST intro email reply for a regulated B2B lead.
+You are writing an intro email reply for a high-urgency regulated B2B lead.
 
 GOAL
 Respond clearly, create confidence, and book a meeting soon.
@@ -417,7 +417,7 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   email_intro_nurture: `ROLE
-You are writing a NURTURE intro email reply for a regulated B2B lead.
+You are writing a value-led intro email reply for a regulated B2B lead.
 
 GOAL
 Be helpful, provide 1–2 value points, share 1 resource, invite a call without pressure.
@@ -459,14 +459,14 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   followup_sequence_4: `Generate a 4-email follow-up sequence for a regulated B2B prospect.
-Mode is either FAST or NURTURE.
+Use the motion context to determine tone and pacing.
 
 IMPORTANT: Use the configured cadence timing provided below. This defines the days between each email in the sequence.
 Configured cadence: {{CADENCE_DAYS}}
 
 Return JSON ONLY in this schema:
 {
-  "mode": "fast|nurture",
+  "motion": "{{MODE}}",
   "cadence_days": {{CADENCE_DAYS}},
   "emails": [
     {"draft_type":"fu1","subject":"...","body":"..."},
