@@ -212,18 +212,46 @@ Psychological triggers:
 - Professional credibility, safety, process alignment
 `;
 
+// Psychological reply patterns — rotated into follow-up and breakup emails
+const REPLY_PATTERNS_BLOCK = `
+=== REPLY OPTIMIZATION PATTERNS ===
+Rotate one of these CTA patterns per email to maximize reply probability:
+
+Permission-Based: "If this isn't relevant, feel free to say so — I'll close the loop."
+Soft Assumption: "If this is already handled internally, happy to step aside."
+Binary Micro-CTA: "Would you say this is: A) Relevant now B) Worth revisiting later C) Not a priority"
+Curiosity Close: "Worth sharing how we've approached this with similar teams?"
+
+Rules:
+- Use ONE pattern per email, do not stack
+- Match pattern to deal stage (permission-based for breakups, curiosity for early touches)
+- Keep the CTA as the final sentence
+`;
+
+// Playbook-specific breakup closers
+const BREAKUP_CLOSERS: Record<string, string> = {
+  b2b_saas: `Breakup style: "I haven't heard back, so I'll assume this isn't a priority right now. If I'm wrong, happy to reconnect. Either way — appreciate the time."`,
+  general_sales: `Breakup style: "Seems like timing may not be right. Should I close the loop for now?"`,
+};
+
 // Map playbook IDs to specialized outreach blocks (fallback to universal)
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
   medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
 };
 
-function isFirstTouchOutbound(ctx: ResolvedContext, taskType: AITaskType): boolean {
+// Determine if cold outreach style should be injected
+// Only for: outbound_prospecting, no prior replies, first or second touch
+function shouldInjectOutreachStyle(ctx: ResolvedContext, taskType: AITaskType): boolean {
   const motion = (ctx.lead as any).motion || "outbound_prospecting";
-  const isOutbound = motion === "outbound_prospecting";
-  const noThread = ctx.thread_emails.length === 0;
-  const isIntroTask = taskType === "pre_email_1_intro" || taskType === "email_intro_fast";
-  return isOutbound && noThread && isIntroTask;
+  if (motion !== "outbound_prospecting") return false;
+  const noInbound = !ctx.last_inbound_email;
+  const isEarlyTouch = taskType === "pre_email_1_intro" || taskType === "email_intro_fast" || taskType === "pre_email_2_followup";
+  return noInbound && isEarlyTouch;
+}
+
+function isBreakupEmail(taskType: AITaskType): boolean {
+  return taskType === "pre_email_4_breakup";
 }
 
 function getColdOutreachBlock(playbookId: string): string {
@@ -246,7 +274,13 @@ function buildAIPayload(
   const playbookContext = formatPlaybookContext(playbook);
 
   // Cold outreach style injection — uses playbook-specific block if available
-  const coldOutreachBlock = isFirstTouchOutbound(ctx, taskType) ? getColdOutreachBlock(playbookId) : "";
+  const coldOutreachBlock = shouldInjectOutreachStyle(ctx, taskType) ? getColdOutreachBlock(playbookId) : "";
+
+  // Breakup email enhancement
+  const breakupCloser = isBreakupEmail(taskType) ? (BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales) : "";
+
+  // Reply pattern injection for follow-ups (not first touch, not late-stage)
+  const replyPatterns = (taskType === "pre_email_2_followup" || taskType === "pre_email_3_followup" || taskType === "pre_email_4_breakup") ? REPLY_PATTERNS_BLOCK : "";
 
   // LinkedIn tasks use a different payload shape
   if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
@@ -286,7 +320,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     industry_context: industryContext,
     company_kb_context: companyKbContext,
-    playbook_context: playbookContext + coldOutreachBlock,
+    playbook_context: [playbookContext, coldOutreachBlock, replyPatterns, breakupCloser].filter(Boolean).join("\n"),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
   };
