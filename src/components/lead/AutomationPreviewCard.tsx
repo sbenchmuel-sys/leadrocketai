@@ -105,7 +105,10 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
 
   const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
   const blockers = useMemo(() => getAutomationBlockers(lead), [lead]);
-  const isPaused = blockers.length > 0;
+  const safetyPaused = blockers.length > 0;
+  // User-paused: has next_action_key but automation is not enabled (eligible_at cleared)
+  const userPaused = !hasAutomationEnabled && !!lead.next_action_key;
+  const isPaused = safetyPaused || userPaused;
   const steps = useMemo(() => getNextTwoSteps(lead), [lead]);
 
   const intervals = getMotionIntervals(motion || "outbound_prospecting");
@@ -218,7 +221,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
       </div>
 
       {/* Safety blockers */}
-      {isPaused && blockers.length > 0 && (
+      {safetyPaused && blockers.length > 0 && (
         <div className="space-y-1">
           {blockers.map((b, i) => (
             <div key={i} className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
@@ -227,6 +230,11 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
             </div>
           ))}
         </div>
+      )}
+
+      {/* User-paused message */}
+      {userPaused && !safetyPaused && (
+        <p className="text-xs text-muted-foreground">Automation paused manually. Click Resume to continue the sequence.</p>
       )}
 
       {/* Scheduled steps */}
