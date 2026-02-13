@@ -1417,6 +1417,23 @@ export type Database = {
               title: string
             }[]
           }
+        | {
+            Args: {
+              filter_customer_facing?: boolean
+              filter_lead_id?: string
+              match_count?: number
+              match_threshold?: number
+              p_owner_user_id?: string
+              query_embedding: string
+            }
+            Returns: {
+              content: string
+              id: string
+              similarity: number
+              source: string
+              title: string
+            }[]
+          }
     }
     Enums: {
       app_role: "admin" | "sales"
