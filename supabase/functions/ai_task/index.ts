@@ -112,7 +112,8 @@ function getCorsHeaders(req: Request): Record<string, string> {
   const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
   const isLovableProject = origin.endsWith(".lovableproject.com");
   const isLovableApp = origin.endsWith(".lovable.app");
-  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || isLovableApp || allowedOrigins.includes("*");
+  const isCustomDomain = origin === "https://drivepilot.app" || origin === "https://www.drivepilot.app";
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || isLovableApp || isCustomDomain || allowedOrigins.includes("*");
   
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "",
