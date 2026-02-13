@@ -1,66 +1,63 @@
 
 
-## Timeline Email Filtering & Cleanup
+## Fix: Gmail Connection Broken on Custom Domain (drivepilot.app)
 
-### Problem
-The timeline shows all synced emails, including irrelevant ones (newsletters, auto-replies, CC'd mass emails, etc.) that clutter the lead's activity feed and pollute AI context.
+### Root Cause
 
-### Solution: Two-Part Approach
+Four edge functions use a dynamic CORS check that only allows `localhost`, `*.lovableproject.com`, and `*.lovable.app` origins. When you access the app from `drivepilot.app`, the browser's preflight (OPTIONS) request gets an empty `Access-Control-Allow-Origin` header, blocking the entire request. This is why you see "Failed to send a request to the Edge Function."
 
-#### Part 1: Add a `hidden` column to `interactions` + Delete/Hide UI
+### Affected Functions
 
-Add a `hidden` boolean column (default `false`) to the `interactions` table. This allows users to mark irrelevant emails as hidden without permanently deleting data (which could break metrics).
+| Function | Has restrictive CORS |
+|----------|---------------------|
+| `gmail-auth` | Yes -- blocks Gmail connect |
+| `gmail-sync` | Yes -- blocks email sync |
+| `gmail-send` | Yes -- blocks sending emails |
+| `ai_task` | Yes -- blocks AI draft generation |
 
-**SQL Migration:**
-```sql
-ALTER TABLE interactions ADD COLUMN hidden boolean NOT NULL DEFAULT false;
-CREATE INDEX idx_interactions_hidden ON interactions (lead_id, hidden) WHERE hidden = false;
-```
+All other functions already use `"Access-Control-Allow-Origin": "*"` and work fine.
 
-**Query changes:**
-- `getLeadInteractions` in `supabaseQueries.ts`: add `.eq("hidden", false)` filter
-- `contextResolver.ts` (feeds AI drafts): also filter hidden interactions so irrelevant emails don't pollute AI-generated content
+### Fix
 
-**UI changes in `TimelineTab.tsx`:**
-- Add a small "Hide" button (trash/eye-off icon) on each timeline entry
-- Clicking it sets `hidden = true` on that interaction row
-- Add a "Show hidden" toggle at the top to reveal hidden items (greyed out, with "Unhide" option)
+Update the `getCorsHeaders` function in all four edge functions to also allow `drivepilot.app`:
 
-#### Part 2: Type-based filter bar
-
-Add a filter bar at the top of the timeline with toggle chips:
-- **All** | **Emails** | **WhatsApp** | **Meetings** | **Notes**
-
-This is purely client-side filtering on the already-loaded interactions array -- no backend changes needed.
-
-### Technical Details
-
-**Files to change:**
-
-| File | Change |
-|------|--------|
-| SQL migration | Add `hidden` boolean column + index |
-| `src/lib/supabaseQueries.ts` | Add `.eq("hidden", false)` to `getLeadInteractions`; add new `hideInteraction(id)` and `unhideInteraction(id)` functions |
-| `src/lib/contextResolver.ts` | Hidden interactions are already excluded since it calls `getLeadInteractions` |
-| `src/components/lead/TimelineTab.tsx` | Add filter bar (All/Emails/WhatsApp/Meetings/Notes), add Hide/Unhide buttons per entry, add "Show hidden" toggle |
-
-**Hide interaction function:**
 ```typescript
-export async function hideInteraction(interactionId: string): Promise<void> {
-  const { error } = await supabase
-    .from("interactions")
-    .update({ hidden: true })
-    .eq("id", interactionId);
-  if (error) throw error;
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") || "";
+  const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
+
+  const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
+  const isLovableProject = origin.endsWith(".lovableproject.com");
+  const isLovableApp = origin.endsWith(".lovable.app");
+  const isCustomDomain = origin === "https://drivepilot.app" || origin === "https://www.drivepilot.app";
+  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || isLovableApp || isCustomDomain || allowedOrigins.includes("*");
+
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : "",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
 }
 ```
 
-**Filter bar behavior:**
-- Default: "All" selected, hidden items excluded
-- Chips are toggle buttons that filter the `interactions` array by `type`
-- "Show hidden" is a secondary toggle that re-fetches with `hidden` filter removed
+The single-line addition (`isCustomDomain`) is applied to all four files.
 
-**Visual design:**
-- Filter chips: small pill buttons matching existing badge style
-- Hide button: subtle eye-off icon, appears on hover over each timeline entry
-- Hidden items (when revealed): shown with reduced opacity and strikethrough subject
+### Google Cloud Console Update (Manual Step)
+
+You also need to add `https://drivepilot.app` as an **Authorized JavaScript Origin** in your Google Cloud Console OAuth credentials. Without this, Google may reject the OAuth flow from the new domain.
+
+1. Go to Google Cloud Console -> APIs & Credentials -> OAuth 2.0 Client IDs
+2. Edit your Web Application client
+3. Under "Authorized JavaScript origins", add `https://drivepilot.app`
+4. Save
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `supabase/functions/gmail-auth/index.ts` | Add `isCustomDomain` check |
+| `supabase/functions/gmail-sync/index.ts` | Add `isCustomDomain` check |
+| `supabase/functions/gmail-send/index.ts` | Add `isCustomDomain` check |
+| `supabase/functions/ai_task/index.ts` | Add `isCustomDomain` check |
+
+All four functions will be redeployed after the changes.
+
