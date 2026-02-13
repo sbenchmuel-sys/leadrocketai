@@ -49,23 +49,37 @@ serve(async (req) => {
       .order("created_at", { ascending: false })
       .limit(30);
 
-    // Gather recent email interactions for signature extraction
-    const { data: emailInteractions } = await supabaseAdmin
-      .from("interactions")
-      .select("body_text, subject, from_email, direction, source")
-      .eq("direction", "outbound")
-      .eq("type", "email")
-      .order("occurred_at", { ascending: false })
-      .limit(20);
+    // Get user's lead IDs to scope interaction queries
+    const { data: userLeads } = await supabaseAdmin
+      .from("leads")
+      .select("id")
+      .eq("owner_user_id", user.id);
 
-    // Also check inbound emails to find the user's signature from replies
-    const { data: inboundEmails } = await supabaseAdmin
-      .from("interactions")
-      .select("body_text, from_email, direction")
-      .eq("direction", "inbound")
-      .eq("type", "email")
-      .order("occurred_at", { ascending: false })
-      .limit(10);
+    const leadIds = (userLeads ?? []).map(l => l.id);
+
+    // Gather recent email interactions for signature extraction (scoped to user's leads)
+    const { data: emailInteractions } = leadIds.length > 0
+      ? await supabaseAdmin
+          .from("interactions")
+          .select("body_text, subject, from_email, direction, source")
+          .in("lead_id", leadIds)
+          .eq("direction", "outbound")
+          .eq("type", "email")
+          .order("occurred_at", { ascending: false })
+          .limit(20)
+      : { data: [] };
+
+    // Also check inbound emails to find the user's signature from replies (scoped)
+    const { data: inboundEmails } = leadIds.length > 0
+      ? await supabaseAdmin
+          .from("interactions")
+          .select("body_text, from_email, direction")
+          .in("lead_id", leadIds)
+          .eq("direction", "inbound")
+          .eq("type", "email")
+          .order("occurred_at", { ascending: false })
+          .limit(10)
+      : { data: [] };
 
     // Get existing workspace profile for context
     const { data: existingWsProfile } = await supabaseAdmin
