@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { getLeadInteractions, InteractionItem } from "@/lib/supabaseQueries";
+import { getLeadInteractions, hideInteraction, unhideInteraction, InteractionItem } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format, differenceInDays } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus, EyeOff, Eye, Undo2 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -13,6 +13,26 @@ import { toast } from "sonner";
 interface TimelineTabProps {
   leadId: string;
   onWhatsAppReply?: () => void;
+}
+
+/* ── Filter types ── */
+type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "notes";
+
+const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "emails", label: "Emails" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "meetings", label: "Meetings" },
+  { value: "notes", label: "Notes" },
+];
+
+function matchesFilter(type: string, filter: TimelineFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "emails") return type === "email_inbound" || type === "email_outbound";
+  if (filter === "whatsapp") return type === "whatsapp_inbound" || type === "whatsapp_outbound";
+  if (filter === "meetings") return type === "meeting";
+  if (filter === "notes") return type === "note";
+  return true;
 }
 
 /* ── Dedupe ── */
@@ -56,9 +76,6 @@ function groupIntoThreads(items: InteractionItem[]): (InteractionItem | ThreadGr
     else threadMap.set(key, [item]);
   }
 
-  const result: (InteractionItem | ThreadGroup)[] = [];
-
-  // Merge emails and non-emails back in chronological order
   const threads: (InteractionItem | ThreadGroup)[] = [];
   for (const [key, threadItems] of threadMap) {
     if (threadItems.length === 1) {
@@ -69,7 +86,6 @@ function groupIntoThreads(items: InteractionItem[]): (InteractionItem | ThreadGr
     }
   }
 
-  // Combine and sort by latest timestamp
   const all = [...threads, ...nonEmailItems];
   all.sort((a, b) => {
     const tsA = 'latest' in a ? new Date(a.latest.occurred_at).getTime() : new Date((a as InteractionItem).occurred_at).getTime();
@@ -92,11 +108,10 @@ function getSignalTags(item: InteractionItem): string[] {
   if (bodyLower.includes("pricing") || bodyLower.includes("price") || bodyLower.includes("cost")) tags.push("Pricing Mentioned");
   if (bodyLower.includes("decision") || bodyLower.includes("approve") || bodyLower.includes("sign off")) tags.push("Decision Maker Involved");
   if (bodyLower.includes("concern") || bodyLower.includes("issue") || bodyLower.includes("problem")) tags.push("Objection Raised");
-  // Dedupe
   return [...new Set(tags)];
 }
 
-/* ── Auto-collapse: expand latest inbound, latest outbound, latest meeting, latest whatsapp ── */
+/* ── Auto-collapse ── */
 function getAutoExpandIds(entries: (InteractionItem | ThreadGroup)[]): Set<string> {
   const ids = new Set<string>();
   let foundInbound = false, foundOutbound = false, foundMeeting = false, foundWhatsApp = false;
@@ -137,20 +152,35 @@ function ChannelBadge({ type }: { type: string }) {
   );
 }
 
+/* ── Hide button ── */
+function HideButton({ interactionId, isHidden, onToggle }: { interactionId: string; isHidden: boolean; onToggle: (id: string, hidden: boolean) => void }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onToggle(interactionId, !isHidden); }}
+      className={cn(
+        "opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent",
+        isHidden && "opacity-100"
+      )}
+      title={isHidden ? "Unhide" : "Hide"}
+    >
+      {isHidden ? <Undo2 className="h-3.5 w-3.5 text-muted-foreground" /> : <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />}
+    </button>
+  );
+}
+
 /* ── Single Entry Row ── */
-function TimelineEntry({ item, defaultOpen }: { item: InteractionItem; defaultOpen: boolean }) {
+function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: InteractionItem; defaultOpen: boolean; onToggleHide: (id: string, hidden: boolean) => void; showHidden: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const tags = useMemo(() => getSignalTags(item), [item]);
-  const isMeeting = item.type === "meeting";
+  const isHidden = item.hidden;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
+      <div className={cn("group", isHidden && "opacity-50")}>
         <CollapsibleTrigger asChild>
           <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0 space-y-1">
-                {/* Meta line */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <ChannelBadge type={item.type} />
                   <span className="text-[11px] text-muted-foreground">
@@ -161,22 +191,28 @@ function TimelineEntry({ item, defaultOpen }: { item: InteractionItem; defaultOp
                       Reply Needed
                     </span>
                   )}
+                  {isHidden && (
+                    <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                      Hidden
+                    </span>
+                  )}
                 </div>
-                {/* Subject */}
                 {item.subject && (
-                  <p className="text-sm font-medium text-foreground leading-snug truncate">
+                  <p className={cn("text-sm font-medium text-foreground leading-snug truncate", isHidden && "line-through")}>
                     {item.subject}
                   </p>
                 )}
-                {/* Body preview (collapsed) */}
                 {!open && item.body_text && (
                   <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
                     {item.body_text}
                   </p>
                 )}
               </div>
-              <div className="pt-1 text-muted-foreground/50">
-                {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <div className="flex items-center gap-1 pt-1">
+                <HideButton interactionId={item.id} isHidden={isHidden} onToggle={onToggleHide} />
+                <span className="text-muted-foreground/50">
+                  {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </span>
               </div>
             </div>
           </button>
@@ -184,18 +220,15 @@ function TimelineEntry({ item, defaultOpen }: { item: InteractionItem; defaultOp
 
         <CollapsibleContent className="animate-accordion-down">
           <div className="pl-3 pb-2 space-y-2">
-            {/* AI Summary */}
             {item.ai_summary && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
                 <p className="text-[11px] font-medium text-muted-foreground mb-0.5">AI Summary</p>
                 <p className="text-[13px] text-foreground leading-relaxed">{item.ai_summary}</p>
               </div>
             )}
-            {/* Full body */}
             <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
               {item.body_text}
             </p>
-            {/* Signal tags */}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {tags.map(tag => (
@@ -213,15 +246,16 @@ function TimelineEntry({ item, defaultOpen }: { item: InteractionItem; defaultOp
 }
 
 /* ── Thread Group ── */
-function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen: boolean }) {
+function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGroup; defaultOpen: boolean; onToggleHide: (id: string, hidden: boolean) => void }) {
   const [open, setOpen] = useState(defaultOpen);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const latest = thread.latest;
   const tags = useMemo(() => getSignalTags(latest), [latest]);
+  const isHidden = latest.hidden;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
+      <div className={cn("group", isHidden && "opacity-50")}>
         <CollapsibleTrigger asChild>
           <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
             <div className="flex items-start gap-3">
@@ -239,9 +273,14 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
                       Reply Needed
                     </span>
                   )}
+                  {isHidden && (
+                    <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                      Hidden
+                    </span>
+                  )}
                 </div>
                 {latest.subject && (
-                  <p className="text-sm font-medium text-foreground leading-snug truncate">
+                  <p className={cn("text-sm font-medium text-foreground leading-snug truncate", isHidden && "line-through")}>
                     {latest.subject}
                   </p>
                 )}
@@ -251,8 +290,11 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
                   </p>
                 )}
               </div>
-              <div className="pt-1 text-muted-foreground/50">
-                {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <div className="flex items-center gap-1 pt-1">
+                <HideButton interactionId={latest.id} isHidden={isHidden} onToggle={onToggleHide} />
+                <span className="text-muted-foreground/50">
+                  {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </span>
               </div>
             </div>
           </button>
@@ -260,7 +302,6 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
 
         <CollapsibleContent className="animate-accordion-down">
           <div className="pl-3 pb-2 space-y-2">
-            {/* Latest message summary */}
             {latest.ai_summary && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
                 <p className="text-[11px] font-medium text-muted-foreground mb-0.5">AI Summary</p>
@@ -280,7 +321,6 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
               </div>
             )}
 
-            {/* Expand thread */}
             {thread.items.length > 1 && (
               <Collapsible open={threadExpanded} onOpenChange={setThreadExpanded}>
                 <CollapsibleTrigger asChild>
@@ -292,14 +332,15 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
                 <CollapsibleContent className="animate-accordion-down">
                   <div className="mt-2 ml-2 border-l-2 border-border pl-3 space-y-3">
                     {thread.items.slice(1).map(msg => (
-                      <div key={msg.id} className="space-y-0.5">
+                      <div key={msg.id} className={cn("space-y-0.5 group/msg", msg.hidden && "opacity-50")}>
                         <div className="flex items-center gap-2">
                           <ChannelBadge type={msg.type} />
                           <span className="text-[11px] text-muted-foreground">
                             {format(new Date(msg.occurred_at), "MMM d · h:mm a")}
                           </span>
+                          <HideButton interactionId={msg.id} isHidden={msg.hidden} onToggle={onToggleHide} />
                         </div>
-                        <p className="text-[13px] text-muted-foreground line-clamp-3 leading-relaxed">
+                        <p className={cn("text-[13px] text-muted-foreground line-clamp-3 leading-relaxed", msg.hidden && "line-through")}>
                           {msg.body_text}
                         </p>
                       </div>
@@ -316,12 +357,13 @@ function ThreadEntry({ thread, defaultOpen }: { thread: ThreadGroup; defaultOpen
 }
 
 /* ── Meeting Entry (Milestone Style) ── */
-function MeetingEntry({ item, defaultOpen }: { item: InteractionItem; defaultOpen: boolean }) {
+function MeetingEntry({ item, defaultOpen, onToggleHide }: { item: InteractionItem; defaultOpen: boolean; onToggleHide: (id: string, hidden: boolean) => void }) {
   const [open, setOpen] = useState(defaultOpen);
+  const isHidden = item.hidden;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
+      <div className={cn("group", isHidden && "opacity-50")}>
         <CollapsibleTrigger asChild>
           <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
             <div className="flex items-start gap-3">
@@ -331,9 +373,14 @@ function MeetingEntry({ item, defaultOpen }: { item: InteractionItem; defaultOpe
                   <span className="text-[11px] text-muted-foreground">
                     {format(new Date(item.occurred_at), "MMM d")}
                   </span>
+                  {isHidden && (
+                    <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                      Hidden
+                    </span>
+                  )}
                 </div>
                 {item.subject && (
-                  <p className="text-sm font-medium text-foreground leading-snug">{item.subject}</p>
+                  <p className={cn("text-sm font-medium text-foreground leading-snug", isHidden && "line-through")}>{item.subject}</p>
                 )}
                 {!open && item.ai_summary && (
                   <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
@@ -341,8 +388,11 @@ function MeetingEntry({ item, defaultOpen }: { item: InteractionItem; defaultOpe
                   </p>
                 )}
               </div>
-              <div className="pt-1 text-muted-foreground/50">
-                {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <div className="flex items-center gap-1 pt-1">
+                <HideButton interactionId={item.id} isHidden={isHidden} onToggle={onToggleHide} />
+                <span className="text-muted-foreground/50">
+                  {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </span>
               </div>
             </div>
           </button>
@@ -364,21 +414,12 @@ function MeetingEntry({ item, defaultOpen }: { item: InteractionItem; defaultOpe
   );
 }
 
-/* ── System Event (soft, centered) ── */
-function SystemEvent({ text }: { text: string }) {
-  return (
-    <div className="py-4 flex items-center justify-center gap-2">
-      <Settings2 className="h-3 w-3 text-muted-foreground/50" />
-      <span className="text-[11px] text-muted-foreground/70">{text}</span>
-    </div>
-  );
-}
-
 /* ── WhatsApp Entry (chat-bubble style) ── */
-function WhatsAppEntry({ item }: { item: InteractionItem }) {
+function WhatsAppEntry({ item, onToggleHide }: { item: InteractionItem; onToggleHide: (id: string, hidden: boolean) => void }) {
   const isOutbound = item.type === "whatsapp_outbound";
+  const isHidden = item.hidden;
   return (
-    <div className={cn("py-3 px-3 -mx-3", isOutbound ? "flex justify-end" : "flex justify-start")}>
+    <div className={cn("py-3 px-3 -mx-3 group", isOutbound ? "flex justify-end" : "flex justify-start", isHidden && "opacity-50")}>
       <div className={cn(
         "max-w-[80%] rounded-2xl px-4 py-2.5 space-y-1",
         isOutbound
@@ -390,8 +431,9 @@ function WhatsAppEntry({ item }: { item: InteractionItem }) {
           <span className="text-[11px] text-muted-foreground">
             {format(new Date(item.occurred_at), "MMM d · h:mm a")}
           </span>
+          <HideButton interactionId={item.id} isHidden={isHidden} onToggle={onToggleHide} />
         </div>
-        <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">
+        <p className={cn("text-[13px] text-foreground leading-relaxed whitespace-pre-wrap", isHidden && "line-through")}>
           {item.body_text}
         </p>
       </div>
@@ -406,9 +448,11 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
   const [showReplyForm, setShowReplyForm] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [isSavingReply, setIsSavingReply] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<TimelineFilter>("all");
+  const [showHidden, setShowHidden] = useState(false);
 
   const loadInteractions = () => {
-    getLeadInteractions(leadId)
+    getLeadInteractions(leadId, showHidden)
       .then((items) => setInteractions(dedupeTimelineItems(items)))
       .catch(console.error)
       .finally(() => setIsLoading(false));
@@ -416,13 +460,28 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
 
   useEffect(() => {
     loadInteractions();
-  }, [leadId]);
+  }, [leadId, showHidden]);
+
+  const handleToggleHide = async (interactionId: string, hide: boolean) => {
+    try {
+      if (hide) {
+        await hideInteraction(interactionId);
+        toast.success("Interaction hidden");
+      } else {
+        await unhideInteraction(interactionId);
+        toast.success("Interaction restored");
+      }
+      loadInteractions();
+    } catch (err) {
+      console.error("[TimelineTab] Hide toggle error:", err);
+      toast.error("Failed to update interaction");
+    }
+  };
 
   const handleLogWhatsAppReply = async () => {
     if (!replyText.trim()) return;
     setIsSavingReply(true);
     try {
-      // 1. Create inbound WhatsApp interaction
       await supabase.from("interactions").insert({
         lead_id: leadId,
         type: "whatsapp_inbound",
@@ -432,8 +491,6 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
         occurred_at: new Date().toISOString(),
       });
 
-      // 2. Update lead: pause automation, set engaged, update last_inbound_at
-      // Phase 6: WhatsApp inbound ALWAYS pauses automation — no exceptions
       await supabase.from("leads").update({
         last_inbound_at: new Date().toISOString(),
         last_activity_at: new Date().toISOString(),
@@ -458,14 +515,22 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
     }
   };
 
-  const entries = useMemo(() => groupIntoThreads(interactions), [interactions]);
+  // Apply type filter
+  const filteredInteractions = useMemo(() => {
+    if (activeFilter === "all") return interactions;
+    return interactions.filter(i => matchesFilter(i.type, activeFilter));
+  }, [interactions, activeFilter]);
+
+  const entries = useMemo(() => groupIntoThreads(filteredInteractions), [filteredInteractions]);
   const autoExpand = useMemo(() => getAutoExpandIds(entries), [entries]);
+
+  const hiddenCount = useMemo(() => interactions.filter(i => i.hidden).length, [interactions]);
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground py-8">Loading interactions...</p>;
   }
 
-  if (entries.length === 0) {
+  if (interactions.length === 0 && !showHidden) {
     return (
       <div className="py-12 text-center">
         <p className="text-sm text-muted-foreground">
@@ -477,17 +542,49 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
 
   return (
     <div className="space-y-0">
-      {/* Log WhatsApp Reply button */}
-      <div className="flex justify-end pb-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs"
-          onClick={() => setShowReplyForm(!showReplyForm)}
-        >
-          <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
-          Log WhatsApp Reply
-        </Button>
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 pb-3 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-1 flex-wrap">
+          {FILTER_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setActiveFilter(opt.value)}
+              className={cn(
+                "text-[12px] font-medium px-3 py-1 rounded-full border transition-colors",
+                activeFilter === opt.value
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted/50 text-muted-foreground border-border hover:bg-accent hover:text-foreground"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowHidden(!showHidden)}
+            className={cn(
+              "text-[11px] flex items-center gap-1 px-2 py-1 rounded border transition-colors",
+              showHidden
+                ? "bg-accent text-foreground border-border"
+                : "text-muted-foreground border-transparent hover:text-foreground"
+            )}
+          >
+            {showHidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+            {showHidden ? "Showing hidden" : `${hiddenCount > 0 ? hiddenCount + " hidden" : "Show hidden"}`}
+          </button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => setShowReplyForm(!showReplyForm)}
+          >
+            <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+            Log WhatsApp Reply
+          </Button>
+        </div>
       </div>
 
       {/* Inline reply form */}
@@ -513,6 +610,10 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
         </div>
       )}
 
+      {entries.length === 0 && (
+        <p className="text-sm text-muted-foreground py-8 text-center">No matching interactions.</p>
+      )}
+
       {entries.map((entry, idx) => {
         const key = isThread(entry) ? entry.key : entry.id;
         const isExpanded = autoExpand.has(key);
@@ -522,13 +623,13 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
           <div key={key}>
             {idx > 0 && <div className="border-t border-border/50 mx-0" />}
             {isThread(entry) ? (
-              <ThreadEntry thread={entry} defaultOpen={isExpanded} />
+              <ThreadEntry thread={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
             ) : entry.type === "meeting" ? (
-              <MeetingEntry item={entry} defaultOpen={isExpanded} />
+              <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
             ) : isWhatsApp ? (
-              <WhatsAppEntry item={entry} />
+              <WhatsAppEntry item={entry} onToggleHide={handleToggleHide} />
             ) : (
-              <TimelineEntry item={entry} defaultOpen={isExpanded} />
+              <TimelineEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} showHidden={showHidden} />
             )}
           </div>
         );
