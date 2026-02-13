@@ -1,71 +1,99 @@
 
 
-## Fix: Complete KB Data Isolation & Cleanup
+## Speed Optimization: Faster Email Generation
 
-### Current State (Already Working)
-- Demo reset correctly deletes all `kb_chunks` for the user
-- KB page deletion works correctly with RLS enforcement
-- `ai_task` KB retrieval is now scoped by `owner_user_id` (just fixed)
-- `extract-profile-from-kb` KB query is already scoped
+Three changes to cut email generation time by ~50%.
 
-### Remaining Fixes Needed
+---
 
-#### 1. Add `owner_user_id` filter to `match_knowledge_chunks` database function
+### Change 1: Remove the Retry Mechanism (saves 2-5s)
 
-The vector search function `match_knowledge_chunks` has NO user-level filtering. If any code path calls it (or future code does), it would return chunks from all users.
+**File: `supabase/functions/ai_task/index.ts`**
 
-**Change:** Add an `owner_user_id` parameter to the function and include a `WHERE kc.owner_user_id = owner_user_id` clause.
+The current system makes a second full AI call if an outbound first-touch draft exceeds 95 words. Instead, we strengthen the prompt to get it right the first time.
+
+- **Update `buildMotionBlock`** (line 262-277): Add explicit counting instruction:
+  ```
+  CRITICAL: You MUST produce fewer than 90 words. Count every word carefully.
+  If in doubt, make it shorter. Under 75 words is ideal.
+  ```
+- **Delete the retry block** (lines 1516-1546): Remove the entire `if (isOutboundFirstTouch && content)` retry logic that makes a second AI call.
+
+---
+
+### Change 2: Smart Model Routing (saves 1-3s on simple drafts)
+
+**File: `supabase/functions/ai_task/index.ts`**
+
+Update the `PRO_MODEL_TASKS` list (lines 1207-1216) to reflect your requirements:
+
+**Use Flash (fast) for:**
+- `pre_email_1_intro` -- outbound intro
+- `pre_email_2_followup` -- outbound follow-up
+- `email_intro_fast` -- outbound intro
+- `email_intro_nurture` -- nurture intro
+- `nurture_email_single` -- nurture emails
+- `linkedin_connect`, `linkedin_followup` -- LinkedIn (already Flash)
+- `whatsapp_message` -- WhatsApp (already Flash)
+
+**Keep Pro (smart) for:**
+- `post_meeting_recap` -- analytical, summarizes meeting
+- `extract_milestones_risks` -- analytical, extracts structured data
+- `extract_deal_factors` -- analytical, extracts structured data
+- `recommend_next_steps` -- analytical, recommends actions
+- `post_meeting_followup_email` -- post-meeting, uses meeting summaries + thread context
+- `post_meeting_followup_personalized` -- post-meeting, uses meeting summaries
+- `pre_email_3_followup` -- closing stage, uses full thread context
+- `pre_email_4_breakup` -- closing stage, uses full thread context
+- `reply_to_thread` -- engaged/active deals, considers previous emails + milestones
+- `analyze_outgoing_email` -- analytical
+- `nurture_sequence` -- multi-email sequence planning (analytical)
+
+**Updated list:**
+```typescript
+const PRO_MODEL_TASKS = [
+  "post_meeting_recap",
+  "extract_milestones_risks",
+  "extract_deal_factors",
+  "recommend_next_steps",
+  "post_meeting_followup_email",
+  "post_meeting_followup_personalized",
+  "pre_email_3_followup",
+  "pre_email_4_breakup",
+  "reply_to_thread",
+  "analyze_outgoing_email",
+  "nurture_sequence",
+];
+```
+
+This removes `nurture_email_single` from Pro (simple value emails) and adds the closing/engaged tasks that need intelligence.
+
+---
+
+### Change 3: Add Database Index for KB Search (saves 100-300ms)
+
+**SQL Migration:**
 
 ```sql
-CREATE OR REPLACE FUNCTION public.match_knowledge_chunks(
-  query_embedding extensions.vector,
-  match_threshold double precision DEFAULT 0.5,
-  match_count integer DEFAULT 5,
-  filter_customer_facing boolean DEFAULT true,
-  filter_lead_id uuid DEFAULT NULL,
-  p_owner_user_id uuid DEFAULT NULL   -- NEW
-)
-RETURNS TABLE(id uuid, content text, title text, source text, similarity double precision)
-...
-WHERE
-  ...
-  AND (p_owner_user_id IS NULL OR kc.owner_user_id = p_owner_user_id)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_kb_chunks_content_trgm ON kb_chunks USING gin (content gin_trgm_ops);
+CREATE INDEX idx_kb_chunks_owner_status ON kb_chunks (owner_user_id, processing_status)
+  WHERE processing_status = 'completed';
 ```
 
-#### 2. Scope `interactions` query in `extract-profile-from-kb`
+This adds:
+- A trigram index on `content` for faster `ilike` pattern matching
+- A composite index on `owner_user_id + processing_status` for faster filtered lookups (used by every KB query now that we enforce user isolation)
 
-The interactions query on lines 53-59 of `extract-profile-from-kb/index.ts` uses the service-role client but does not filter by user. This means it could pull email signatures from other users' outbound emails.
+---
 
-**Change:** Add a lead-ownership subquery or join to scope interactions to the current user's leads only.
+### Summary
 
-```typescript
-// Get the user's lead IDs first
-const { data: userLeads } = await supabaseAdmin
-  .from("leads")
-  .select("id")
-  .eq("owner_user_id", user.id);
+| Optimization | Time Saved | Risk |
+|-------------|-----------|------|
+| Remove retry block, strengthen prompt | 2-5s on outbound first touch | Low -- prompt enforcement is reliable |
+| Smart model routing (Flash for simple, Pro for complex) | 1-3s on simple drafts | None -- Pro kept where intelligence matters |
+| DB indexes for KB search | 100-300ms per generation | None -- read-only optimization |
 
-const leadIds = (userLeads ?? []).map(l => l.id);
+No frontend changes needed. Only `supabase/functions/ai_task/index.ts` and one SQL migration.
 
-// Then scope interactions
-const { data: emailInteractions } = await supabaseAdmin
-  .from("interactions")
-  .select("body_text, subject, from_email, direction, source")
-  .in("lead_id", leadIds)
-  .eq("direction", "outbound")
-  .eq("type", "email")
-  .order("occurred_at", { ascending: false })
-  .limit(20);
-```
-
-### Summary of Changes
-
-| File | Change |
-|------|--------|
-| SQL migration | Update `match_knowledge_chunks` to accept and enforce `owner_user_id` |
-| `supabase/functions/extract-profile-from-kb/index.ts` | Scope interactions query to current user's leads |
-
-### No changes needed for:
-- `reset-demo` -- already deletes all user KB chunks
-- `Knowledge.tsx` deletion -- already works correctly via RLS
-- `ai_task` retrieval -- already fixed in previous edit
