@@ -28,6 +28,7 @@ async function getTextBasedKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
+  userId: string,
   leadId?: string
 ): Promise<string> {
   try {
@@ -48,6 +49,7 @@ async function getTextBasedKnowledgeContext(
     let query = supabaseAdmin
       .from("kb_chunks")
       .select("id, title, content, source")
+      .eq("owner_user_id", userId)
       .eq("allowed_customer_facing", true)
       .eq("processing_status", "completed")
       .limit(5);
@@ -1402,6 +1404,7 @@ serve(async (req) => {
           searchQuery,
           supabaseUrl,
           supabaseServiceKey,
+          user.id,
           leadId
         );
         
