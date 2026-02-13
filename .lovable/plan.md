@@ -1,39 +1,61 @@
 
 
-## Problem
-After completing the Gmail OAuth flow, the browser lands on the `gmail-callback` edge function URL and displays a raw-looking success page. Since the flow uses a same-window redirect (not a popup), `window.close()` doesn't work, leaving you stranded on an unfamiliar page.
+## Fix: KB Retrieval Cross-User Data Contamination
 
-## Solution
-Instead of rendering an HTML success page, the `gmail-callback` edge function will **redirect back to your app** with a `?gmail_connected=true` query parameter. Your app already handles this parameter and shows a toast notification -- so the experience becomes seamless: Google auth completes, and you're right back where you started.
+### Problem
+The `getTextBasedKnowledgeContext` function in `supabase/functions/ai_task/index.ts` queries `kb_chunks` using a service-role client but does **not** filter by `owner_user_id`. This means any user's KB documents can leak into another user's AI-generated emails.
 
-## Changes
+### Fix (2 changes in one file)
 
-### 1. `supabase/functions/gmail-callback/index.ts`
-Replace the success HTML response (the big block that renders "Gmail Connected!" with styles and scripts) with a simple **HTTP 302 redirect** back to the app:
-- Build the redirect URL from `stateData.redirect_url` (the page the user was on)
-- Append `?gmail_connected=true` to trigger the existing toast + refetch logic
-- Keep all error pages as-is (they still need to display something)
+**File: `supabase/functions/ai_task/index.ts`**
 
-### 2. `src/hooks/useGmailConnection.ts`
-No changes needed -- it already detects `?gmail_connected=true`, cleans up the URL, shows a success toast, and refetches the connection.
+1. **Add `userId` parameter** to the `getTextBasedKnowledgeContext` function signature (line ~27):
+   - Add `userId: string` as a required parameter
 
-## Technical Details
+2. **Add `owner_user_id` filter** to the query (after line 52):
+   - Add `.eq("owner_user_id", userId)` to the query builder chain
 
-In the callback's success path (after upserting `gmail_connections`), replace the HTML response with:
+3. **Pass `user.id`** at the call site (line ~1401):
+   - Add `user.id` as the new argument when calling `getTextBasedKnowledgeContext`
 
+### Technical Details
+
+Updated function signature:
 ```typescript
-// Build redirect back to the app
-const redirectUrl = new URL(stateData.redirect_url);
-redirectUrl.searchParams.set("gmail_connected", "true");
-
-return new Response(null, {
-  status: 302,
-  headers: {
-    "Location": redirectUrl.toString(),
-    ...getSecureHtmlHeaders(),
-  },
-});
+async function getTextBasedKnowledgeContext(
+  queryText: string,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  userId: string,        // NEW — required
+  leadId?: string
+): Promise<string>
 ```
 
-This is a single-file change to the edge function. The integration logic stays intact -- only the final response changes from "render HTML" to "redirect."
+Updated query:
+```typescript
+let query = supabaseAdmin
+  .from("kb_chunks")
+  .select("id, title, content, source")
+  .eq("owner_user_id", userId)              // NEW — enforces isolation
+  .eq("allowed_customer_facing", true)
+  .eq("processing_status", "completed")
+  .limit(5);
+```
+
+Updated call site:
+```typescript
+const textContext = await getTextBasedKnowledgeContext(
+  searchQuery,
+  supabaseUrl,
+  supabaseServiceKey,
+  user.id,               // NEW
+  leadId
+);
+```
+
+### Impact
+- Prevents KB data from one user bleeding into another user's AI generations
+- No schema or migration changes needed
+- No frontend changes needed
+- Edge function will be auto-deployed after the edit
 
