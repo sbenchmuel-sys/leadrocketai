@@ -263,11 +263,14 @@ function buildMotionBlock({ motion, first_touch }: { motion: string; first_touch
 Objective:
 Trigger a reply. Not to close. Not to explain fully.
 
+CRITICAL: You MUST produce fewer than 90 words. Count every word carefully.
+If in doubt, make it shorter. Under 75 words is ideal.
+
 STRICT STRUCTURE RULES:
-- Maximum 90 words.
+- ABSOLUTE Maximum 90 words. No exceptions.
 - Maximum 5 short paragraphs.
 - One idea only.
-- One CTA only.
+- One CTA only (a simple question, never a calendar link).
 - No feature lists.
 - No attachments.
 - No calendar links.
@@ -1209,10 +1212,13 @@ const PRO_MODEL_TASKS = [
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
-  "nurture_sequence",
-  "nurture_email_single",
   "post_meeting_followup_email",
+  "post_meeting_followup_personalized",
+  "pre_email_3_followup",
+  "pre_email_4_breakup",
+  "reply_to_thread",
   "analyze_outgoing_email",
+  "nurture_sequence",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
@@ -1512,38 +1518,10 @@ serve(async (req) => {
     const data = await response.json();
     let content = data.choices?.[0]?.message?.content || "";
 
-    // Word count enforcement for outbound first touch (max 1 retry)
+    // Word count logging for outbound first touch (no retry — prompt handles enforcement)
     if (isOutboundFirstTouch && content) {
       const wordCount = content.split(/\s+/).filter(Boolean).length;
       console.log(`[ai_task] Outbound first touch word count: ${wordCount}`);
-      if (wordCount > 95) {
-        console.log(`[ai_task] ⚠️ Over 95 words (${wordCount}), retrying with strict constraint`);
-        const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: SYSTEM_GLOBAL_PROMPT },
-              { role: "user", content: userPrompt },
-              { role: "assistant", content },
-              { role: "user", content: "Rewrite the email under 90 words. Maintain structure rules. Do not expand." },
-            ],
-          }),
-        });
-        if (retryResponse.ok) {
-          const retryData = await retryResponse.json();
-          const retryContent = retryData.choices?.[0]?.message?.content || "";
-          const retryWordCount = retryContent.split(/\s+/).filter(Boolean).length;
-          console.log(`[ai_task] ✅ Retry word count: ${retryWordCount} (was ${wordCount})`);
-          content = retryContent;
-        } else {
-          console.error(`[ai_task] Retry failed (${retryResponse.status}), using original`);
-        }
-      }
     }
 
     console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
