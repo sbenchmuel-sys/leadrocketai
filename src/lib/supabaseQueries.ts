@@ -241,21 +241,42 @@ export async function deleteLead(leadId: string): Promise<void> {
 
 export type InteractionItem = Pick<Interaction,
   'id' | 'lead_id' | 'type' | 'source' | 'occurred_at' | 'subject' |
-  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id'
+  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id' | 'hidden'
 >;
 
-export async function getLeadInteractions(leadId: string): Promise<InteractionItem[]> {
+export async function getLeadInteractions(leadId: string, includeHidden = false): Promise<InteractionItem[]> {
   if (!leadId) throw new Error('Missing leadId');
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('interactions')
-    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id')
+    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, hidden')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false })
     .limit(100);
 
+  if (!includeHidden) {
+    query = query.eq('hidden', false);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
+}
+
+export async function hideInteraction(interactionId: string): Promise<void> {
+  const { error } = await supabase
+    .from('interactions')
+    .update({ hidden: true })
+    .eq('id', interactionId);
+  if (error) throw error;
+}
+
+export async function unhideInteraction(interactionId: string): Promise<void> {
+  const { error } = await supabase
+    .from('interactions')
+    .update({ hidden: false })
+    .eq('id', interactionId);
+  if (error) throw error;
 }
 
 export interface InsertInteractionInput {

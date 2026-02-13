@@ -411,6 +411,7 @@ export type Database = {
           from_email: string | null
           gmail_message_id: string | null
           gmail_thread_id: string | null
+          hidden: boolean
           id: string
           lead_id: string
           occurred_at: string
@@ -428,6 +429,7 @@ export type Database = {
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
+          hidden?: boolean
           id?: string
           lead_id: string
           occurred_at?: string
@@ -445,6 +447,7 @@ export type Database = {
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
+          hidden?: boolean
           id?: string
           lead_id?: string
           occurred_at?: string
