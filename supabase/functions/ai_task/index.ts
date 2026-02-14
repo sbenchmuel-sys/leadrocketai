@@ -9,9 +9,6 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "post_meeting_recap",
   "answer_questions",
   "pre_email_1_intro",
-  "pre_email_2_followup",
-  "pre_email_3_followup",
-  "pre_email_4_breakup",
   "post_meeting_followup_personalized",
   "nurture_sequence",
   "nurture_email_single",
@@ -1215,10 +1212,7 @@ const PRO_MODEL_TASKS = [
   "recommend_next_steps",
   "post_meeting_followup_email",
   "post_meeting_followup_personalized",
-  "pre_email_3_followup",
-  "pre_email_4_breakup",
   "reply_to_thread",
-  "analyze_outgoing_email",
   "nurture_sequence",
 ];
 
@@ -1480,19 +1474,28 @@ serve(async (req) => {
 
     console.log(`[ai_task] Task: ${task}, Model: ${model}, User: ${user.id}`);
 
+    // Check if client requested streaming
+    const streamRequested = payload?.stream === true;
+
+    const aiRequestBody: Record<string, unknown> = {
+      model,
+      messages: [
+        { role: "system", content: SYSTEM_GLOBAL_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    };
+
+    if (streamRequested) {
+      aiRequestBody.stream = true;
+    }
+
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: SYSTEM_GLOBAL_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(aiRequestBody),
     });
 
     if (!response.ok) {
@@ -1516,6 +1519,15 @@ serve(async (req) => {
       });
     }
 
+    // Streaming path: pipe SSE directly to client
+    if (streamRequested && response.body) {
+      console.log(`[ai_task] Streaming response for task: ${task}`);
+      return new Response(response.body, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
+    }
+
+    // Non-streaming path: buffer full response
     const data = await response.json();
     let content = data.choices?.[0]?.message?.content || "";
 
