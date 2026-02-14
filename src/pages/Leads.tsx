@@ -31,6 +31,7 @@ import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw, AlertTriangle,
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
+import { SOURCE_TYPE_LABELS, SourceType } from "@/lib/dashboardUtils";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 
@@ -426,7 +427,7 @@ export default function Leads() {
                       <TableCell className="text-muted-foreground">{lead.country || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{lead.company}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{(lead as any).motion?.replace(/_/g, ' ') || "outbound"}</Badge>
+                        <Badge variant="outline">{SOURCE_TYPE_LABELS[lead.source_type as SourceType] || lead.source_type?.replace(/_/g, ' ') || "Manual"}</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{lead.status}</Badge>
