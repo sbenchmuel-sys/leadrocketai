@@ -1,47 +1,62 @@
 
 
-# Migrate Data from Gmail Account to Work Account
+# Change Lead Source from Dashboard (Single + Bulk)
 
 ## What This Does
-Moves all your leads, knowledge base entries, settings, and Gmail connection from the `s.benchmuel@gmail.com` account to your `shai.benchmuel@binah.ai` account so everything is accessible under one login.
+Adds the ability to change a lead's source type (e.g., "Outbound Prospect", "Inbound -- Website", "Event Lead", "Referral", "Manual") directly from the dashboard table -- for individual leads or in bulk. When the source changes, the system automatically updates the lead's **motion** and **origin category** to match, so the AI playbook adapts seamlessly.
 
-## Steps
+## Changes
 
-### 1. Reassign leads (111 records)
-Update all leads so they belong to your work account.
+### 1. New Component: `SourceDropdown`
+A compact inline dropdown (similar to the existing Phase/Mode dropdown) for the Source column in the lead table.
 
-### 2. Reassign knowledge base chunks (9 records)
-Move the 9 KB entries from the old account to the new one (your work account already has 83 -- these 9 will be added).
+- Displays the current source label with its color dot
+- On change, updates `source_type`, `motion`, and recalculates `origin_category` using the existing `SOURCE_PRESETS` mapping
+- Triggers a dashboard refresh after update
 
-### 3. Merge rep profile and workspace profile
-Your work account doesn't have a rep_profile or workspace_profile yet, so we'll reassign the existing ones from the old account.
+### 2. New Utility: `updateSourceFromTable()` in `motionUpdater.ts`
+A new function that:
+- Accepts a lead ID and a source preset key (outbound, inbound_website, event, referral, other)
+- Writes `source_type`, `motion`, and resets sequence state appropriately (clears nurture fields if moving away from nurture, etc.)
+- Calls `refreshDashboard()`
 
-### 4. Reassign Gmail connection
-Move the Gmail integration link to the new account so email sync continues working.
+### 3. Update `LeadTable.tsx`
+- Replace the static source badge in the Source column with the new `SourceDropdown` component
+- Add a **bulk source change** dropdown in the bulk actions bar (alongside "Move to stage..." and "Delete")
 
-### 5. Clean up the old account's profile
-The old profile record remains but will have no associated data. Optionally we can leave it as-is (harmless).
+### 4. Bulk Source Change
+- New `Select` in the bulk action bar: "Change source..."
+- Calls `updateSourceFromTable()` for each selected lead
+- Shows success toast with count
+
+### 5. What Automatically Adapts
+Because source changes update `motion`, the following systems adapt without extra work:
+- **Playbook resolver** (`playbookResolver.ts`) -- uses `motion` and `source_type` to pick the right AI intent
+- **Display phase** -- recalculated from the new motion
+- **Color-coded bar** -- updates to match new source
+- **Cadence system** -- motion-based intervals apply automatically
+
+---
 
 ## Technical Details
 
-All changes are simple `UPDATE` statements run against the database:
+### Source Preset Mapping (already exists in `SOURCE_PRESETS`)
 
-```sql
--- 1. Leads
-UPDATE leads SET owner_user_id = 'ce2cd3db-...' WHERE owner_user_id = 'aca893f9-...';
-
--- 2. KB chunks
-UPDATE kb_chunks SET owner_user_id = 'ce2cd3db-...' WHERE owner_user_id = 'aca893f9-...';
-
--- 3. Rep profile (reassign)
-UPDATE rep_profiles SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
-
--- 4. Workspace profile (reassign)
-UPDATE workspace_profiles SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
-
--- 5. Gmail connection
-UPDATE gmail_connections SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
+```text
+outbound          -> source_type: outbound_prospecting, motion: outbound_prospecting
+inbound_website   -> source_type: contact_form,         motion: inbound_response
+event             -> source_type: event_lead,            motion: outbound_prospecting
+referral          -> source_type: referral,              motion: inbound_response
+other             -> source_type: manual_entry,          motion: outbound_prospecting
 ```
 
-No code changes are needed -- this is purely a data migration. After running these updates, logging in with Google (shai.benchmuel@binah.ai) will show all 111 leads and associated data.
+### Files to Create
+- `src/components/dashboard/SourceDropdown.tsx` -- inline source selector
+
+### Files to Modify
+- `src/lib/motionUpdater.ts` -- add `updateSourceFromTable()` function
+- `src/components/dashboard/LeadTable.tsx` -- replace static source badge with `SourceDropdown`, add bulk source select to toolbar
+
+### No Database Changes Required
+All fields (`source_type`, `motion`, `stage`) already exist in the leads table.
 
