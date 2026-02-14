@@ -95,7 +95,7 @@ export default function Landing() {
                 </Link>
               </Button>
               <Button size="lg" variant="ghost" asChild className="h-13 px-8 text-[15px] font-medium text-muted-foreground">
-                <a href="#features">See How It Works</a>
+                <a href="#features" onClick={(e) => { e.preventDefault(); document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' }); }}>See How It Works</a>
               </Button>
             </div>
           </div>
