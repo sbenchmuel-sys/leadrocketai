@@ -143,9 +143,33 @@ function buildAIPayload(
     payload.lead_card_message = (lead as any).initial_message;
   }
 
-  // Previous email summary for follow-ups
+  // Previous email summary + re-engagement context for follow-ups
   if (taskType.includes("pre_email")) {
     payload.previous_email_summary = ctx.thread_summary || "No previous emails sent yet.";
+    // Full last outbound for dedup
+    payload.last_outbound_body = ctx.last_outbound_email?.body_text || "";
+    // Intelligence signals for varied angles
+    payload.buying_signals = ctx.buying_signals.length > 0 
+      ? ctx.buying_signals.join(", ") : "None detected";
+    payload.risk_signals = ctx.risk_signals.length > 0 
+      ? ctx.risk_signals.join(", ") : "None detected";
+    payload.engagement_level = ctx.engagement_level;
+    // Milestones summary
+    const milestones = ctx.lead.milestones_json as any[];
+    payload.milestones = milestones?.length > 0
+      ? milestones.map((m: any) => `${m.status}: ${m.description}`).join("; ")
+      : "No milestones recorded";
+    // Days since last activity
+    if (ctx.lead.last_activity_at) {
+      const days = Math.floor((Date.now() - new Date(ctx.lead.last_activity_at).getTime()) / (1000*60*60*24));
+      payload.days_since_activity = String(days);
+    }
+    // Meeting context if available
+    if (ctx.last_meeting_summary) {
+      const bullets = ctx.last_meeting_summary.internal_recap_bullets;
+      payload.meeting_context = Array.isArray(bullets) 
+        ? (bullets as string[]).slice(0, 3).join(". ") : "";
+    }
   }
 
   // Nurture emails

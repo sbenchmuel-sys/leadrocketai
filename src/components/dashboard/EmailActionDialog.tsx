@@ -894,12 +894,20 @@ Calendar Link: ${repProfile.calendar_link || ''}
                 
                 {/* Most Recent Email - Always expanded */}
                 <div className={`p-4 rounded-lg border ${mostRecentEmail.direction === 'inbound' ? 'bg-muted/50' : 'bg-primary/5 border-primary/20'}`}>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2 flex-wrap">
                     <Badge variant={mostRecentEmail.direction === 'inbound' ? 'secondary' : 'outline'} className="text-xs">
                       {mostRecentEmail.direction === 'inbound' ? 'Received' : 'Sent'}
                     </Badge>
                     <span>•</span>
                     <span>{new Date(mostRecentEmail.occurred_at).toLocaleDateString()}</span>
+                    {mostRecentEmail.direction === 'outbound' && (() => {
+                      const days = Math.floor((Date.now() - new Date(mostRecentEmail.occurred_at).getTime()) / (1000*60*60*24));
+                      return days > 3 ? (
+                        <Badge variant="destructive" className="text-xs">
+                          No reply in {days} days
+                        </Badge>
+                      ) : null;
+                    })()}
                   </div>
                   {mostRecentEmail.subject && (
                     <div className="font-medium text-sm mb-2">
