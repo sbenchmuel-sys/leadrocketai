@@ -102,7 +102,7 @@ export default function LeadDetailHeader({
       {/* Back + Actions row — slim */}
       <div className="flex items-center justify-between pb-2">
         <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-          <Link to="/dashboard/leads"><ArrowLeft className="h-4 w-4" /></Link>
+          <Link to="/app/leads"><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
         <div className="flex gap-1.5">
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
@@ -110,7 +110,7 @@ export default function LeadDetailHeader({
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (
             <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
-              <Link to="/dashboard/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
+              <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
             </Button>
           )}
           <AlertDialog>

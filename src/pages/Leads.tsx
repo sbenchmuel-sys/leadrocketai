@@ -418,7 +418,7 @@ export default function Leads() {
                       </TableCell>
                       <TableCell>
                         <Link
-                          to={`/dashboard/leads/${lead.id}`}
+                          to={`/app/leads/${lead.id}`}
                           className="font-medium text-foreground hover:underline"
                         >
                           {lead.name}
@@ -450,7 +450,7 @@ export default function Leads() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => navigate(`/dashboard/leads/${lead.id}`)}>
+                            <DropdownMenuItem onClick={() => navigate(`/app/leads/${lead.id}`)}>
                               <Pencil className="h-4 w-4 mr-2" />
                               Edit
                             </DropdownMenuItem>

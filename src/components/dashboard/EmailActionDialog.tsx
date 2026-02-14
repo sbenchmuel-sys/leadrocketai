@@ -1095,7 +1095,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
             </Select>
             
             <Button variant="outline" asChild className="gap-1">
-              <Link to={`/dashboard/leads/${lead.id}`}>
+              <Link to={`/app/leads/${lead.id}`}>
                 <ExternalLink className="h-4 w-4" />
                 <span className="hidden sm:inline">View Lead</span>
               </Link>

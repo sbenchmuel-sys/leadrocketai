@@ -2,12 +2,13 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
 import DashboardLayout from "@/components/DashboardLayout";
+import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Inbox from "./pages/Inbox";
@@ -32,7 +33,7 @@ const App = () => (
         <BrowserRouter>
           <AuthProvider>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Landing />} />
             <Route path="/auth" element={<Auth />} />
             <Route
               path="/onboarding"
@@ -43,7 +44,7 @@ const App = () => (
               }
             />
             <Route
-              path="/dashboard"
+              path="/app"
               element={
                 <ProtectedRoute>
                   <DashboardLayout />

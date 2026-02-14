@@ -243,7 +243,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
           <div className="text-center py-8">
             <p className="text-muted-foreground mb-4">No leads match this filter</p>
             <Button asChild>
-              <Link to="/dashboard/leads">
+              <Link to="/app/leads">
                 <Plus className="h-4 w-4 mr-2" />
                 Add Your First Lead
               </Link>
@@ -290,7 +290,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
 
   const renderViewButton = (lead: EnrichedLead) => (
     <Button size="sm" variant="ghost" asChild>
-      <Link to={`/dashboard/leads/${lead.id}`}>
+      <Link to={`/app/leads/${lead.id}`}>
         <Eye className="h-4 w-4" />
       </Link>
     </Button>
@@ -570,7 +570,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     )}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("button, a, [role='dialog'], input, [role='combobox']")) return;
-                      navigate(`/dashboard/leads/${lead.id}`);
+                      navigate(`/app/leads/${lead.id}`);
                     }}
                   >
                     {/* Color bar */}

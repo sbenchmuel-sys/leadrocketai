@@ -21,7 +21,7 @@ export default function Onboarding() {
       try {
         const profile = await getCurrentProfile();
         if (profile.onboarding_done) {
-          navigate("/dashboard", { replace: true });
+          navigate("/app", { replace: true });
           return;
         }
         setCurrentStep(Math.min(profile.onboarding_step || 0, TOTAL_STEPS - 1));

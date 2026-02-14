@@ -39,7 +39,7 @@ export default function ProtectedOnboardingRoute({ children }: { children: React
 
   // Already completed onboarding -> go to dashboard
   if (profile.onboarding_done) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/app" replace />;
   }
 
   return <>{children}</>;

@@ -16,7 +16,7 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
 
   const handleConnect = async () => {
     try {
-      await connectGmail("/dashboard/settings");
+      await connectGmail("/app/settings");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to connect Gmail";
       toast.error("Connection failed", { description: message });
@@ -35,7 +35,7 @@ export function GmailConnectionCard({ onConnectionChange }: GmailConnectionCardP
   const handleReauthorize = async () => {
     try {
       await disconnect();
-      await connectGmail("/dashboard/settings");
+      await connectGmail("/app/settings");
     } catch {
       // Errors handled in hook
     }
