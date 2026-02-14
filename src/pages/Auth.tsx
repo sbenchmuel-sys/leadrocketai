@@ -9,12 +9,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import AccountMergeDialog from "@/components/auth/AccountMergeDialog";
 
 export default function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [showMergeDialog, setShowMergeDialog] = useState(false);
+  const [mergeEmail, setMergeEmail] = useState("");
   const { signIn, signUp, user, profile, isLoading } = useAuth();
   const navigate = useNavigate();
 
@@ -37,7 +40,14 @@ export default function Auth() {
         redirect_uri: window.location.origin,
       });
       if (error) {
-        toast.error(error.message || "Google sign-in failed");
+        const msg = error.message || "";
+        if (msg.toLowerCase().includes("already registered") || msg.toLowerCase().includes("duplicate")) {
+          // Extract email hint if available, otherwise leave blank
+          setMergeEmail(email || "");
+          setShowMergeDialog(true);
+        } else {
+          toast.error(msg || "Google sign-in failed");
+        }
       }
     } catch (err: any) {
       toast.error(err.message || "Google sign-in failed");
@@ -194,6 +204,11 @@ export default function Auth() {
           </Tabs>
         </CardContent>
       </Card>
+      <AccountMergeDialog
+        open={showMergeDialog}
+        onOpenChange={setShowMergeDialog}
+        mergeEmail={mergeEmail}
+      />
     </div>
   );
 }
