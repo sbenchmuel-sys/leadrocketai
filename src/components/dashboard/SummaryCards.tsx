@@ -72,7 +72,7 @@ export function SummaryCards({
   };
 
   return (
-    <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-5 grid-cols-2 lg:grid-cols-4">
       {cardConfig.map((card, index) => {
         const filterKey = keyToFilter[card.key];
         const isActive = activeFilter === filterKey;
@@ -81,38 +81,39 @@ export function SummaryCards({
           <Card
             key={card.key}
             className={cn(
-              "transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5 border-0",
+              "transition-all duration-300 border border-border rounded-2xl",
+              "hover:shadow-lg hover:-translate-y-1",
               card.gradient,
               !isLoading && "animate-fade-in",
-              card.emphasis === "strong" && !isActive && "ring-1 ring-warning/30",
+              card.emphasis === "strong" && !isActive && "ring-1 ring-warning/20",
               "cursor-pointer",
-              isActive && "ring-2 ring-primary shadow-md",
+              isActive && "ring-2 ring-primary shadow-[0_0_24px_hsl(217_91%_60%/0.12)]",
             )}
-            style={{ animationDelay: `${index * 50}ms` }}
+            style={{ animationDelay: `${index * 60}ms` }}
             onClick={() => onCardClick?.(filterKey)}
           >
-            <CardContent className="p-4">
+            <CardContent className="p-5">
               <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-muted-foreground">
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     {card.label}
                   </p>
                   <p
                     className={cn(
-                      "text-3xl font-bold text-foreground tabular-nums",
+                      "text-3xl font-semibold text-foreground tabular-nums tracking-tight",
                       !isLoading && "animate-count-up"
                     )}
-                    style={{ animationDelay: `${index * 50 + 100}ms` }}
+                    style={{ animationDelay: `${index * 60 + 100}ms` }}
                   >
                     {isLoading ? "—" : values[index]}
                   </p>
                   {card.key === "warming_up" && !isLoading && (
-                    <p className="text-[10px] text-muted-foreground leading-tight">
+                    <p className="text-[10px] text-muted-foreground/70 leading-tight">
                       Engagement + buying signals
                     </p>
                   )}
                 </div>
-                <div className={cn("p-2 rounded-lg", card.iconBg)}>
+                <div className={cn("p-2.5 rounded-xl", card.iconBg)}>
                   <card.icon className={cn("h-5 w-5", card.iconColor)} />
                 </div>
               </div>

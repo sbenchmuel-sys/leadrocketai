@@ -78,13 +78,13 @@ interface LeadTableProps {
 }
 
 const stageBadgeVariants: Record<DealStage, string> = {
-  new: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-  contacted: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 hover:bg-blue-200",
-  engaged: "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 hover:bg-green-200",
-  post_meeting: "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300 hover:bg-purple-200",
-  closing: "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 hover:bg-orange-200",
-  closed_won: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 hover:bg-emerald-200",
-  closed_lost: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300 hover:bg-red-200",
+  new: "bg-muted/60 text-muted-foreground",
+  contacted: "bg-primary/10 text-primary",
+  engaged: "bg-success/10 text-success",
+  post_meeting: "bg-secondary/15 text-secondary",
+  closing: "bg-warning/10 text-warning",
+  closed_won: "bg-success/15 text-success",
+  closed_lost: "bg-destructive/10 text-destructive",
 };
 
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
@@ -520,7 +520,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
         <CardContent className="p-0">
           <Table>
             <TableHeader>
-              <TableRow className="text-xs">
+              <TableRow className="text-xs border-b border-border/60">
                 <TableHead className="w-1 p-0" />
                 <TableHead className="w-10 py-2">
                   <Checkbox
@@ -564,9 +564,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   <TableRow
                     key={lead.id}
                     className={cn(
-                      "cursor-pointer transition-colors",
-                      "hover:bg-muted/50",
-                      isSelected && "bg-muted/40",
+                      "cursor-pointer transition-colors duration-150",
+                      "hover:bg-accent/30",
+                      isSelected && "bg-accent/20",
                     )}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("button, a, [role='dialog'], input, [role='combobox']")) return;

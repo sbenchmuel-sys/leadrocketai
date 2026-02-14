@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles, Mail, CalendarCheck, FileText } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import {
   EnrichedLead,
@@ -20,6 +20,94 @@ import { IntelligenceCards } from "@/components/dashboard/IntelligenceCards";
 import { ActionRequiredPanel } from "@/components/dashboard/ActionRequiredPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 import { AIRecommendation } from "@/components/dashboard/AIRecommendation";
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function AIActivityPanel({ leads }: { leads: EnrichedLead[] }) {
+  // Build activity items from lead data
+  const activities = useMemo(() => {
+    const items: { icon: typeof Mail; label: string; detail: string; time: string }[] = [];
+
+    // Find recent drafts (leads with needs_action and action labels)
+    const actionLeads = leads
+      .filter((l) => l.needs_action && l.next_action_label)
+      .sort((a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime())
+      .slice(0, 2);
+
+    actionLeads.forEach((l) => {
+      items.push({
+        icon: FileText,
+        label: "Draft created",
+        detail: `${l.next_action_label} for ${l.name}`,
+        time: formatDistanceToNow(new Date(l.last_activity_at), { addSuffix: true }),
+      });
+    });
+
+    // Find leads with recent inbound (reply detected)
+    const replyLeads = leads
+      .filter((l) => l.last_inbound_at)
+      .sort((a, b) => new Date(b.last_inbound_at!).getTime() - new Date(a.last_inbound_at!).getTime())
+      .slice(0, 2);
+
+    replyLeads.forEach((l) => {
+      items.push({
+        icon: Mail,
+        label: "Reply detected",
+        detail: `${l.name} from ${l.company}`,
+        time: formatDistanceToNow(new Date(l.last_inbound_at!), { addSuffix: true }),
+      });
+    });
+
+    // Automation scheduled
+    const autoLeads = leads
+      .filter((l) => (l as any).nurture_mode === "auto" && (l as any).nurture_status === "active")
+      .slice(0, 2);
+
+    autoLeads.forEach((l) => {
+      items.push({
+        icon: CalendarCheck,
+        label: "Follow-up scheduled",
+        detail: l.name,
+        time: "Queued",
+      });
+    });
+
+    return items.slice(0, 6);
+  }, [leads]);
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold text-foreground">Assistant Activity</h3>
+      </div>
+
+      {activities.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">No recent activity yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {activities.map((a, i) => (
+            <div key={i} className="flex items-start gap-3">
+              <div className="mt-0.5 h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                <a.icon className="h-3.5 w-3.5 text-muted-foreground" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-foreground">{a.label}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{a.detail}</p>
+              </div>
+              <span className="text-[10px] text-muted-foreground/60 shrink-0 mt-0.5">{a.time}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -94,7 +182,7 @@ export default function Dashboard() {
     return counts;
   }, [leads]);
 
-  // Cooling down: leads that were recently active but momentum is stalling
+  // Cooling down
   const coolingDownCount = useMemo(() => {
     const now = new Date();
     return leads.filter((l) => {
@@ -150,21 +238,25 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
+    <div className="space-y-8">
+      {/* Greeting Header */}
+      <div className="flex items-start justify-between">
+        <div className="space-y-1">
+          <h1 className="text-4xl font-semibold text-foreground tracking-tight">
+            {getGreeting()}.
+          </h1>
           <div className="flex items-center gap-2">
-            <p className="text-muted-foreground">Your B2B Deal Assistant</p>
+            <p className="text-muted-foreground text-[15px]">
+              Your assistant is monitoring {execStats.activeLeads} active lead{execStats.activeLeads !== 1 ? "s" : ""}.
+            </p>
             {lastRefreshedAt && (
-              <span className="text-xs text-muted-foreground/60">
+              <span className="text-xs text-muted-foreground/50">
                 · Updated {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
               </span>
             )}
           </div>
         </div>
-        <Button asChild>
+        <Button asChild className="h-10">
           <Link to="/app/leads">
             <Plus className="h-4 w-4 mr-2" />
             Add Lead
@@ -201,18 +293,19 @@ export default function Dashboard() {
         onStageClick={handleStageClick}
       />
 
-      {/* Two Column Layout for Action Panel and AI */}
+      {/* Two Column Layout for Action Panel + AI Activity */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 space-y-6">
           <ActionRequiredPanel leads={leads} onLeadUpdated={loadData} />
-        </div>
-        <div>
           <AIRecommendation
             warmingUpLeads={metrics?.warmingUpLeads ?? []}
             coolingDownCount={coolingDownCount}
             nurtureCandidates={intelligenceMetrics.nurtureCandidateCount}
             atRisk={intelligenceMetrics.staleCount}
           />
+        </div>
+        <div>
+          <AIActivityPanel leads={leads} />
         </div>
       </div>
 
