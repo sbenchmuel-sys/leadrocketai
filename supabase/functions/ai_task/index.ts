@@ -716,6 +716,26 @@ You are generating Email 2 in a pre-meeting outreach cadence.
 GOAL
 Politely follow up after no response, add one value point, and reduce friction to reply.
 
+CRITICAL DEDUPLICATION:
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Do NOT repeat the same:
+- Opening angle or observation
+- Value proposition or benefit
+- CTA phrasing
+- Company/product description
+
+Instead, choose ONE fresh re-engagement angle from:
+1. Reference a milestone or deal progress point: {{MILESTONES}}
+2. Address a detected buying signal: {{BUYING_SIGNALS}}
+3. Share a relevant industry insight or peer example
+4. Reference a meeting discussion point: {{MEETING_CONTEXT}}
+5. Acknowledge the silence directly with a binary question
+
+Engagement: {{ENGAGEMENT_LEVEL}} | Days inactive: {{DAYS_SINCE_ACTIVITY}}
+Risk signals: {{RISK_SIGNALS}}
+
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -738,7 +758,7 @@ Custom Instructions:
 CONSTRAINTS
 - 90–140 words
 - Friendly, respectful of time
-- Briefly reference previous email
+- Use a DIFFERENT angle than the last email — do not rehash the same value prop
 - No hype or guarantees
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
 - SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
@@ -755,7 +775,26 @@ Return EMAIL BODY ONLY. The email must be complete and ready to send with real n
 You are generating Email 3 in a pre-meeting outreach cadence.
 
 GOAL
-Check relevance, prompt a yes/no response, and keep tone professional.
+Check relevance, prompt a yes/no response, and keep tone professional. This is a more direct follow-up.
+
+CRITICAL DEDUPLICATION:
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Do NOT repeat the same:
+- Opening angle or observation
+- Value proposition or benefit
+- CTA phrasing
+
+Choose a COMPLETELY DIFFERENT approach from previous emails:
+1. Ask a direct binary question about priorities: {{MILESTONES}}
+2. Reference a specific buying signal to re-engage: {{BUYING_SIGNALS}}
+3. Share a brief peer comparison or industry trend
+4. Call back to a meeting discussion: {{MEETING_CONTEXT}}
+5. Use a permission-based close ("If this isn't relevant, happy to close the loop")
+
+Engagement: {{ENGAGEMENT_LEVEL}} | Days inactive: {{DAYS_SINCE_ACTIVITY}}
+Risk signals: {{RISK_SIGNALS}}
 
 INPUTS
 Lead Context:
@@ -777,6 +816,7 @@ CONSTRAINTS
 - 70–120 words
 - More direct, still polite
 - Explicitly acknowledge silence without pressure
+- Must use a DIFFERENT angle and CTA style than any previous email
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
 - SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
