@@ -1,97 +1,47 @@
 
 
-# Account Merging: Email + Google OAuth
+# Migrate Data from Gmail Account to Work Account
 
-## Problem
+## What This Does
+Moves all your leads, knowledge base entries, settings, and Gmail connection from the `s.benchmuel@gmail.com` account to your `shai.benchmuel@binah.ai` account so everything is accessible under one login.
 
-When a user signs up with email/password and later tries to sign in with Google using the same email, they either get an error or end up with two separate accounts. The app should detect this and guide the user through linking their accounts.
+## Steps
 
-## How It Works
+### 1. Reassign leads (111 records)
+Update all leads so they belong to your work account.
 
-The authentication system supports automatic identity linking when a confirmed email matches. However, if the email isn't confirmed or automatic linking fails, the user sees a cryptic error. We need to handle this gracefully.
+### 2. Reassign knowledge base chunks (9 records)
+Move the 9 KB entries from the old account to the new one (your work account already has 83 -- these 9 will be added).
 
-## Solution
+### 3. Merge rep profile and workspace profile
+Your work account doesn't have a rep_profile or workspace_profile yet, so we'll reassign the existing ones from the old account.
 
-### 1. Detect duplicate-email errors on Google sign-in
+### 4. Reassign Gmail connection
+Move the Gmail integration link to the new account so email sync continues working.
 
-When Google sign-in fails with an error indicating the email is already registered (e.g., "User already registered" or duplicate key errors), catch it and show a friendly merge prompt instead of a generic error toast.
-
-### 2. Add an Account Merge Dialog (`src/components/auth/AccountMergeDialog.tsx`)
-
-A new dialog component that:
-- Explains: "An account with this email already exists. Sign in with your password to link your Google account."
-- Shows a password input field
-- On submit: signs the user in with email/password, then calls `supabase.auth.linkIdentity({ provider: 'google' })` to link the Google identity
-- Shows success confirmation when linking completes
-
-### 3. Update Auth page to manage merge flow (`src/pages/Auth.tsx`)
-
-- Add state for `showMergeDialog` and `mergeEmail` (the email from the failed Google attempt)
-- In `handleGoogleSignIn`, detect the duplicate-account error and trigger the merge dialog instead of a toast
-- After successful merge, redirect normally
-
-### 4. Add "Link Google Account" option in Settings (optional enhancement)
-
-For users already signed in with email/password, add a button in Settings to proactively link their Google account using `linkIdentity`.
+### 5. Clean up the old account's profile
+The old profile record remains but will have no associated data. Optionally we can leave it as-is (harmless).
 
 ## Technical Details
 
-### New file: `src/components/auth/AccountMergeDialog.tsx`
+All changes are simple `UPDATE` statements run against the database:
 
-```typescript
-// Dialog with:
-// - Explanation text about account linking
-// - Password input
-// - "Link Accounts" button
-// - On submit:
-//   1. signIn(mergeEmail, password)
-//   2. supabase.auth.linkIdentity({ provider: 'google' })
-//   3. Close dialog, redirect to /app
+```sql
+-- 1. Leads
+UPDATE leads SET owner_user_id = 'ce2cd3db-...' WHERE owner_user_id = 'aca893f9-...';
+
+-- 2. KB chunks
+UPDATE kb_chunks SET owner_user_id = 'ce2cd3db-...' WHERE owner_user_id = 'aca893f9-...';
+
+-- 3. Rep profile (reassign)
+UPDATE rep_profiles SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
+
+-- 4. Workspace profile (reassign)
+UPDATE workspace_profiles SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
+
+-- 5. Gmail connection
+UPDATE gmail_connections SET user_id = 'ce2cd3db-...' WHERE user_id = 'aca893f9-...';
 ```
 
-### Changes to `src/pages/Auth.tsx`
-
-```typescript
-// Add state:
-const [showMergeDialog, setShowMergeDialog] = useState(false);
-const [mergeEmail, setMergeEmail] = useState("");
-
-// In handleGoogleSignIn error handler:
-if (error?.message?.includes("already registered") || 
-    error?.message?.includes("duplicate")) {
-  setMergeEmail(/* extract email from error or context */);
-  setShowMergeDialog(true);
-} else {
-  toast.error(error.message);
-}
-```
-
-## User Flow
-
-```text
-User clicks "Continue with Google"
-       |
-Google OAuth returns email "user@example.com"
-       |
-  Email already exists as password account?
-       |                    |
-      NO                   YES
-       |                    |
-  Normal sign-in     Show merge dialog
-                          |
-              User enters password
-                          |
-              Sign in with password
-                          |
-              Link Google identity
-                          |
-              Redirect to /app
-```
-
-## Files Changed
-
-| File | Change |
-|------|--------|
-| `src/components/auth/AccountMergeDialog.tsx` | New dialog for account linking flow |
-| `src/pages/Auth.tsx` | Detect duplicate-email error, show merge dialog |
+No code changes are needed -- this is purely a data migration. After running these updates, logging in with Google (shai.benchmuel@binah.ai) will show all 111 leads and associated data.
 
