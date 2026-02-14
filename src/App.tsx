@@ -19,6 +19,7 @@ import Onboarding from "./pages/Onboarding";
 import ManagerAnalytics from "./pages/ManagerAnalytics";
 import NotFound from "./pages/NotFound";
 import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 
 const queryClient = new QueryClient();
 
@@ -58,6 +59,7 @@ const App = () => (
               <Route path="analytics" element={<ManagerAnalytics />} />
             </Route>
             <Route path="/privacy" element={<Privacy />} />
+            <Route path="/terms" element={<Terms />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           </AuthProvider>
