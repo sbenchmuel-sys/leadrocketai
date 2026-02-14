@@ -99,9 +99,14 @@ const MOTION_OPTIONS: { value: Motion; label: string }[] = [
 ];
 
 // Derive playbook label from action key
-function getPlaybookLabel(actionKey: string | null, motion: Motion): string {
+function getPlaybookLabel(actionKey: string | null, motion: Motion, hasOutboundEmail?: boolean): string {
   const motionLabel = MOTION_LABELS[motion] || "Prospecting";
   const actionType = getActionType(actionKey);
+  
+  // For inbound leads with no outbound email yet, show "Inbound Intro"
+  if (motion === "inbound_response" && !hasOutboundEmail && (actionType === "reply" || actionType === "view")) {
+    return `${motionLabel} · Inbound Intro`;
+  }
   
   const stepMap: Record<string, string> = {
     reply: "Reply",
@@ -124,13 +129,15 @@ function getPlaybookLabel(actionKey: string | null, motion: Motion): string {
 }
 
 // Map action types to AI tasks
-function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITaskType {
+function getAITaskForAction(actionKey: string | null, hasThread: boolean, motion?: string, hasOutboundEmail?: boolean): AITaskType {
   const actionType = getActionType(actionKey);
+  
+  // For inbound leads with no prior outbound email, always use intro
+  const isInboundFirstTouch = motion === "inbound_response" && !hasOutboundEmail;
   
   switch (actionType) {
     case "reply":
-      // For replies WITH a thread, use reply_to_thread
-      // For new outreach without a thread, use pre_email_1_intro (intro email)
+      if (isInboundFirstTouch) return "pre_email_1_intro";
       return hasThread ? "reply_to_thread" : "pre_email_1_intro";
     case "recap":
       return "post_meeting_followup_email";
@@ -142,7 +149,7 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean): AITas
     case "nurture":
       return "nurture_email_single";
     default:
-      // If there's email history, generate a reply; otherwise intro email
+      if (isInboundFirstTouch) return "pre_email_1_intro";
       return hasThread ? "reply_to_thread" : "pre_email_1_intro";
   }
 }
@@ -567,7 +574,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
       try {
         const effectiveActionKeyForSeq = actionKey || lead.next_action_key || null;
         const hasThreadForSeq = threadEmails.length > 0;
-        const intentUsed = getAITaskForAction(effectiveActionKeyForSeq, hasThreadForSeq);
+        const intentUsed = getAITaskForAction(effectiveActionKeyForSeq, hasThreadForSeq, lead.motion, threadEmails.some(e => e.direction === 'outbound'));
         const recommended = resolvedIntent as AITaskType | null;
         const isOverride = recommended && intentUsed !== recommended;
         const motionOvr = getMotionOverrideValue();
@@ -647,7 +654,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
     // Update sequence state after Gmail compose (single atomic update including motion override)
     try {
       const motionOvr = getMotionOverrideValue();
-      const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0);
+      const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0, lead.motion, threadEmails.some(e => e.direction === 'outbound'));
       const recommended = resolvedIntent as AITaskType | null;
       const isOverride = recommended && intentUsed !== recommended;
       await updateSequenceState(
@@ -705,7 +712,7 @@ Calendar Link: ${repProfile.calendar_link || ''}
         <DialogHeader className="px-6 py-4 border-b shrink-0">
           {/* Playbook context strip */}
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground/70 tracking-wide mb-1">
-            <span>Playbook: {getPlaybookLabel(effectiveActionKey, selectedMotion)}</span>
+            <span>Playbook: {getPlaybookLabel(effectiveActionKey, selectedMotion, threadEmails.some(e => e.direction === 'outbound'))}</span>
             {resolvedIntent && (
               <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
                 {resolvedIntent}{resolvedStep ? ` · ${resolvedStep}` : ""}
