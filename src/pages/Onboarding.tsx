@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { getCurrentProfile } from "@/lib/supabaseQueries";
+import { getCurrentProfile, setOnboardingStep } from "@/lib/supabaseQueries";
 import ChoosePlaybookStep from "@/components/onboarding/ChoosePlaybookStep";
 import ConnectInboxStep from "@/components/onboarding/ConnectInboxStep";
 import AddKnowledgeStep from "@/components/onboarding/AddKnowledgeStep";
@@ -14,6 +14,11 @@ export default function Onboarding() {
   const navigate = useNavigate();
   const { refreshProfile } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
+
+  const goToStep = async (step: number) => {
+    setCurrentStep(step);
+    try { await setOnboardingStep(step); } catch (e) { console.error("Failed to save step:", e); }
+  };
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -70,25 +75,25 @@ export default function Onboarding() {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {currentStep === 0 && (
-            <ChoosePlaybookStep onNext={() => setCurrentStep(1)} />
+            <ChoosePlaybookStep onNext={() => goToStep(1)} />
           )}
           {currentStep === 1 && (
             <ConnectInboxStep
-              onNext={() => setCurrentStep(2)}
-              onBack={() => setCurrentStep(0)}
+              onNext={() => goToStep(2)}
+              onBack={() => goToStep(0)}
               allowSkip
             />
           )}
           {currentStep === 2 && (
             <AddKnowledgeStep
-              onNext={() => setCurrentStep(3)}
-              onBack={() => setCurrentStep(1)}
+              onNext={() => goToStep(3)}
+              onBack={() => goToStep(1)}
             />
           )}
           {currentStep === 3 && (
             <CreateLeadStep
-              onNext={() => setCurrentStep(4)}
-              onBack={() => setCurrentStep(2)}
+              onNext={() => goToStep(4)}
+              onBack={() => goToStep(2)}
             />
           )}
           {currentStep === 4 && (
