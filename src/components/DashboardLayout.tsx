@@ -27,12 +27,12 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-{ to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-{ to: "/dashboard/inbox", icon: Inbox, label: "Inbox" },
-{ to: "/dashboard/leads", icon: Users, label: "Leads" },
-{ to: "/dashboard/analytics", icon: BarChart3, label: "Team Analytics", managerOnly: true },
-{ to: "/dashboard/knowledge", icon: BookOpen, label: "Knowledge Base" },
-{ to: "/dashboard/settings", icon: Settings, label: "Settings" }];
+{ to: "/app", icon: LayoutDashboard, label: "Dashboard" },
+{ to: "/app/inbox", icon: Inbox, label: "Inbox" },
+{ to: "/app/leads", icon: Users, label: "Leads" },
+{ to: "/app/analytics", icon: BarChart3, label: "Team Analytics", managerOnly: true },
+{ to: "/app/knowledge", icon: BookOpen, label: "Knowledge Base" },
+{ to: "/app/settings", icon: Settings, label: "Settings" }];
 
 
 export default function DashboardLayout() {
@@ -85,12 +85,12 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <aside className="w-64 border-r border-border bg-card hidden md:flex flex-col">
         <div className="p-4 border-b border-border">
-          <h1 className="text-xl font-bold text-foreground">Lead Rocket AI</h1>
+          <h1 className="text-xl font-bold text-foreground">DrivePilot</h1>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           {visibleNavItems.map((item) => {
             const isActive = location.pathname === item.to ||
-            item.to !== "/dashboard" && location.pathname.startsWith(item.to);
+            item.to !== "/app" && location.pathname.startsWith(item.to);
             return (
               <Link
                 key={item.to}
@@ -143,11 +143,11 @@ export default function DashboardLayout() {
 
       {/* Mobile header */}
       <div className="md:hidden fixed top-0 left-0 right-0 h-14 border-b border-border bg-card z-50 flex items-center px-4 gap-4">
-        <h1 className="font-bold">Deal Assistant</h1>
+        <h1 className="font-bold">DrivePilot</h1>
         <nav className="flex-1 flex gap-2 overflow-x-auto">
           {visibleNavItems.map((item) => {
             const isActive = location.pathname === item.to ||
-            item.to !== "/dashboard" && location.pathname.startsWith(item.to);
+            item.to !== "/app" && location.pathname.startsWith(item.to);
             return (
               <Link
                 key={item.to}

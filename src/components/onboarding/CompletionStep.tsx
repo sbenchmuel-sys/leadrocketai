@@ -19,7 +19,7 @@ export default function CompletionStep({ onComplete }: CompletionStepProps) {
       await finishOnboarding();
       onComplete();
       toast.success("Welcome aboard!");
-      navigate("/dashboard", { replace: true });
+      navigate("/app", { replace: true });
     } catch (err) {
       console.error("Failed to finish onboarding:", err);
       toast.error("Something went wrong. Please try again.");

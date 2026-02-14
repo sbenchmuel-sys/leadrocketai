@@ -165,7 +165,7 @@ export default function Dashboard() {
           </div>
         </div>
         <Button asChild>
-          <Link to="/dashboard/leads">
+          <Link to="/app/leads">
             <Plus className="h-4 w-4 mr-2" />
             Add Lead
           </Link>

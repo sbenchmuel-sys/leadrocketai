@@ -21,7 +21,7 @@ export default function Auth() {
     if (!user) return;
 
     if (profile?.onboarding_done) {
-      navigate("/dashboard", { replace: true });
+      navigate("/app", { replace: true });
     } else {
       navigate("/onboarding", { replace: true });
     }
@@ -61,9 +61,9 @@ export default function Auth() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">Deal Assistant</CardTitle>
+          <CardTitle className="text-2xl font-bold">DrivePilot</CardTitle>
           <CardDescription>
-            Manage your B2B sales deals with AI-powered insights
+            AI-powered email automation for professionals
           </CardDescription>
         </CardHeader>
         <CardContent>

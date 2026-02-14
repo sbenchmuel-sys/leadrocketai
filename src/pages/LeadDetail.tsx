@@ -29,7 +29,7 @@ export default function LeadDetail() {
     try {
       await deleteLead(id);
       toast.success("Lead deleted successfully");
-      navigate("/dashboard/leads");
+      navigate("/app/leads");
     } catch (err) {
       toast.error("Failed to delete lead");
     } finally {
@@ -71,7 +71,7 @@ export default function LeadDetail() {
       <div className="text-center py-12">
         <p className="text-muted-foreground">Lead not found</p>
         <Button asChild className="mt-4">
-          <Link to="/dashboard/leads">Back to Leads</Link>
+          <Link to="/app/leads">Back to Leads</Link>
         </Button>
       </div>
     );
