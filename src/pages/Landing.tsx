@@ -1,6 +1,8 @@
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { Mail, Zap, PenTool } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
 
 const features = [
   {
@@ -21,6 +23,18 @@ const features = [
 ];
 
 export default function Landing() {
+  const { user, profile, isLoading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (isLoading || !user) return;
+    if (profile?.onboarding_done) {
+      navigate("/app", { replace: true });
+    } else {
+      navigate("/onboarding", { replace: true });
+    }
+  }, [isLoading, user, profile?.onboarding_done, navigate]);
+
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       {/* Header */}
@@ -28,12 +42,20 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto flex items-center justify-between px-6 py-4">
           <span className="text-lg font-bold tracking-tight">DrivePilot</span>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild>
-              <Link to="/auth">Sign In</Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link to="/auth">Get Started</Link>
-            </Button>
+            {user ? (
+              <Button size="sm" asChild>
+                <Link to="/app">Go to Dashboard</Link>
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link to="/auth">Sign In</Link>
+                </Button>
+                <Button size="sm" asChild>
+                  <Link to="/auth">Get Started</Link>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
