@@ -6,7 +6,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
 import { createLead, setOnboardingStep } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, ArrowLeft, Upload, FileSpreadsheet, Keyboard, UserPlus } from "lucide-react";
+import { Loader2, ArrowLeft, Upload, FileSpreadsheet, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -37,19 +37,16 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
     motion: "outbound_prospecting" as string,
   });
 
-  // File upload state
   const [parsedLeads, setParsedLeads] = useState<ParsedLead[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
     if (!formData.name.trim() || !formData.company.trim() || !formData.email.trim()) {
       toast.error("Please fill in all fields");
       return;
     }
-
     setIsLoading(true);
     try {
       await createLead({
@@ -72,9 +69,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setFileName(file.name);
-
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: "array" });
@@ -88,15 +83,8 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         const name = firstName && lastName
           ? `${firstName} ${lastName}`
           : String(row["Name"] || row["name"] || firstName || "Unknown").trim();
-
-        const company = String(
-          row["Company Name"] || row["Company"] || row["company"] || row["company_name"] || ""
-        ).trim();
-
-        const email = String(
-          row["Email"] || row["email"] || row["Email Address"] || ""
-        ).trim().toLowerCase();
-
+        const company = String(row["Company Name"] || row["Company"] || row["company"] || row["company_name"] || "").trim();
+        const email = String(row["Email"] || row["email"] || row["Email Address"] || "").trim().toLowerCase();
         return {
           name,
           company: company || "Unknown Company",
@@ -108,12 +96,8 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         };
       });
 
-      const validLeads = leads.filter(
-        (lead) => lead.email && lead.email.includes("@")
-      );
-
+      const validLeads = leads.filter((lead) => lead.email && lead.email.includes("@"));
       setParsedLeads(validLeads);
-
       if (validLeads.length === 0) {
         toast.error("No valid leads found. Make sure there's an Email column.");
       } else {
@@ -128,12 +112,10 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
 
   const handleFileImport = async () => {
     if (parsedLeads.length === 0) return;
-
     setIsLoading(true);
     try {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
-
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
@@ -142,10 +124,8 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         strategy: "fast" as const,
         last_activity_at: new Date().toISOString(),
       }));
-
       const { error } = await supabase.from("leads").insert(leadsToInsert);
       if (error) throw error;
-
       await setOnboardingStep(4);
       toast.success(`Imported ${parsedLeads.length} leads!`);
       onNext();
@@ -159,44 +139,80 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2 text-center">
-        <h2 className="text-2xl font-bold text-foreground">Add Your First Lead</h2>
-        <p className="text-muted-foreground">
+      <div className="space-y-3 text-center">
+        <h2 className="text-3xl font-semibold text-foreground tracking-tight">Add Your First Lead</h2>
+        <p className="text-muted-foreground text-[15px] leading-relaxed">
           Start by adding a prospect you're currently working with.
         </p>
       </div>
 
       {mode === "choose" && (
         <>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-3 max-w-sm mx-auto">
+            <button
+              type="button"
+              onClick={() => setMode("manual")}
+              className="flex items-center gap-4 p-5 rounded-2xl border border-border bg-card hover:border-primary/40 hover:shadow-[0_0_20px_hsl(217_91%_60%/0.08)] transition-all cursor-pointer text-left"
+            >
+              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                <UserPlus className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <p className="font-medium text-foreground text-[15px]">Create Lead</p>
+                <p className="text-sm text-muted-foreground">Add a single contact manually</p>
+              </div>
+            </button>
+
             <button
               type="button"
               onClick={() => {
                 setMode("upload");
                 setTimeout(() => fileInputRef.current?.click(), 100);
               }}
-              className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-border bg-card hover:border-primary/50 hover:bg-accent/50 transition-all cursor-pointer"
+              className="flex items-center gap-4 p-4 rounded-2xl border border-border bg-card hover:border-muted-foreground/20 transition-all cursor-pointer text-left"
             >
-              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-              <div className="text-center">
-                <p className="font-medium text-foreground text-sm">Upload a file</p>
-                <p className="text-xs text-muted-foreground mt-1">CSV or Excel</p>
+              <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
               </div>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("manual")}
-              className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-border bg-card hover:border-primary/50 hover:bg-accent/50 transition-all cursor-pointer"
-            >
-              <UserPlus className="h-8 w-8 text-muted-foreground" />
-              <div className="text-center">
-                <p className="font-medium text-foreground text-sm">Add manually</p>
-                <p className="text-xs text-muted-foreground mt-1">Single lead</p>
+              <div>
+                <p className="font-medium text-foreground text-sm">Import CSV</p>
+                <p className="text-xs text-muted-foreground">Bulk import from a spreadsheet</p>
               </div>
             </button>
           </div>
 
-          <div className="flex gap-3 pt-2">
+          {/* Mini CRM preview */}
+          <div className="max-w-sm mx-auto rounded-2xl border border-border bg-muted/20 overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-border">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Your Pipeline Preview</p>
+            </div>
+            <div className="divide-y divide-border">
+              {[
+                { name: "Your first lead", company: "Company", stage: "Prospecting" },
+                { name: "...", company: "...", stage: "..." },
+              ].map((row, i) => (
+                <div key={i} className="flex items-center justify-between px-4 py-2.5 text-xs">
+                  <div className="flex items-center gap-3">
+                    <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-medium text-muted-foreground">
+                      {row.name[0]}
+                    </div>
+                    <div>
+                      <p className={cn("font-medium", i === 0 ? "text-foreground" : "text-muted-foreground/40")}>{row.name}</p>
+                      <p className="text-muted-foreground/60">{row.company}</p>
+                    </div>
+                  </div>
+                  <span className={cn(
+                    "text-[10px] px-2 py-0.5 rounded-full",
+                    i === 0 ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground/40"
+                  )}>
+                    {row.stage}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2 max-w-sm mx-auto">
             <Button type="button" variant="outline" onClick={onBack} disabled={isLoading}>
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
@@ -206,7 +222,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
       )}
 
       {mode === "upload" && (
-        <>
+        <div className="max-w-sm mx-auto space-y-4">
           <input
             ref={fileInputRef}
             type="file"
@@ -217,8 +233,8 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
 
           <div
             className={cn(
-              "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
-              parsedLeads.length > 0 ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+              "border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all",
+              parsedLeads.length > 0 ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
             )}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -240,7 +256,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
           </div>
 
           {parsedLeads.length > 0 && (
-            <div className="max-h-32 overflow-y-auto border border-border rounded-md divide-y divide-border">
+            <div className="max-h-32 overflow-y-auto border border-border rounded-xl divide-y divide-border">
               {parsedLeads.slice(0, 5).map((lead, i) => (
                 <div key={i} className="p-2.5 text-sm">
                   <p className="font-medium text-foreground text-xs">{lead.name}</p>
@@ -257,7 +273,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
             </div>
           )}
 
-          <div className="bg-muted/50 rounded-md p-3 text-xs text-muted-foreground">
+          <div className="bg-muted/30 rounded-xl border border-border p-3 text-xs text-muted-foreground">
             <p className="font-medium mb-1">Expected columns:</p>
             <p>First Name, Last Name, Company, Email, Job Title, Phone, Industry, Country</p>
           </div>
@@ -276,77 +292,41 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
               Import {parsedLeads.length} Lead{parsedLeads.length !== 1 ? "s" : ""} & Continue
             </Button>
           </div>
-        </>
+        </div>
       )}
 
       {mode === "manual" && (
-        <form onSubmit={handleManualSubmit} className="space-y-4">
+        <form onSubmit={handleManualSubmit} className="space-y-4 max-w-sm mx-auto">
           <div className="space-y-2">
             <Label htmlFor="name">Contact Name</Label>
-            <Input
-              id="name"
-              placeholder="John Smith"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              disabled={isLoading}
-            />
+            <Input id="name" placeholder="John Smith" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} disabled={isLoading} />
           </div>
-
           <div className="space-y-2">
             <Label htmlFor="company">Company</Label>
-            <Input
-              id="company"
-              placeholder="Acme Corp"
-              value={formData.company}
-              onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-              disabled={isLoading}
-            />
+            <Input id="company" placeholder="Acme Corp" value={formData.company} onChange={(e) => setFormData({ ...formData, company: e.target.value })} disabled={isLoading} />
           </div>
-
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="john@acme.com"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              disabled={isLoading}
-            />
+            <Input id="email" type="email" placeholder="john@acme.com" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} disabled={isLoading} />
           </div>
-
           <div className="space-y-3">
             <Label>Motion</Label>
-            <RadioGroup
-              value={formData.motion}
-              onValueChange={(value) => setFormData({ ...formData, motion: value })}
-              disabled={isLoading}
-              className="grid grid-cols-3 gap-3"
-            >
-              <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
-                <RadioGroupItem value="outbound_prospecting" id="outbound" />
-                <label htmlFor="outbound" className="cursor-pointer">
-                  <p className="font-medium text-foreground text-sm">Outbound</p>
-                  <p className="text-xs text-muted-foreground">Cold outreach</p>
-                </label>
-              </div>
-              <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
-                <RadioGroupItem value="inbound_response" id="inbound" />
-                <label htmlFor="inbound" className="cursor-pointer">
-                  <p className="font-medium text-foreground text-sm">Inbound</p>
-                  <p className="text-xs text-muted-foreground">They reached out</p>
-                </label>
-              </div>
-              <div className="flex flex-col items-center space-y-1.5 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 cursor-pointer text-center">
-                <RadioGroupItem value="nurture" id="nurture" />
-                <label htmlFor="nurture" className="cursor-pointer">
-                  <p className="font-medium text-foreground text-sm">Nurture</p>
-                  <p className="text-xs text-muted-foreground">Long-term play</p>
-                </label>
-              </div>
+            <RadioGroup value={formData.motion} onValueChange={(value) => setFormData({ ...formData, motion: value })} disabled={isLoading} className="grid grid-cols-3 gap-3">
+              {[
+                { value: "outbound_prospecting", id: "outbound", label: "Outbound", desc: "Cold outreach" },
+                { value: "inbound_response", id: "inbound", label: "Inbound", desc: "They reached out" },
+                { value: "nurture", id: "nurture", label: "Nurture", desc: "Long-term play" },
+              ].map((opt) => (
+                <div key={opt.value} className="flex flex-col items-center space-y-1.5 p-3 rounded-xl border border-border bg-card hover:bg-accent/30 cursor-pointer text-center">
+                  <RadioGroupItem value={opt.value} id={opt.id} />
+                  <label htmlFor={opt.id} className="cursor-pointer">
+                    <p className="font-medium text-foreground text-sm">{opt.label}</p>
+                    <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                  </label>
+                </div>
+              ))}
             </RadioGroup>
           </div>
-
           <div className="flex gap-3 pt-4">
             <Button type="button" variant="outline" onClick={() => setMode("choose")} disabled={isLoading}>
               <ArrowLeft className="h-4 w-4 mr-2" />
