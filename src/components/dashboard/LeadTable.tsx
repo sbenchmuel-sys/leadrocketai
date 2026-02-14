@@ -39,6 +39,8 @@ import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { BulkAutomationDialog } from "./BulkAutomationDialog";
 import { LeadAvatar } from "./LeadAvatar";
 import { ModeDropdown } from "./ModeDropdown";
+import { SourceDropdown } from "./SourceDropdown";
+import { updateSourceFromTable, type SourcePresetKey } from "@/lib/motionUpdater";
 import { updateLeadStage, bulkUpdateLeadStage, deleteLead } from "@/lib/supabaseQueries";
 import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -101,6 +103,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   const [updatingStrategy, setUpdatingStrategy] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkSourceUpdating, setBulkSourceUpdating] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
   const navigate = useNavigate();
@@ -458,6 +461,39 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     ))}
                   </SelectContent>
                 </Select>
+
+                <Select
+                  onValueChange={async (value) => {
+                    const key = value as SourcePresetKey;
+                    if (selectedLeads.size === 0) return;
+                    setBulkSourceUpdating(true);
+                    let successCount = 0;
+                    for (const id of selectedLeads) {
+                      const ok = await updateSourceFromTable(id, key);
+                      if (ok) successCount++;
+                    }
+                    setBulkSourceUpdating(false);
+                    if (successCount > 0) {
+                      toast.success(`Updated source for ${successCount} lead${successCount > 1 ? 's' : ''}`);
+                      setSelectedLeads(new Set());
+                      onLeadUpdated?.();
+                    } else {
+                      toast.error("Failed to update sources");
+                    }
+                  }}
+                  disabled={bulkUpdating || bulkDeleting || bulkSourceUpdating}
+                >
+                  <SelectTrigger className="w-[170px] h-8">
+                    <SelectValue placeholder="Change source..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="outbound">Outbound Prospect</SelectItem>
+                    <SelectItem value="inbound_website">Inbound – Website</SelectItem>
+                    <SelectItem value="event">Event Lead</SelectItem>
+                    <SelectItem value="referral">Referral</SelectItem>
+                    <SelectItem value="other">Manual</SelectItem>
+                  </SelectContent>
+                </Select>
                 
                 <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
                   <AlertDialogTrigger asChild>
@@ -512,7 +548,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   Enable Automation
                 </Button>
                 
-                {(bulkUpdating || bulkDeleting) && <Loader2 className="h-4 w-4 animate-spin" />}
+                {(bulkUpdating || bulkDeleting || bulkSourceUpdating) && <Loader2 className="h-4 w-4 animate-spin" />}
               </div>
             )}
           </div>
@@ -612,15 +648,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     </TableCell>
 
                     {/* Source */}
-                    <TableCell className="py-2 hidden md:table-cell">
-                      <span className={cn(
-                        "text-[10px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1",
-                        SOURCE_TYPE_COLORS[lead.source_type]?.bg,
-                        SOURCE_TYPE_COLORS[lead.source_type]?.text
-                      )}>
-                        <span className={cn("w-1.5 h-1.5 rounded-full", SOURCE_TYPE_COLORS[lead.source_type]?.dot)} />
-                        {SOURCE_TYPE_LABELS[lead.source_type] || lead.source_type}
-                      </span>
+                    <TableCell className="py-2 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
+                      <SourceDropdown
+                        leadId={lead.id}
+                        leadName={lead.name}
+                        currentSourceType={lead.source_type}
+                        onUpdated={onLeadUpdated}
+                      />
                     </TableCell>
 
                     {/* Last Activity */}

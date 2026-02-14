@@ -20,6 +20,7 @@ export type RefreshReason =
   | "reply_synced"
   | "motion_updated"
   | "strategy_changed"
+  | "source_updated"
   | "manual";
 
 export interface DashboardMetrics {
