@@ -10,6 +10,8 @@ import CompletionStep from "@/components/onboarding/CompletionStep";
 
 const TOTAL_STEPS = 5;
 
+const STEP_LABELS = ["Playbook", "Inbox", "Knowledge", "Leads", "Launch"];
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const { refreshProfile } = useAuth();
@@ -53,27 +55,40 @@ export default function Onboarding() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <div className="p-4 border-b border-border">
-        <div className="max-w-md mx-auto">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">
+      {/* Premium progress header */}
+      <div className="p-6 border-b border-border">
+        <div className="max-w-lg mx-auto space-y-4">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium text-foreground text-sm">
               Step {currentStep + 1} of {TOTAL_STEPS}
             </span>
-            <span className="text-sm font-medium text-foreground">
+            <span className="text-sm font-medium text-primary">
               {Math.round(((currentStep + 1) / TOTAL_STEPS) * 100)}%
             </span>
           </div>
-          <div className="h-2 bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${((currentStep + 1) / TOTAL_STEPS) * 100}%` }}
-            />
+
+          {/* Segmented progress */}
+          <div className="flex gap-2">
+            {STEP_LABELS.map((label, i) => (
+              <div key={label} className="flex-1 space-y-1.5">
+                <div
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    i <= currentStep ? "bg-primary" : "bg-muted"
+                  }`}
+                />
+                <p className={`text-[10px] text-center font-medium transition-colors ${
+                  i <= currentStep ? "text-primary" : "text-muted-foreground/50"
+                }`}>
+                  {label}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
       <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
+        <div className={`w-full ${currentStep === 2 ? "max-w-3xl" : "max-w-md"}`}>
           {currentStep === 0 && (
             <ChoosePlaybookStep onNext={() => goToStep(1)} />
           )}
