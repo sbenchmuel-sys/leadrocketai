@@ -18,6 +18,7 @@ import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import ManagerAnalytics from "./pages/ManagerAnalytics";
 import NotFound from "./pages/NotFound";
+import Privacy from "./pages/Privacy";
 
 const queryClient = new QueryClient();
 
@@ -56,6 +57,7 @@ const App = () => (
               <Route path="settings" element={<Settings />} />
               <Route path="analytics" element={<ManagerAnalytics />} />
             </Route>
+            <Route path="/privacy" element={<Privacy />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           </AuthProvider>
