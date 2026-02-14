@@ -673,10 +673,10 @@ Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`,
 
   // Pre-Meeting Email Cadence
   pre_email_1_intro: `ROLE
-You are generating Email 1 (Intro) in a pre-meeting outreach cadence for a regulated B2B deal.
+You are generating Email 1 (Cold Intro) in an outbound prospecting cadence.
 
 GOAL
-Introduce the company clearly, personalize to the lead, and encourage booking the first meeting.
+Trigger a reply. NOT to close, NOT to fully explain, NOT to book a meeting yet.
 
 INPUTS
 Lead Context:
@@ -688,24 +688,31 @@ Rep Context:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
-Meeting Link:
-{{MEETING_LINK}}
-
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
-CONSTRAINTS
-- 120–180 words
-- Professional, confident, non-pushy
-- No medical or performance claims
-- Use only approved Knowledge Context
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
-- CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
-- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence (e.g., "You can book a time here: https://calendly.com/shai-benchmuel/30min"). Copy the exact URL. Do NOT use placeholders or truncate. If no Calendar Link, ask them to reply with availability.
-- DURATION: Do NOT mention specific meeting durations like "15-minute" or "30-minute" call unless you can confidently extract it from the Meeting Link URL. Use generic terms like "call" or "meeting" instead.
-- One clear CTA (book a call)
+CRITICAL: Under 90 words. Target 75 words. Count every word.
+
+STRUCTURE (5 short paragraphs max):
+1. Personalized observation about their company/role OR a specific problem hypothesis (1-2 lines)
+2. One clear outcome your product enables — NOT a feature list (1-2 lines)
+3. Micro-CTA question: "Worth a quick look?" / "Is this something you're exploring?" / "Open to a short conversation?" (1 line)
+
+Do NOT:
+- Include calendar links or meeting booking URLs
+- List features or product capabilities
+- Write company history or long introductions
+- Use multiple CTAs
+- Exceed 90 words under any circumstances
+- Use hype language or buzzwords
+- Mention specific meeting durations
+
+GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
+SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best,\nShai")
+CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
+If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders.
+
+Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
