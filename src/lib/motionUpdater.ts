@@ -149,6 +149,57 @@ export async function updateMotionFromTable(
   return true;
 }
 
+// ============================================
+// SOURCE CHANGE FROM TABLE
+// ============================================
+
+export type SourcePresetKey = "outbound" | "inbound_website" | "event" | "referral" | "other";
+
+const SOURCE_PRESET_MAP: Record<SourcePresetKey, { source_type: string; motion: string }> = {
+  outbound:        { source_type: "outbound_prospecting", motion: "outbound_prospecting" },
+  inbound_website: { source_type: "contact_form",         motion: "inbound_response" },
+  event:           { source_type: "event_lead",            motion: "outbound_prospecting" },
+  referral:        { source_type: "referral",              motion: "inbound_response" },
+  other:           { source_type: "manual_entry",          motion: "outbound_prospecting" },
+};
+
+/**
+ * Change a lead's source type from the table dropdown.
+ * Automatically updates motion and clears nurture state when moving away from nurture.
+ */
+export async function updateSourceFromTable(
+  leadId: string,
+  presetKey: SourcePresetKey,
+): Promise<boolean> {
+  const preset = SOURCE_PRESET_MAP[presetKey];
+  if (!preset) return false;
+
+  const now = new Date().toISOString();
+  const update: Record<string, unknown> = {
+    source_type: preset.source_type,
+    motion: preset.motion,
+    mode_changed_at: now,
+    // Clear nurture fields since source change resets the motion
+    nurture_mode: "off",
+    nurture_status: "inactive",
+    nurture_cadence: null,
+    nurture_theme: null,
+  };
+
+  const { error } = await supabase
+    .from("leads")
+    .update(update)
+    .eq("id", leadId);
+
+  if (error) {
+    console.error("[motionUpdater] source update failed:", error);
+    return false;
+  }
+
+  refreshDashboard("source_updated");
+  return true;
+}
+
 /**
  * Update nurture cadence for a lead (called from cadence edit dialog).
  */
