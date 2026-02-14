@@ -1,63 +1,49 @@
 
 
-## Fix: Gmail Connection Broken on Custom Domain (drivepilot.app)
+## Fix: Leads List Shows Wrong Source & Email Composer Uses Wrong Playbook
 
-### Root Cause
+### Two Bugs Identified
 
-Four edge functions use a dynamic CORS check that only allows `localhost`, `*.lovableproject.com`, and `*.lovable.app` origins. When you access the app from `drivepilot.app`, the browser's preflight (OPTIONS) request gets an empty `Access-Control-Allow-Origin` header, blocking the entire request. This is why you see "Failed to send a request to the Edge Function."
+**Bug 1: Leads page shows "outbound" for all leads**
+The `getLeadsList()` query only selects a limited set of columns and does NOT include `motion` or `source_type`. On the Leads page (line 429), the code does `(lead as any).motion?.replace(/_/g, ' ') || "outbound"` -- since `motion` is never fetched, it always falls back to "outbound".
 
-### Affected Functions
+**Bug 2: Email composer shows "Reply to Inbound" for new inbound leads with no email history**
+When opening the composer for an inbound-website lead that has never been emailed, the playbook resolver's Rule 2 may incorrectly detect the lead's `initial_message` as an inbound email in the thread, causing it to recommend "Reply to Inbound" instead of "Inbound Intro". Additionally, the `getAITaskForAction` fallback (line 146 in EmailActionDialog) defaults to `reply_to_thread` if any thread exists, which is wrong for first-touch outreach to inbound leads.
 
-| Function | Has restrictive CORS |
-|----------|---------------------|
-| `gmail-auth` | Yes -- blocks Gmail connect |
-| `gmail-sync` | Yes -- blocks email sync |
-| `gmail-send` | Yes -- blocks sending emails |
-| `ai_task` | Yes -- blocks AI draft generation |
+---
 
-All other functions already use `"Access-Control-Allow-Origin": "*"` and work fine.
+### Fix 1: Add `motion` and `source_type` to the Leads List Query
 
-### Fix
+**File: `src/lib/supabaseQueries.ts`**
 
-Update the `getCorsHeaders` function in all four edge functions to also allow `drivepilot.app`:
+- Update the `LeadListItem` type (line 91-94) to include `motion` and `source_type`
+- Update the `.select()` call in `getLeadsList()` (line 110) to fetch these columns
 
-```typescript
-function getCorsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("Origin") || "";
-  const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",") || [];
+**File: `src/pages/Leads.tsx`**
 
-  const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
-  const isLovableProject = origin.endsWith(".lovableproject.com");
-  const isLovableApp = origin.endsWith(".lovable.app");
-  const isCustomDomain = origin === "https://drivepilot.app" || origin === "https://www.drivepilot.app";
-  const isAllowed = allowedOrigins.includes(origin) || isLocalhost || isLovableProject || isLovableApp || isCustomDomain || allowedOrigins.includes("*");
+- Update the Strategy column (line 429) to use proper humanized labels from `SOURCE_TYPE_LABELS` instead of raw motion values. Display the source type (e.g., "Inbound - Website") rather than the motion.
 
-  return {
-    "Access-Control-Allow-Origin": isAllowed ? origin : "",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  };
-}
-```
+---
 
-The single-line addition (`isCustomDomain`) is applied to all four files.
+### Fix 2: Correct Playbook Resolution for Fresh Inbound Leads
 
-### Google Cloud Console Update (Manual Step)
+**File: `src/lib/playbookResolver.ts`**
 
-You also need to add `https://drivepilot.app` as an **Authorized JavaScript Origin** in your Google Cloud Console OAuth credentials. Without this, Google may reject the OAuth flow from the new domain.
+- In `deriveDefault()` (line 159-183): The logic is actually correct -- it checks `hasThread` and returns "Inbound Intro" when there's no thread. The issue is upstream: the `contextResolver` may be picking up non-email interactions (like initial_message notes) as email thread items.
 
-1. Go to Google Cloud Console -> APIs & Credentials -> OAuth 2.0 Client IDs
-2. Edit your Web Application client
-3. Under "Authorized JavaScript origins", add `https://drivepilot.app`
-4. Save
+**File: `src/components/dashboard/EmailActionDialog.tsx`**
 
-### Files Changed
+- Update `getAITaskForAction` default case (line 145-146): When the lead's motion is `inbound_response` and there's no prior outbound email in the thread, use `pre_email_1_intro` instead of `reply_to_thread`. This ensures first-touch emails to inbound leads use the intro playbook.
+- Update `getPlaybookLabel` (line 102-124): Add source-type awareness so inbound leads show "Inbound Intro" instead of generic "Reply" when no outbound emails exist yet.
+
+---
+
+### Technical Summary
 
 | File | Change |
 |------|--------|
-| `supabase/functions/gmail-auth/index.ts` | Add `isCustomDomain` check |
-| `supabase/functions/gmail-sync/index.ts` | Add `isCustomDomain` check |
-| `supabase/functions/gmail-send/index.ts` | Add `isCustomDomain` check |
-| `supabase/functions/ai_task/index.ts` | Add `isCustomDomain` check |
-
-All four functions will be redeployed after the changes.
+| `src/lib/supabaseQueries.ts` | Add `motion`, `source_type` to `LeadListItem` type and `getLeadsList` select |
+| `src/pages/Leads.tsx` | Use `SOURCE_TYPE_LABELS` for the source column display |
+| `src/components/dashboard/EmailActionDialog.tsx` | Fix `getAITaskForAction` default to use intro for inbound leads without outbound history |
+| `src/lib/playbookResolver.ts` | No change needed -- logic is correct, issue was in consumer code |
 
