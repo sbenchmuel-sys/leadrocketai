@@ -210,7 +210,162 @@ export function resolveEmailPlaceholders(text: string, repName: string | null): 
 }
 
 // ============================================
-// MAIN ORCHESTRATOR
+// STREAMING DRAFT GENERATOR
+// ============================================
+
+export interface StreamDraftInput extends GenerateDraftInput {
+  onToken: (token: string) => void;
+  onSubject: (subject: string) => void;
+  onPipelineReady: (result: Omit<DraftPipelineResult, 'draft_text'>) => void;
+}
+
+export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelineResult> {
+  const { lead_id, channel = "email", override_intent, instructions, motion_override, onToken, onSubject, onPipelineReady } = input;
+
+  console.log("[streamDraft] Starting streaming pipeline for lead", lead_id);
+
+  // Step 1: Resolve context
+  const resolvedContext = await contextResolver(lead_id);
+
+  // Apply motion override if provided
+  if (motion_override && motion_override !== resolvedContext.motion) {
+    console.log("[streamDraft] Motion override:", resolvedContext.motion, "→", motion_override);
+    (resolvedContext as any).motion = motion_override;
+  }
+
+  // Step 2: Determine playbook (channel-aware)
+  const playbook = playbookResolver(resolvedContext, channel);
+
+  // Step 3: Apply override intent if provided
+  const finalIntent = override_intent || playbook.recommended_intent;
+
+  // Step 4: Complexity scoring + model selection
+  const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
+
+  // Step 5: Build raw payload
+  const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
+
+  // Derive subject immediately (no AI needed)
+  const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
+  onSubject(suggestedSubject);
+
+  // Notify caller of pipeline metadata before streaming starts
+  const partialResult: Omit<DraftPipelineResult, 'draft_text'> = {
+    resolved_context: resolvedContext,
+    playbook,
+    recommended_intent: finalIntent,
+    recommended_playbook: playbook.recommended_playbook,
+    sequence_step: playbook.next_sequence_step,
+    suggested_subject: suggestedSubject,
+    complexity_score: complexity.complexity_score,
+    model_used: complexity.model_used,
+    scoring_factors: complexity.scoring_factors,
+  };
+  onPipelineReady(partialResult);
+
+  // Step 6: Stream AI response via SSE
+  let fullText = "";
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+    
+    // Get auth token
+    const { data: { session } } = await supabase.auth.getSession();
+    const authToken = session?.access_token || supabaseKey;
+
+    const resp = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+        "apikey": supabaseKey,
+      },
+      body: JSON.stringify({ task: finalIntent, payload: { ...aiPayload, stream: true } }),
+    });
+
+    if (!resp.ok || !resp.body) {
+      // Try to read error
+      const errText = await resp.text();
+      console.error("[streamDraft] SSE request failed:", resp.status, errText);
+      throw new Error(`Stream request failed: ${resp.status}`);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let textBuffer = "";
+    let streamDone = false;
+
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      textBuffer += decoder.decode(value, { stream: true });
+
+      let newlineIndex: number;
+      while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+        let line = textBuffer.slice(0, newlineIndex);
+        textBuffer = textBuffer.slice(newlineIndex + 1);
+
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line.startsWith(":") || line.trim() === "") continue;
+        if (!line.startsWith("data: ")) continue;
+
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr === "[DONE]") {
+          streamDone = true;
+          break;
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+          if (content) {
+            fullText += content;
+            onToken(content);
+          }
+        } catch {
+          textBuffer = line + "\n" + textBuffer;
+          break;
+        }
+      }
+    }
+
+    // Final flush
+    if (textBuffer.trim()) {
+      for (let raw of textBuffer.split("\n")) {
+        if (!raw) continue;
+        if (raw.endsWith("\r")) raw = raw.slice(0, -1);
+        if (raw.startsWith(":") || raw.trim() === "") continue;
+        if (!raw.startsWith("data: ")) continue;
+        const jsonStr = raw.slice(6).trim();
+        if (jsonStr === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+          if (content) {
+            fullText += content;
+            onToken(content);
+          }
+        } catch { /* ignore partial leftovers */ }
+      }
+    }
+
+    // Resolve placeholders on full text
+    fullText = resolveEmailPlaceholders(fullText, resolvedContext.rep_profile?.full_name || null);
+  } catch (err) {
+    console.error("[streamDraft] Streaming failed:", err);
+  }
+
+  const result: DraftPipelineResult = {
+    ...partialResult,
+    draft_text: fullText || null,
+  };
+
+  console.log("[streamDraft] Complete:", { hasDraft: !!fullText, intent: finalIntent });
+  return result;
+}
+
+// ============================================
+// MAIN ORCHESTRATOR (non-streaming, kept for backward compat)
 // ============================================
 
 export async function generateDraft(input: GenerateDraftInput): Promise<DraftPipelineResult> {
@@ -241,12 +396,6 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     playbook: playbook.recommended_playbook,
     step: playbook.next_sequence_step,
     finalIntent: override_intent ? `${finalIntent} (override)` : finalIntent,
-  });
-
-  console.log("[generateDraft] Complexity:", {
-    score: complexity.complexity_score,
-    model: complexity.model_used,
-    factors: complexity.scoring_factors.map((f) => `${f.label} (+${f.points})`).join(", "),
   });
 
   // Step 5: Build raw payload (no prompt blocks — edge function handles assembly)

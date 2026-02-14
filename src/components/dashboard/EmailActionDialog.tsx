@@ -52,8 +52,8 @@ import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowl
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
-import { generateDraft, resolveEmailPlaceholders } from "@/lib/generateDraft";
-import { contextResolver } from "@/lib/contextResolver";
+import { generateDraft, streamDraft, resolveEmailPlaceholders } from "@/lib/generateDraft";
+import type { DraftPipelineResult } from "@/lib/generateDraft";
 import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
 
@@ -262,49 +262,19 @@ export function EmailActionDialog({
   const { sendEmail, isSyncing } = useGmailSync();
   const { isConnected, connection } = useGmailConnection();
 
-  // Load signatures, docs, and profiles on mount
+  // Load signatures/docs in parallel, start generation independently
   useEffect(() => {
-    loadData();
-  }, []);
+    if (open) {
+      loadData();
+    }
+  }, [open]);
 
-  // Generate email when dialog opens AND profiles are loaded
+  // Generate email when dialog opens — no longer waits for profilesLoaded
   useEffect(() => {
-    if (open && profilesLoaded) {
+    if (open) {
       setTo(lead.email);
       setInstructions(initialInstructions);
 
-      // Log resolved context + playbook when Composer opens
-      contextResolver(lead.id).then((ctx) => {
-        const pb = playbookResolver(ctx);
-        setResolvedIntent(pb.recommended_intent);
-        setResolvedStep(pb.next_sequence_step);
-
-        console.log("[Composer] Playbook recommendation:", {
-          recommended_intent: pb.recommended_intent,
-          recommended_playbook: pb.recommended_playbook,
-          next_sequence_step: pb.next_sequence_step,
-        });
-        console.log("[Composer] Resolved context on open:", {
-          source_type: ctx.source_type,
-          motion: ctx.motion,
-          sequence_type: ctx.sequence_type,
-          sequence_step: ctx.sequence_step,
-          sequence_status: ctx.sequence_status,
-          last_outbound_email: ctx.last_outbound_email ? { subject: ctx.last_outbound_email.subject, date: ctx.last_outbound_email.occurred_at } : null,
-          last_inbound_email: ctx.last_inbound_email ? { subject: ctx.last_inbound_email.subject, date: ctx.last_inbound_email.occurred_at } : null,
-          last_meeting_summary: ctx.last_meeting_summary ? { title: ctx.last_meeting_summary.title, date: ctx.last_meeting_summary.meeting_date } : null,
-          buying_signals: ctx.buying_signals,
-          risk_signals: ctx.risk_signals,
-          engagement_level: ctx.engagement_level,
-          closing_power: ctx.closing_power,
-          kb_slices: {
-            company: ctx.company_kb ? "present" : "none",
-            industry: ctx.industry_kb ? "present" : "none",
-            persona_docs: ctx.persona_kb.length,
-          },
-        });
-      }).catch((err) => console.error("[Composer] Context resolve failed:", err));
-      
       if (prefilledSubject || prefilledBody) {
         setSubject(prefilledSubject || "");
         setBody(prefilledBody || "");
@@ -312,7 +282,7 @@ export function EmailActionDialog({
         generateEmail();
       }
     }
-  }, [open, lead.id, profilesLoaded]);
+  }, [open, lead.id]);
 
   async function loadData() {
     try {
@@ -388,12 +358,6 @@ Calendar Link: ${repProfile.calendar_link || ''}
   }
 
   async function generateEmail() {
-    // Guard: ensure profiles are loaded before generating
-    if (!profilesLoaded) {
-      console.warn('Profiles not loaded yet, skipping generation');
-      return;
-    }
-    
     setIsGenerating(true);
     setBody("");
     setSubject("");
@@ -402,40 +366,46 @@ Calendar Link: ${repProfile.calendar_link || ''}
     setReplyToMessageId(null);
 
     try {
-      const pipelineResult = await generateDraft({
+      const pipelineResult = await streamDraft({
         lead_id: lead.id,
         channel: "email",
         instructions: instructions.trim() || null,
         motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
+        onToken: (token) => {
+          setBody(prev => prev + token);
+        },
+        onSubject: (subj) => {
+          setSubject(subj);
+        },
+        onPipelineReady: (partial) => {
+          const ctx = partial.resolved_context;
+
+          // Set thread state from pipeline context
+          setThreadEmails(ctx.thread_emails);
+          const latestInbound = ctx.last_inbound_email;
+          if (latestInbound) {
+            setReplyThreadId(latestInbound.gmail_thread_id);
+            setReplyToMessageId(latestInbound.gmail_message_id);
+          }
+
+          // Update resolved intent badge
+          setResolvedIntent(partial.recommended_intent);
+          setResolvedStep(partial.sequence_step);
+
+          console.log("[EmailActionDialog] Pipeline ready:", {
+            intent: partial.recommended_intent,
+            playbook: partial.recommended_playbook,
+            step: partial.sequence_step,
+            model: partial.model_used,
+            complexity: partial.complexity_score,
+          });
+        },
       });
 
-      const ctx = pipelineResult.resolved_context;
-
-      // Set thread state from pipeline context
-      setThreadEmails(ctx.thread_emails);
-      const latestInbound = ctx.last_inbound_email;
-      if (latestInbound) {
-        setReplyThreadId(latestInbound.gmail_thread_id);
-        setReplyToMessageId(latestInbound.gmail_message_id);
-      }
-
-      // Update resolved intent badge
-      setResolvedIntent(pipelineResult.recommended_intent);
-      setResolvedStep(pipelineResult.sequence_step);
-
-      console.log("[EmailActionDialog] Pipeline result:", {
-        intent: pipelineResult.recommended_intent,
-        playbook: pipelineResult.recommended_playbook,
-        step: pipelineResult.sequence_step,
-        model: pipelineResult.model_used,
-        complexity: pipelineResult.complexity_score,
-        hasDraft: !!pipelineResult.draft_text,
-      });
-
+      // After streaming completes, resolve placeholders on full body
       if (pipelineResult.draft_text) {
         setBody(pipelineResult.draft_text);
-        setSubject(pipelineResult.suggested_subject || "");
-      } else {
+      } else if (!pipelineResult.draft_text) {
         toast.error("Failed to generate email");
       }
     } catch (err) {
