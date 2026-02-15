@@ -131,7 +131,7 @@ export default function Dashboard() {
       <AIInsightPanel leads={filteredLeads} />
 
       {/* Lead Table */}
-      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
+      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
     </div>
   );
 }

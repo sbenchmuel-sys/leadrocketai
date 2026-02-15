@@ -77,6 +77,7 @@ interface LeadTableProps {
   leads: EnrichedLead[];
   isLoading: boolean;
   onLeadUpdated?: () => void;
+  revenueStateFilter?: string;
 }
 
 const stageBadgeVariants: Record<DealStage, string> = {
@@ -91,7 +92,7 @@ const stageBadgeVariants: Record<DealStage, string> = {
 
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
-export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
+export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter }: LeadTableProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -639,7 +640,12 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 <TableHead className="py-2">Phase</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
-                <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                {revenueStateFilter !== "heating_up" && (
+                  <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                )}
+                {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
+                  <TableHead className="py-2 text-right">Action</TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -733,29 +739,38 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     </TableCell>
 
                     {/* Automation Status */}
-                    <TableCell className="py-2 hidden lg:table-cell">
-                      <div className="flex items-center gap-1">
-                        {isAutoRunning ? (
-                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
-                            <Zap className="h-3 w-3 mr-0.5" /> Auto
-                          </Badge>
-                        ) : (
-                          <span className="text-[10px] text-muted-foreground">Off</span>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-5 w-5 p-0"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenEmailDialog(lead, "");
-                          }}
-                          title="Compose email"
-                        >
-                          <Mail className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {revenueStateFilter !== "heating_up" && (
+                      <TableCell className="py-2 hidden lg:table-cell">
+                        <div className="flex items-center gap-1">
+                          {isAutoRunning ? (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
+                              <Zap className="h-3 w-3 mr-0.5" /> Auto
+                            </Badge>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">Off</span>
+                          )}
+                          {revenueStateFilter !== "action_required" && revenueStateFilter !== "heating_up" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-5 w-5 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEmailDialog(lead, "");
+                              }}
+                              title="Compose email"
+                            >
+                              <Mail className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    )}
+
+                    {/* Action button for action_required / heating_up */}
+                    {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
+                      <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
+                    )}
 
                   </TableRow>
                 );
