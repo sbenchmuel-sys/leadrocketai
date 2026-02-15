@@ -406,27 +406,14 @@ export function CadenceSettingsCard() {
 
   return (
     <Card>
-      <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-        <CardHeader className="cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5" />
+            Sequence & Cadence Settings
+          </CardTitle>
+          <CardDescription>Configure email and WhatsApp sequences</CardDescription>
         </CardHeader>
 
-        <CollapsibleContent>
           <CardContent className="space-y-6">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className="grid w-full grid-cols-4">
@@ -987,8 +974,6 @@ export function CadenceSettingsCard() {
               </Button>
             </div>
           </CardContent>
-        </CollapsibleContent>
-      </Collapsible>
     </Card>);
 
 }
