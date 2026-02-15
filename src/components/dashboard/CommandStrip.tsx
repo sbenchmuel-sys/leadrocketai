@@ -19,29 +19,24 @@ const segments: { key: DashboardFilter; label: string }[] = [
 export function CommandStrip({ counts, activeFilter, onFilterChange }: CommandStripProps) {
   return (
     <div className="border-b border-border">
-      <div className="flex items-stretch">
-        {segments.map((seg, i) => {
+      <div className="flex items-center gap-6">
+        {segments.map((seg) => {
           const isActive = activeFilter === seg.key;
           return (
             <button
               key={seg.key}
               onClick={() => onFilterChange(seg.key)}
               className={cn(
-                "flex-1 relative flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors",
-                "hover:bg-muted/40",
-                i > 0 && "border-l border-border",
-                isActive
-                  ? "text-foreground"
-                  : "text-muted-foreground"
+                "relative pb-3 text-sm font-medium transition-colors flex items-center gap-2",
+                "hover:text-foreground",
+                isActive ? "text-foreground" : "text-muted-foreground"
               )}
             >
               <span>{seg.label}</span>
               <span
                 className={cn(
-                  "tabular-nums text-xs font-semibold px-1.5 py-0.5 rounded-md",
-                  isActive
-                    ? "bg-primary/15 text-primary"
-                    : "bg-muted text-muted-foreground"
+                  "tabular-nums text-xs font-semibold",
+                  isActive ? "text-primary" : "text-muted-foreground/60"
                 )}
               >
                 {counts[seg.key]}
