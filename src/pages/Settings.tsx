@@ -11,7 +11,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Building2, Clock, User, PenLine, Mail, Video, MessageSquare } from "lucide-react";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -37,6 +37,39 @@ export default function Settings() {
           </AccordionContent>
         </AccordionItem>
 
+        <AccordionItem value="profile" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <User className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Your Profile</div>
+                <div className="text-sm text-muted-foreground font-normal">Your info, signatures, and personalization</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="space-y-6">
+            <RepProfileCard />
+            <SignaturesCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="integrations" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Plug className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Integrations</div>
+                <div className="text-sm text-muted-foreground font-normal">Connect email, messaging, and meeting tools</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="space-y-4">
+            <GmailConnectionCard />
+            <WhatsAppConnectionCard />
+            <ZoomMeetingSyncCard />
+          </AccordionContent>
+        </AccordionItem>
+
         <AccordionItem value="cadence" className="border rounded-lg px-4">
           <AccordionTrigger className="hover:no-underline">
             <div className="flex items-center gap-3">
@@ -51,82 +84,6 @@ export default function Settings() {
             <CadenceSettingsCard />
           </AccordionContent>
         </AccordionItem>
-
-        <AccordionItem value="profile" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <User className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Your Profile</div>
-                <div className="text-sm text-muted-foreground font-normal">Your info for signatures and personalization</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <RepProfileCard />
-          </AccordionContent>
-        </AccordionItem>
-
-        <AccordionItem value="signatures" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <PenLine className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Email Signatures</div>
-                <div className="text-sm text-muted-foreground font-normal">Create and manage email signatures</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <SignaturesCard />
-          </AccordionContent>
-        </AccordionItem>
-
-        <AccordionItem value="gmail" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <Mail className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Gmail Integration</div>
-                <div className="text-sm text-muted-foreground font-normal">Sync emails and send messages</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <GmailConnectionCard />
-          </AccordionContent>
-        </AccordionItem>
-
-        <AccordionItem value="whatsapp" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <MessageSquare className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">WhatsApp Business</div>
-                <div className="text-sm text-muted-foreground font-normal">Connect your WhatsApp Business account via Cloud API</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <WhatsAppConnectionCard />
-          </AccordionContent>
-        </AccordionItem>
-
-        <AccordionItem value="zoom" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline">
-            <div className="flex items-center gap-3">
-              <Video className="h-5 w-5 text-muted-foreground" />
-              <div className="text-left">
-                <div className="font-semibold">Zoom Meeting Sync</div>
-                <div className="text-sm text-muted-foreground font-normal">Auto-detect Zoom meeting summary emails</div>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <ZoomMeetingSyncCard />
-          </AccordionContent>
-        </AccordionItem>
-
       </Accordion>
     </div>
   );
