@@ -182,12 +182,6 @@ export default function Dashboard() {
         }}
       />
 
-      {/* ROW 2 — Stage Filter Bar */}
-      <StageFilterBar
-        counts={stageCounts}
-        activeStage={stageFilter}
-        onStageChange={setStageFilter}
-      />
 
       {/* ROW 3 — Two Column Grid */}
       <div className="grid gap-6 lg:grid-cols-5">
