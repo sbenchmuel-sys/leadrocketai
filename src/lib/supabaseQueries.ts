@@ -337,7 +337,7 @@ export interface SaveDraftInput {
   step_key?: string;
   nurture_theme?: string;
   nurture_cadence?: string;
-  status?: 'pending' | 'saved' | 'sent' | 'skipped';
+  status?: 'pending' | 'approved' | 'saved' | 'sent' | 'skipped' | 'discarded';
 }
 
 export async function saveDraft(leadId: string, form: SaveDraftInput): Promise<{ id: string }> {

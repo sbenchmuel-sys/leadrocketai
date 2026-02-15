@@ -129,7 +129,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
         step_key: `nurture_${nurtureSent + (previewTarget === "following" ? 2 : 1)}`,
         nurture_theme: theme,
         nurture_cadence: lead.nurture_cadence || "biweekly",
-        status: "saved",
+        status: "approved",
       });
 
       toast.success("Nurture email approved and saved");
