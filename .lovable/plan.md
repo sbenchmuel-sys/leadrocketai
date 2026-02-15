@@ -1,57 +1,56 @@
 
 
-# Fix: Automation Stops Before Sending Emails
+# Fix Nurture Automation + Bulk Nurture
 
-## Root Causes Found
+## Problem
 
-### 1. Status check rejects "new" leads (executor bug)
-In `automation-executor` line 171, the safety re-check does:
-```
-statusInactive = freshLead.status !== "active"
-```
-Itai's lead has `status: "new"`, so the executor skips it with "Safety block: inactive" -- even though the initial query on line 50 correctly includes both `"active"` and `"new"` statuses.
+Three things are broken for nurture leads:
 
-**Fix:** Change the safety check to match the initial query: `freshLead.status !== "active" && freshLead.status !== "new"`.
+1. **BulkAutomationDialog rejects nurture leads** -- Line 59 in `BulkAutomationDialog.tsx` only allows `outbound_prospecting` and `inbound_response`, flagging all nurture leads as "Not eligible (Nurture)".
 
-### 2. Gmail sync overwrites automation scheduling (the main killer)
-Every time `gmail-sync` runs (every 20 minutes via auto-sync, plus any manual sync or screen refresh), it recalculates `deriveAction()` and then **unconditionally overwrites** these fields on the lead (lines 1276-1282):
-- `needs_action`
-- `next_action_key`
-- `next_action_label`
-- `eligible_at`
-- `action_reason_code`
+2. **AutomationPreviewCard hides for nurture leads** -- Line 114 checks `motion === "outbound_prospecting" || motion === "inbound_response"`, so the card never renders for nurture leads. The NurturePreviewCard exists separately but doesn't integrate with the automation scheduling system.
 
-For a new lead with no email history (like Itai), `deriveAction()` returns `needs_action: false` with everything null -- wiping the automation schedule that was set up when automation was enabled. This is why "sometimes it just stops."
-
-**Fix:** In `gmail-sync`, before overwriting action fields, check if the lead currently has automation scheduled (a valid `eligible_at` in the future). If so, preserve the existing action fields instead of overwriting them with the recalculated values.
-
-### 3. Manual email send clears automation (`useGmailSync.ts`)
-Line 229 in `useGmailSync.ts` sets `needs_action: false` after any manual email send. If a user sends a manual email to a different lead, this is fine. But for leads with active automation, clearing `needs_action` kills the sequence.
-
-**Fix:** Only clear `needs_action` if the lead does NOT have a future `eligible_at` set (i.e., no active automation).
-
----
+3. **No bulk "Move to Nurture" action** -- Users can change source in bulk but cannot switch leads to nurture mode in bulk from the dashboard.
 
 ## Changes
 
-### File 1: `supabase/functions/automation-executor/index.ts`
-- Line 171: Change `freshLead.status !== "active"` to `freshLead.status !== "active" && freshLead.status !== "new"`
+### File 1: `src/components/dashboard/BulkAutomationDialog.tsx`
 
-### File 2: `supabase/functions/gmail-sync/index.ts`
-- Lines 1275-1309: Before applying `leadUpdate`, fetch the current lead's `eligible_at` and `needs_action`. If the lead has an active automation schedule (`eligible_at` is set and in the future, and `needs_action` is true), skip overwriting the action fields (`needs_action`, `next_action_key`, `next_action_label`, `eligible_at`, `action_reason_code`). Only overwrite metrics and stage.
-- Add a query before the update to check: `SELECT eligible_at, needs_action FROM leads WHERE id = leadId`
+**Line 59** -- Add `nurture` to the eligible motions check:
+```
+} else if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response" && lead.motion !== "nurture") {
+```
 
-### File 3: `src/hooks/useGmailSync.ts`
-- Line 226-229: Before setting `needs_action: false`, check if the lead has an active automation schedule. If `eligible_at` is set in the future, do not clear `needs_action`.
-- Update the lead query on line 221 to also select `eligible_at` and `needs_action`
+**`computeAutomationFields` function** -- Add nurture-specific scheduling. When motion is `nurture`, use the nurture cadence (7/14/30 days) instead of the outbound/inbound sequence intervals. Set `action_reason_code` to `"NURTURE_DUE"` and also set `nurture_status: "active"` and `nurture_mode: "review"` (if not already set).
+
+### File 2: `src/components/lead/AutomationPreviewCard.tsx`
+
+**Line 89** -- Remove the blocker for nurture motion (`"Motion changed"` should not flag nurture).
+
+**Line 114** -- Add nurture to the eligible check:
+```
+const isEligible = (motion === "outbound_prospecting" || motion === "inbound_response" || motion === "nurture") &&
+  stage !== "closed_won" && stage !== "closed_lost";
+```
+
+**Nurture-specific scheduling** -- When enabling/resuming automation for nurture leads, use the nurture cadence days (from `getNurtureCadenceDays`) instead of the outbound interval array. Set step labels to nurture-specific ones (e.g., "Nurture Email 1").
+
+### File 3: `src/components/dashboard/LeadTable.tsx`
+
+**After the "Enable Automation" button (line 549)** -- Add a "Move to Nurture" bulk action button. When clicked, it updates all selected leads to `motion: "nurture"`, `nurture_status: "active"`, `nurture_mode: "review"`, `nurture_cadence: "biweekly"`, and schedules the first nurture email (sets `needs_action: true`, `eligible_at` based on cadence). This gives users a one-click way to bulk-move leads into nurture mode.
+
+### File 4: `supabase/functions/automation-executor/index.ts`
+
+Verify that the executor already handles nurture motion correctly (line 170 already includes `nurture` in the allowed motions check). The nurture-specific AI task generation should use `nurture_email_single` intent. No changes expected here -- just verification.
 
 ---
 
 ## Summary
-Three bugs conspire to kill automation:
-1. The executor rejects "new" status leads (immediate fix)
-2. Gmail sync overwrites scheduling every 20 minutes (the main problem)
-3. Manual sends clear automation flags (edge case)
 
-After these fixes, automation scheduling will survive Gmail syncs and screen refreshes.
+| What | Fix |
+|------|-----|
+| Nurture leads flagged "Not eligible" in bulk dialog | Add `nurture` to eligible motions in `BulkAutomationDialog` |
+| Automation card hidden for nurture leads | Add `nurture` to eligible check in `AutomationPreviewCard` |
+| No way to bulk-move leads to nurture | Add "Move to Nurture" button in `LeadTable` bulk actions |
+| Nurture scheduling uses wrong intervals | Use cadence-based scheduling (7/14/30 days) instead of sequence intervals |
 
