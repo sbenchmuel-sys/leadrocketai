@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, differenceInDays } from "date-fns";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 
 interface TopMoversProps {
@@ -10,10 +10,10 @@ interface TopMoversProps {
 interface Mover {
   leadId: string;
   leadName: string;
-  company: string;
-  reason: string;
+  summary: string;
   impactScore: number;
   time: string;
+  hasUpArrow: boolean;
 }
 
 const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000;
@@ -29,86 +29,81 @@ export function TopMovers({ leads }: TopMoversProps) {
       const lastActivity = lead.last_activity_at
         ? new Date(lead.last_activity_at).getTime()
         : 0;
-
       if (lastActivity < cutoff) continue;
 
-      let bestReason = "";
+      const signals: string[] = [];
       let bestScore = 0;
+      let hasUpArrow = false;
 
-      // Meeting scheduled (weight: 90)
+      // Meeting scheduled (90)
       if (lead.hasMeeting && lead.stage === "post_meeting") {
-        bestReason = "Meeting scheduled";
-        bestScore = 90;
+        signals.push("Meeting scheduled");
+        bestScore = Math.max(bestScore, 90);
       }
 
-      // Reply after >7 days inactivity (weight: 85)
+      // Reply after >7d inactivity (85) or normal reply (70)
       if (lead.last_inbound_at) {
-        const inboundTime = new Date(lead.last_inbound_at).getTime();
-        if (inboundTime > cutoff) {
-          const lastOutbound = lead.last_outbound_at
+        const inT = new Date(lead.last_inbound_at).getTime();
+        if (inT > cutoff) {
+          const lastOut = lead.last_outbound_at
             ? new Date(lead.last_outbound_at).getTime()
             : 0;
-          const gap = inboundTime - lastOutbound;
+          const gap = inT - lastOut;
           if (gap > SEVEN_DAYS) {
-            if (85 > bestScore) {
-              bestReason = "Reply after extended silence";
-              bestScore = 85;
-            }
-          } else if (70 > bestScore) {
-            bestReason = "Reply received";
-            bestScore = 70;
+            const days = Math.round(gap / (1000 * 60 * 60 * 24));
+            signals.push(`Reactivated after ${days} days`);
+            bestScore = Math.max(bestScore, 85);
+          } else {
+            signals.push("Reply received");
+            bestScore = Math.max(bestScore, 70);
           }
         }
       }
 
-      // Revenue State = heating_up (weight: 80)
-      if (lead.revenueState === "heating_up" && 80 > bestScore) {
-        bestReason = "Heating up";
-        bestScore = 80;
-      }
-
-      // Revenue State = action_required (weight: 75)
-      if (lead.revenueState === "action_required" && 75 > bestScore) {
-        bestReason = "Action required";
-        bestScore = 75;
-      }
-
-      // Reactivated from long cycle — nurture with recent inbound (weight: 82)
+      // Reactivated from nurture (82)
       if (
         lead.revenueState === "active" &&
         (lead.motion as string) === "nurture" &&
         lead.last_inbound_at &&
         new Date(lead.last_inbound_at).getTime() > cutoff &&
-        82 > bestScore
+        !signals.some((s) => s.startsWith("Reactivated"))
       ) {
-        bestReason = "Reactivated from long cycle";
-        bestScore = 82;
+        signals.push("Reactivated from long cycle");
+        bestScore = Math.max(bestScore, 82);
       }
 
-      // Engagement velocity — fast reply latency <24h (weight: 65)
-      if (
-        lead.last_outbound_at &&
-        lead.last_inbound_at &&
-        65 > bestScore
-      ) {
+      // Heating up (80)
+      if (lead.revenueState === "heating_up") {
+        signals.push("Moved to Heating Up");
+        bestScore = Math.max(bestScore, 80);
+        hasUpArrow = true;
+      }
+
+      // Action required (75)
+      if (lead.revenueState === "action_required") {
+        signals.push("Action required");
+        bestScore = Math.max(bestScore, 75);
+      }
+
+      // Fast engagement velocity (65)
+      if (lead.last_outbound_at && lead.last_inbound_at) {
         const outT = new Date(lead.last_outbound_at).getTime();
         const inT = new Date(lead.last_inbound_at).getTime();
         if (inT > outT && inT - outT < 24 * 60 * 60 * 1000 && inT > cutoff) {
-          bestReason = "Fast engagement velocity";
-          bestScore = 65;
+          signals.push("Engagement velocity ↑");
+          bestScore = Math.max(bestScore, 65);
+          hasUpArrow = true;
         }
       }
 
-      if (bestScore > 0) {
+      if (bestScore > 0 && signals.length > 0) {
         items.push({
           leadId: lead.id,
           leadName: lead.name,
-          company: lead.company,
-          reason: bestReason,
+          summary: signals.slice(0, 2).join(" · "),
           impactScore: bestScore,
-          time: formatDistanceToNow(new Date(lastActivity), {
-            addSuffix: true,
-          }),
+          time: formatDistanceToNow(new Date(lastActivity), { addSuffix: true }),
+          hasUpArrow,
         });
       }
     }
@@ -117,31 +112,33 @@ export function TopMovers({ leads }: TopMoversProps) {
   }, [leads]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <h3 className="text-sm font-semibold text-foreground">Top Movers</h3>
 
       {movers.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4 text-center">
+        <p className="text-xs text-muted-foreground py-3 text-center">
           No significant movement detected in the last 48 hours.
         </p>
       ) : (
-        <div className="space-y-0.5">
+        <div className="divide-y divide-border/40">
           {movers.map((m, i) => (
             <Link
               key={i}
               to={`/app/leads/${m.leadId}`}
-              className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-muted/40 transition-colors"
+              className="flex items-center justify-between gap-3 py-2.5 px-1.5 hover:bg-muted/30 transition-colors rounded-sm group"
             >
-              <div className="min-w-0">
-                <span className="text-xs text-foreground truncate block">
-                  <span className="font-medium">{m.leadName}</span>
-                  <span className="text-muted-foreground"> · {m.company}</span>
+              <div className="min-w-0 space-y-0.5">
+                <span className="text-[13px] font-medium text-foreground block truncate">
+                  {m.leadName}
                 </span>
-                <span className="text-[11px] text-muted-foreground/70">
-                  {m.reason}
+                <span className="text-[11px] text-muted-foreground leading-tight block truncate">
+                  {m.hasUpArrow && (
+                    <span className="text-primary mr-1">↑</span>
+                  )}
+                  {m.summary}
                 </span>
               </div>
-              <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
+              <span className="text-[10px] text-muted-foreground/50 shrink-0 tabular-nums">
                 {m.time}
               </span>
             </Link>
