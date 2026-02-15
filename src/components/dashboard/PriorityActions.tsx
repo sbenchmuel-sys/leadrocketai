@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,8 +7,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Mail, FileText, Eye, Send, X, RefreshCw, Zap } from "lucide-react";
-import { EnrichedLead, getActionType, STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
+import { Mail, FileText, Eye, Send, X, RefreshCw } from "lucide-react";
+import { EnrichedLead, getActionType, STAGE_LABELS, DealStage, RevenueState } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { dismissLeadAction } from "@/lib/supabaseQueries";
@@ -21,34 +21,52 @@ const DISMISS_REASONS = [
   { code: "other", label: "Other" },
 ];
 
+const URGENCY_PRIORITY: Record<string, number> = {
+  reply_now: 1,
+  generate_post_meeting_recap: 2,
+  send_proposal: 3,
+  closing_followup: 3,
+  send_pre_2: 4,
+  send_pre_3: 5,
+};
+
 interface PriorityActionsProps {
   leads: EnrichedLead[];
+  allLeads?: EnrichedLead[];
+  revenueStateFilter: RevenueState;
   onLeadUpdated?: () => void;
 }
 
-export function PriorityActions({ leads, onLeadUpdated }: PriorityActionsProps) {
+export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpdated }: PriorityActionsProps) {
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
 
-  const actionLeads = leads
-    .filter((l) => l.needs_action)
-    .sort((a, b) => {
-      // Prioritize by action type urgency
-      const priority: Record<string, number> = {
-        reply_now: 1,
-        generate_post_meeting_recap: 2,
-        send_proposal: 3,
-        closing_followup: 3,
-        send_pre_2: 4,
-        send_pre_3: 5,
-      };
-      const ap = priority[a.next_action_key || ""] || 10;
-      const bp = priority[b.next_action_key || ""] || 10;
-      return ap - bp;
-    })
-    .slice(0, 3);
+  const actionLeads = useMemo(() => {
+    const sortByUrgency = (list: EnrichedLead[]) =>
+      [...list].sort((a, b) => {
+        const ap = URGENCY_PRIORITY[a.next_action_key || ""] || 10;
+        const bp = URGENCY_PRIORITY[b.next_action_key || ""] || 10;
+        return ap - bp;
+      });
+
+    if (revenueStateFilter === "action_required") {
+      // Show ALL action required leads (no limit)
+      return sortByUrgency(leads.filter((l) => l.needs_action));
+    }
+
+    if (revenueStateFilter === "active") {
+      // Pull top 3 most urgent from action_required across all leads
+      const actionPool = (allLeads ?? leads).filter(
+        (l) => l.revenueState === "action_required" && l.needs_action
+      );
+      return sortByUrgency(actionPool).slice(0, 3);
+    }
+
+    // Other states: show needs_action from filtered set, max 3
+    return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 3);
+  }, [leads, allLeads, revenueStateFilter]);
 
   const handleDismiss = async (lead: EnrichedLead, reasonCode: string) => {
     setDismissingId(lead.id);
@@ -118,16 +136,13 @@ export function PriorityActions({ leads, onLeadUpdated }: PriorityActionsProps) 
   return (
     <>
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-foreground">Priority Actions</h3>
+        <h3 className="text-sm font-semibold text-foreground">Action Required</h3>
 
         {actionLeads.length === 0 ? (
           <div className="flex items-center justify-center py-8 text-center">
-            <div className="space-y-1">
-              <Zap className="h-5 w-5 text-muted-foreground/40 mx-auto" />
-              <p className="text-sm text-muted-foreground">
-                No urgent actions. Assistant progressing deals autonomously.
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              No conversations in this state.
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -136,7 +151,7 @@ export function PriorityActions({ leads, onLeadUpdated }: PriorityActionsProps) 
               return (
                 <div
                   key={lead.id}
-                  className="flex items-center gap-3 rounded-lg border border-border bg-card/50 px-4 py-3"
+                  className="flex items-center gap-3 rounded-md border border-border bg-card/50 px-4 py-3"
                 >
                   <Link
                     to={`/app/leads/${lead.id}`}
