@@ -1,56 +1,126 @@
 
-# Fix Team Analytics — Wire to Correct Data Sources
 
-## Problem
-The `compute-manager-analytics` edge function queries the `conversations` and `messages` tables (which are empty — used for WhatsApp/inbox), but all the actual activity data lives in:
-- **`interactions`** table: 558 outbound emails, 100 inbound emails
-- **`leads`** table: 138 leads with stage data (contacted, engaged, post_meeting)
-- **`meeting_summaries`** table: 16 meeting summaries
+# Automation Fixes + 2 Improvements (Activity Feed + Unsubscribe Handling)
 
-The dashboard correctly shows zeros because the wrong tables are being queried.
+This plan covers all 5 original issues plus the 2 requested improvements.
 
-## Solution
-Rewrite the `compute-manager-analytics` edge function to pull from `interactions`, `leads`, and `meeting_summaries` instead of `conversations`/`messages`. The frontend (`ManagerDashboard.tsx`) and query layer (`managerAnalyticsQueries.ts`) remain unchanged — they already display whatever `manager_views` contains.
+## What's Being Fixed
 
-## What changes
+### Issue 1: "Automation Running" filter shows wrong results
+The dashboard filter only checks nurture-auto leads, missing outbound/inbound sequence automation.
 
-### Edge function: `supabase/functions/compute-manager-analytics/index.ts`
+### Issue 2: No "Stop Automation" for replied leads
+Currently only Pause/Resume exists. When a lead replies, users need a permanent "Stop" action.
 
-Rewrite `computeRepMetrics()` to:
+### Issue 3: Emails not sending + no visibility
+The `automation-executor` function is never triggered (no cron/scheduler). No execution log exists.
 
-1. **Emails sent/received**: Query `interactions` joined to `leads` by `owner_user_id`, counting `email_outbound` vs `email_inbound`
-2. **Response time**: Calculate from `interactions` per lead — time between an inbound email and the next outbound email
-3. **Needs reply**: Leads where the most recent interaction is `email_inbound` and status is not closed
-4. **Stage distribution**: Aggregate from `leads.stage` (contacted, engaged, post_meeting, new)
-5. **Channel metrics**: Derive from `interactions.source` (gmail) and direction
-6. **Meeting summaries**: Count from `meeting_summaries` per user
-7. **Ghost risk**: Leads with no outbound in 14+ days where last interaction was inbound
-8. **Sentiment/urgency/objections/topics**: Keep reading from `conversation_analysis` if available, but also derive basic sentiment from `leads.deal_outlook`
+### Issue 4: Nurture timing not visible in lead card
+Already partially working -- the NurturePreviewCard shows dates. Will ensure it's consistent with outbound card.
 
-### No changes needed
-- `src/components/manager/ManagerDashboard.tsx` — already displays from `manager_views`
-- `src/lib/managerAnalyticsQueries.ts` — already reads from `manager_views`
-- `manager_views` table schema — already has the right columns
-- No database migrations needed
+### Issue 5: Emails logged incorrectly
+Automated emails are logged as `system_note` instead of `email_outbound`, making them invisible in timelines/inbox.
 
-## Technical Details
+### Improvement 1: Automation Activity Feed in Timeline
+Show automation events (sent, skipped, failed) in the lead's timeline so users can see what the system did.
 
-The rewritten `computeRepMetrics` function will:
+### Improvement 4: Unsubscribe Handling
+When a lead replies with "unsubscribe", auto-stop the sequence, flag the lead, and log it.
+
+---
+
+## Technical Plan
+
+### Step 1: Database Migration — `automation_log` table
+Create a new table to track every automation execution attempt:
 
 ```text
-1. Query leads WHERE owner_user_id = repUserId
-2. Query interactions WHERE lead_id IN (those lead IDs)
-   - Group by type/direction for sent/received counts
-   - Sort per-lead by occurred_at to compute response times
-3. Query meeting_summaries WHERE user_id = repUserId
-4. Derive stage_distribution from leads.stage
-5. Derive ghost_risk from leads with last_inbound_at > last_outbound_at
-   and days since last_outbound > 14
-6. Derive channel_metrics from interactions.source (gmail = email channel)
-7. Keep conversation_analysis lookup as a bonus data source if available
+automation_log:
+  id (uuid, PK)
+  lead_id (uuid, FK -> leads)
+  owner_user_id (uuid)
+  action_key (text)
+  ai_task (text)
+  status (text: pending, sent, failed, skipped)
+  error_message (text, nullable)
+  gmail_message_id (text, nullable)
+  subject (text, nullable)
+  created_at (timestamptz)
+  completed_at (timestamptz, nullable)
 ```
 
-Key safety points:
-- The function uses `SUPABASE_SERVICE_ROLE_KEY` so RLS is bypassed (correct for a backend compute job)
-- The `manager_views` table only has a SELECT policy for admin/manager roles — no data leaks
-- No frontend changes, so nothing else can break
+Add `unsubscribed` boolean column to `leads` table (default false).
+RLS: users can SELECT their own leads' logs.
+
+### Step 2: Fix `automation-executor` edge function
+- Change interaction logging from `type: "system_note"` to `type: "email_outbound"` with `source: "automation"` so auto-sent emails appear in timeline and inbox
+- Insert `automation_log` entries for every attempt (sent, failed, skipped) with error details
+- Add retry logic: on gmail-send failure, re-queue `eligible_at` + 15 minutes (max 2 retries via log count check)
+- Detect unsubscribe replies: before sending, check if last inbound contains "unsubscribe" -- if so, set `leads.unsubscribed = true`, clear automation, skip lead
+- Include `gmail_message_id` from send response in the interaction record
+
+### Step 3: Create `automation-check` edge function
+A user-authenticated wrapper that:
+- Accepts user auth token (not service-role only)
+- Finds the current user's leads where `eligible_at <= now` and `needs_action = true`
+- Runs the same execution logic inline (or calls automation-executor with service role)
+- Returns results so the frontend knows what happened
+
+Add to `config.toml`: `[functions.automation-check] verify_jwt = false`
+
+### Step 4: Create `useAutomationPoller` hook
+A frontend hook used on the Dashboard that:
+- Polls `automation-check` every 60 seconds while the tab is active
+- Shows a toast when an email is auto-sent ("Auto-sent Follow-up 1 to John")
+- Triggers a dashboard metrics refresh after any successful send
+- Pauses polling when tab is hidden (Page Visibility API)
+
+### Step 5: Fix Dashboard "Automation Running" filter
+In `src/pages/Dashboard.tsx` line 213, update the filter to match both sequence and nurture automation:
+
+```typescript
+result = result.filter((l) => {
+  const hasSequenceAutomation = !!(l as any).eligible_at && l.needs_action;
+  const hasNurtureAutomation = l.nurture_mode === "auto" && l.nurture_status === "active";
+  return hasSequenceAutomation || hasNurtureAutomation;
+});
+```
+
+### Step 6: Add "Stop Sequence" to AutomationPreviewCard
+When `safetyPaused` is true (lead replied or meeting scheduled):
+- Replace "Resume" with "Stop Sequence" button
+- Stop clears all automation fields permanently: `next_action_key`, `next_action_label`, `eligible_at`, `needs_action`, `action_reason_code` all set to null/false
+- Keep "Resume" only when `userPaused` (no safety blockers)
+- Show distinct UI: red "Stop" vs amber "Resume"
+
+### Step 7: Automation Activity Feed in Timeline
+Update `TimelineTab.tsx` to:
+- Add a new filter option: "Automation" alongside All/Emails/WhatsApp/Meetings/Notes
+- Show automation interactions (type `email_outbound` + source `automation`) with a special "Auto-sent" badge
+- Also fetch from `automation_log` for failed/skipped entries and display them as system events with status indicators (green check for sent, red X for failed, grey skip for skipped)
+
+### Step 8: Unsubscribe Detection in `gmail-sync`
+When processing inbound emails in `gmail-sync`, check if the body contains "unsubscribe" (case-insensitive, whole word):
+- If detected and `stop_on_unsubscribe` is true:
+  - Set `leads.unsubscribed = true`
+  - Clear all automation fields (`needs_action`, `eligible_at`, `next_action_key`, etc.)
+  - Set `nurture_status = "inactive"` if in nurture mode
+  - Log an interaction: `type: "system_note"`, body: "Lead requested to unsubscribe"
+- In `AutomationPreviewCard`, if `lead.unsubscribed === true`, show "Unsubscribed" status and prevent re-enabling automation
+
+---
+
+## Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| Database migration | Create `automation_log` table + add `unsubscribed` to `leads` |
+| `supabase/functions/automation-executor/index.ts` | Fix interaction type, add logging, retry, unsubscribe check |
+| `supabase/functions/automation-check/index.ts` | **New** -- user-auth wrapper for polling |
+| `supabase/config.toml` | Add automation-check entry |
+| `src/hooks/useAutomationPoller.ts` | **New** -- 60s polling hook with toast |
+| `src/pages/Dashboard.tsx` | Fix automation filter (line 213), wire poller |
+| `src/components/lead/AutomationPreviewCard.tsx` | Add Stop button, unsubscribed state |
+| `src/components/lead/TimelineTab.tsx` | Add Automation filter, show auto-sent badge + log entries |
+| `supabase/functions/gmail-sync/index.ts` | Add unsubscribe detection on inbound emails |
+
