@@ -1,32 +1,19 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
-import { formatDistanceToNow } from "date-fns";
 import { differenceInDays, parseISO } from "date-fns";
-import {
-  EnrichedLead,
-  DealStage,
-} from "@/lib/dashboardUtils";
+import type { EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
   onDashboardRefresh,
   type DashboardMetrics,
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
-import { StageFilterBar, StageFilter } from "@/components/dashboard/StageFilterBar";
 import { PriorityActions } from "@/components/dashboard/PriorityActions";
-import { AIActivityFeed } from "@/components/dashboard/AIActivityFeed";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -38,7 +25,6 @@ export default function Dashboard() {
   useAutomationPoller();
 
   const [dashboardFilter, setDashboardFilter] = useState<DashboardFilter>("active");
-  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
 
   const loadData = useCallback(async () => {
     try {
@@ -95,14 +81,7 @@ export default function Dashboard() {
     }
   }, [leads, dashboardFilter, metrics?.warmingUpLeads]);
 
-  // --- Stage filter logic ---
-  const filteredLeads = useMemo(() => {
-    if (stageFilter === "all") return dashboardFiltered;
-    if (stageFilter === "nurture") {
-      return dashboardFiltered.filter((l) => l.motion === "nurture");
-    }
-    return dashboardFiltered.filter((l) => l.stage === stageFilter);
-  }, [dashboardFiltered, stageFilter]);
+  const filteredLeads = dashboardFiltered;
 
   // --- Command strip counts ---
   const commandCounts = useMemo(() => {
@@ -123,83 +102,43 @@ export default function Dashboard() {
     };
   }, [leads, metrics?.warmingUpLeads]);
 
-  // --- Stage filter counts (from dashboardFiltered) ---
-  const stageCounts = useMemo(() => {
-    const counts: Record<StageFilter, number> = {
-      all: dashboardFiltered.length,
-      new: 0,
-      contacted: 0,
-      engaged: 0,
-      post_meeting: 0,
-      nurture: 0,
-    };
-    dashboardFiltered.forEach((l) => {
-      if (l.motion === "nurture") counts.nurture++;
-      if (l.stage === "new") counts.new++;
-      else if (l.stage === "contacted") counts.contacted++;
-      else if (l.stage === "engaged") counts.engaged++;
-      else if (l.stage === "post_meeting") counts.post_meeting++;
-    });
-    return counts;
-  }, [dashboardFiltered]);
-
-  const activeCount = commandCounts.active;
+  const needYouCount = commandCounts.need_you;
 
   return (
     <div className="space-y-6">
-      {/* Greeting Header */}
-      <div className="flex items-start justify-between">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-            {getGreeting()}.
-          </h1>
-          <div className="flex items-center gap-2">
-            <p className="text-muted-foreground text-sm">
-              Your assistant is monitoring {activeCount} active lead{activeCount !== 1 ? "s" : ""}.
-            </p>
-            {lastRefreshedAt && (
-              <span className="text-xs text-muted-foreground/50">
-                · Updated {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
-              </span>
-            )}
-          </div>
+      {/* Header — Action-focused */}
+      <div className="space-y-1">
+        <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+          You have {needYouCount} action{needYouCount !== 1 ? "s" : ""} pending.
+        </h1>
+        <p className="text-sm text-muted-foreground">Sorted by urgency.</p>
+        <div className="pt-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              setDashboardFilter("need_you");
+              const el = document.getElementById("priority-actions");
+              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+          >
+            Review Actions
+          </Button>
         </div>
-        <Button asChild size="sm">
-          <Link to="/app/leads">
-            <Plus className="h-4 w-4 mr-1" />
-            Add Lead
-          </Link>
-        </Button>
       </div>
 
-      {/* ROW 1 — Command Strip */}
+      {/* Command Strip — Single filter system */}
       <CommandStrip
         counts={commandCounts}
         activeFilter={dashboardFilter}
-        onFilterChange={(f) => {
-          setDashboardFilter(f);
-          setStageFilter("all");
-        }}
+        onFilterChange={setDashboardFilter}
       />
 
-      {/* ROW 2 — Stage Filter Bar */}
-      <StageFilterBar
-        counts={stageCounts}
-        activeStage={stageFilter}
-        onStageChange={setStageFilter}
-      />
-
-      {/* ROW 3 — Two Column Grid */}
-      <div className="grid gap-6 lg:grid-cols-5">
-        <div className="lg:col-span-3">
-          <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
-        </div>
-        <div className="lg:col-span-2">
-          <AIActivityFeed leads={filteredLeads} />
-        </div>
+      {/* Priority Actions — Full width */}
+      <div id="priority-actions">
+        <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
       </div>
 
-      {/* ROW 4 — AI Insight */}
+      {/* AI Insight */}
       <AIInsightPanel leads={filteredLeads} />
 
       {/* Lead Table */}
