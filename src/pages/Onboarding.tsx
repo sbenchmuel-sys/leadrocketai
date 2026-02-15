@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { getCurrentProfile, setOnboardingStep } from "@/lib/supabaseQueries";
 import ChoosePlaybookStep from "@/components/onboarding/ChoosePlaybookStep";
 import ConnectInboxStep from "@/components/onboarding/ConnectInboxStep";
@@ -14,7 +16,7 @@ const STEP_LABELS = ["Playbook", "Inbox", "Knowledge", "Leads", "Launch"];
 
 export default function Onboarding() {
   const navigate = useNavigate();
-  const { refreshProfile } = useAuth();
+  const { refreshProfile, profile } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
 
   const goToStep = async (step: number) => {
@@ -58,6 +60,14 @@ export default function Onboarding() {
       {/* Premium progress header */}
       <div className="p-6 border-b border-border">
         <div className="max-w-lg mx-auto space-y-4">
+          <div className="flex items-center justify-between">
+            <Button variant="ghost" size="sm" asChild className="text-muted-foreground hover:text-foreground -ml-2">
+              <Link to={profile?.onboarding_done ? "/app" : "/"}>
+                <ArrowLeft className="size-4" />
+                {profile?.onboarding_done ? "Dashboard" : "Home"}
+              </Link>
+            </Button>
+          </div>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium text-foreground text-sm">
               Step {currentStep + 1} of {TOTAL_STEPS}
