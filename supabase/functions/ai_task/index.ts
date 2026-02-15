@@ -9,6 +9,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "post_meeting_recap",
   "answer_questions",
   "pre_email_1_intro",
+  "inbound_intro",
   "post_meeting_followup_personalized",
   "nurture_sequence",
   "nurture_email_single",
@@ -670,6 +671,50 @@ Return TEXT ONLY.
 Prospect: {{PROSPECT_NAME}}, {{TITLE}} at {{COMPANY}}
 Context: {{CONTEXT}}
 Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`,
+
+  // Inbound Intro — first-touch email for inbound leads
+  inbound_intro: `ROLE
+You are writing the first response email to an inbound lead who has expressed interest via a website form, referral, or inbound inquiry.
+
+GOAL
+Acknowledge their message, provide one relevant value point, and propose a clear next step. Convert interest into a conversation — NOT a cold pitch.
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
+Lead's Initial Message:
+{{LEAD_CARD_MESSAGE}}
+
+Knowledge Context (approved snippets):
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+CONSTRAINTS
+- 100–150 words
+- Warm, responsive tone — they came to YOU
+- MUST acknowledge their specific message or interest area directly in the opening
+- Provide ONE relevant value point from Knowledge Context (if available)
+- End with a clear next step: propose a meeting (use Meeting Link if available) OR ask a qualifying question
+- Do NOT pitch cold — they already showed interest
+- Do NOT list features or write a product overview
+- Do NOT use generic openers like "Thanks for reaching out" without referencing their specific interest
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+- If the lead's company is missing or says "Unknown Company", simply omit company references
+- MEETING LINK: If provided, embed the exact URL in a sentence. If empty, ask them to reply with availability.
+
+OUTPUT
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   // Pre-Meeting Email Cadence
   pre_email_1_intro: `ROLE

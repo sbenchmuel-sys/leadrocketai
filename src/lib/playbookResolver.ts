@@ -162,7 +162,7 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
   // Inbound sources default to reply or intro
   if (ctx.source_type === "contact_form" || ctx.source_type === "gmail_inbound" || ctx.source_type === "referral") {
     return {
-      recommended_intent: hasThread ? "reply_to_thread" : "pre_email_1_intro",
+      recommended_intent: hasThread ? "reply_to_thread" : "inbound_intro",
       recommended_playbook: hasThread ? "Inbound Response" : "Inbound Intro",
       next_sequence_step: hasThread ? "Reply" : "Introduction",
     };

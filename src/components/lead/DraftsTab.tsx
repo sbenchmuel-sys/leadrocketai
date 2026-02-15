@@ -87,7 +87,7 @@ const CHAR_LIMITS: Partial<Record<ComposerIntent, number>> = {
 // Map composer intents to AITaskType for pipeline override
 const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
   follow_up: "pre_email_2_followup",
-  inbound_response: "pre_email_1_intro",
+  inbound_response: "inbound_intro",
   reply_to_thread: "reply_to_thread",
   post_meeting_recap: "post_meeting_followup_email",
   closing_nudge: "pre_email_3_followup",
