@@ -1,34 +1,18 @@
 
 
-# Add Excel File Support Back (Securely)
+# Add Navigation Button to Onboarding Page
 
-## Problem
-After removing the `xlsx` library (due to Prototype Pollution and ReDoS vulnerabilities), both import dialogs only accept CSV files. Users need to import from Excel spreadsheets (.xlsx) as well.
+## What Changes
+Add a small navigation link/button in the onboarding header area that lets users leave the onboarding flow:
+- If onboarding is already done (edge case), it links to `/app` (Dashboard)
+- Otherwise, it links to `/` (Homepage/Landing)
 
-## Solution
-Add the lightweight `read-excel-file` package -- a secure, actively maintained library with no known vulnerabilities -- to parse .xlsx files. CSV parsing continues to use PapaParse.
+## File to Modify
 
-## How It Works
-1. When a user selects a file, check the extension
-2. If `.csv` -- parse with PapaParse (existing logic)
-3. If `.xlsx` / `.xls` -- parse with `read-excel-file`, which returns rows as arrays; treat the first row as headers, then map columns using the same dynamic header-matching logic
+**`src/pages/Onboarding.tsx`**
+- Add a button (e.g., a subtle ghost button with a home or arrow-left icon) in the top-left area of the progress header
+- Use `useAuth` to check `profile?.onboarding_done` to determine the destination (`/app` vs `/`)
+- Use `react-router-dom`'s `Link` or `useNavigate` for navigation
 
-## Changes
-
-### New Dependency
-- `read-excel-file` -- small, secure .xlsx parser (~30KB)
-
-### Files to Modify
-
-**`src/components/leads/LeadImportDialog.tsx`**
-- Update file `accept` to `.csv,.xlsx,.xls`
-- Add a `parseExcelFile()` helper using `read-excel-file`
-- Route file handling based on extension: CSV goes to PapaParse, Excel goes to `read-excel-file`
-- Shared `mapRowToLead()` function normalizes headers and extracts lead fields identically for both formats
-- Update UI text from "CSV" to "CSV or Excel"
-
-**`src/components/onboarding/CreateLeadStep.tsx`**
-- Same changes: accept `.csv,.xlsx,.xls`, add Excel parsing path, update labels
-
-### No database or backend changes required
+The button will sit above or beside the step indicator, styled as a minimal ghost/link button (e.g., "Back to Home" with an ArrowLeft icon) so it doesn't distract from the onboarding flow but remains accessible.
 
