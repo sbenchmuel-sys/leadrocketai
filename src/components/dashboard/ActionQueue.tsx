@@ -213,7 +213,7 @@ export function ActionQueue({ leads, onLeadUpdated }: ActionQueueProps) {
         {queue.length === 0 ? (
           <div className="flex items-center justify-center py-10 text-center">
             <p className="text-sm text-muted-foreground">
-              No actions pending. Assistant is progressing deals autonomously.
+              All clear. No actions required.
             </p>
           </div>
         ) : (

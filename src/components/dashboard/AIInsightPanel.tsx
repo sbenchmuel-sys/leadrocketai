@@ -106,7 +106,7 @@ export function AIInsightPanel({ leads }: AIInsightPanelProps) {
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          No strong signals detected. Assistant monitoring engagement patterns.
+          All clear. No actions required.
         </p>
       )}
     </div>
