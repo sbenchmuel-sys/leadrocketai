@@ -9,9 +9,10 @@ import {
   type DashboardMetrics,
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
-import { ActionQueue } from "@/components/dashboard/ActionQueue";
-import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
+import { ActionQueue, classifyLead } from "@/components/dashboard/ActionQueue";
+import { AIFocusPanel } from "@/components/dashboard/AIFocusPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
+import { STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -76,6 +77,28 @@ export default function Dashboard() {
 
   const needYouCount = commandCounts.need_you;
 
+  const topFocusItem = useMemo(() => {
+    for (const lead of filteredLeads) {
+      const item = classifyLead(lead);
+      if (item) {
+        const stage = STAGE_LABELS[item.lead.stage as DealStage] ?? item.lead.stage;
+        const buttonLabel =
+          item.actionType === "Reply" ? "Reply Now" :
+          item.actionType === "Call" ? "Call" :
+          item.actionType === "Send Proposal" ? "Send" :
+          item.actionType === "Follow-up" ? "Follow Up" : "Review";
+        return {
+          leadId: item.lead.id,
+          leadName: item.lead.name,
+          stage,
+          reason: item.reason,
+          buttonLabel,
+        };
+      }
+    }
+    return null;
+  }, [filteredLeads]);
+
   return (
     <div className="space-y-6">
       {/* Header — Action-focused */}
@@ -110,8 +133,8 @@ export default function Dashboard() {
         <ActionQueue leads={filteredLeads} onLeadUpdated={loadData} />
       </div>
 
-      {/* AI Insight */}
-      <AIInsightPanel leads={filteredLeads} />
+      {/* AI Focus */}
+      <AIFocusPanel topItem={topFocusItem} />
 
       {/* Lead Table */}
       <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
