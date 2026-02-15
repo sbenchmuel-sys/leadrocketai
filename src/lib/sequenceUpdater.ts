@@ -249,7 +249,7 @@ export async function updateSequenceState(
       const freshLead = await getLeadDetail(leadId);
       const hasReply = !!freshLead.last_inbound_at;
       const hasMeeting = freshLead.has_future_meeting;
-      const motionChanged = freshLead.motion !== "outbound_prospecting";
+      const motionChanged = freshLead.motion !== "outbound_prospecting" && freshLead.motion !== "inbound_response" && freshLead.motion !== "nurture";
       const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
 
       if (hasReply || hasMeeting || motionChanged || isClosed) {

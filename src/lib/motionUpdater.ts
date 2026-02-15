@@ -33,10 +33,11 @@ interface MotionUpdate {
   next_action_label?: string | null;
   action_reason_code?: string | null;
   auto_nurture_eligible?: boolean;
+  eligible_at?: string | null;
   mode_changed_at: string;
 }
 
-function buildUpdate(mode: ModeOption): MotionUpdate {
+async function buildUpdate(mode: ModeOption): Promise<MotionUpdate> {
   const now = new Date().toISOString();
   const base: MotionUpdate = { motion: "", stage: "", mode_changed_at: now };
 
@@ -84,8 +85,18 @@ function buildUpdate(mode: ModeOption): MotionUpdate {
         stage: "closing",
       };
 
-    case "Nurture":
+    case "Nurture": {
       // Default cadence applied; dialog handles optional override
+      // Schedule first nurture email based on cadence (default biweekly = 14 days)
+      const { getNurtureCadenceDays } = await import("@/lib/cadenceSettingsTypes");
+      const gapDays = getNurtureCadenceDays("biweekly");
+      let eligibleAt = new Date();
+      eligibleAt.setDate(eligibleAt.getDate() + gapDays);
+      eligibleAt.setHours(9, 30, 0, 0);
+      if (eligibleAt.getTime() <= Date.now()) {
+        eligibleAt.setDate(eligibleAt.getDate() + 1);
+      }
+
       return {
         ...base,
         motion: "nurture",
@@ -95,11 +106,13 @@ function buildUpdate(mode: ModeOption): MotionUpdate {
         nurture_status: "active",
         nurture_theme: "balanced",
         auto_nurture_eligible: false,
-        needs_action: true,
+        needs_action: false,
         next_action_key: "send_nurture_1",
         next_action_label: "Review first nurture email",
-        action_reason_code: null,
+        action_reason_code: "NURTURE_DUE",
+        eligible_at: eligibleAt.toISOString(),
       };
+    }
 
     case "Closed":
       return {
@@ -132,7 +145,7 @@ export async function updateMotionFromTable(
   leadId: string,
   mode: ModeOption,
 ): Promise<boolean> {
-  const update = buildUpdate(mode);
+  const update = await buildUpdate(mode);
 
   const { error } = await supabase
     .from("leads")
