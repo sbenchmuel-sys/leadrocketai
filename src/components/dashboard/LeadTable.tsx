@@ -640,7 +640,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
-                <TableHead className="py-2 text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -758,8 +757,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </div>
                     </TableCell>
 
-                    {/* Action */}
-                    <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
                   </TableRow>
                 );
               })}
