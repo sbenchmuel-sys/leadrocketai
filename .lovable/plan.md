@@ -1,62 +1,56 @@
 
-
-# Fix Inbound Lead Email Draft — Align Playbook with Inbound Context
+# Fix Team Analytics — Wire to Correct Data Sources
 
 ## Problem
-When composing an email for an inbound lead (e.g., someone who submitted "I am interested in your product for remote monitoring of my patients"), the system generates a cold outreach email instead of acknowledging the lead's interest. The email reads like the rep is reaching out for the first time, ignoring the lead's initial message entirely.
+The `compute-manager-analytics` edge function queries the `conversations` and `messages` tables (which are empty — used for WhatsApp/inbox), but all the actual activity data lives in:
+- **`interactions`** table: 558 outbound emails, 100 inbound emails
+- **`leads`** table: 138 leads with stage data (contacted, engaged, post_meeting)
+- **`meeting_summaries`** table: 16 meeting summaries
 
-## Root Cause
-The `inbound_response` composer intent maps to the `pre_email_1_intro` AI task, which is a cold outreach prompt ("Cold Intro in an outbound prospecting cadence — Trigger a reply"). Inbound leads should instead use a prompt that acknowledges their message and converts interest into a conversation.
+The dashboard correctly shows zeros because the wrong tables are being queried.
 
-## Changes
+## Solution
+Rewrite the `compute-manager-analytics` edge function to pull from `interactions`, `leads`, and `meeting_summaries` instead of `conversations`/`messages`. The frontend (`ManagerDashboard.tsx`) and query layer (`managerAnalyticsQueries.ts`) remain unchanged — they already display whatever `manager_views` contains.
 
-### 1. Add a dedicated `inbound_intro` task prompt (edge function)
-**File**: `supabase/functions/ai_task/index.ts`
+## What changes
 
-Add a new prompt `inbound_intro` to the PROMPTS dictionary specifically for inbound first-touch emails:
-- Objective: Acknowledge the lead's message, provide one helpful detail, offer a clear next step
-- References `{{LEAD_CARD_MESSAGE}}` (their initial message) and `{{KNOWLEDGE_CONTEXT}}`
-- Tone: Warm, responsive, not salesy -- convert interest into a conversation
-- Length: 100-150 words
-- Structure: Acknowledge their interest, provide one relevant value point, propose a next step (meeting or reply)
+### Edge function: `supabase/functions/compute-manager-analytics/index.ts`
 
-Also add `"inbound_intro"` to the `KNOWLEDGE_SEARCH_TASKS` array so knowledge context is injected.
+Rewrite `computeRepMetrics()` to:
 
-### 2. Map `inbound_response` intent to the new task
-**File**: `src/components/lead/DraftsTab.tsx`
+1. **Emails sent/received**: Query `interactions` joined to `leads` by `owner_user_id`, counting `email_outbound` vs `email_inbound`
+2. **Response time**: Calculate from `interactions` per lead — time between an inbound email and the next outbound email
+3. **Needs reply**: Leads where the most recent interaction is `email_inbound` and status is not closed
+4. **Stage distribution**: Aggregate from `leads.stage` (contacted, engaged, post_meeting, new)
+5. **Channel metrics**: Derive from `interactions.source` (gmail) and direction
+6. **Meeting summaries**: Count from `meeting_summaries` per user
+7. **Ghost risk**: Leads with no outbound in 14+ days where last interaction was inbound
+8. **Sentiment/urgency/objections/topics**: Keep reading from `conversation_analysis` if available, but also derive basic sentiment from `leads.deal_outlook`
 
-Change the mapping:
-```
-inbound_response: "inbound_intro"  // was: "pre_email_1_intro"
-```
-
-### 3. Add `inbound_intro` to the AITaskType union
-**File**: `src/hooks/useAITask.ts`
-
-Add `"inbound_intro"` to the type union so TypeScript accepts it.
-
-### 4. Ensure the lead's initial message is passed to the new prompt
-**File**: `src/lib/generateDraft.ts`
-
-The `lead_card_message` is already set when `thread_emails.length === 0 && lead.initial_message` exists (line 142). The new prompt template will reference `{{LEAD_CARD_MESSAGE}}` to include this context.
-
-### 5. Wire up inbound motion block in the edge function
-**File**: `supabase/functions/ai_task/index.ts`
-
-The existing `buildMotionBlock` already has an `inbound_response` block (lines 293-305). Ensure the new `inbound_intro` task uses the `inbound_response` motion so this block gets injected correctly.
-
-### 6. Update the playbook resolver for inbound intro
-**File**: `src/lib/playbookResolver.ts`
-
-In `deriveDefault`, when source is inbound and there's no thread, change the recommended intent from `pre_email_1_intro` to `inbound_intro` so the playbook header correctly shows "Inbound Intro" with the right task.
+### No changes needed
+- `src/components/manager/ManagerDashboard.tsx` — already displays from `manager_views`
+- `src/lib/managerAnalyticsQueries.ts` — already reads from `manager_views`
+- `manager_views` table schema — already has the right columns
+- No database migrations needed
 
 ## Technical Details
 
-New prompt structure for `inbound_intro`:
-- Acknowledges the lead's initial message directly
-- Uses knowledge context to provide one relevant value point
-- Proposes a clear next step (meeting or reply)
-- Warm, responsive tone -- not a cold pitch
-- 100-150 words max
-- References: `LEAD_CONTEXT`, `REP_CONTEXT`, `LEAD_CARD_MESSAGE`, `KNOWLEDGE_CONTEXT`, `MEETING_LINK`, `CUSTOM_INSTRUCTIONS`
+The rewritten `computeRepMetrics` function will:
 
+```text
+1. Query leads WHERE owner_user_id = repUserId
+2. Query interactions WHERE lead_id IN (those lead IDs)
+   - Group by type/direction for sent/received counts
+   - Sort per-lead by occurred_at to compute response times
+3. Query meeting_summaries WHERE user_id = repUserId
+4. Derive stage_distribution from leads.stage
+5. Derive ghost_risk from leads with last_inbound_at > last_outbound_at
+   and days since last_outbound > 14
+6. Derive channel_metrics from interactions.source (gmail = email channel)
+7. Keep conversation_analysis lookup as a bonus data source if available
+```
+
+Key safety points:
+- The function uses `SUPABASE_SERVICE_ROLE_KEY` so RLS is bypassed (correct for a backend compute job)
+- The `manager_views` table only has a SELECT policy for admin/manager roles — no data leaks
+- No frontend changes, so nothing else can break
