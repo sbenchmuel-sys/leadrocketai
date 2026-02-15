@@ -77,6 +77,7 @@ export default function Dashboard() {
       action_required: 0,
       heating_up: 0,
       long_cycle: 0,
+      automation: 0,
     };
   }, [metrics?.revenueStateCounts]);
 

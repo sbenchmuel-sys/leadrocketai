@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2, Leaf } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2, Leaf, Search } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -92,6 +92,7 @@ const stageBadgeVariants: Record<DealStage, string> = {
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
 export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
@@ -441,9 +442,19 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     <>
       <Card>
         <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <CardTitle>Leads</CardTitle>
-            {selectedLeads.size > 0 && (
+            <div className="relative w-64">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search by name or company..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-8 text-sm"
+              />
+            </div>
+          </div>
+          {selectedLeads.size > 0 && (
               <div className="flex items-center gap-2 animate-fade-in">
                 <span className="text-sm text-muted-foreground">
                   {selectedLeads.size} selected
@@ -610,7 +621,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 {(bulkUpdating || bulkDeleting || bulkSourceUpdating) && <Loader2 className="h-4 w-4 animate-spin" />}
               </div>
             )}
-          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -627,7 +637,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
                 <TableHead className="py-2">Phase</TableHead>
-                <TableHead className="py-2 hidden md:table-cell">Source</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
@@ -635,7 +644,11 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.map((lead, index) => {
+              {leads.filter((l) => {
+                if (!searchQuery) return true;
+                const q = searchQuery.toLowerCase();
+                return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
+              }).map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
                 const nurtureMode = (lead as any).nurture_mode;
@@ -706,16 +719,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       />
                     </TableCell>
 
-                    {/* Source */}
-                    <TableCell className="py-2 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
-                      <SourceDropdown
-                        leadId={lead.id}
-                        leadName={lead.name}
-                        currentSourceType={lead.source_type}
-                        onUpdated={onLeadUpdated}
-                      />
-                    </TableCell>
-
                     {/* Last Activity */}
                     <TableCell className="py-2 hidden md:table-cell">
                       <span className={cn("text-xs", lastEmail.className)}>
@@ -732,17 +735,27 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
 
                     {/* Automation Status */}
                     <TableCell className="py-2 hidden lg:table-cell">
-                      {isAutoRunning ? (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
-                          <Zap className="h-3 w-3 mr-0.5" /> Auto
-                        </Badge>
-                      ) : isReview ? (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-warning/10 text-warning border-0">
-                          Review
-                        </Badge>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">Off</span>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {isAutoRunning ? (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
+                            <Zap className="h-3 w-3 mr-0.5" /> Auto
+                          </Badge>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">Off</span>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 w-5 p-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenEmailDialog(lead, "");
+                          }}
+                          title="Compose email"
+                        >
+                          <Mail className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </TableCell>
 
                     {/* Action */}

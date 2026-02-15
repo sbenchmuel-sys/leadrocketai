@@ -32,6 +32,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { SOURCE_TYPE_LABELS, SourceType } from "@/lib/dashboardUtils";
+import { SourceDropdown } from "@/components/dashboard/SourceDropdown";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 
@@ -399,8 +400,7 @@ export default function Leads() {
                     <TableHead>Name</TableHead>
                     <TableHead>Country</TableHead>
                     <TableHead>Company</TableHead>
-                    <TableHead>Strategy</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Outlook</TableHead>
                     <TableHead>Last Activity</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
@@ -426,11 +426,15 @@ export default function Leads() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{lead.country || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{lead.company}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{SOURCE_TYPE_LABELS[lead.source_type as SourceType] || lead.source_type?.replace(/_/g, ' ') || "Manual"}</Badge>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <SourceDropdown
+                          leadId={lead.id}
+                          leadName={lead.name}
+                          currentSourceType={(lead.source_type || "manual_entry") as SourceType}
+                          onUpdated={loadLeads}
+                        />
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{lead.status}</Badge>
                       </TableCell>
                       <TableCell>
                         {lead.deal_outlook && (
