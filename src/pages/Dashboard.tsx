@@ -2,7 +2,6 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
-import { differenceInDays, parseISO } from "date-fns";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
@@ -10,10 +9,9 @@ import {
   type DashboardMetrics,
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
-import { PriorityActions } from "@/components/dashboard/PriorityActions";
+import { ActionQueue } from "@/components/dashboard/ActionQueue";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
-
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -57,50 +55,24 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  // --- Dashboard filter logic ---
-  const dashboardFiltered = useMemo(() => {
-    const now = new Date();
+  const filteredLeads = useMemo(() => {
     switch (dashboardFilter) {
       case "active":
         return leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
       case "need_you":
         return leads.filter((l) => l.needs_action);
-      case "heating_up":
-        return metrics?.warmingUpLeads ?? [];
-      case "at_risk":
-        return leads.filter((l) => {
-          if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
-          if (!l.last_outbound_at) {
-            if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
-            return false;
-          }
-          return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
-        });
       default:
         return leads;
     }
-  }, [leads, dashboardFilter, metrics?.warmingUpLeads]);
+  }, [leads, dashboardFilter]);
 
-  const filteredLeads = dashboardFiltered;
-
-  // --- Command strip counts ---
   const commandCounts = useMemo(() => {
-    const now = new Date();
     const active = leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
     return {
       active: active.length,
       need_you: leads.filter((l) => l.needs_action).length,
-      heating_up: (metrics?.warmingUpLeads ?? []).length,
-      at_risk: leads.filter((l) => {
-        if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
-        if (!l.last_outbound_at) {
-          if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
-          return false;
-        }
-        return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
-      }).length,
     };
-  }, [leads, metrics?.warmingUpLeads]);
+  }, [leads]);
 
   const needYouCount = commandCounts.need_you;
 
@@ -117,7 +89,7 @@ export default function Dashboard() {
             size="sm"
             onClick={() => {
               setDashboardFilter("need_you");
-              const el = document.getElementById("priority-actions");
+              const el = document.getElementById("action-queue");
               el?.scrollIntoView({ behavior: "smooth", block: "start" });
             }}
           >
@@ -126,16 +98,16 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Command Strip — Single filter system */}
+      {/* Command Strip */}
       <CommandStrip
         counts={commandCounts}
         activeFilter={dashboardFilter}
         onFilterChange={setDashboardFilter}
       />
 
-      {/* Priority Actions — Full width */}
-      <div id="priority-actions">
-        <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
+      {/* Action Queue */}
+      <div id="action-queue">
+        <ActionQueue leads={filteredLeads} onLeadUpdated={loadData} />
       </div>
 
       {/* AI Insight */}
