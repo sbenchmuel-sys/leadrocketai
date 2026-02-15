@@ -151,7 +151,7 @@ function buildAIPayload(
   }
 
   // Previous email summary + re-engagement context for follow-ups
-  if (taskType.includes("pre_email")) {
+  if (taskType.includes("pre_email") || taskType === "re_engagement_intro") {
     payload.previous_email_summary = ctx.thread_summary || "No previous emails sent yet.";
     // Full last outbound for dedup
     payload.last_outbound_body = ctx.last_outbound_email?.body_text || "";
@@ -213,6 +213,7 @@ function deriveSubject(ctx: ResolvedContext, taskType: AITaskType): string {
   if (taskType === "post_meeting_followup_email") {
     return `Following up on our conversation${company ? ` - ${company}` : ""}`;
   }
+  if (taskType === "re_engagement_intro") return `Reconnecting - ${leadFirstName}`;
   if (taskType === "pre_email_2_followup") return `Following up - ${leadFirstName}`;
   if (taskType === "pre_email_3_followup") return `Checking in - ${leadFirstName}`;
   if (taskType === "pre_email_4_breakup") return `Closing the loop - ${leadFirstName}`;

@@ -178,11 +178,11 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
         next_sequence_step: "Reply",
       };
     }
-    // Outbound is newer (post-breakup / waiting state) — re-engagement intro
+    // Outbound is newer (post-breakup / waiting state) — contextual re-engagement
     return {
-      recommended_intent: "pre_email_1_intro",
+      recommended_intent: "re_engagement_intro",
       recommended_playbook: "Re-engagement",
-      next_sequence_step: "Fresh Approach",
+      next_sequence_step: "Contextual Re-engagement",
     };
   }
 

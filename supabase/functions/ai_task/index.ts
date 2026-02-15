@@ -19,6 +19,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "recommend_next_steps",
   "linkedin_followup",
   "reply_to_thread",
+  "re_engagement_intro",
 ];
 
 // Function to get knowledge context using text-based search (no embeddings required)
@@ -903,6 +904,73 @@ CONSTRAINTS
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
 - SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
 - CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], etc.
+
+OUTPUT
+Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
+
+  // Re-engagement Intro — for leads with existing relationship context (post-breakup/stale)
+  re_engagement_intro: `ROLE
+You are generating a re-engagement email for a lead you have an EXISTING relationship with. This is NOT a cold intro — you have had prior conversations, meetings, or email exchanges.
+
+GOAL
+Re-open the conversation with a fresh, relevant angle based on your shared history, milestones, and AI-recommended next steps. Do NOT repeat previous outreach angles.
+
+CRITICAL CONTEXT:
+This lead has gone quiet after previous engagement. Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Do NOT:
+- Repeat any angle, value prop, or CTA from your last email
+- Write a cold intro as if you've never spoken
+- Use generic openers like "I wanted to reach out" without referencing shared context
+- List features or give a product overview
+
+RELATIONSHIP CONTEXT:
+Milestones from your engagement: {{MILESTONES}}
+Buying signals detected: {{BUYING_SIGNALS}}
+Risk signals: {{RISK_SIGNALS}}
+Meeting context: {{MEETING_CONTEXT}}
+Engagement level: {{ENGAGEMENT_LEVEL}}
+Days since last activity: {{DAYS_SINCE_ACTIVITY}}
+
+RE-ENGAGEMENT STRATEGY:
+Choose ONE fresh angle based on the context above:
+1. Reference a specific milestone or discussion point from your meetings/calls and build on it
+2. Share a new development, insight, or use case relevant to their stated interests
+3. Address a risk or concern that was raised and offer a resolution
+4. Reference their industry/role with a timely insight that connects to your prior conversation
+5. Propose a different value proposition or use case you haven't discussed yet
+
+Previous Outreach Summary:
+{{PREVIOUS_EMAIL_SUMMARY}}
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+CONSTRAINTS
+- 90–140 words
+- Warm, familiar tone — you know this person
+- Reference your shared history naturally (meeting, prior emails, etc.)
+- ONE new angle or value point
+- ONE clear but low-pressure CTA
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders
+- If the lead's company is missing or says "Unknown Company", simply omit company references
+- MEETING LINK: If provided, embed the exact URL. If empty, ask them to reply with availability.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
