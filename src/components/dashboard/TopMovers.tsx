@@ -112,11 +112,11 @@ export function TopMovers({ leads }: TopMoversProps) {
   }, [leads]);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 overflow-hidden">
       <h3 className="text-sm font-semibold text-foreground">Top Movers</h3>
 
       {movers.length === 0 ? (
-        <p className="text-xs text-muted-foreground py-3 text-center">
+        <p className="text-xs text-muted-foreground py-2 text-center">
           No significant movement detected in the last 48 hours.
         </p>
       ) : (
@@ -125,7 +125,7 @@ export function TopMovers({ leads }: TopMoversProps) {
             <Link
               key={i}
               to={`/app/leads/${m.leadId}`}
-              className="flex items-center justify-between gap-3 py-2.5 px-1.5 hover:bg-muted/30 transition-colors rounded-sm group"
+              className="flex items-center justify-between gap-3 py-2 px-1.5 hover:bg-muted/30 transition-colors rounded-sm"
             >
               <div className="min-w-0 space-y-0.5">
                 <span className="text-[13px] font-medium text-foreground block truncate">
