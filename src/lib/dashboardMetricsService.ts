@@ -246,6 +246,7 @@ export async function getDashboardMetrics(
     action_required: 0,
     heating_up: 0,
     long_cycle: 0,
+    automation: 0,
   };
 
   for (const lead of leads) {

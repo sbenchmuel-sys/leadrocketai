@@ -165,13 +165,14 @@ const STAGE_PROGRESSION_ORDER: DealStage[] = ["new", "contacted", "engaged", "po
 // REVENUE CONTROL STATES
 // ============================================
 
-export type RevenueState = "action_required" | "heating_up" | "long_cycle" | "active";
+export type RevenueState = "action_required" | "heating_up" | "long_cycle" | "active" | "automation";
 
 export const REVENUE_STATE_LABELS: Record<RevenueState, string> = {
   action_required: "Action Required",
   heating_up: "Heating Up",
   long_cycle: "Long Cycle",
   active: "Active",
+  automation: "Automation",
 };
 
 /**
@@ -185,6 +186,11 @@ export function classifyRevenueState(
   lead: EnrichedLead,
   warmingUpIds: Set<string>
 ): RevenueState {
+  // --- 0. AUTOMATION (highest priority — divert automated leads) ---
+  const hasSequenceAutomation = !!lead.eligible_at && lead.needs_action;
+  const hasNurtureAutomation = lead.nurture_mode === "auto" && lead.nurture_status === "active";
+  if (hasSequenceAutomation || hasNurtureAutomation) return "automation";
+
   // --- 1. ACTION REQUIRED ---
   if (lead.needs_action) return "action_required";
   // Unreplied inbound (has inbound but last outbound is before last inbound)
