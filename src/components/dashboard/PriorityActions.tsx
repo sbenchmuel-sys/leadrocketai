@@ -53,7 +53,7 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
 
     if (revenueStateFilter === "action_required") {
       // Show ALL action required leads (no limit)
-      return sortByUrgency(leads.filter((l) => l.needs_action));
+      return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 5);
     }
 
     if (revenueStateFilter === "active") {
