@@ -83,10 +83,10 @@ export default function Dashboard() {
   const activeCount = metrics?.active_count ?? 0;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* Greeting Header */}
       <div className="flex items-start justify-between">
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           <h1 className="text-3xl font-semibold text-foreground tracking-tight">
             {getGreeting()}.
           </h1>
@@ -109,15 +109,15 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      {/* ROW 1 — Command Strip */}
+      {/* Command Strip */}
       <CommandStrip
         counts={commandCounts}
         activeFilter={revenueStateFilter}
         onFilterChange={setRevenueStateFilter}
       />
 
-      {/* ROW 2 — Two Column Grid */}
-      <div className="grid gap-5 lg:grid-cols-5">
+      {/* Action Required + Top Movers */}
+      <div className="grid gap-4 lg:grid-cols-5">
         <div className="lg:col-span-3">
           <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
         </div>
@@ -126,7 +126,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ROW 3 — AI Insight */}
+      {/* Revenue Signal — directly below */}
       <AIInsightPanel leads={filteredLeads} />
 
       {/* Lead Table */}
