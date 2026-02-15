@@ -135,7 +135,14 @@ function buildAIPayload(
   // Thread context for replies
   if (ctx.thread_emails.length > 0 && taskType === "reply_to_thread") {
     payload.email_thread = ctx.thread_summary;
-    payload.latest_inbound = ctx.last_inbound_email?.body_text || "";
+    // Staleness guard: only include latest_inbound if it's genuinely newer than last outbound
+    const inboundTime = ctx.last_inbound_email?.occurred_at;
+    const outboundTime = ctx.last_outbound_email?.occurred_at;
+    if (inboundTime && (!outboundTime || new Date(inboundTime) > new Date(outboundTime))) {
+      payload.latest_inbound = ctx.last_inbound_email?.body_text || "";
+    } else {
+      payload.latest_inbound = ""; // prevent AI from addressing stale inbound
+    }
   }
 
   // Lead card context for new outreach
