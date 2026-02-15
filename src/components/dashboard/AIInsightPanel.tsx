@@ -92,24 +92,26 @@ export function AIInsightPanel({ leads }: AIInsightPanelProps) {
   }, [leads]);
 
   return (
-    <div className="border-l-2 border-primary/30 pl-4 py-3">
-      <h3 className="text-sm font-semibold text-foreground mb-2">Revenue Signal</h3>
+    <div className="border-l-2 border-primary/30 pl-3 py-1.5">
+      <h3 className="text-xs font-semibold text-foreground mb-1">Revenue Signal</h3>
 
       {signal ? (
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="text-sm text-foreground font-medium">{signal.summary}</p>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Recommended action: {signal.detail}
-            </p>
+        <div className="space-y-0.5">
+          <p className="text-[13px] text-foreground leading-snug">{signal.summary}</p>
+          <p className="text-[11px] text-muted-foreground leading-snug">{signal.detail}</p>
+          <div className="flex items-center gap-1 pt-0.5">
+            <span className="text-[11px] text-muted-foreground">Recommended:</span>
+            <Link
+              to={`/app/leads/${signal.leadId}`}
+              className="text-[11px] font-medium text-primary hover:underline"
+            >
+              {signal.action} →
+            </Link>
           </div>
-          <Button size="sm" variant="outline" className="shrink-0 h-8 text-xs rounded-md" asChild>
-            <Link to={`/app/leads/${signal.leadId}`}>{signal.action}</Link>
-          </Button>
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          No significant revenue signals detected.
+        <p className="text-xs text-muted-foreground">
+          Revenue stable. No immediate action required.
         </p>
       )}
     </div>
