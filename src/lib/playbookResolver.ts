@@ -161,10 +161,28 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
 
   // Inbound sources default to reply or intro
   if (ctx.source_type === "contact_form" || ctx.source_type === "gmail_inbound" || ctx.source_type === "referral") {
+    if (!hasThread) {
+      return {
+        recommended_intent: "inbound_intro",
+        recommended_playbook: "Inbound Intro",
+        next_sequence_step: "Introduction",
+      };
+    }
+    // Only recommend reply_to_thread if inbound is genuinely newer than last outbound
+    const inboundTime = ctx.last_inbound_email ? new Date(ctx.last_inbound_email.occurred_at).getTime() : 0;
+    const outboundTime = ctx.last_outbound_email ? new Date(ctx.last_outbound_email.occurred_at).getTime() : 0;
+    if (inboundTime > outboundTime) {
+      return {
+        recommended_intent: "reply_to_thread",
+        recommended_playbook: "Inbound Response",
+        next_sequence_step: "Reply",
+      };
+    }
+    // Outbound is newer (post-breakup / waiting state) — re-engagement intro
     return {
-      recommended_intent: hasThread ? "reply_to_thread" : "inbound_intro",
-      recommended_playbook: hasThread ? "Inbound Response" : "Inbound Intro",
-      next_sequence_step: hasThread ? "Reply" : "Introduction",
+      recommended_intent: "pre_email_1_intro",
+      recommended_playbook: "Re-engagement",
+      next_sequence_step: "Fresh Approach",
     };
   }
 
