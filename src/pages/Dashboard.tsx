@@ -83,7 +83,7 @@ export default function Dashboard() {
   const activeCount = metrics?.active_count ?? 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Greeting Header */}
       <div className="flex items-start justify-between">
         <div className="space-y-1">
@@ -117,7 +117,7 @@ export default function Dashboard() {
       />
 
       {/* ROW 2 — Two Column Grid */}
-      <div className="grid gap-6 lg:grid-cols-5">
+      <div className="grid gap-5 lg:grid-cols-5">
         <div className="lg:col-span-3">
           <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
         </div>

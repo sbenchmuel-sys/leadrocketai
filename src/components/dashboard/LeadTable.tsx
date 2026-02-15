@@ -440,7 +440,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
   return (
     <>
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle>Leads</CardTitle>
             {selectedLeads.size > 0 && (
