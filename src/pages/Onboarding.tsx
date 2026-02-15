@@ -16,7 +16,7 @@ const STEP_LABELS = ["Playbook", "Inbox", "Knowledge", "Leads", "Launch"];
 
 export default function Onboarding() {
   const navigate = useNavigate();
-  const { refreshProfile, profile } = useAuth();
+  const { refreshProfile, profile, signOut } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
 
   const goToStep = async (step: number) => {
@@ -61,12 +61,27 @@ export default function Onboarding() {
       <div className="p-6 border-b border-border">
         <div className="max-w-lg mx-auto space-y-4">
           <div className="flex items-center justify-between">
-            <Button variant="ghost" size="sm" asChild className="text-muted-foreground hover:text-foreground -ml-2">
-              <Link to={profile?.onboarding_done ? "/app" : "/"}>
+            {profile?.onboarding_done ? (
+              <Button variant="ghost" size="sm" asChild className="text-muted-foreground hover:text-foreground -ml-2">
+                <Link to="/app">
+                  <ArrowLeft className="size-4" />
+                  Dashboard
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground -ml-2"
+                onClick={async () => {
+                  await signOut();
+                  navigate("/");
+                }}
+              >
                 <ArrowLeft className="size-4" />
-                {profile?.onboarding_done ? "Dashboard" : "Home"}
-              </Link>
-            </Button>
+                Home
+              </Button>
+            )}
           </div>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium text-foreground text-sm">
