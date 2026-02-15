@@ -14,18 +14,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { SOURCE_PRESETS, SOURCE_TYPE_COLORS } from "@/lib/dashboardUtils";
-import Papa from "papaparse";
-
-interface ParsedLead {
-  name: string;
-  company: string;
-  email: string;
-  job_title?: string;
-  phone?: string;
-  industry?: string;
-  country?: string;
-  initial_message?: string;
-}
+import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
 
 type ImportStep = "upload" | "source" | "confirm";
 
@@ -60,56 +49,21 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
     setFileName(file.name);
 
-    Papa.parse<Record<string, string>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const leads: ParsedLead[] = results.data.map((row) => {
-          const firstName = (row["First Name"] || row["FirstName"] || row["first_name"] || "").trim();
-          const lastName = (row["Last Name"] || row["LastName"] || row["last_name"] || "").trim();
-          const name = firstName && lastName
-            ? `${firstName} ${lastName}`
-            : (row["Name"] || row["name"] || firstName || "Unknown").trim();
+    try {
+      const validLeads = await parseLeadFile(file);
+      setParsedLeads(validLeads);
 
-          const company = (
-            row["Company Name"] || row["Company"] || row["company"] || row["company_name"] || ""
-          ).trim();
-
-          const email = (
-            row["Email"] || row["email"] || row["Email Address"] || ""
-          ).trim().toLowerCase();
-
-          return {
-            name,
-            company: company || "Unknown Company",
-            email: email || `${name.toLowerCase().replace(/\s+/g, ".")}@unknown.com`,
-            job_title: (row["Job Title"] || row["Title"] || row["job_title"] || "").trim() || undefined,
-            phone: (row["Phone Number"] || row["Phone"] || row["phone"] || "").trim() || undefined,
-            industry: (row["Industry"] || row["industry"] || "").trim() || undefined,
-            country: (row["Country/Region"] || row["Country"] || row["country"] || "").trim() || undefined,
-            initial_message: (row["Message"] || row["Notes"] || row["message"] || "").trim() || undefined,
-          };
-        });
-
-        const validLeads = leads.filter(
-          (lead) => lead.email && lead.email.includes("@") && !lead.email.includes("unknown.com")
-        );
-
-        setParsedLeads(validLeads);
-
-        if (validLeads.length === 0) {
-          toast.error("No valid leads found in file. Make sure there's an Email column.");
-        } else {
-          toast.success(`Found ${validLeads.length} leads to import`);
-          setStep("source");
-        }
-      },
-      error: (err) => {
-        console.error("Failed to parse file:", err);
-        toast.error("Failed to parse file. Please check the format.");
-        setParsedLeads([]);
-      },
-    });
+      if (validLeads.length === 0) {
+        toast.error("No valid leads found in file. Make sure there's an Email column.");
+      } else {
+        toast.success(`Found ${validLeads.length} leads to import`);
+        setStep("source");
+      }
+    } catch (err) {
+      console.error("Failed to parse file:", err);
+      toast.error("Failed to parse file. Please check the format.");
+      setParsedLeads([]);
+    }
   };
 
   const handleImport = async () => {
@@ -176,13 +130,13 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       <DialogTrigger asChild>
         <Button variant="outline">
           <Upload className="h-4 w-4 mr-2" />
-          Import CSV
+          Import Leads
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {step === "upload" && "Import Leads from CSV"}
+            {step === "upload" && "Import Leads from CSV or Excel"}
             {step === "source" && "How were these leads generated?"}
             {step === "confirm" && "Confirm Import"}
           </DialogTitle>
@@ -218,7 +172,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.xlsx,.xls"
                   onChange={handleFileSelect}
                   className="hidden"
                 />
@@ -231,7 +185,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                       Click to upload or drag and drop
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      CSV files
+                      CSV or Excel files
                     </p>
                   </>
                 )}

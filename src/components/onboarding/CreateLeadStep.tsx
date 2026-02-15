@@ -8,22 +8,14 @@ import { createLead, setOnboardingStep } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, ArrowLeft, Upload, FileSpreadsheet, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Papa from "papaparse";
+import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
 
 interface CreateLeadStepProps {
   onNext: () => void;
   onBack: () => void;
 }
 
-interface ParsedLead {
-  name: string;
-  company: string;
-  email: string;
-  job_title?: string;
-  phone?: string;
-  industry?: string;
-  country?: string;
-}
+// ParsedLead type is imported from parseLeadFile
 
 type InputMode = "choose" | "manual" | "upload";
 
@@ -70,44 +62,20 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
-    
-    Papa.parse<Record<string, string>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const leads: ParsedLead[] = results.data.map((row) => {
-          const firstName = (row["First Name"] || row["FirstName"] || row["first_name"] || "").trim();
-          const lastName = (row["Last Name"] || row["LastName"] || row["last_name"] || "").trim();
-          const name = firstName && lastName
-            ? `${firstName} ${lastName}`
-            : (row["Name"] || row["name"] || firstName || "Unknown").trim();
-          const company = (row["Company Name"] || row["Company"] || row["company"] || row["company_name"] || "").trim();
-          const email = (row["Email"] || row["email"] || row["Email Address"] || "").trim().toLowerCase();
-          return {
-            name,
-            company: company || "Unknown Company",
-            email: email || "",
-            job_title: (row["Job Title"] || row["Title"] || row["job_title"] || "").trim() || undefined,
-            phone: (row["Phone Number"] || row["Phone"] || row["phone"] || "").trim() || undefined,
-            industry: (row["Industry"] || row["industry"] || "").trim() || undefined,
-            country: (row["Country/Region"] || row["Country"] || row["country"] || "").trim() || undefined,
-          };
-        });
 
-        const validLeads = leads.filter((lead) => lead.email && lead.email.includes("@"));
-        setParsedLeads(validLeads);
-        if (validLeads.length === 0) {
-          toast.error("No valid leads found. Make sure there's an Email column.");
-        } else {
-          toast.success(`Found ${validLeads.length} leads to import`);
-        }
-      },
-      error: (err) => {
-        console.error("Failed to parse file:", err);
-        toast.error("Failed to parse file. Please check the format.");
-        setParsedLeads([]);
-      },
-    });
+    try {
+      const validLeads = await parseLeadFile(file);
+      setParsedLeads(validLeads);
+      if (validLeads.length === 0) {
+        toast.error("No valid leads found. Make sure there's an Email column.");
+      } else {
+        toast.success(`Found ${validLeads.length} leads to import`);
+      }
+    } catch (err) {
+      console.error("Failed to parse file:", err);
+      toast.error("Failed to parse file. Please check the format.");
+      setParsedLeads([]);
+    }
   };
 
   const handleFileImport = async () => {
@@ -175,7 +143,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
                 <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
               </div>
               <div>
-                <p className="font-medium text-foreground text-sm">Import CSV</p>
+                <p className="font-medium text-foreground text-sm">Import CSV or Excel</p>
                 <p className="text-xs text-muted-foreground">Bulk import from a spreadsheet</p>
               </div>
             </button>
@@ -226,7 +194,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv"
+            accept=".csv,.xlsx,.xls"
             onChange={handleFileSelect}
             className="hidden"
           />
@@ -250,7 +218,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
               <div className="flex flex-col items-center gap-2">
                 <Upload className="h-10 w-10 text-muted-foreground" />
                 <p className="text-sm font-medium text-foreground">Click to select a file</p>
-                <p className="text-xs text-muted-foreground">CSV files</p>
+                <p className="text-xs text-muted-foreground">CSV or Excel files</p>
               </div>
             )}
           </div>
