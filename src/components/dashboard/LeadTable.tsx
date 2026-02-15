@@ -356,36 +356,47 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
             </PopoverContent>
           </Popover>
           {renderEmailComposeButton(lead)}
-          {renderViewButton(lead)}
         </div>
       );
     }
 
-    if (lead.needs_action) {
-      const ActionIcon = actionType === "reply" ? Mail 
-        : actionType === "nurture" ? Send 
-        : FileText;
-      const actionLabel = actionType === "reply" ? "Reply" 
-        : actionType === "nurture" ? "Send" 
-        : "Draft";
-
+    // Needs action
+    if (lead.needs_action && lead.next_action_key) {
+      const labelMap: Record<string, string> = {
+        reply: "Reply",
+        follow_up: "Follow Up",
+        recap: "Recap",
+        nurture: "Nurture",
+        closing: "Close",
+        view: "View",
+      };
+      const iconMap: Record<string, React.ReactNode> = {
+        reply: <Mail className="h-4 w-4 mr-1" />,
+        follow_up: <Send className="h-4 w-4 mr-1" />,
+        recap: <FileText className="h-4 w-4 mr-1" />,
+        nurture: <Leaf className="h-4 w-4 mr-1" />,
+        closing: <Sparkles className="h-4 w-4 mr-1" />,
+        view: <Eye className="h-4 w-4 mr-1" />,
+      };
+      const label = labelMap[actionType] || "Action";
+      const icon = iconMap[actionType] || null;
       return (
         <div className="flex items-center gap-1">
           <Popover 
-            open={instructionsPopover === lead.id} 
+            open={instructionsPopover === lead.id}
             onOpenChange={(open) => !open && setInstructionsPopover(null)}
           >
             <PopoverTrigger asChild>
-              <Button 
-                size="sm" 
-                variant="default" 
+              <Button
+                size="sm"
+                variant="default"
                 onClick={(e) => openInstructionsPopover(lead.id, e)}
               >
-                <ActionIcon className="h-4 w-4 mr-1" />
-                {actionLabel}
+                {icon}
+                <span>{label}</span>
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-80" align="end">
+            <PopoverContent className="w-80" align="end" onClick={(e) => e.stopPropagation()}>
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Lightbulb className="h-4 w-4 text-warning" />
@@ -394,7 +405,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 <Input
                   value={tempInstructions}
                   onChange={(e) => setTempInstructions(e.target.value)}
-                  placeholder="e.g., Already sent recap, follow up on pricing..."
+                  placeholder="e.g., Mention the healthcare conference..."
                   className="text-sm"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
@@ -403,34 +414,25 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                   }}
                 />
                 <div className="flex justify-end gap-2">
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
-                    onClick={() => setInstructionsPopover(null)}
-                  >
+                  <Button size="sm" variant="ghost" onClick={() => setInstructionsPopover(null)}>
                     Cancel
                   </Button>
-                  <Button 
-                    size="sm" 
-                    onClick={() => confirmInstructions(lead)}
-                  >
-                    Generate {actionLabel}
+                  <Button size="sm" onClick={() => confirmInstructions(lead)}>
+                    Continue
                   </Button>
                 </div>
               </div>
             </PopoverContent>
           </Popover>
           {renderEmailComposeButton(lead)}
-          {renderViewButton(lead)}
         </div>
       );
     }
 
-    // Default: just email compose + view
+    // Default
     return (
       <div className="flex items-center gap-1">
         {renderEmailComposeButton(lead)}
-        {renderViewButton(lead)}
       </div>
     );
   };
