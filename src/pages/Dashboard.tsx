@@ -12,7 +12,7 @@ import {
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
 import { PriorityActions } from "@/components/dashboard/PriorityActions";
-import { AIActivityFeed } from "@/components/dashboard/AIActivityFeed";
+import { TopMovers } from "@/components/dashboard/TopMovers";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 
@@ -122,7 +122,7 @@ export default function Dashboard() {
           <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
         </div>
         <div className="lg:col-span-2">
-          <AIActivityFeed leads={filteredLeads} />
+          <TopMovers leads={filteredLeads} />
         </div>
       </div>
 
