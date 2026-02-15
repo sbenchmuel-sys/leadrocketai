@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  Zap, Pause, Play, Loader2, ShieldCheck, Clock,
+  Zap, Pause, Play, Loader2, ShieldCheck, Clock, Square, Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays } from "date-fns";
@@ -53,7 +53,6 @@ function getNextTwoSteps(lead: LeadDetail) {
 
   const steps: { key: string; label: string; date: Date }[] = [];
   const baseDate = lead.last_outbound_at ? new Date(lead.last_outbound_at) : new Date();
-  // Use eligible_at as the anchor for the first step if available
   const eligibleAt = (lead as any).eligible_at ? new Date((lead as any).eligible_at) : null;
 
   for (let i = 0; i < 2; i++) {
@@ -64,7 +63,6 @@ function getNextTwoSteps(lead: LeadDetail) {
     
     let date: Date;
     if (i === 0 && eligibleAt) {
-      // First step: use the stored eligible_at timestamp
       date = eligibleAt;
     } else {
       const gapDays = idx > 0 ? intervals[idx] - intervals[idx - 1] : 0;
@@ -73,7 +71,6 @@ function getNextTwoSteps(lead: LeadDetail) {
       date.setHours(9, 30, 0, 0);
     }
     
-    // Ensure date is in the future for display
     if (date.getTime() <= Date.now()) {
       date = new Date();
       date.setMinutes(date.getMinutes() + 5);
@@ -85,7 +82,6 @@ function getNextTwoSteps(lead: LeadDetail) {
   return steps;
 }
 
-// Safety checks before automation can proceed
 function getAutomationBlockers(lead: LeadDetail): string[] {
   const blockers: string[] = [];
   if (lead.last_inbound_at) blockers.push("Lead has replied");
@@ -99,14 +95,15 @@ function getAutomationBlockers(lead: LeadDetail): string[] {
 export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPreviewCardProps) {
   const [isEnabling, setIsEnabling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
 
   const motion = lead.motion;
   const stage = lead.stage;
+  const isUnsubscribed = (lead as any).unsubscribed === true;
 
   const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
   const blockers = useMemo(() => getAutomationBlockers(lead), [lead]);
   const safetyPaused = blockers.length > 0;
-  // User-paused: has next_action_key but automation is not enabled (eligible_at cleared)
   const userPaused = !hasAutomationEnabled && !!lead.next_action_key;
   const isPaused = safetyPaused || userPaused;
   const steps = useMemo(() => getNextTwoSteps(lead), [lead]);
@@ -114,13 +111,55 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const intervals = getMotionIntervals(motion || "outbound_prospecting");
   const stepLabels = getStepLabels(motion || "outbound_prospecting");
 
-  // Only show for outbound/inbound motion, non-closed stages
   const isEligible = (motion === "outbound_prospecting" || motion === "inbound_response") &&
     stage !== "closed_won" && stage !== "closed_lost";
 
   if (!isEligible) return null;
 
-  // If automation is not enabled and there's no next action queued, show enable button
+  // Unsubscribed state
+  if (isUnsubscribed) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Ban className="h-3.5 w-3.5 text-destructive" />
+          <span className="text-sm font-medium text-foreground">Automation</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+            Unsubscribed
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          This lead requested to unsubscribe. Automation is permanently disabled.
+        </p>
+        <Separator className="bg-border/40" />
+      </div>
+    );
+  }
+
+  // Stop sequence handler — permanently clears all automation
+  const handleStopSequence = async () => {
+    setIsStopping(true);
+    try {
+      await supabase
+        .from("leads")
+        .update({
+          needs_action: false,
+          next_action_key: null,
+          next_action_label: null,
+          eligible_at: null,
+          action_reason_code: null,
+        })
+        .eq("id", lead.id);
+      toast.success("Sequence stopped permanently");
+      onUpdate();
+    } catch (err) {
+      console.error("Failed to stop sequence:", err);
+      toast.error("Failed to stop sequence");
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
+  // Not enabled — show enable button
   if (!hasAutomationEnabled && !lead.next_action_key) {
     return (
       <div className="space-y-2">
@@ -140,11 +179,9 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           onClick={async () => {
             setIsEnabling(true);
             try {
-              // If no outbound yet, start with intro (send_pre_1), otherwise next step
               const hasOutbound = !!(lead as any).last_outbound_at;
               const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
               const nextLabel = stepLabels[nextKey] || "Intro Email";
-              // Use gap between steps from intervals
               const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
               const gapDays = stepIdx > 0 && stepIdx < intervals.length
                 ? intervals[stepIdx] - intervals[stepIdx - 1]
@@ -152,13 +189,11 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
               
               let eligibleAt: Date;
               if (gapDays === 0) {
-                // Immediate send — but ensure it's in the future
                 eligibleAt = new Date();
-                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5); // 5 min from now
+                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
               } else {
                 eligibleAt = addDays(new Date(), gapDays);
                 eligibleAt.setHours(9, 30, 0, 0);
-                // If the calculated time is in the past, push to tomorrow
                 if (eligibleAt.getTime() <= Date.now()) {
                   eligibleAt = addDays(eligibleAt, 1);
                 }
@@ -199,7 +234,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
     );
   }
 
-  // Automation is enabled — show status
+  // Automation enabled — show status
   return (
     <div className="space-y-3">
       {/* Header */}
@@ -257,14 +292,88 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
 
       <Separator className="bg-border/40" />
 
-      {/* Pause / Resume */}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={async () => {
-          setIsPausing(true);
-          try {
-            if (isPaused) {
+      {/* Safety paused: show Stop Sequence (red) + Resume (amber) */}
+      {safetyPaused ? (
+        <div className="space-y-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleStopSequence}
+            disabled={isStopping}
+            className="w-full text-xs h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+          >
+            {isStopping ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <Square className="h-3 w-3 mr-1" />
+            )}
+            Stop Sequence
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              setIsPausing(true);
+              try {
+                const freshBlockers = getAutomationBlockers(lead);
+                if (freshBlockers.length > 0) {
+                  toast.error(`Cannot resume: ${freshBlockers[0]}`);
+                  return;
+                }
+                const hasOutbound = !!(lead as any).last_outbound_at;
+                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+                const nextLabel = stepLabels[nextKey] || "Follow-up";
+                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+                const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                  ? intervals[stepIdx] - intervals[stepIdx - 1]
+                  : (hasOutbound ? 2 : 0);
+                let eligibleAt: Date;
+                if (gapDays === 0) {
+                  eligibleAt = new Date();
+                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+                } else {
+                  eligibleAt = addDays(new Date(), gapDays);
+                  eligibleAt.setHours(9, 30, 0, 0);
+                  if (eligibleAt.getTime() <= Date.now()) {
+                    eligibleAt = addDays(eligibleAt, 1);
+                  }
+                }
+                await supabase
+                  .from("leads")
+                  .update({
+                    needs_action: true,
+                    next_action_key: nextKey,
+                    next_action_label: nextLabel,
+                    eligible_at: eligibleAt.toISOString(),
+                  })
+                  .eq("id", lead.id);
+                toast.success("Automation resumed");
+                onUpdate();
+              } catch (err) {
+                console.error("Failed to resume automation:", err);
+              } finally {
+                setIsPausing(false);
+              }
+            }}
+            disabled={isPausing}
+            className="w-full text-xs h-7 text-muted-foreground"
+          >
+            {isPausing ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <Play className="h-3 w-3 mr-1" />
+            )}
+            Resume Anyway
+          </Button>
+        </div>
+      ) : userPaused ? (
+        /* User-paused: show Resume */
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={async () => {
+            setIsPausing(true);
+            try {
               const freshBlockers = getAutomationBlockers(lead);
               if (freshBlockers.length > 0) {
                 toast.error(`Cannot resume: ${freshBlockers[0]}`);
@@ -288,7 +397,6 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                   eligibleAt = addDays(eligibleAt, 1);
                 }
               }
-
               await supabase
                 .from("leads")
                 .update({
@@ -299,59 +407,79 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 })
                 .eq("id", lead.id);
               toast.success("Automation resumed");
-            } else {
+              onUpdate();
+            } catch (err) {
+              console.error("Failed to resume automation:", err);
+            } finally {
+              setIsPausing(false);
+            }
+          }}
+          disabled={isPausing}
+          className="w-full text-xs h-7 text-muted-foreground"
+        >
+          {isPausing ? (
+            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          ) : (
+            <Play className="h-3 w-3 mr-1" />
+          )}
+          Resume
+        </Button>
+      ) : (
+        /* Active: show Pause + Disable */
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              setIsPausing(true);
+              try {
+                await supabase
+                  .from("leads")
+                  .update({
+                    needs_action: false,
+                    eligible_at: null,
+                  })
+                  .eq("id", lead.id);
+                toast.success("Automation paused");
+                onUpdate();
+              } catch (err) {
+                console.error("Failed to pause automation:", err);
+              } finally {
+                setIsPausing(false);
+              }
+            }}
+            disabled={isPausing}
+            className="w-full text-xs h-7 text-muted-foreground"
+          >
+            {isPausing ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <Pause className="h-3 w-3 mr-1" />
+            )}
+            Pause
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
               await supabase
                 .from("leads")
                 .update({
                   needs_action: false,
+                  next_action_key: null,
+                  next_action_label: null,
                   eligible_at: null,
+                  action_reason_code: null,
                 })
                 .eq("id", lead.id);
-              toast.success("Automation paused");
-            }
-            onUpdate();
-          } catch (err) {
-            console.error("Failed to toggle automation:", err);
-          } finally {
-            setIsPausing(false);
-          }
-        }}
-        disabled={isPausing}
-        className="w-full text-xs h-7 text-muted-foreground"
-      >
-        {isPausing ? (
-          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-        ) : isPaused ? (
-          <Play className="h-3 w-3 mr-1" />
-        ) : (
-          <Pause className="h-3 w-3 mr-1" />
-        )}
-        {isPaused ? "Resume" : "Pause"}
-      </Button>
-
-      {/* Disable completely */}
-      {!isPaused && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={async () => {
-            await supabase
-              .from("leads")
-              .update({
-                needs_action: false,
-                next_action_key: null,
-                next_action_label: null,
-                eligible_at: null,
-                action_reason_code: null,
-              })
-              .eq("id", lead.id);
-            toast.success("Automation disabled");
-            onUpdate();
-          }}
-          className="w-full text-xs h-7 text-destructive/70 hover:text-destructive"
-        >
-          Disable Automation
-        </Button>
+              toast.success("Automation disabled");
+              onUpdate();
+            }}
+            className="w-full text-xs h-7 text-destructive/70 hover:text-destructive"
+          >
+            Disable Automation
+          </Button>
+        </>
       )}
     </div>
   );

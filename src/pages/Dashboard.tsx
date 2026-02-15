@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus, Sparkles, Mail, CalendarCheck, FileText } from "lucide-react";
+import { useAutomationPoller } from "@/hooks/useAutomationPoller";
 import { formatDistanceToNow } from "date-fns";
 import {
   EnrichedLead,
@@ -116,6 +117,9 @@ export default function Dashboard() {
   const [, setTick] = useState(0);
   const location = useLocation();
 
+  // Poll automation-executor every 60s while dashboard is open
+  useAutomationPoller();
+
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [activeStage, setActiveStage] = useState<DealStage | null>(null);
 
@@ -210,7 +214,11 @@ export default function Dashboard() {
     } else if (activeFilter === "warming_up") {
       result = metrics?.warmingUpLeads ?? [];
     } else if (activeFilter === "automation") {
-      result = result.filter((l) => l.nurture_mode === "auto" && l.nurture_status === "active");
+      result = result.filter((l) => {
+        const hasSequenceAutomation = !!(l as any).eligible_at && l.needs_action;
+        const hasNurtureAutomation = l.nurture_mode === "auto" && l.nurture_status === "active";
+        return hasSequenceAutomation || hasNurtureAutomation;
+      });
     }
 
     if (activeStage) {

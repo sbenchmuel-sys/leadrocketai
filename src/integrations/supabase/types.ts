@@ -14,6 +14,56 @@ export type Database = {
   }
   public: {
     Tables: {
+      automation_log: {
+        Row: {
+          action_key: string | null
+          ai_task: string | null
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          gmail_message_id: string | null
+          id: string
+          lead_id: string
+          owner_user_id: string
+          status: string
+          subject: string | null
+        }
+        Insert: {
+          action_key?: string | null
+          ai_task?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          gmail_message_id?: string | null
+          id?: string
+          lead_id: string
+          owner_user_id: string
+          status?: string
+          subject?: string | null
+        }
+        Update: {
+          action_key?: string | null
+          ai_task?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          gmail_message_id?: string | null
+          id?: string
+          lead_id?: string
+          owner_user_id?: string
+          status?: string
+          subject?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "automation_log_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contact_identities: {
         Row: {
           contact_id: string
@@ -569,6 +619,7 @@ export type Database = {
           stage: string
           status: string
           strategy: string
+          unsubscribed: boolean
         }
         Insert: {
           action_dismissed_at?: string | null
@@ -619,6 +670,7 @@ export type Database = {
           stage?: string
           status?: string
           strategy: string
+          unsubscribed?: boolean
         }
         Update: {
           action_dismissed_at?: string | null
@@ -669,6 +721,7 @@ export type Database = {
           stage?: string
           status?: string
           strategy?: string
+          unsubscribed?: boolean
         }
         Relationships: []
       }

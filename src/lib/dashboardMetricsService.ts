@@ -21,6 +21,7 @@ export type RefreshReason =
   | "motion_updated"
   | "strategy_changed"
   | "source_updated"
+  | "automation_send"
   | "manual";
 
 export interface DashboardMetrics {

@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format, differenceInDays } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus, EyeOff, Eye, Undo2 } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus, EyeOff, Eye, Undo2, Zap } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -16,7 +16,7 @@ interface TimelineTabProps {
 }
 
 /* ── Filter types ── */
-type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "notes";
+type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "notes" | "automation";
 
 const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -24,14 +24,16 @@ const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "meetings", label: "Meetings" },
   { value: "notes", label: "Notes" },
+  { value: "automation", label: "Automation" },
 ];
 
-function matchesFilter(type: string, filter: TimelineFilter): boolean {
+function matchesFilter(type: string, source: string, filter: TimelineFilter): boolean {
   if (filter === "all") return true;
   if (filter === "emails") return type === "email_inbound" || type === "email_outbound";
   if (filter === "whatsapp") return type === "whatsapp_inbound" || type === "whatsapp_outbound";
   if (filter === "meetings") return type === "meeting";
-  if (filter === "notes") return type === "note";
+  if (filter === "notes") return type === "note" || type === "system_note";
+  if (filter === "automation") return source === "automation";
   return true;
 }
 
@@ -183,6 +185,12 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <ChannelBadge type={item.type} />
+                  {item.source === "automation" && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      <Zap className="h-2.5 w-2.5" />
+                      Auto-sent
+                    </span>
+                  )}
                   <span className="text-[11px] text-muted-foreground">
                     {format(new Date(item.occurred_at), "MMM d · h:mm a")}
                   </span>
@@ -518,7 +526,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
   // Apply type filter
   const filteredInteractions = useMemo(() => {
     if (activeFilter === "all") return interactions;
-    return interactions.filter(i => matchesFilter(i.type, activeFilter));
+    return interactions.filter(i => matchesFilter(i.type, i.source || "", activeFilter));
   }, [interactions, activeFilter]);
 
   const entries = useMemo(() => groupIntoThreads(filteredInteractions), [filteredInteractions]);
