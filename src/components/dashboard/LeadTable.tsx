@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2, Leaf } from "lucide-react";
-import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType, REVENUE_STATE_LABELS, RevenueState } from "@/lib/dashboardUtils";
+import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { BulkAutomationDialog } from "./BulkAutomationDialog";
@@ -225,27 +225,35 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
 
   if (isLoading) {
     return (
-      <div className="border border-border rounded-md p-6">
-        <h3 className="text-sm font-semibold text-foreground mb-4">Conversations</h3>
-        <p className="text-muted-foreground text-center py-8">Loading...</p>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Leads</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground text-center py-8">Loading...</p>
+        </CardContent>
+      </Card>
     );
   }
 
   if (leads.length === 0) {
     return (
-      <div className="border border-border rounded-md p-6">
-        <h3 className="text-sm font-semibold text-foreground mb-4">Conversations</h3>
-        <div className="text-center py-8">
-          <p className="text-muted-foreground mb-4">No conversations in this state</p>
-          <Button asChild size="sm">
-            <Link to="/app/leads">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Your First Lead
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Leads</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-8">
+            <p className="text-muted-foreground mb-4">No leads match this filter</p>
+            <Button asChild>
+              <Link to="/app/leads">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Your First Lead
+              </Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -429,19 +437,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     );
   };
 
-  const revenueStateBadge: Record<RevenueState, string> = {
-    active: "text-foreground bg-muted/60",
-    action_required: "text-warning bg-warning/10",
-    heating_up: "text-success bg-success/10",
-    long_cycle: "text-muted-foreground bg-muted/40",
-  };
-
   return (
     <>
-      <div className="border border-border rounded-md overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
-          <h3 className="text-sm font-semibold text-foreground">Conversations</h3>
-          {selectedLeads.size > 0 && (
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle>Leads</CardTitle>
+            {selectedLeads.size > 0 && (
               <div className="flex items-center gap-2 animate-fade-in">
                 <span className="text-sm text-muted-foreground">
                   {selectedLeads.size} selected
@@ -609,10 +611,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
               </div>
             )}
           </div>
+        </CardHeader>
+        <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow className="text-xs border-b border-border/60">
-                <TableHead className="w-10 py-2 pl-4">
+                <TableHead className="w-1 p-0" />
+                <TableHead className="w-10 py-2">
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={handleSelectAll}
@@ -620,34 +625,35 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead className="py-2">Conversation</TableHead>
-                <TableHead className="py-2 hidden md:table-cell">Status</TableHead>
-                <TableHead className="py-2 hidden md:table-cell">Engagement</TableHead>
+                <TableHead className="py-2">Lead</TableHead>
+                <TableHead className="py-2">Phase</TableHead>
+                <TableHead className="py-2 hidden md:table-cell">Source</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
-                <TableHead className="py-2 hidden lg:table-cell">Revenue State</TableHead>
-                <TableHead className="py-2 text-right pr-4">Action</TableHead>
+                <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
+                <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                <TableHead className="py-2 text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.map((lead) => {
+              {leads.map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
+                const nurtureMode = (lead as any).nurture_mode;
+                const nurtureStatus = (lead as any).nurture_status;
+                const hasEligibleAt = !!(lead as any).eligible_at;
+                // Active: has eligible_at + needs_action, OR nurture auto mode
+                const isAutoRunning = (hasEligibleAt && lead.needs_action) || (nurtureMode === "auto" && nurtureStatus === "active");
+                const isReview = !isAutoRunning && nurtureMode === "review" && nurtureStatus === "active";
 
-                // Engagement indicator
-                const engagement = (() => {
-                  if (!lead.last_inbound_at) return { label: "No reply", className: "text-muted-foreground" };
-                  const hoursSince = (Date.now() - new Date(lead.last_inbound_at).getTime()) / (1000 * 60 * 60);
-                  if (hoursSince < 24) return { label: "High", className: "text-success font-medium" };
-                  if (hoursSince < 72) return { label: "Medium", className: "text-warning" };
-                  return { label: "Low", className: "text-muted-foreground" };
+                // Direction indicator based on activity recency
+                const directionArrow = (() => {
+                  if (lead.stage === "closed_won" || lead.stage === "closed_lost") return "";
+                  if (!lead.last_activity_at) return "";
+                  const daysSince = (Date.now() - new Date(lead.last_activity_at).getTime()) / (1000 * 60 * 60 * 24);
+                  if (daysSince <= 3 && (lead.last_inbound_at || lead.stage !== "new")) return " ↑";
+                  if (daysSince > 14) return " ↓";
+                  return " →";
                 })();
-
-                // Status text
-                const status = lead.needs_action
-                  ? (lead.next_action_label || "Action needed")
-                  : STAGE_LABELS[lead.stage as DealStage] ?? lead.stage;
-
-                const rs = lead.revenueState ?? "active";
 
                 return (
                   <TableRow
@@ -662,7 +668,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       navigate(`/app/leads/${lead.id}`);
                     }}
                   >
-                    <TableCell className="py-2 pl-4" onClick={(e) => e.stopPropagation()}>
+                    {/* Color bar */}
+                    <td className="w-0 p-0 relative">
+                      <div className={cn(
+                        "absolute left-0 top-0 bottom-0 w-1 rounded-r",
+                        SOURCE_TYPE_COLORS[lead.source_type]?.bar || "bg-muted-foreground/30"
+                      )} />
+                    </td>
+                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
@@ -670,7 +683,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       />
                     </TableCell>
 
-                    {/* Conversation */}
+                    {/* Lead */}
                     <TableCell className="py-2">
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
@@ -681,18 +694,26 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </div>
                     </TableCell>
 
-                    {/* Status */}
-                    <TableCell className="py-2 hidden md:table-cell">
-                      <p className="text-xs text-muted-foreground truncate max-w-[160px]">
-                        {status}
-                      </p>
+                    {/* Phase with mode dropdown */}
+                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                      <ModeDropdown
+                        leadId={lead.id}
+                        leadName={lead.name}
+                        currentPhase={lead.displayPhase}
+                        directionArrow={directionArrow}
+                        onNurtureSelect={() => setNurtureSwitchLead(lead)}
+                        onUpdated={onLeadUpdated}
+                      />
                     </TableCell>
 
-                    {/* Engagement */}
-                    <TableCell className="py-2 hidden md:table-cell">
-                      <span className={cn("text-xs", engagement.className)}>
-                        {engagement.label}
-                      </span>
+                    {/* Source */}
+                    <TableCell className="py-2 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
+                      <SourceDropdown
+                        leadId={lead.id}
+                        leadName={lead.name}
+                        currentSourceType={lead.source_type}
+                        onUpdated={onLeadUpdated}
+                      />
                     </TableCell>
 
                     {/* Last Activity */}
@@ -702,24 +723,37 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                       </span>
                     </TableCell>
 
-                    {/* Revenue State */}
+                    {/* Next Action */}
                     <TableCell className="py-2 hidden lg:table-cell">
-                      <Badge variant="secondary" className={cn(
-                        "text-[10px] px-1.5 py-0 h-5 border-0 font-medium",
-                        revenueStateBadge[rs]
-                      )}>
-                        {REVENUE_STATE_LABELS[rs]}
-                      </Badge>
+                      <p className="text-xs text-muted-foreground truncate max-w-[180px]">
+                        {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
+                      </p>
+                    </TableCell>
+
+                    {/* Automation Status */}
+                    <TableCell className="py-2 hidden lg:table-cell">
+                      {isAutoRunning ? (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-success/10 text-success border-0">
+                          <Zap className="h-3 w-3 mr-0.5" /> Auto
+                        </Badge>
+                      ) : isReview ? (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 bg-warning/10 text-warning border-0">
+                          Review
+                        </Badge>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">Off</span>
+                      )}
                     </TableCell>
 
                     {/* Action */}
-                    <TableCell className="py-2 text-right pr-4">{getActionButton(lead)}</TableCell>
+                    <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
                   </TableRow>
                 );
               })}
             </TableBody>
           </Table>
-      </div>
+        </CardContent>
+      </Card>
 
       {selectedLead && (
         <EmailActionDialog

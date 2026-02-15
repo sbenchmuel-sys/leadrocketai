@@ -36,7 +36,7 @@
     --input: 215 20% 16%;
     --ring: 217 91% 60%;
 
-    --radius: 0.5rem;
+    --radius: 1rem;
 
     /* Semantic colors */
     --success: 160 84% 39%;
@@ -46,10 +46,17 @@
     --info: 217 91% 60%;
     --info-foreground: 0 0% 100%;
 
-    /* Shadows — flat, no glow */
-    --shadow-sm: 0 1px 3px hsl(0 0% 0% / 0.2);
-    --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.25);
-    --shadow-lg: 0 8px 24px hsl(0 0% 0% / 0.3);
+    /* Card gradients */
+    --gradient-blue: linear-gradient(135deg, hsl(217 91% 60% / 0.12) 0%, hsl(217 91% 60% / 0.04) 100%);
+    --gradient-green: linear-gradient(135deg, hsl(160 84% 39% / 0.12) 0%, hsl(160 84% 39% / 0.04) 100%);
+    --gradient-orange: linear-gradient(135deg, hsl(38 92% 50% / 0.12) 0%, hsl(38 92% 50% / 0.04) 100%);
+    --gradient-purple: linear-gradient(135deg, hsl(239 84% 67% / 0.12) 0%, hsl(239 84% 67% / 0.04) 100%);
+
+    /* Shadows */
+    --shadow-sm: 0 2px 8px hsl(0 0% 0% / 0.25);
+    --shadow-md: 0 8px 24px hsl(0 0% 0% / 0.3);
+    --shadow-lg: 0 20px 40px hsl(0 0% 0% / 0.35);
+    --shadow-glow: 0 0 30px hsl(217 91% 60% / 0.15);
 
     --sidebar-background: 220 30% 7%;
     --sidebar-foreground: 215 20% 75%;
@@ -98,9 +105,15 @@
     --info: 217 91% 60%;
     --info-foreground: 0 0% 100%;
 
-    --shadow-sm: 0 1px 3px hsl(0 0% 0% / 0.3);
-    --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.35);
-    --shadow-lg: 0 8px 24px hsl(0 0% 0% / 0.4);
+    --gradient-blue: linear-gradient(135deg, hsl(217 91% 60% / 0.15) 0%, hsl(217 91% 60% / 0.05) 100%);
+    --gradient-green: linear-gradient(135deg, hsl(160 84% 39% / 0.15) 0%, hsl(160 84% 39% / 0.05) 100%);
+    --gradient-orange: linear-gradient(135deg, hsl(38 92% 50% / 0.15) 0%, hsl(38 92% 50% / 0.05) 100%);
+    --gradient-purple: linear-gradient(135deg, hsl(239 84% 67% / 0.15) 0%, hsl(239 84% 67% / 0.05) 100%);
+
+    --shadow-sm: 0 2px 8px hsl(0 0% 0% / 0.4);
+    --shadow-md: 0 8px 24px hsl(0 0% 0% / 0.45);
+    --shadow-lg: 0 20px 40px hsl(0 0% 0% / 0.5);
+    --shadow-glow: 0 0 30px hsl(217 91% 60% / 0.2);
 
     --sidebar-background: 220 30% 7%;
     --sidebar-foreground: 215 20% 75%;
@@ -134,9 +147,10 @@
 
 @layer utilities {
   .card-hover {
-    @apply transition-colors duration-200 ease-out;
+    @apply transition-all duration-300 ease-out;
   }
   .card-hover:hover {
-    background: hsl(var(--accent));
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px hsl(0 0% 0% / 0.35);
   }
 }
