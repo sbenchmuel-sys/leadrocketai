@@ -10,7 +10,7 @@ import { format, addDays } from "date-fns";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { getMotionIntervals } from "@/lib/cadenceSettingsTypes";
+import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
@@ -31,8 +31,16 @@ const INBOUND_STEP_LABELS: Record<string, string> = {
   send_pre_3: "Follow-up 2",
 };
 
+const NURTURE_STEP_LABELS: Record<string, string> = {
+  nurture_1: "Nurture Email 1",
+  nurture_2: "Nurture Email 2",
+  nurture_3: "Nurture Email 3",
+  nurture_4: "Nurture Email 4",
+};
+
 function getStepLabels(motion: string): Record<string, string> {
   if (motion === "inbound_response") return INBOUND_STEP_LABELS;
+  if (motion === "nurture") return NURTURE_STEP_LABELS;
   return OUTBOUND_STEP_LABELS;
 }
 
@@ -43,8 +51,41 @@ function getMaxSteps(motion: string): number {
 
 function getNextTwoSteps(lead: LeadDetail) {
   const motion = lead.motion || "outbound_prospecting";
-  const intervals = getMotionIntervals(motion);
   const stepLabels = getStepLabels(motion);
+  const eligibleAt = (lead as any).eligible_at ? new Date((lead as any).eligible_at) : null;
+
+  // Nurture uses cadence-based scheduling
+  if (motion === "nurture") {
+    const cadence = (lead as any).nurture_cadence || "biweekly";
+    const gapDays = getNurtureCadenceDays(cadence);
+    const actionKey = lead.next_action_key || "nurture_1";
+    const stepMatch = actionKey.match(/nurture_(\d+)/);
+    const stepNum = stepMatch ? parseInt(stepMatch[1], 10) : 1;
+
+    const steps: { key: string; label: string; date: Date }[] = [];
+    for (let i = 0; i < 2; i++) {
+      const num = stepNum + i;
+      const key = `nurture_${num}`;
+      const label = stepLabels[key] || `Nurture Email ${num}`;
+      let date: Date;
+      if (i === 0 && eligibleAt) {
+        date = eligibleAt;
+      } else {
+        const prevDate = i === 0 ? new Date() : steps[i - 1]?.date || new Date();
+        date = addDays(prevDate, gapDays);
+        date.setHours(9, 30, 0, 0);
+      }
+      if (date.getTime() <= Date.now()) {
+        date = new Date();
+        date.setMinutes(date.getMinutes() + 5);
+      }
+      steps.push({ key, label, date });
+    }
+    return steps;
+  }
+
+  // Outbound / Inbound uses interval-based scheduling
+  const intervals = getMotionIntervals(motion);
   const maxSteps = intervals.length;
 
   const actionKey = lead.next_action_key || "send_pre_1";
@@ -53,7 +94,6 @@ function getNextTwoSteps(lead: LeadDetail) {
 
   const steps: { key: string; label: string; date: Date }[] = [];
   const baseDate = lead.last_outbound_at ? new Date(lead.last_outbound_at) : new Date();
-  const eligibleAt = (lead as any).eligible_at ? new Date((lead as any).eligible_at) : null;
 
   for (let i = 0; i < 2; i++) {
     const idx = stepNum - 1 + i;
@@ -86,7 +126,7 @@ function getAutomationBlockers(lead: LeadDetail): string[] {
   const blockers: string[] = [];
   if (lead.last_inbound_at) blockers.push("Lead has replied");
   if (lead.has_future_meeting) blockers.push("Meeting scheduled");
-  if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response") blockers.push("Motion changed");
+  if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response" && lead.motion !== "nurture") blockers.push("Motion changed");
   const stage = lead.stage;
   if (stage === "closed_won" || stage === "closed_lost") blockers.push("Deal closed");
   return blockers;
@@ -111,7 +151,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const intervals = getMotionIntervals(motion || "outbound_prospecting");
   const stepLabels = getStepLabels(motion || "outbound_prospecting");
 
-  const isEligible = (motion === "outbound_prospecting" || motion === "inbound_response") &&
+  const isEligible = (motion === "outbound_prospecting" || motion === "inbound_response" || motion === "nurture") &&
     stage !== "closed_won" && stage !== "closed_lost";
 
   if (!isEligible) return null;
@@ -179,35 +219,56 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           onClick={async () => {
             setIsEnabling(true);
             try {
-              const hasOutbound = !!(lead as any).last_outbound_at;
-              const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-              const nextLabel = stepLabels[nextKey] || "Intro Email";
-              const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-              const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                ? intervals[stepIdx] - intervals[stepIdx - 1]
-                : (hasOutbound ? intervals[1] - intervals[0] : 0);
-              
-              let eligibleAt: Date;
-              if (gapDays === 0) {
-                eligibleAt = new Date();
-                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-              } else {
-                eligibleAt = addDays(new Date(), gapDays);
-                eligibleAt.setHours(9, 30, 0, 0);
-                if (eligibleAt.getTime() <= Date.now()) {
-                  eligibleAt = addDays(eligibleAt, 1);
-                }
-              }
+              let updateFields: Record<string, any>;
 
-              await supabase
-                .from("leads")
-                .update({
+              if (motion === "nurture") {
+                const cadence = (lead as any).nurture_cadence || "biweekly";
+                const gapDays = getNurtureCadenceDays(cadence);
+                const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
+                let eligibleAt = addDays(new Date(), gapDays);
+                eligibleAt.setHours(9, 30, 0, 0);
+                if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+
+                updateFields = {
+                  needs_action: true,
+                  next_action_key: `nurture_${stepNum}`,
+                  next_action_label: `Nurture Email ${stepNum}`,
+                  eligible_at: eligibleAt.toISOString(),
+                  action_reason_code: "NURTURE_DUE",
+                  nurture_status: "active",
+                  nurture_mode: (lead as any).nurture_mode || "review",
+                };
+              } else {
+                const hasOutbound = !!(lead as any).last_outbound_at;
+                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+                const nextLabel = stepLabels[nextKey] || "Intro Email";
+                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+                const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                  ? intervals[stepIdx] - intervals[stepIdx - 1]
+                  : (hasOutbound ? intervals[1] - intervals[0] : 0);
+                
+                let eligibleAt: Date;
+                if (gapDays === 0) {
+                  eligibleAt = new Date();
+                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+                } else {
+                  eligibleAt = addDays(new Date(), gapDays);
+                  eligibleAt.setHours(9, 30, 0, 0);
+                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+                }
+
+                updateFields = {
                   needs_action: true,
                   next_action_key: nextKey,
                   next_action_label: nextLabel,
                   eligible_at: eligibleAt.toISOString(),
                   action_reason_code: "FOLLOWUP_DUE",
-                })
+                };
+              }
+
+              await supabase
+                .from("leads")
+                .update(updateFields)
                 .eq("id", lead.id);
 
               toast.success("Automation enabled. Next step scheduled.");
@@ -320,32 +381,47 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                   toast.error(`Cannot resume: ${freshBlockers[0]}`);
                   return;
                 }
-                const hasOutbound = !!(lead as any).last_outbound_at;
-                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                const nextLabel = stepLabels[nextKey] || "Follow-up";
-                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-                const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                  ? intervals[stepIdx] - intervals[stepIdx - 1]
-                  : (hasOutbound ? 2 : 0);
-                let eligibleAt: Date;
-                if (gapDays === 0) {
-                  eligibleAt = new Date();
-                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-                } else {
-                  eligibleAt = addDays(new Date(), gapDays);
+                let updateFields: Record<string, any>;
+                if (motion === "nurture") {
+                  const cadence = (lead as any).nurture_cadence || "biweekly";
+                  const gapDays = getNurtureCadenceDays(cadence);
+                  const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
+                  let eligibleAt = addDays(new Date(), gapDays);
                   eligibleAt.setHours(9, 30, 0, 0);
-                  if (eligibleAt.getTime() <= Date.now()) {
-                    eligibleAt = addDays(eligibleAt, 1);
+                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+                  updateFields = {
+                    needs_action: true,
+                    next_action_key: `nurture_${stepNum}`,
+                    next_action_label: `Nurture Email ${stepNum}`,
+                    eligible_at: eligibleAt.toISOString(),
+                  };
+                } else {
+                  const hasOutbound = !!(lead as any).last_outbound_at;
+                  const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+                  const nextLabel = stepLabels[nextKey] || "Follow-up";
+                  const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+                  const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                    ? intervals[stepIdx] - intervals[stepIdx - 1]
+                    : (hasOutbound ? 2 : 0);
+                  let eligibleAt: Date;
+                  if (gapDays === 0) {
+                    eligibleAt = new Date();
+                    eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+                  } else {
+                    eligibleAt = addDays(new Date(), gapDays);
+                    eligibleAt.setHours(9, 30, 0, 0);
+                    if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
                   }
-                }
-                await supabase
-                  .from("leads")
-                  .update({
+                  updateFields = {
                     needs_action: true,
                     next_action_key: nextKey,
                     next_action_label: nextLabel,
                     eligible_at: eligibleAt.toISOString(),
-                  })
+                  };
+                }
+                await supabase
+                  .from("leads")
+                  .update(updateFields)
                   .eq("id", lead.id);
                 toast.success("Automation resumed");
                 onUpdate();
@@ -379,32 +455,47 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 toast.error(`Cannot resume: ${freshBlockers[0]}`);
                 return;
               }
-              const hasOutbound = !!(lead as any).last_outbound_at;
-              const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-              const nextLabel = stepLabels[nextKey] || "Follow-up";
-              const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-              const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                ? intervals[stepIdx] - intervals[stepIdx - 1]
-                : (hasOutbound ? 2 : 0);
-              let eligibleAt: Date;
-              if (gapDays === 0) {
-                eligibleAt = new Date();
-                eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-              } else {
-                eligibleAt = addDays(new Date(), gapDays);
+              let updateFields: Record<string, any>;
+              if (motion === "nurture") {
+                const cadence = (lead as any).nurture_cadence || "biweekly";
+                const gapDays = getNurtureCadenceDays(cadence);
+                const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
+                let eligibleAt = addDays(new Date(), gapDays);
                 eligibleAt.setHours(9, 30, 0, 0);
-                if (eligibleAt.getTime() <= Date.now()) {
-                  eligibleAt = addDays(eligibleAt, 1);
+                if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+                updateFields = {
+                  needs_action: true,
+                  next_action_key: `nurture_${stepNum}`,
+                  next_action_label: `Nurture Email ${stepNum}`,
+                  eligible_at: eligibleAt.toISOString(),
+                };
+              } else {
+                const hasOutbound = !!(lead as any).last_outbound_at;
+                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+                const nextLabel = stepLabels[nextKey] || "Follow-up";
+                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+                const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                  ? intervals[stepIdx] - intervals[stepIdx - 1]
+                  : (hasOutbound ? 2 : 0);
+                let eligibleAt: Date;
+                if (gapDays === 0) {
+                  eligibleAt = new Date();
+                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+                } else {
+                  eligibleAt = addDays(new Date(), gapDays);
+                  eligibleAt.setHours(9, 30, 0, 0);
+                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
                 }
-              }
-              await supabase
-                .from("leads")
-                .update({
+                updateFields = {
                   needs_action: true,
                   next_action_key: nextKey,
                   next_action_label: nextLabel,
                   eligible_at: eligibleAt.toISOString(),
-                })
+                };
+              }
+              await supabase
+                .from("leads")
+                .update(updateFields)
                 .eq("id", lead.id);
               toast.success("Automation resumed");
               onUpdate();

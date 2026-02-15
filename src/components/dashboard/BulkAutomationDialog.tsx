@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Zap, Loader2, AlertTriangle, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { EnrichedLead, MOTION_LABELS, Motion } from "@/lib/dashboardUtils";
-import { getMotionIntervals } from "@/lib/cadenceSettingsTypes";
+import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { addDays } from "date-fns";
@@ -56,7 +56,7 @@ function categorizeLead(lead: EnrichedLead): CategorizedLead {
 
   if (lead.stage === "closed_won" || lead.stage === "closed_lost") {
     flags.push({ reason: "closed", label: FLAG_LABELS.closed });
-  } else if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response") {
+  } else if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response" && lead.motion !== "nurture") {
     flags.push({ reason: "not_eligible_motion", label: `${FLAG_LABELS.not_eligible_motion} (${MOTION_LABELS[lead.motion as Motion] || lead.motion})` });
   }
 
@@ -70,6 +70,31 @@ function categorizeLead(lead: EnrichedLead): CategorizedLead {
 
 function computeAutomationFields(lead: EnrichedLead) {
   const motion = lead.motion || "outbound_prospecting";
+
+  // Nurture-specific scheduling
+  if (motion === "nurture") {
+    const cadence = (lead as any).nurture_cadence || "biweekly";
+    const gapDays = getNurtureCadenceDays(cadence);
+    const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
+
+    let eligibleAt = addDays(new Date(), gapDays);
+    eligibleAt.setHours(9, 30, 0, 0);
+    if (eligibleAt.getTime() <= Date.now()) {
+      eligibleAt = addDays(eligibleAt, 1);
+    }
+
+    return {
+      needs_action: true,
+      next_action_key: `nurture_${stepNum}`,
+      next_action_label: `Nurture Email ${stepNum}`,
+      eligible_at: eligibleAt.toISOString(),
+      action_reason_code: "NURTURE_DUE",
+      nurture_status: "active",
+      nurture_mode: (lead as any).nurture_mode || "review",
+    };
+  }
+
+  // Outbound / Inbound scheduling
   const intervals = getMotionIntervals(motion);
 
   const STEP_LABELS: Record<string, string> = motion === "inbound_response"
