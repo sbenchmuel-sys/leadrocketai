@@ -577,7 +577,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                             nurture_status: "active",
                             nurture_mode: "review",
                             nurture_cadence: "biweekly",
-                            needs_action: true,
+                            needs_action: false,
                             next_action_key: "nurture_1",
                             next_action_label: "Nurture Email 1",
                             eligible_at: eligibleAt.toISOString(),

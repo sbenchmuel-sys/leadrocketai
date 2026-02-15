@@ -209,18 +209,15 @@ export function classifyRevenueState(
     ? differenceInDays(now, parseISO(lead.created_at))
     : 0;
   const isLongCycle =
-    createdDaysAgo > 30 &&
+    createdDaysAgo > 60 &&
     lead.stage !== "closed_won" &&
     lead.stage !== "closed_lost";
-  // Low-frequency nurture or minimal recent activity
+  // Long cycle only if genuinely inactive (>14 days silence), regardless of motion
   if (isLongCycle) {
     const lastActDays = lead.last_activity_at
       ? differenceInDays(now, parseISO(lead.last_activity_at))
       : 999;
-    // Nurture motion counts as long cycle
-    if (lead.motion === "nurture") return "long_cycle";
-    // Minimal recent activity (>7 days silence)
-    if (lastActDays > 7) return "long_cycle";
+    if (lastActDays > 14) return "long_cycle";
   }
 
   // --- 4. ACTIVE (default) ---
