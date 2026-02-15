@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2 } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2, Leaf } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -546,6 +546,63 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
                 >
                   <Zap className="h-4 w-4 mr-1" />
                   Enable Automation
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={bulkUpdating || bulkDeleting}
+                  onClick={async () => {
+                    const selectedIds = Array.from(selectedLeads);
+                    if (selectedIds.length === 0) return;
+                    setBulkUpdating(true);
+                    try {
+                      const { getNurtureCadenceDays } = await import("@/lib/cadenceSettingsTypes");
+                      const gapDays = getNurtureCadenceDays("biweekly");
+                      let eligibleAt = new Date();
+                      eligibleAt.setDate(eligibleAt.getDate() + gapDays);
+                      eligibleAt.setHours(9, 30, 0, 0);
+                      if (eligibleAt.getTime() <= Date.now()) {
+                        eligibleAt.setDate(eligibleAt.getDate() + 1);
+                      }
+
+                      const updates = selectedIds.map((id) =>
+                        supabase
+                          .from("leads")
+                          .update({
+                            motion: "nurture",
+                            nurture_status: "active",
+                            nurture_mode: "review",
+                            nurture_cadence: "biweekly",
+                            needs_action: true,
+                            next_action_key: "nurture_1",
+                            next_action_label: "Nurture Email 1",
+                            eligible_at: eligibleAt.toISOString(),
+                            action_reason_code: "NURTURE_DUE",
+                            mode_changed_at: new Date().toISOString(),
+                          })
+                          .eq("id", id)
+                      );
+                      const results = await Promise.all(updates);
+                      const errors = results.filter((r) => r.error);
+                      if (errors.length > 0) {
+                        toast.error(`Failed to update ${errors.length} lead(s)`);
+                      } else {
+                        toast.success(`${selectedIds.length} lead${selectedIds.length > 1 ? "s" : ""} moved to Nurture`);
+                      }
+                      setSelectedLeads(new Set());
+                      onLeadUpdated?.();
+                    } catch (err) {
+                      console.error("Bulk nurture failed:", err);
+                      toast.error("Failed to move leads to nurture");
+                    } finally {
+                      setBulkUpdating(false);
+                    }
+                  }}
+                >
+                  <Leaf className="h-4 w-4 mr-1" />
+                  Move to Nurture
                 </Button>
                 
                 {(bulkUpdating || bulkDeleting || bulkSourceUpdating) && <Loader2 className="h-4 w-4 animate-spin" />}
