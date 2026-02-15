@@ -227,7 +227,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Leads</CardTitle>
+          <CardTitle className="text-sm font-medium text-muted-foreground">All Deals</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground text-center py-8">Loading...</p>
@@ -240,7 +240,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Leads</CardTitle>
+          <CardTitle className="text-sm font-medium text-muted-foreground">All Deals</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="text-center py-8">
@@ -440,7 +440,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated }: LeadTableProps) {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle>Leads</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">All Deals</CardTitle>
             {selectedLeads.size > 0 && (
               <div className="flex items-center gap-2 animate-fade-in">
                 <span className="text-sm text-muted-foreground">
