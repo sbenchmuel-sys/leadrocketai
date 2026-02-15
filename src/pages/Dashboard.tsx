@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
+import { ChevronRight } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
@@ -13,6 +14,7 @@ import { ActionQueue, classifyLead } from "@/components/dashboard/ActionQueue";
 import { AIFocusPanel } from "@/components/dashboard/AIFocusPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 import { STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
+import { cn } from "@/lib/utils";
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -24,6 +26,7 @@ export default function Dashboard() {
   useAutomationPoller();
 
   const [dashboardFilter, setDashboardFilter] = useState<DashboardFilter>("active");
+  const [dealsOpen, setDealsOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -136,8 +139,21 @@ export default function Dashboard() {
       {/* AI Focus */}
       <AIFocusPanel topItem={topFocusItem} />
 
-      {/* Lead Table */}
-      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
+      {/* All Deals — collapsible browse section */}
+      <div>
+        <button
+          onClick={() => setDealsOpen((o) => !o)}
+          className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", dealsOpen && "rotate-90")} />
+          All Deals ({filteredLeads.length})
+        </button>
+        {dealsOpen && (
+          <div className="mt-3">
+            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
