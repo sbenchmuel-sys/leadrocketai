@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-export type DashboardFilter = "active" | "need_you";
+export type DashboardFilter = "active" | "need_you" | "heating_up" | "at_risk";
 
 interface CommandStripProps {
   counts: Record<DashboardFilter, number>;
@@ -11,6 +11,8 @@ interface CommandStripProps {
 const segments: { key: DashboardFilter; label: string }[] = [
   { key: "active", label: "Active" },
   { key: "need_you", label: "Need You" },
+  { key: "heating_up", label: "Heating Up" },
+  { key: "at_risk", label: "At Risk" },
 ];
 
 export function CommandStrip({ counts, activeFilter, onFilterChange }: CommandStripProps) {

@@ -1,20 +1,32 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { ChevronRight } from "lucide-react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
-import type { EnrichedLead } from "@/lib/dashboardUtils";
+import { formatDistanceToNow } from "date-fns";
+import { differenceInDays, parseISO } from "date-fns";
+import {
+  EnrichedLead,
+  DealStage,
+} from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
   onDashboardRefresh,
   type DashboardMetrics,
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
-import { ActionQueue, classifyLead } from "@/components/dashboard/ActionQueue";
-import { AIFocusPanel } from "@/components/dashboard/AIFocusPanel";
+import { StageFilterBar, StageFilter } from "@/components/dashboard/StageFilterBar";
+import { PriorityActions } from "@/components/dashboard/PriorityActions";
+import { AIActivityFeed } from "@/components/dashboard/AIActivityFeed";
+import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
-import { STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
-import { cn } from "@/lib/utils";
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -26,7 +38,7 @@ export default function Dashboard() {
   useAutomationPoller();
 
   const [dashboardFilter, setDashboardFilter] = useState<DashboardFilter>("active");
-  const [dealsOpen, setDealsOpen] = useState(false);
+  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
 
   const loadData = useCallback(async () => {
     try {
@@ -59,101 +71,139 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  const filteredLeads = useMemo(() => {
+  // --- Dashboard filter logic ---
+  const dashboardFiltered = useMemo(() => {
+    const now = new Date();
     switch (dashboardFilter) {
       case "active":
         return leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
       case "need_you":
         return leads.filter((l) => l.needs_action);
+      case "heating_up":
+        return metrics?.warmingUpLeads ?? [];
+      case "at_risk":
+        return leads.filter((l) => {
+          if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
+          if (!l.last_outbound_at) {
+            if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
+            return false;
+          }
+          return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
+        });
       default:
         return leads;
     }
-  }, [leads, dashboardFilter]);
+  }, [leads, dashboardFilter, metrics?.warmingUpLeads]);
 
+  // --- Stage filter logic ---
+  const filteredLeads = useMemo(() => {
+    if (stageFilter === "all") return dashboardFiltered;
+    if (stageFilter === "nurture") {
+      return dashboardFiltered.filter((l) => l.motion === "nurture");
+    }
+    return dashboardFiltered.filter((l) => l.stage === stageFilter);
+  }, [dashboardFiltered, stageFilter]);
+
+  // --- Command strip counts ---
   const commandCounts = useMemo(() => {
+    const now = new Date();
     const active = leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
     return {
       active: active.length,
       need_you: leads.filter((l) => l.needs_action).length,
+      heating_up: (metrics?.warmingUpLeads ?? []).length,
+      at_risk: leads.filter((l) => {
+        if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
+        if (!l.last_outbound_at) {
+          if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
+          return false;
+        }
+        return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
+      }).length,
     };
-  }, [leads]);
+  }, [leads, metrics?.warmingUpLeads]);
 
-  const needYouCount = commandCounts.need_you;
+  // --- Stage filter counts (from dashboardFiltered) ---
+  const stageCounts = useMemo(() => {
+    const counts: Record<StageFilter, number> = {
+      all: dashboardFiltered.length,
+      new: 0,
+      contacted: 0,
+      engaged: 0,
+      post_meeting: 0,
+      nurture: 0,
+    };
+    dashboardFiltered.forEach((l) => {
+      if (l.motion === "nurture") counts.nurture++;
+      if (l.stage === "new") counts.new++;
+      else if (l.stage === "contacted") counts.contacted++;
+      else if (l.stage === "engaged") counts.engaged++;
+      else if (l.stage === "post_meeting") counts.post_meeting++;
+    });
+    return counts;
+  }, [dashboardFiltered]);
 
-  const topFocusItem = useMemo(() => {
-    for (const lead of filteredLeads) {
-      const item = classifyLead(lead);
-      if (item) {
-        const stage = STAGE_LABELS[item.lead.stage as DealStage] ?? item.lead.stage;
-        const buttonLabel =
-          item.actionType === "Reply" ? "Reply Now" :
-          item.actionType === "Call" ? "Call" :
-          item.actionType === "Send Proposal" ? "Send" :
-          item.actionType === "Follow-up" ? "Follow Up" : "Review";
-        return {
-          leadId: item.lead.id,
-          leadName: item.lead.name,
-          stage,
-          reason: item.reason,
-          buttonLabel,
-        };
-      }
-    }
-    return null;
-  }, [filteredLeads]);
+  const activeCount = commandCounts.active;
 
   return (
     <div className="space-y-6">
-      {/* Header — Action-focused */}
-      <div className="space-y-1">
-        <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-          You have {needYouCount} action{needYouCount !== 1 ? "s" : ""} pending.
-        </h1>
-        <p className="text-sm text-muted-foreground">Sorted by urgency.</p>
-        <div className="pt-2">
-          <Button
-            size="sm"
-            onClick={() => {
-              setDashboardFilter("need_you");
-              const el = document.getElementById("action-queue");
-              el?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
-          >
-            Review Actions
-          </Button>
+      {/* Greeting Header */}
+      <div className="flex items-start justify-between">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+            {getGreeting()}.
+          </h1>
+          <div className="flex items-center gap-2">
+            <p className="text-muted-foreground text-sm">
+              Your assistant is monitoring {activeCount} active lead{activeCount !== 1 ? "s" : ""}.
+            </p>
+            {lastRefreshedAt && (
+              <span className="text-xs text-muted-foreground/50">
+                · Updated {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
+              </span>
+            )}
+          </div>
         </div>
+        <Button asChild size="sm">
+          <Link to="/app/leads">
+            <Plus className="h-4 w-4 mr-1" />
+            Add Lead
+          </Link>
+        </Button>
       </div>
 
-      {/* Command Strip */}
+      {/* ROW 1 — Command Strip */}
       <CommandStrip
         counts={commandCounts}
         activeFilter={dashboardFilter}
-        onFilterChange={setDashboardFilter}
+        onFilterChange={(f) => {
+          setDashboardFilter(f);
+          setStageFilter("all");
+        }}
       />
 
-      {/* Action Queue */}
-      <div id="action-queue">
-        <ActionQueue leads={filteredLeads} onLeadUpdated={loadData} />
+      {/* ROW 2 — Stage Filter Bar */}
+      <StageFilterBar
+        counts={stageCounts}
+        activeStage={stageFilter}
+        onStageChange={setStageFilter}
+      />
+
+      {/* ROW 3 — Two Column Grid */}
+      <div className="grid gap-6 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
+        </div>
+        <div className="lg:col-span-2">
+          <AIActivityFeed leads={filteredLeads} />
+        </div>
       </div>
 
-      {/* AI Focus */}
-      <AIFocusPanel topItem={topFocusItem} />
+      {/* ROW 4 — AI Insight */}
+      <AIInsightPanel leads={filteredLeads} />
 
-      {/* All Deals — collapsible browse section */}
-      <div>
-        <button
-          onClick={() => setDealsOpen((o) => !o)}
-          className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", dealsOpen && "rotate-90")} />
-          All Deals ({filteredLeads.length})
-        </button>
-        {dealsOpen && (
-          <div className="mt-3">
-            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
-          </div>
-        )}
-      </div>
+      {/* Lead Table */}
+      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} />
     </div>
   );
 }
