@@ -1,69 +1,64 @@
 
-
-## Fix: Post-Breakup Re-engagement Generating Wrong Email Type
+## Fix: Re-engagement Email Should Use Lead Intelligence, Not Cold Intro
 
 ### Problem
 
-When the outbound sequence completes (breakup email sent) and the lead hasn't replied, clicking "Generate Draft" produces a nonsensical reply that addresses the lead's OLD inbound message as if they just responded (e.g., "Thanks for getting back to me, Manoj").
+The previous fix correctly identified that stale inbound leads shouldn't get `reply_to_thread`, but it falls back to `pre_email_1_intro` which is a **cold intro prompt** ("Cold Intro in an outbound prospecting cadence"). It generates a generic pitch ignoring all prior relationship context -- meetings held, email conversations, milestones extracted by AI analysis, and recommended next steps.
 
 ### Root Cause
 
-The playbook resolver's `deriveDefault` function (Rule 6) recommends `reply_to_thread` for any inbound-sourced lead (`contact_form`, `gmail_inbound`, `referral`) that has an email thread -- without checking whether the latest inbound is actually newer than the latest outbound. After a breakup email, the thread exists, the old inbound exists, so the system picks `reply_to_thread`. The AI then receives the stale inbound as `LATEST_INBOUND` and writes a reply to it.
+`pre_email_1_intro` prompt template in the edge function:
+- Says "Email 1 (Cold Intro)"
+- Only uses `{{LEAD_CONTEXT}}`, `{{REP_CONTEXT}}`, `{{KNOWLEDGE_CONTEXT}}`
+- Does NOT reference `{{MILESTONES}}`, `{{MEETING_CONTEXT}}`, `{{PREVIOUS_EMAIL_SUMMARY}}`, `{{BUYING_SIGNALS}}`, etc.
+- Even though the payload builder sends milestones/meeting data for all `pre_email` tasks, the prompt template for step 1 never renders them
 
 ### Solution
 
-Two changes fix this:
+Create a dedicated `re_engagement_intro` task type that is purpose-built for leads with existing relationship context. It will leverage milestones, meeting notes, buying signals, conversation history, and AI recommendations to craft a contextual re-engagement email -- not a cold pitch.
 
-**1. Fix `deriveDefault` in playbook resolver** (`src/lib/playbookResolver.ts`)
+### Changes
 
-For inbound-sourced leads with a thread, check whether the most recent inbound is actually newer than the most recent outbound before recommending `reply_to_thread`. If the outbound is newer (meaning the rep already replied and is waiting), fall through to the outbound follow-up logic instead.
+**1. Add `re_engagement_intro` to AITaskType** (`src/hooks/useAITask.ts`)
 
-This requires passing `ResolvedContext` into `deriveDefault` (it currently only uses a subset of fields). The function will compare `last_inbound_email.occurred_at` vs `last_outbound_email.occurred_at` and only recommend `reply_to_thread` when the inbound is genuinely the most recent message.
+Add the new type to the union.
 
-When the outbound is newer (post-breakup or post-follow-up state), use a re-engagement intro (`pre_email_1_intro`) to generate a fresh approach rather than replying to a stale message.
+**2. Update playbook resolver** (`src/lib/playbookResolver.ts`)
 
-**2. Add a safety check in `buildAIPayload`** (`src/lib/generateDraft.ts`)
+Change the fallback from `pre_email_1_intro` to `re_engagement_intro` when an inbound-sourced lead has a thread but outbound is newer (post-breakup/waiting state).
 
-When the task is `reply_to_thread`, verify that `latest_inbound` is actually a recent message (newer than last outbound). If it's stale, clear the `latest_inbound` field so the AI doesn't hallucinate a response to an old message.
+**3. Update payload builder** (`src/lib/generateDraft.ts`)
+
+Add `re_engagement_intro` to the condition that populates rich context (milestones, meeting context, buying signals, risk signals, previous email summary, etc.). Currently this block checks `taskType.includes("pre_email")` -- it needs to also match `re_engagement_intro`.
+
+Also include the AI-extracted recommendations (from `recommend_next_steps` analysis stored on the lead) so the prompt can reference them.
+
+**4. Add new prompt template in edge function** (`supabase/functions/ai_task/index.ts`)
+
+Create a `re_engagement_intro` prompt that:
+- Acknowledges the existing relationship (not cold)
+- References the most recent meeting or conversation context
+- Uses milestones and AI recommendations to pick a fresh angle
+- Keeps it concise (90-140 words) like follow-up emails
+- Includes deduplication against the last outbound
+- Uses the same greeting/sign-off conventions
+
+The prompt will use these template variables:
+- `{{LEAD_CONTEXT}}`, `{{REP_CONTEXT}}`, `{{KNOWLEDGE_CONTEXT}}`
+- `{{PREVIOUS_EMAIL_SUMMARY}}`, `{{LAST_OUTBOUND_BODY}}`
+- `{{MILESTONES}}`, `{{BUYING_SIGNALS}}`, `{{RISK_SIGNALS}}`
+- `{{MEETING_CONTEXT}}`, `{{ENGAGEMENT_LEVEL}}`, `{{DAYS_SINCE_ACTIVITY}}`
+- `{{MEETING_LINK}}`, `{{CUSTOM_INSTRUCTIONS}}`
+
+**5. Register in edge function task routing** (`supabase/functions/ai_task/index.ts`)
+
+Add `re_engagement_intro` to the `KNOWLEDGE_SEARCH_TASKS` array so it gets KB context.
 
 ### Technical Details
 
-**File: `src/lib/playbookResolver.ts`**
-
-Update `deriveDefault` to accept full context and add inbound-freshness check:
-
-```text
-Before:
-  if (source is inbound AND hasThread) -> reply_to_thread
-
-After:
-  if (source is inbound AND hasThread) {
-    if (last_inbound is newer than last_outbound) -> reply_to_thread
-    else -> pre_email_1_intro (re-engagement)
-  }
-```
-
-**File: `src/lib/generateDraft.ts`**
-
-In `buildAIPayload`, for `reply_to_thread`, add a staleness guard:
-
-```text
-if (taskType === "reply_to_thread") {
-  // Only include latest_inbound if it's genuinely newer than last outbound
-  const inboundTime = ctx.last_inbound_email?.occurred_at;
-  const outboundTime = ctx.last_outbound_email?.occurred_at;
-  if (inboundTime && outboundTime && new Date(inboundTime) > new Date(outboundTime)) {
-    payload.latest_inbound = ctx.last_inbound_email?.body_text || "";
-  } else {
-    payload.latest_inbound = "";  // prevent AI from addressing stale inbound
-  }
-}
-```
-
-### Files Modified
-
 | File | Change |
 |------|--------|
-| `src/lib/playbookResolver.ts` | Update `deriveDefault` to check inbound freshness before recommending `reply_to_thread`; fall back to re-engagement intro when outbound is newer |
-| `src/lib/generateDraft.ts` | Add staleness guard for `latest_inbound` in `buildAIPayload` to prevent AI from replying to old messages |
-
+| `src/hooks/useAITask.ts` | Add `"re_engagement_intro"` to `AITaskType` union |
+| `src/lib/playbookResolver.ts` | Change fallback intent from `pre_email_1_intro` to `re_engagement_intro` |
+| `src/lib/generateDraft.ts` | Extend the rich-context payload condition to include `re_engagement_intro`; add `recommendations_json` from lead data |
+| `supabase/functions/ai_task/index.ts` | Add `re_engagement_intro` prompt template and register in `KNOWLEDGE_SEARCH_TASKS` |
