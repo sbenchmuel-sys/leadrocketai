@@ -14,6 +14,7 @@ export type AITaskType =
   | "recommend_next_steps"
   | "linkedin_connect"
   | "linkedin_followup"
+  | "inbound_intro"
   | "pre_email_1_intro"
   | "pre_email_2_followup"
   | "pre_email_3_followup"
