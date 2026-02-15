@@ -119,7 +119,7 @@ export default function Dashboard() {
       {/* ROW 2 — Two Column Grid */}
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
-          <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
+          <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
         </div>
         <div className="lg:col-span-2">
           <AIActivityFeed leads={filteredLeads} />
