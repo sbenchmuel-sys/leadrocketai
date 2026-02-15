@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.reset-demo]
 verify_jwt = false
+
+[functions.automation-check]
+verify_jwt = false

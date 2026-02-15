@@ -1042,6 +1042,31 @@ serve(async (req) => {
           hasClosingKeywords = true;
         }
 
+        // Unsubscribe detection in inbound emails
+        if (direction === "inbound") {
+          const bodyLower = bodyText.toLowerCase();
+          if (/\bunsubscribe\b/.test(bodyLower) || /\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower)) {
+            console.log(`[gmail-sync] Lead ${leadId}: Unsubscribe keyword detected in inbound email`);
+            await serviceSupabase.from("leads").update({
+              unsubscribed: true,
+              needs_action: false,
+              eligible_at: null,
+              next_action_key: null,
+              next_action_label: null,
+              action_reason_code: null,
+              nurture_status: "inactive",
+            }).eq("id", leadId);
+
+            await serviceSupabase.from("interactions").insert({
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
+              body_text: "Lead requested to unsubscribe — automation stopped permanently.",
+              occurred_at: new Date().toISOString(),
+            });
+          }
+        }
+
         const { error: insertError } = await serviceSupabase
           .from("interactions")
           .insert({
