@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Mail, FileText, Eye, Send, X, RefreshCw } from "lucide-react";
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage, RevenueState } from "@/lib/dashboardUtils";
-import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { dismissLeadAction } from "@/lib/supabaseQueries";
 import { toast } from "sonner";
@@ -38,8 +37,7 @@ interface PriorityActionsProps {
 }
 
 export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpdated }: PriorityActionsProps) {
-  const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const navigate = useNavigate();
   const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
 
@@ -52,19 +50,16 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
       });
 
     if (revenueStateFilter === "action_required") {
-      // Show ALL action required leads (no limit)
       return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 5);
     }
 
     if (revenueStateFilter === "active") {
-      // Pull top 3 most urgent from action_required across all leads
       const actionPool = (allLeads ?? leads).filter(
         (l) => l.revenueState === "action_required" && l.needs_action
       );
       return sortByUrgency(actionPool).slice(0, 3);
     }
 
-    // Other states: show needs_action from filtered set, max 3
     return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 3);
   }, [leads, allLeads, revenueStateFilter]);
 
@@ -82,9 +77,8 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
     }
   };
 
-  const handleOpenEmailDialog = (lead: EnrichedLead) => {
-    setSelectedLead(lead);
-    setDialogOpen(true);
+  const handleNavigateToLead = (lead: EnrichedLead) => {
+    navigate(`/app/leads/${lead.id}`);
   };
 
   const getActionButton = (lead: EnrichedLead) => {
@@ -116,7 +110,7 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
     if (entry) {
       const Icon = entry.icon;
       return (
-        <Button size="sm" className="h-8 text-xs" onClick={() => handleOpenEmailDialog(lead)}>
+        <Button size="sm" className="h-8 text-xs" onClick={() => handleNavigateToLead(lead)}>
           <Icon className="h-3 w-3 mr-1" />
           {entry.label}
         </Button>
@@ -198,21 +192,6 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
           </div>
         )}
       </div>
-
-      {selectedLead && (
-        <EmailActionDialog
-          lead={selectedLead}
-          open={dialogOpen}
-          initialInstructions=""
-          onOpenChange={(open) => {
-            setDialogOpen(open);
-            if (!open) {
-              setSelectedLead(null);
-              onLeadUpdated?.();
-            }
-          }}
-        />
-      )}
 
       {nurtureSwitchLead && (
         <NurtureSwitchDialog
