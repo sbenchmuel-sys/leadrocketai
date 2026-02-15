@@ -4,18 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
 import { formatDistanceToNow } from "date-fns";
-import { differenceInDays, parseISO } from "date-fns";
-import {
-  EnrichedLead,
-  DealStage,
-} from "@/lib/dashboardUtils";
+import type { RevenueState } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
   onDashboardRefresh,
   type DashboardMetrics,
 } from "@/lib/dashboardMetricsService";
 import { CommandStrip, DashboardFilter } from "@/components/dashboard/CommandStrip";
-import { StageFilterBar, StageFilter } from "@/components/dashboard/StageFilterBar";
 import { PriorityActions } from "@/components/dashboard/PriorityActions";
 import { AIActivityFeed } from "@/components/dashboard/AIActivityFeed";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
@@ -37,8 +32,7 @@ export default function Dashboard() {
 
   useAutomationPoller();
 
-  const [dashboardFilter, setDashboardFilter] = useState<DashboardFilter>("active");
-  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
+  const [revenueStateFilter, setRevenueStateFilter] = useState<RevenueState>("active");
 
   const loadData = useCallback(async () => {
     try {
@@ -71,79 +65,22 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  // --- Dashboard filter logic ---
-  const dashboardFiltered = useMemo(() => {
-    const now = new Date();
-    switch (dashboardFilter) {
-      case "active":
-        return leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
-      case "need_you":
-        return leads.filter((l) => l.needs_action);
-      case "heating_up":
-        return metrics?.warmingUpLeads ?? [];
-      case "at_risk":
-        return leads.filter((l) => {
-          if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
-          if (!l.last_outbound_at) {
-            if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
-            return false;
-          }
-          return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
-        });
-      default:
-        return leads;
-    }
-  }, [leads, dashboardFilter, metrics?.warmingUpLeads]);
-
-  // --- Stage filter logic ---
+  // --- Centralized Revenue State filtering ---
   const filteredLeads = useMemo(() => {
-    if (stageFilter === "all") return dashboardFiltered;
-    if (stageFilter === "nurture") {
-      return dashboardFiltered.filter((l) => l.motion === "nurture");
-    }
-    return dashboardFiltered.filter((l) => l.stage === stageFilter);
-  }, [dashboardFiltered, stageFilter]);
+    return leads.filter((l) => l.revenueState === revenueStateFilter);
+  }, [leads, revenueStateFilter]);
 
-  // --- Command strip counts ---
-  const commandCounts = useMemo(() => {
-    const now = new Date();
-    const active = leads.filter((l) => l.stage !== "closed_won" && l.stage !== "closed_lost");
-    return {
-      active: active.length,
-      need_you: leads.filter((l) => l.needs_action).length,
-      heating_up: (metrics?.warmingUpLeads ?? []).length,
-      at_risk: leads.filter((l) => {
-        if (l.stage === "closed_won" || l.stage === "closed_lost") return false;
-        if (!l.last_outbound_at) {
-          if (l.created_at) return differenceInDays(now, parseISO(l.created_at)) > 14;
-          return false;
-        }
-        return differenceInDays(now, parseISO(l.last_outbound_at)) > 14;
-      }).length,
+  // --- Command strip counts from centralized metrics ---
+  const commandCounts = useMemo<Record<DashboardFilter, number>>(() => {
+    return metrics?.revenueStateCounts ?? {
+      active: 0,
+      action_required: 0,
+      heating_up: 0,
+      long_cycle: 0,
     };
-  }, [leads, metrics?.warmingUpLeads]);
+  }, [metrics?.revenueStateCounts]);
 
-  // --- Stage filter counts (from dashboardFiltered) ---
-  const stageCounts = useMemo(() => {
-    const counts: Record<StageFilter, number> = {
-      all: dashboardFiltered.length,
-      new: 0,
-      contacted: 0,
-      engaged: 0,
-      post_meeting: 0,
-      nurture: 0,
-    };
-    dashboardFiltered.forEach((l) => {
-      if (l.motion === "nurture") counts.nurture++;
-      if (l.stage === "new") counts.new++;
-      else if (l.stage === "contacted") counts.contacted++;
-      else if (l.stage === "engaged") counts.engaged++;
-      else if (l.stage === "post_meeting") counts.post_meeting++;
-    });
-    return counts;
-  }, [dashboardFiltered]);
-
-  const activeCount = commandCounts.active;
+  const activeCount = metrics?.active_count ?? 0;
 
   return (
     <div className="space-y-6">
@@ -175,15 +112,11 @@ export default function Dashboard() {
       {/* ROW 1 — Command Strip */}
       <CommandStrip
         counts={commandCounts}
-        activeFilter={dashboardFilter}
-        onFilterChange={(f) => {
-          setDashboardFilter(f);
-          setStageFilter("all");
-        }}
+        activeFilter={revenueStateFilter}
+        onFilterChange={setRevenueStateFilter}
       />
 
-
-      {/* ROW 3 — Two Column Grid */}
+      {/* ROW 2 — Two Column Grid */}
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
           <PriorityActions leads={filteredLeads} onLeadUpdated={loadData} />
@@ -193,7 +126,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ROW 4 — AI Insight */}
+      {/* ROW 3 — AI Insight */}
       <AIInsightPanel leads={filteredLeads} />
 
       {/* Lead Table */}

@@ -7,8 +7,8 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { differenceInDays, parseISO } from "date-fns";
-import type { EnrichedLead, DealStage, Motion } from "@/lib/dashboardUtils";
-import { enrichLead } from "@/lib/dashboardUtils";
+import type { EnrichedLead, DealStage, Motion, RevenueState } from "@/lib/dashboardUtils";
+import { enrichLead, classifyRevenueState } from "@/lib/dashboardUtils";
 
 // ============================================
 // TYPES
@@ -39,6 +39,9 @@ export interface DashboardMetrics {
   nurture_ready_count: number;
   /** Leads showing engagement + buying progress signals */
   warming_up_count: number;
+
+  // Revenue State counts
+  revenueStateCounts: Record<RevenueState, number>;
 
   // Underlying data for components that still need it
   leads: EnrichedLead[];
@@ -231,18 +234,39 @@ export async function getDashboardMetrics(
   const staleLeads = deriveStaleLeads(leads);
   const nurtureCandidates = deriveNurtureCandidates(leads);
   const warmingUpLeads = deriveWarmingUpLeads(leads);
-  const activeCount = leads.filter(
+  const warmingUpIds = new Set(warmingUpLeads.map((l) => l.id));
+
+  // Classify every lead into a Revenue State and stamp it
+  const openLeads = leads.filter(
     (l) => l.stage !== "closed_won" && l.stage !== "closed_lost"
-  ).length;
+  );
+
+  const revenueStateCounts: Record<RevenueState, number> = {
+    active: 0,
+    action_required: 0,
+    heating_up: 0,
+    long_cycle: 0,
+  };
+
+  for (const lead of leads) {
+    if (lead.stage === "closed_won" || lead.stage === "closed_lost") {
+      lead.revenueState = undefined;
+      continue;
+    }
+    const state = classifyRevenueState(lead, warmingUpIds);
+    lead.revenueState = state;
+    revenueStateCounts[state]++;
+  }
 
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,
-    active_count: activeCount,
+    active_count: openLeads.length,
     automation_running_count: deriveAutomationRunningCount(leads),
     momentum_score: deriveMomentumScore(leads),
     stale_count: staleLeads.length,
     nurture_ready_count: nurtureCandidates.length,
     warming_up_count: warmingUpLeads.length,
+    revenueStateCounts,
     leads,
     staleLeads,
     nurtureCandidates,
