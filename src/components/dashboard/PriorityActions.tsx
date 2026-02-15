@@ -125,7 +125,7 @@ export function PriorityActions({ leads, onLeadUpdated }: PriorityActionsProps) 
             <div className="space-y-1">
               <Zap className="h-5 w-5 text-muted-foreground/40 mx-auto" />
               <p className="text-sm text-muted-foreground">
-                All clear. No actions required.
+                No urgent actions. Assistant progressing deals autonomously.
               </p>
             </div>
           </div>

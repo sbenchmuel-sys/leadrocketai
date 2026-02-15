@@ -35,7 +35,7 @@ export function AIFocusPanel({ topItem, onAction }: AIFocusPanelProps) {
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          All clear. No actions required.
+          No actions pending. Assistant monitoring engagement patterns.
         </p>
       )}
     </div>
