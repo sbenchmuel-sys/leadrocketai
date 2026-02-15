@@ -1,18 +1,23 @@
 
 
-# Add Navigation Button to Onboarding Page
+# Fix CSV/Excel Import Issues
 
-## What Changes
-Add a small navigation link/button in the onboarding header area that lets users leave the onboarding flow:
-- If onboarding is already done (edge case), it links to `/app` (Dashboard)
-- Otherwise, it links to `/` (Homepage/Landing)
+## Changes
 
-## File to Modify
+### 1. File picker visibility (`LeadImportDialog.tsx` + `CreateLeadStep.tsx`)
+Update `accept` attributes to include Excel MIME types alongside extensions:
+```
+.csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel
+```
 
-**`src/pages/Onboarding.tsx`**
-- Add a button (e.g., a subtle ghost button with a home or arrow-left icon) in the top-left area of the progress header
-- Use `useAuth` to check `profile?.onboarding_done` to determine the destination (`/app` vs `/`)
-- Use `react-router-dom`'s `Link` or `useNavigate` for navigation
+### 2. Case-insensitive header matching (`parseLeadFile.ts`)
+Normalize ALL row keys before lookup in `mapRowToLead`:
+- Add a `normalizeRow()` helper that lowercases and trims all keys, storing values under canonical keys
+- Map common variations to canonical names (e.g. "first name", "firstname", "first_name" all become the same lookup)
+- This fixes Email, Company, Name, and every other column in one pass -- no more exact-case matching anywhere
 
-The button will sit above or beside the step indicator, styled as a minimal ghost/link button (e.g., "Back to Home" with an ArrowLeft icon) so it doesn't distract from the onboarding flow but remains accessible.
+### Files to modify
+- `src/lib/parseLeadFile.ts` -- normalize row keys before mapping
+- `src/components/leads/LeadImportDialog.tsx` -- update `accept` attribute
+- `src/components/onboarding/CreateLeadStep.tsx` -- update `accept` attribute
 
