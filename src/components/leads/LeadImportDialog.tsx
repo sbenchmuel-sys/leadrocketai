@@ -172,7 +172,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,.xlsx,.xls"
+                  accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   onChange={handleFileSelect}
                   className="hidden"
                 />
