@@ -161,6 +161,72 @@ export const DISPLAY_PHASE_ORDER: DisplayPhase[] = ["Prospecting", "Engaged", "P
 // Stage progression order for momentum calculation
 const STAGE_PROGRESSION_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won"];
 
+// ============================================
+// REVENUE CONTROL STATES
+// ============================================
+
+export type RevenueState = "action_required" | "heating_up" | "long_cycle" | "active";
+
+export const REVENUE_STATE_LABELS: Record<RevenueState, string> = {
+  action_required: "Action Required",
+  heating_up: "Heating Up",
+  long_cycle: "Long Cycle",
+  active: "Active",
+};
+
+/**
+ * Classify a lead into exactly ONE Revenue State.
+ * Priority order (highest → lowest): Action Required > Heating Up > Long Cycle > Active.
+ *
+ * Must be called AFTER enrichment so hasMeeting / stage / needs_action are populated.
+ * warmingUpIds is a pre-computed set from deriveWarmingUpLeads for consistency.
+ */
+export function classifyRevenueState(
+  lead: EnrichedLead,
+  warmingUpIds: Set<string>
+): RevenueState {
+  // --- 1. ACTION REQUIRED ---
+  if (lead.needs_action) return "action_required";
+  // Unreplied inbound (has inbound but last outbound is before last inbound)
+  if (lead.last_inbound_at) {
+    const inboundTs = new Date(lead.last_inbound_at).getTime();
+    const outboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+    if (inboundTs > outboundTs) return "action_required";
+  }
+  // Meeting completed with no follow-up sent (post_meeting stage, no outbound after meeting)
+  if (lead.stage === "post_meeting" && lead.hasMeeting) {
+    const lastActivity = new Date(lead.last_activity_at).getTime();
+    const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+    if (lastOutbound < lastActivity) return "action_required";
+  }
+
+  // --- 2. HEATING UP ---
+  if (warmingUpIds.has(lead.id)) return "heating_up";
+
+  // --- 3. LONG CYCLE ---
+  const now = new Date();
+  const createdDaysAgo = lead.created_at
+    ? differenceInDays(now, parseISO(lead.created_at))
+    : 0;
+  const isLongCycle =
+    createdDaysAgo > 30 &&
+    lead.stage !== "closed_won" &&
+    lead.stage !== "closed_lost";
+  // Low-frequency nurture or minimal recent activity
+  if (isLongCycle) {
+    const lastActDays = lead.last_activity_at
+      ? differenceInDays(now, parseISO(lead.last_activity_at))
+      : 999;
+    // Nurture motion counts as long cycle
+    if (lead.motion === "nurture") return "long_cycle";
+    // Minimal recent activity (>7 days silence)
+    if (lastActDays > 7) return "long_cycle";
+  }
+
+  // --- 4. ACTIVE (default) ---
+  return "active";
+}
+
 export interface EnrichedLead extends LeadListItem {
   stage: DealStage;
   needs_action: boolean;
@@ -177,6 +243,7 @@ export interface EnrichedLead extends LeadListItem {
   nurture_mode?: string;
   nurture_status?: string;
   eligible_at?: string | null;
+  revenueState?: RevenueState;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
