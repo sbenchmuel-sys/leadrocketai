@@ -168,7 +168,7 @@ serve(async (req) => {
         const hasMeeting = freshLead.has_future_meeting;
         const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
         const motionChanged = freshLead.motion !== "outbound_prospecting" && freshLead.motion !== "inbound_response" && freshLead.motion !== "nurture";
-        const statusInactive = freshLead.status !== "active";
+        const statusInactive = freshLead.status !== "active" && freshLead.status !== "new";
         const noLongerNeeded = !freshLead.needs_action || !freshLead.eligible_at;
 
         // Stop-on-reply for non-nurture leads

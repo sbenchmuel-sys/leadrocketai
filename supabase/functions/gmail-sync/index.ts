@@ -1272,14 +1272,27 @@ serve(async (req) => {
       shouldClearDismissal = true;
     }
 
+    // Check if lead has active automation scheduled (eligible_at in the future with needs_action true)
+    // If so, preserve automation fields instead of overwriting them
+    const { data: currentLeadState } = await serviceSupabase
+      .from("leads")
+      .select("eligible_at, needs_action")
+      .eq("id", leadId)
+      .single();
+
+    const hasActiveAutomation = currentLeadState?.needs_action === true
+      && currentLeadState?.eligible_at
+      && new Date(currentLeadState.eligible_at).getTime() > Date.now();
+
     // Update lead with computed values
     const leadUpdate: LeadUpdate & { auto_nurture_eligible?: boolean } = {
       stage,
-      needs_action: finalAction.needs_action,
-      next_action_key: finalAction.next_action_key,
-      next_action_label: finalAction.next_action_label,
-      eligible_at: finalAction.eligible_at,
-      action_reason_code: finalAction.action_reason_code,
+      // Preserve automation scheduling if active, otherwise use derived values
+      needs_action: hasActiveAutomation ? currentLeadState.needs_action : finalAction.needs_action,
+      next_action_key: hasActiveAutomation ? undefined : finalAction.next_action_key,
+      next_action_label: hasActiveAutomation ? undefined : finalAction.next_action_label,
+      eligible_at: hasActiveAutomation ? currentLeadState.eligible_at : finalAction.eligible_at,
+      action_reason_code: hasActiveAutomation ? undefined : finalAction.action_reason_code,
       first_outbound_at: metrics.first_outbound_at,
       last_outbound_at: metrics.last_outbound_at,
       last_inbound_at: metrics.last_inbound_at,
