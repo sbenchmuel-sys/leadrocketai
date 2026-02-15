@@ -92,7 +92,7 @@ export default function Dashboard() {
           </h1>
           <div className="flex items-center gap-2">
             <p className="text-muted-foreground text-sm">
-              Your assistant is monitoring {activeCount} active lead{activeCount !== 1 ? "s" : ""}.
+              Your assistant is monitoring {activeCount} open lead{activeCount !== 1 ? "s" : ""}.
             </p>
             {lastRefreshedAt && (
               <span className="text-xs text-muted-foreground/50">
