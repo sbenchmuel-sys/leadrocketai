@@ -217,16 +217,22 @@ export function useGmailSync() {
         // Get current lead data
         const { data: leadData } = await supabase
           .from("leads")
-          .select("email, stage, first_outbound_at")
+          .select("email, stage, first_outbound_at, eligible_at, needs_action")
           .eq("id", leadId)
           .single();
 
         if (leadData) {
+          // Check if lead has active automation (future eligible_at)
+          const hasActiveAutomation = leadData.needs_action === true
+            && leadData.eligible_at
+            && new Date(leadData.eligible_at).getTime() > Date.now();
+
           // Optimistic update: move from "new" to "outreach" stage, update timestamps
           const updates: Record<string, unknown> = {
             last_activity_at: new Date().toISOString(),
             last_outbound_at: new Date().toISOString(),
-            needs_action: false, // Clear action flag since we just took action
+            // Only clear action flag if no active automation is scheduled
+            ...(hasActiveAutomation ? {} : { needs_action: false }),
           };
 
           // If this is a new lead or hasn't been contacted, mark first outbound
