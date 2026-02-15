@@ -16,7 +16,6 @@ Deno.serve(async (req) => {
   );
 
   try {
-    // Get all workspaces
     const { data: workspaces, error: wsErr } = await supabase
       .from("workspaces")
       .select("id");
@@ -31,7 +30,6 @@ Deno.serve(async (req) => {
     let computed = 0;
 
     for (const ws of workspaces) {
-      // Get all reps in workspace
       const { data: members } = await supabase
         .from("workspace_members")
         .select("user_id, role")
@@ -44,7 +42,6 @@ Deno.serve(async (req) => {
       for (const rep of reps) {
         const repMetrics = await computeRepMetrics(supabase, ws.id, rep.user_id);
 
-        // Upsert into manager_views
         const { error: upsertErr } = await supabase
           .from("manager_views")
           .upsert(
@@ -79,58 +76,57 @@ Deno.serve(async (req) => {
   }
 });
 
-async function computeRepMetrics(supabase: any, workspaceId: string, repUserId: string) {
-  // 1. Conversations owned by this rep
-  const { data: conversations } = await supabase
-    .from("conversations")
-    .select("id, channel, status, last_message_at, message_count, contact_id")
-    .eq("workspace_id", workspaceId)
+async function computeRepMetrics(supabase: any, _workspaceId: string, repUserId: string) {
+  // 1. Get all leads owned by this rep
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("id, stage, status, deal_outlook, last_inbound_at, last_outbound_at, first_outbound_at, name")
     .eq("owner_user_id", repUserId);
 
-  const convos = conversations ?? [];
-  const convoIds = convos.map((c: any) => c.id);
+  const allLeads = leads ?? [];
+  const leadIds = allLeads.map((l: any) => l.id);
 
-  // 2. Get all analysis records for these conversations (no message body access)
-  const { data: analyses } = await supabase
-    .from("conversation_analysis")
-    .select("conversation_id, contact_id, sentiment, urgency, topics, extracted_features, recommended_reply_channel, summary_short")
-    .eq("workspace_id", workspaceId)
-    .in("conversation_id", convoIds.length ? convoIds : ["__none__"]);
+  // 2. Get all interactions for these leads
+  const { data: interactions } = await supabase
+    .from("interactions")
+    .select("id, lead_id, type, direction, source, occurred_at")
+    .in("lead_id", leadIds.length ? leadIds : ["__none__"])
+    .order("occurred_at", { ascending: true });
 
-  const allAnalyses = analyses ?? [];
+  const allInteractions = interactions ?? [];
 
-  // 3. Compute needs-reply: conversations where latest direction is inbound
-  // We use message metadata (direction only, no body access)
-  let needsReplyCount = 0;
-  for (const convo of convos) {
-    if (convo.status !== "open") continue;
-    const { data: latestMsg } = await supabase
-      .from("messages")
-      .select("direction")
-      .eq("conversation_id", convo.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  // 3. Get meeting summaries for this rep
+  const { data: meetingSummaries } = await supabase
+    .from("meeting_summaries")
+    .select("id, lead_id")
+    .eq("user_id", repUserId);
 
-    if (latestMsg?.direction === "inbound") needsReplyCount++;
+  const allMeetings = meetingSummaries ?? [];
+
+  // --- Emails sent / received ---
+  let totalSent = 0;
+  let totalReceived = 0;
+  for (const i of allInteractions) {
+    if (i.type === "email_outbound" || i.direction === "outbound") totalSent++;
+    else if (i.type === "email_inbound" || i.direction === "inbound") totalReceived++;
   }
 
-  // 4. Response time: compute from message timestamps (metadata only)
+  // --- Response time (inbound → next outbound per lead) ---
+  const interactionsByLead: Record<string, any[]> = {};
+  for (const i of allInteractions) {
+    if (!interactionsByLead[i.lead_id]) interactionsByLead[i.lead_id] = [];
+    interactionsByLead[i.lead_id].push(i);
+  }
+
   const responseTimes: number[] = [];
-  for (const convo of convos.slice(0, 20)) {
-    // Sample up to 20 convos for performance
-    const { data: msgs } = await supabase
-      .from("messages")
-      .select("direction, created_at")
-      .eq("conversation_id", convo.id)
-      .order("created_at", { ascending: true })
-      .limit(50);
-
-    if (!msgs?.length) continue;
-
+  for (const msgs of Object.values(interactionsByLead)) {
     for (let i = 1; i < msgs.length; i++) {
-      if (msgs[i - 1].direction === "inbound" && msgs[i].direction === "outbound") {
-        const diff = new Date(msgs[i].created_at).getTime() - new Date(msgs[i - 1].created_at).getTime();
+      const prev = msgs[i - 1];
+      const curr = msgs[i];
+      const prevIsInbound = prev.type === "email_inbound" || prev.direction === "inbound";
+      const currIsOutbound = curr.type === "email_outbound" || curr.direction === "outbound";
+      if (prevIsInbound && currIsOutbound) {
+        const diff = new Date(curr.occurred_at).getTime() - new Date(prev.occurred_at).getTime();
         responseTimes.push(diff / (1000 * 60)); // minutes
       }
     }
@@ -139,122 +135,105 @@ async function computeRepMetrics(supabase: any, workspaceId: string, repUserId: 
   const avgResponseTime = responseTimes.length
     ? responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length
     : 0;
-  const medianResponseTime = responseTimes.length
-    ? responseTimes.sort((a, b) => a - b)[Math.floor(responseTimes.length / 2)]
+  const sortedRT = [...responseTimes].sort((a, b) => a - b);
+  const medianResponseTime = sortedRT.length
+    ? sortedRT[Math.floor(sortedRT.length / 2)]
     : 0;
 
-  // 5. Aggregate from analysis records
-  const sentimentDist: Record<string, number> = {};
-  const urgencyDist: Record<string, number> = {};
-  const objectionFreq: Record<string, number> = {};
-  const topicCounts: Record<string, number> = {};
-  let highGhostRisk = 0;
-  let mediumGhostRisk = 0;
-  const ghostRiskContacts: Array<{ contact_id: string; summary: string; risk: string }> = [];
-  const channelMetrics: Record<string, { sent: number; received: number; conversations: number }> = {};
-
-  for (const a of allAnalyses) {
-    // Sentiment
-    const s = a.sentiment ?? "neutral";
-    sentimentDist[s] = (sentimentDist[s] ?? 0) + 1;
-
-    // Urgency
-    const u = a.urgency ?? "medium";
-    urgencyDist[u] = (urgencyDist[u] ?? 0) + 1;
-
-    // Objections
-    const features = (a.extracted_features ?? {}) as Record<string, any>;
-    const objections = features.objections ?? [];
-    for (const obj of objections) {
-      // Normalize to keyword
-      const key = String(obj).toLowerCase().replace(/[^a-z0-9 ]/g, "").trim().split(" ").slice(0, 3).join("_");
-      if (key) objectionFreq[key] = (objectionFreq[key] ?? 0) + 1;
-    }
-
-    // Ghosting risk
-    const ghostRisk = features.ghosting_risk ?? "low";
-    if (ghostRisk === "high") {
-      highGhostRisk++;
-      ghostRiskContacts.push({
-        contact_id: a.contact_id,
-        summary: a.summary_short ?? "",
-        risk: "high",
-      });
-    } else if (ghostRisk === "medium") {
-      mediumGhostRisk++;
-      if (ghostRiskContacts.length < 10) {
-        ghostRiskContacts.push({
-          contact_id: a.contact_id,
-          summary: a.summary_short ?? "",
-          risk: "medium",
-        });
-      }
-    }
-
-    // Topics
-    for (const t of a.topics ?? []) {
-      topicCounts[t] = (topicCounts[t] ?? 0) + 1;
+  // --- Needs reply: leads where last interaction is inbound and status != closed ---
+  let needsReplyCount = 0;
+  for (const lead of allLeads) {
+    if (lead.status === "closed") continue;
+    const leadMsgs = interactionsByLead[lead.id];
+    if (!leadMsgs?.length) continue;
+    const last = leadMsgs[leadMsgs.length - 1];
+    if (last.type === "email_inbound" || last.direction === "inbound") {
+      needsReplyCount++;
     }
   }
 
-  // Channel metrics from conversations
-  for (const convo of convos) {
-    const ch = convo.channel ?? "whatsapp";
-    if (!channelMetrics[ch]) {
-      channelMetrics[ch] = { sent: 0, received: 0, conversations: 0 };
-    }
-    channelMetrics[ch].conversations++;
-  }
-
-  // Count sent/received per channel from message metadata
-  for (const convo of convos) {
-    const ch = convo.channel ?? "whatsapp";
-    const { data: dirCounts } = await supabase
-      .from("messages")
-      .select("direction")
-      .eq("conversation_id", convo.id);
-
-    if (dirCounts) {
-      for (const m of dirCounts) {
-        if (m.direction === "outbound") channelMetrics[ch].sent++;
-        else channelMetrics[ch].received++;
-      }
-    }
-  }
-
-  // Stage distribution: from analysis deal_stage
+  // --- Stage distribution ---
   const stageDist: Record<string, number> = {};
-  for (const a of allAnalyses) {
-    const features = (a.extracted_features ?? {}) as Record<string, any>;
-    const stage = features.deal_stage ?? "unknown";
+  for (const lead of allLeads) {
+    const stage = lead.stage ?? "new";
     stageDist[stage] = (stageDist[stage] ?? 0) + 1;
   }
 
-  // Top topics sorted
-  const topTopics = Object.entries(topicCounts)
+  // --- Channel metrics from interactions.source ---
+  const channelMetrics: Record<string, { sent: number; received: number; conversations: number }> = {};
+  const channelLeads: Record<string, Set<string>> = {};
+  for (const i of allInteractions) {
+    const ch = i.source ?? "email";
+    if (!channelMetrics[ch]) {
+      channelMetrics[ch] = { sent: 0, received: 0, conversations: 0 };
+      channelLeads[ch] = new Set();
+    }
+    channelLeads[ch].add(i.lead_id);
+    if (i.type === "email_outbound" || i.direction === "outbound") channelMetrics[ch].sent++;
+    else channelMetrics[ch].received++;
+  }
+  for (const [ch, leads_set] of Object.entries(channelLeads)) {
+    channelMetrics[ch].conversations = leads_set.size;
+  }
+
+  // --- Ghost risk: leads with last inbound > last outbound and no outbound in 14+ days ---
+  const now = Date.now();
+  const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+  let highGhostRisk = 0;
+  let mediumGhostRisk = 0;
+  const ghostRiskContacts: Array<{ contact_id: string; summary: string; risk: string }> = [];
+
+  for (const lead of allLeads) {
+    if (lead.status === "closed") continue;
+    const lastInbound = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+    const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+
+    if (lastInbound > 0 && lastInbound > lastOutbound) {
+      const daysSinceOutbound = lastOutbound > 0 ? (now - lastOutbound) / (1000 * 60 * 60 * 24) : 999;
+      if (daysSinceOutbound >= 14) {
+        highGhostRisk++;
+        ghostRiskContacts.push({ contact_id: lead.id, summary: lead.name, risk: "high" });
+      } else if (daysSinceOutbound >= 7) {
+        mediumGhostRisk++;
+        if (ghostRiskContacts.length < 10) {
+          ghostRiskContacts.push({ contact_id: lead.id, summary: lead.name, risk: "medium" });
+        }
+      }
+    }
+  }
+
+  // --- Sentiment from deal_outlook ---
+  const sentimentDist: Record<string, number> = {};
+  for (const lead of allLeads) {
+    const s = lead.deal_outlook ?? "neutral";
+    sentimentDist[s] = (sentimentDist[s] ?? 0) + 1;
+  }
+
+  // --- Active leads (not closed) ---
+  const activeLeads = allLeads.filter((l: any) => l.status !== "closed").length;
+
+  // --- Top topics: derive from lead stages as basic topics ---
+  const topTopics = Object.entries(stageDist)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([topic, count]) => ({ topic, count }));
-
-  const totalSent = Object.values(channelMetrics).reduce((s, c) => s + c.sent, 0);
-  const totalReceived = Object.values(channelMetrics).reduce((s, c) => s + c.received, 0);
 
   return {
     avg_response_time_minutes: Math.round(avgResponseTime * 10) / 10,
     median_response_time_minutes: Math.round(medianResponseTime * 10) / 10,
     needs_reply_count: needsReplyCount,
     stage_distribution: stageDist,
-    objection_frequency: objectionFreq,
+    objection_frequency: {},
     high_ghost_risk_count: highGhostRisk,
     medium_ghost_risk_count: mediumGhostRisk,
     ghost_risk_contacts: ghostRiskContacts,
     channel_metrics: channelMetrics,
-    total_conversations: convos.length,
+    total_conversations: leadIds.length,
     total_messages_sent: totalSent,
     total_messages_received: totalReceived,
-    active_conversations: convos.filter((c: any) => c.status === "open").length,
+    active_conversations: activeLeads,
     sentiment_distribution: sentimentDist,
-    urgency_distribution: urgencyDist,
+    urgency_distribution: {},
     top_topics: topTopics,
   };
 }
