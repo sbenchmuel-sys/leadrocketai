@@ -17,9 +17,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 // ─── Priority tiers ───────────────────────────────────────────
-type ActionType = "Reply" | "Follow-up" | "Send Proposal" | "Call" | "Review";
+export type ActionType = "Reply" | "Follow-up" | "Send Proposal" | "Call" | "Review";
 
-interface QueueItem {
+export interface QueueItem {
   lead: EnrichedLead;
   priority: number;
   reason: string;
@@ -38,7 +38,7 @@ function formatDuration(hours: number): string {
   return `${days}d`;
 }
 
-function classifyLead(lead: EnrichedLead): QueueItem | null {
+export function classifyLead(lead: EnrichedLead): QueueItem | null {
   const now = Date.now();
 
   // Skip closed leads
