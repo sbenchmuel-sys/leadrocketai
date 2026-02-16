@@ -26,6 +26,7 @@ import { generateDraft } from "@/lib/generateDraft";
 interface DraftsTabProps {
   lead: LeadDetail;
   onUpdate: () => void;
+  onActionComplete?: () => void;
 }
 
 interface Draft {
@@ -179,7 +180,7 @@ function deriveWhatsAppIntent(lead: LeadDetail): IntentSuggestion {
 // Main Component
 // ============================================
 
-export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
+export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTabProps) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [channel, setChannel] = useState<Channel>("email");
@@ -641,6 +642,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         onSuccess={() => {
           onUpdate();
           loadDrafts();
+          onActionComplete?.();
         }}
         initialInstructions={composerNote}
       />

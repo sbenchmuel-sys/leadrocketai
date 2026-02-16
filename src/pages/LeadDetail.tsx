@@ -25,13 +25,22 @@ export default function LeadDetail() {
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
 
+  const backRoute = originContext === "leads" ? "/app/leads" : originContext === "inbox" ? "/app/inbox" : "/app";
+
+  const handleActionComplete = async () => {
+    await loadLead();
+    setRefreshKey(prev => prev + 1);
+    // Navigate back to origin after successful primary action
+    navigate(backRoute);
+  };
+
   const handleDelete = async () => {
     if (!id) return;
     setIsDeleting(true);
     try {
       await deleteLead(id);
       toast.success("Lead deleted successfully");
-      navigate("/app/leads");
+      navigate(backRoute);
     } catch (err) {
       toast.error("Failed to delete lead");
     } finally {
@@ -110,7 +119,7 @@ export default function LeadDetail() {
               <TimelineTab leadId={lead.id} onWhatsAppReply={handleUpdate} />
             </TabsContent>
             <TabsContent value="drafts" className="mt-6">
-              <DraftsTab lead={lead} onUpdate={handleUpdate} />
+              <DraftsTab lead={lead} onUpdate={handleUpdate} onActionComplete={handleActionComplete} />
             </TabsContent>
             <TabsContent value="meetings" className="mt-6">
               <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
