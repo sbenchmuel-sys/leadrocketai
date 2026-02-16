@@ -63,10 +63,42 @@ export default function Settings() {
               </div>
             </div>
           </AccordionTrigger>
-          <AccordionContent className="space-y-4">
-            <GmailConnectionCard />
-            <WhatsAppConnectionCard />
-            <ZoomMeetingSyncCard />
+          <AccordionContent>
+            <Accordion type="multiple" defaultValue={[]} className="space-y-2">
+              <AccordionItem value="gmail" className="border rounded-lg px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Gmail</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <GmailConnectionCard />
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="whatsapp" className="border rounded-lg px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">WhatsApp</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <WhatsAppConnectionCard />
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="zoom" className="border rounded-lg px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <Video className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Zoom Meeting Sync</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <ZoomMeetingSyncCard />
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </AccordionContent>
         </AccordionItem>
 
