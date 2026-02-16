@@ -3,6 +3,8 @@
 
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
+import { isDemoMode } from '@/lib/demoMode';
+import { getDemoLeadDetail, getDemoInteractions, getDemoDrafts } from '@/lib/demoData';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Lead = Database['public']['Tables']['leads']['Row'];
@@ -134,6 +136,11 @@ export type LeadDetail = Pick<Lead,
 export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
   if (!leadId) throw new Error('Missing leadId');
 
+  if (isDemoMode()) {
+    const demo = getDemoLeadDetail(leadId);
+    if (!demo) throw new Error('Lead not found');
+    return demo as unknown as LeadDetail;
+  }
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) throw new Error('Not logged in');
@@ -168,6 +175,7 @@ export interface CreateLeadInput {
 }
 
 export async function createLead(form: CreateLeadInput): Promise<{ id: string }> {
+  if (isDemoMode()) return { id: 'demo-blocked' };
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) throw new Error('Not logged in');
@@ -225,6 +233,7 @@ export async function updateLeadPrefs(leadId: string, form: UpdateLeadPrefsInput
 }
 
 export async function deleteLead(leadId: string): Promise<void> {
+  if (isDemoMode()) return;
   if (!leadId) throw new Error('Missing leadId');
 
   const { error } = await supabase
@@ -247,6 +256,10 @@ export type InteractionItem = Pick<Interaction,
 export async function getLeadInteractions(leadId: string, includeHidden = false): Promise<InteractionItem[]> {
   if (!leadId) throw new Error('Missing leadId');
 
+  if (isDemoMode()) {
+    return getDemoInteractions(leadId) as unknown as InteractionItem[];
+  }
+
   let query = supabase
     .from('interactions')
     .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, hidden')
@@ -264,6 +277,7 @@ export async function getLeadInteractions(leadId: string, includeHidden = false)
 }
 
 export async function hideInteraction(interactionId: string): Promise<void> {
+  if (isDemoMode()) return;
   const { error } = await supabase
     .from('interactions')
     .update({ hidden: true })
@@ -291,6 +305,7 @@ export interface InsertInteractionInput {
 }
 
 export async function insertInteraction(leadId: string, form: InsertInteractionInput): Promise<{ id: string; lead_id: string }> {
+  if (isDemoMode()) return { id: 'demo-blocked', lead_id: leadId };
   if (!leadId) throw new Error('Missing leadId');
 
   const payload = {
@@ -341,6 +356,7 @@ export interface SaveDraftInput {
 }
 
 export async function saveDraft(leadId: string, form: SaveDraftInput): Promise<{ id: string }> {
+  if (isDemoMode()) return { id: 'demo-blocked' };
   const { data: { user } } = await supabase.auth.getUser();
 
   const payload = {
@@ -412,6 +428,10 @@ export async function updateDraftStatus(draftId: string, status: 'pending' | 'sa
 
 export async function getLeadDrafts(leadId: string): Promise<Draft[]> {
   if (!leadId) throw new Error('Missing leadId');
+
+  if (isDemoMode()) {
+    return getDemoDrafts(leadId) as unknown as Draft[];
+  }
 
   const { data, error } = await supabase
     .from('drafts')
