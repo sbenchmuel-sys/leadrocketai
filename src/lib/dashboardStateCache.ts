@@ -6,7 +6,7 @@ interface DashboardState {
 }
 
 let cached: DashboardState = {
-  revenueStateFilter: "active",
+  revenueStateFilter: "action_required",
   scrollY: 0,
 };
 
