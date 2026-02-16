@@ -539,9 +539,9 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                 />
               </div>
             )}
-            {/* WhatsApp actions: Log as Sent + Open in WhatsApp */}
+            {/* WhatsApp actions: Send via API + Open in WhatsApp + Log as Sent */}
             {channel === "whatsapp" && (
-              <div className="flex gap-2 justify-end">
+              <div className="flex gap-2 justify-end flex-wrap">
                 {lead.phone && (
                   <Button
                     variant="outline"
@@ -556,11 +556,23 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                     Open in WhatsApp
                   </Button>
                 )}
+                {lead.phone && (
+                  <SendWhatsAppButton
+                    phone={lead.phone}
+                    messageText={generatedContent}
+                    leadId={lead.id}
+                    selectedIntent={selectedIntent}
+                    onSent={() => {
+                      setGeneratedContent("");
+                      onUpdate();
+                    }}
+                  />
+                )}
                 <Button
+                  variant="ghost"
                   size="sm"
                   onClick={async () => {
                     try {
-                      // 1. Create outbound interaction
                       const { data: { user } } = await supabase.auth.getUser();
                       await supabase.from("interactions").insert({
                         lead_id: lead.id,
@@ -572,7 +584,6 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                         to_email: lead.email,
                         occurred_at: new Date().toISOString(),
                       });
-                      // 2. Run sequence engine — same as email
                       const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
                       await updateSequenceState(lead.id, intentUsed, null, null, "whatsapp");
                       toast.success("WhatsApp message logged & sequence updated");
@@ -584,7 +595,7 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
                     }
                   }}
                 >
-                  <Send className="h-3.5 w-3.5 mr-1" />
+                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
                   Log as Sent
                 </Button>
               </div>
@@ -634,6 +645,184 @@ export default function DraftsTab({ lead, onUpdate }: DraftsTabProps) {
         initialInstructions={composerNote}
       />
     </div>
+  );
+}
+
+// ============================================
+// Send via WhatsApp API Button
+// ============================================
+
+interface SendWhatsAppButtonProps {
+  phone: string;
+  messageText: string;
+  leadId: string;
+  selectedIntent: ComposerIntent;
+  onSent: () => void;
+}
+
+function SendWhatsAppButton({ phone, messageText, leadId, selectedIntent, onSent }: SendWhatsAppButtonProps) {
+  const [isSending, setIsSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!messageText.trim()) {
+      toast.error("No message to send");
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      // Normalize phone
+      const normalizedPhone = phone.replace(/[^0-9]/g, "");
+
+      // Find the user's WhatsApp integration
+      const { data: integration, error: intErr } = await supabase
+        .from("integrations")
+        .select("id")
+        .eq("user_id", session.user.id)
+        .eq("type", "whatsapp")
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (intErr || !integration) {
+        toast.error("No active WhatsApp connection found. Connect WhatsApp in Settings first.");
+        return;
+      }
+
+      // Find or create a conversation for this contact
+      // First, find the contact by phone
+      const { data: identity } = await supabase
+        .from("contact_identities")
+        .select("contact_id")
+        .eq("type", "phone")
+        .eq("value", normalizedPhone)
+        .maybeSingle();
+
+      let conversationId: string | null = null;
+
+      if (identity) {
+        // Find an open conversation
+        const { data: convo } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("contact_id", identity.contact_id)
+          .eq("channel", "whatsapp")
+          .eq("owner_user_id", session.user.id)
+          .eq("status", "open")
+          .maybeSingle();
+
+        conversationId = convo?.id ?? null;
+      }
+
+      if (!conversationId) {
+        // Need a conversation — get workspace first
+        const { data: member } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", session.user.id)
+          .maybeSingle();
+
+        if (!member) throw new Error("No workspace found");
+
+        // Create or find contact
+        let contactId = identity?.contact_id;
+        if (!contactId) {
+          const { data: newContact, error: cErr } = await supabase
+            .from("contacts")
+            .insert({
+              workspace_id: member.workspace_id,
+              status: "lead",
+              display_name: normalizedPhone,
+              last_activity_at: new Date().toISOString(),
+            })
+            .select("id")
+            .single();
+          if (cErr || !newContact) throw new Error("Failed to create contact");
+          contactId = newContact.id;
+
+          await supabase.from("contact_identities").insert({
+            workspace_id: member.workspace_id,
+            contact_id: contactId,
+            type: "phone",
+            value: normalizedPhone,
+            is_primary: true,
+          });
+        }
+
+        // Create conversation
+        const { data: newConvo, error: cvErr } = await supabase
+          .from("conversations")
+          .insert({
+            workspace_id: member.workspace_id,
+            contact_id: contactId,
+            channel: "whatsapp",
+            owner_user_id: session.user.id,
+            integration_id: integration.id,
+            provider_thread_id: normalizedPhone,
+            status: "open",
+            last_message_at: new Date().toISOString(),
+            message_count: 0,
+          })
+          .select("id")
+          .single();
+        if (cvErr || !newConvo) throw new Error("Failed to create conversation");
+        conversationId = newConvo.id;
+      }
+
+      // Call whatsapp-send edge function
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/whatsapp-send`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          to: normalizedPhone,
+          message_text: messageText,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.error || result.details || "WhatsApp send failed");
+      }
+
+      // Also log as interaction on the lead
+      await supabase.from("interactions").insert({
+        lead_id: leadId,
+        type: "whatsapp_outbound",
+        source: "whatsapp_api",
+        body_text: messageText,
+        direction: "outbound",
+        occurred_at: new Date().toISOString(),
+      });
+
+      const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
+      await updateSequenceState(leadId, intentUsed, null, null, "whatsapp");
+
+      toast.success("WhatsApp message sent!");
+      onSent();
+    } catch (err: any) {
+      console.error("[SendWhatsAppButton] Error:", err);
+      toast.error(err.message || "Failed to send WhatsApp message");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <Button size="sm" onClick={handleSend} disabled={isSending}>
+      {isSending ? (
+        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+      ) : (
+        <Send className="h-3.5 w-3.5 mr-1" />
+      )}
+      {isSending ? "Sending..." : "Send via WhatsApp"}
+    </Button>
   );
 }
 
