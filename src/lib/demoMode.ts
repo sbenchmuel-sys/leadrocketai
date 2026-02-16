@@ -6,5 +6,6 @@
  */
 
 export const isDemoMode = (): boolean => {
-  return import.meta.env.VITE_DEMO_MODE === "true";
+  return import.meta.env.VITE_DEMO_MODE === "true" || 
+    (typeof window !== "undefined" && localStorage.getItem("VITE_DEMO_MODE") === "true");
 };
