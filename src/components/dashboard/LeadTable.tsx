@@ -669,7 +669,10 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
             <TableHeader>
               <TableRow className="text-xs border-b border-border/60">
                 <TableHead className="w-1 p-0" />
-                <TableHead className="w-10 py-2">
+                {revenueStateFilter === "heating_up" && (
+                  <TableHead className="w-6 py-1.5 px-0 text-center text-[10px] text-muted-foreground/50">#</TableHead>
+                )}
+                <TableHead className="w-10 py-1.5">
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={handleSelectAll}
@@ -677,9 +680,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead className={cn("py-2", revenueStateFilter === "heating_up" && "max-w-[300px] w-[300px]")}>Lead</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 max-w-[300px] w-[300px]" : "py-2")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-2 text-right w-[90px] px-2">
+                  <TableHead className="py-1.5 text-right w-[90px] px-2">
                     <span className="inline-flex items-center gap-0.5">
                       Score
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -689,13 +692,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2">Phase</TableHead>
                 )}
-                <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
-                <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
                 )}
                 {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                  <TableHead className="py-2 text-right">Action</TableHead>
+                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "text-right")}>Action</TableHead>
                 )}
               </TableRow>
             </TableHeader>
@@ -707,6 +710,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               })
               .sort((a, b) => revenueStateFilter === "heating_up" ? (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0) : 0)
               .map((lead, index) => {
+                const isHeatingUp = revenueStateFilter === "heating_up";
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
                 const nurtureMode = (lead as any).nurture_mode;
@@ -746,7 +750,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                         SOURCE_TYPE_COLORS[lead.source_type]?.bar || "bg-muted-foreground/30"
                       )} />
                     </td>
-                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                    {/* Ranking index (heating_up only) */}
+                    {isHeatingUp && (
+                      <td className="w-6 px-0 text-center py-1">
+                        <span className="text-[10px] tabular-nums text-muted-foreground/40">{index + 1}</span>
+                      </td>
+                    )}
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2")} onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
@@ -755,7 +765,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Lead */}
-                    <TableCell className={cn("py-2", revenueStateFilter === "heating_up" && "max-w-[300px] w-[300px]")}>
+                    <TableCell className={cn(isHeatingUp ? "py-1 max-w-[300px] w-[300px]" : "py-2")}>
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
                         <div className="min-w-0 max-w-[220px]">
@@ -766,12 +776,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Score + signals (heating_up only, right after Lead) */}
-                    {revenueStateFilter === "heating_up" && (
-                      <TableCell className="py-2 text-right w-[90px] px-2">
+                    {isHeatingUp && (
+                      <TableCell className="py-1 text-right w-[90px] px-2">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
                           const bd = breakdownMap.get(lead.id);
-                          const color = s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
+                          const isTop3 = index < 3;
+                          const color = isTop3
+                            ? "text-foreground font-bold"
+                            : s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
                           const signals = bd ? getAccelerationSignals(lead, bd) : ["Engagement trending upward"];
                           return (
                             <div>
@@ -800,14 +813,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
 
                     {/* Last Activity */}
-                    <TableCell className="py-2 hidden md:table-cell">
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden md:table-cell")}>
                       <span className={cn("text-xs", lastEmail.className)}>
                         {lastEmail.text}
                       </span>
                     </TableCell>
 
                     {/* Next Action */}
-                    <TableCell className="py-2 hidden lg:table-cell">
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden lg:table-cell")}>
                       <p className="text-xs text-muted-foreground truncate max-w-[180px]">
                         {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                       </p>
@@ -844,7 +857,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
 
                     {/* Action button for action_required / heating_up */}
                     {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                      <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
+                      <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "text-right")}>{getActionButton(lead)}</TableCell>
                     )}
 
                   </TableRow>
