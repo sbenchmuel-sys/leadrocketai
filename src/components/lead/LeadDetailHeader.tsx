@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -16,10 +16,13 @@ import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
 import { useMemo } from "react";
 import { calculateClosingPower, getMomentum } from "@/lib/closingPowerUtils";
 
+type OriginContext = "dashboard" | "leads" | "inbox";
+
 interface LeadDetailHeaderProps {
   lead: LeadDetail;
   isConnected: boolean;
   isDeleting: boolean;
+  originContext: OriginContext;
   onDelete: () => void;
   onUpdate: () => void;
   onSyncComplete: () => void;
@@ -82,9 +85,16 @@ const PHASE_COLORS: Record<string, string> = {
   Closed: "bg-muted text-muted-foreground",
 };
 
+const BACK_ROUTES: Record<OriginContext, string> = {
+  dashboard: "/app",
+  leads: "/app/leads",
+  inbox: "/app/inbox",
+};
+
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
+  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
 }: LeadDetailHeaderProps) {
+  const navigate = useNavigate();
   const motion = (lead.motion as Motion) || "outbound_prospecting";
   const stage = (lead.stage as DealStage) || "new";
   const phase = getDisplayPhase(stage, motion);
@@ -101,8 +111,8 @@ export default function LeadDetailHeader({
     <div className="space-y-0">
       {/* Back + Actions row — slim */}
       <div className="flex items-center justify-between pb-2">
-        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-          <Link to="/app/leads"><ArrowLeft className="h-4 w-4" /></Link>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(BACK_ROUTES[originContext])}>
+          <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex gap-1.5">
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
