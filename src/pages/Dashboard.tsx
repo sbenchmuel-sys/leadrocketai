@@ -140,20 +140,33 @@ export default function Dashboard() {
       />
 
       {/* Action Required + Top Movers */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <div className="lg:col-span-3">
-          <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
-        </div>
-        <div className="lg:col-span-2">
+      {revenueStateFilter === "heating_up" ? (
+        <>
+          {/* Heating Up: hide Action Required, show Top Movers full-width */}
           <TopMovers leads={filteredLeads} />
-        </div>
-      </div>
-
-      {/* Revenue Signal — directly below */}
-      <AIInsightPanel leads={filteredLeads} />
-
-      {/* Lead Table */}
-      <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+          {/* Revenue Signal */}
+          <AIInsightPanel leads={filteredLeads} />
+          {/* Lead Table — give it more vertical weight */}
+          <div className="min-h-[60vh]">
+            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid gap-4 lg:grid-cols-5">
+            <div className="lg:col-span-3">
+              <PriorityActions leads={filteredLeads} allLeads={leads} revenueStateFilter={revenueStateFilter} onLeadUpdated={loadData} />
+            </div>
+            <div className="lg:col-span-2">
+              <TopMovers leads={filteredLeads} />
+            </div>
+          </div>
+          {/* Revenue Signal */}
+          <AIInsightPanel leads={filteredLeads} />
+          {/* Lead Table */}
+          <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+        </>
+      )}
     </div>
   );
 }
