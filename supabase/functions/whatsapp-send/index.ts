@@ -190,11 +190,55 @@ Deno.serve(async (req) => {
     console.error("[whatsapp-send] Failed to store outbound message:", msgErr);
   }
 
-  // Update conversation last_message_at
+  // Update conversation last_message_at and increment message_count
+  const { data: currentConvo } = await supabase
+    .from("conversations")
+    .select("message_count")
+    .eq("id", conversation_id)
+    .single();
+
   await supabase
     .from("conversations")
-    .update({ last_message_at: now })
+    .update({
+      message_count: (currentConvo?.message_count ?? 0) + 1,
+      last_message_at: now,
+    })
     .eq("id", conversation_id);
+
+  // ── Bridge to interactions table for lead timeline ──
+  const { data: matchedLeads } = await supabase
+    .from("leads")
+    .select("id, phone")
+    .filter("phone", "neq", "")
+    .not("phone", "is", null)
+    .limit(100);
+
+  if (matchedLeads && matchedLeads.length > 0) {
+    const lead = matchedLeads.find((l: any) => {
+      const leadPhone = (l.phone || "").replace(/\D/g, "");
+      return leadPhone.length >= 4 && normalizedTo.endsWith(leadPhone);
+    });
+
+    if (lead) {
+      const { error: intxErr } = await supabase
+        .from("interactions")
+        .insert({
+          lead_id: lead.id,
+          type: "whatsapp_outbound",
+          source: "whatsapp",
+          body_text: message_text,
+          occurred_at: now,
+          direction: "outbound",
+          from_email: `+${normalizedTo}`,
+        });
+
+      if (intxErr) {
+        console.error("[whatsapp-send] Failed to bridge to interactions:", intxErr);
+      } else {
+        console.log("[whatsapp-send] Bridged outbound to lead:", lead.id);
+      }
+    }
+  }
 
   console.log("[whatsapp-send] Message sent:", providerMessageId, "to:", normalizedTo);
 
