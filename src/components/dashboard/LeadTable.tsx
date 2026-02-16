@@ -665,6 +665,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                   />
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
+                {revenueStateFilter === "heating_up" && (
+                  <TableHead className="py-2 text-right w-[70px] px-2">
+                    <span className="inline-flex items-center gap-0.5">
+                      Score
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </span>
+                  </TableHead>
+                )}
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2">Phase</TableHead>
                 )}
@@ -672,14 +680,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
-                )}
-                {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-2 text-right w-16">
-                    <span className="inline-flex items-center gap-0.5">
-                      Score
-                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                    </span>
-                  </TableHead>
                 )}
                 {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
                   <TableHead className="py-2 text-right">Action</TableHead>
@@ -752,6 +752,17 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                       </div>
                     </TableCell>
 
+                    {/* Score (heating_up only, right after Lead) */}
+                    {revenueStateFilter === "heating_up" && (
+                      <TableCell className="py-2 text-right w-[70px] px-2">
+                        {(() => {
+                          const s = scoreMap.get(lead.id) ?? 0;
+                          const color = s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
+                          return <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>;
+                        })()}
+                      </TableCell>
+                    )}
+
                     {/* Phase (hidden in heating_up) */}
                     {revenueStateFilter !== "heating_up" && (
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
@@ -806,17 +817,6 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                             </Button>
                           )}
                         </div>
-                      </TableCell>
-                    )}
-
-                    {/* Score (heating_up only, right-aligned, before Action) */}
-                    {revenueStateFilter === "heating_up" && (
-                      <TableCell className="py-2 text-right w-16">
-                        {(() => {
-                          const s = scoreMap.get(lead.id) ?? 0;
-                          const color = s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
-                          return <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>;
-                        })()}
                       </TableCell>
                     )}
 
