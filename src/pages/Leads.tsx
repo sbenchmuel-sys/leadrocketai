@@ -419,6 +419,7 @@ export default function Leads() {
                       <TableCell>
                         <Link
                           to={`/app/leads/${lead.id}`}
+                          state={{ originContext: "leads" }}
                           className="font-medium text-foreground hover:underline"
                         >
                           {lead.name}
@@ -454,7 +455,7 @@ export default function Leads() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => navigate(`/app/leads/${lead.id}`)}>
+                            <DropdownMenuItem onClick={() => navigate(`/app/leads/${lead.id}`, { state: { originContext: "leads" } })}>
                               <Pencil className="h-4 w-4 mr-2" />
                               Edit
                             </DropdownMenuItem>

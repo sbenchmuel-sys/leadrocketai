@@ -295,7 +295,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
 
   const renderViewButton = (lead: EnrichedLead) => (
     <Button size="sm" variant="ghost" asChild>
-      <Link to={`/app/leads/${lead.id}`}>
+      <Link to={`/app/leads/${lead.id}`} state={{ originContext: "dashboard" }}>
         <Eye className="h-4 w-4" />
       </Link>
     </Button>
@@ -683,7 +683,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("button, a, [role='dialog'], input, [role='combobox']")) return;
-                      navigate(`/app/leads/${lead.id}`);
+                      navigate(`/app/leads/${lead.id}`, { state: { originContext: "dashboard" } });
                     }}
                   >
                     {/* Color bar */}

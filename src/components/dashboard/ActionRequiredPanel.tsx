@@ -94,7 +94,7 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
 
     return (
       <Button size="sm" variant="outline" className="h-7 text-xs" asChild>
-        <Link to={`/app/leads/${lead.id}`}>
+        <Link to={`/app/leads/${lead.id}`} state={{ originContext: "dashboard" }}>
           <Eye className="h-3 w-3 mr-1" />
           View
         </Link>
@@ -139,6 +139,7 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
                 {/* Info */}
                 <Link
                   to={`/app/leads/${lead.id}`}
+                  state={{ originContext: "dashboard" }}
                   className="min-w-0 flex-1 hover:underline"
                 >
                   <div className="flex items-center gap-1.5 text-sm">
