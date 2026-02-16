@@ -122,14 +122,14 @@ Deno.serve(async (req) => {
 
   // ── Decrypt credentials ───────────────────────────
   let accessToken: string;
-  let phoneNumberId: string;
+  // Use provider_account_id as the canonical phone number ID
+  const phoneNumberId = integration.provider_account_id!;
 
   try {
     const credsJson = await safeDecryptToken(integration.credentials_encrypted);
     const creds = JSON.parse(credsJson);
     // access_token inside is individually encrypted
     accessToken = await safeDecryptToken(creds.access_token);
-    phoneNumberId = creds.phone_number_id;
   } catch (err) {
     console.error("[whatsapp-send] Failed to decrypt credentials:", err);
     return new Response(JSON.stringify({ error: "Failed to decrypt credentials" }), {
