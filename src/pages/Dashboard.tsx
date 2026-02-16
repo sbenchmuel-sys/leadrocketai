@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
 import { formatDistanceToNow } from "date-fns";
 import { isDemoMode } from "@/lib/demoMode";
+import { getDashboardState, setDashboardFilter, setDashboardScroll } from "@/lib/dashboardStateCache";
 import type { RevenueState } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
@@ -34,7 +35,12 @@ export default function Dashboard() {
 
   if (!isDemoMode()) useAutomationPoller();
 
-  const [revenueStateFilter, setRevenueStateFilter] = useState<RevenueState>("active");
+  const [revenueStateFilter, setRevenueStateFilterLocal] = useState<RevenueState>(getDashboardState().revenueStateFilter);
+
+  const handleFilterChange = useCallback((filter: RevenueState) => {
+    setRevenueStateFilterLocal(filter);
+    setDashboardFilter(filter);
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
@@ -50,7 +56,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
+    // Restore scroll position
+    const { scrollY } = getDashboardState();
+    if (scrollY > 0) {
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    }
   }, [loadData, location.key]);
+
+  // Persist scroll position on unmount
+  useEffect(() => {
+    return () => {
+      setDashboardScroll(window.scrollY);
+    };
+  }, []);
 
   useEffect(() => {
     const unsub = onDashboardRefresh((_reason, m) => {
@@ -118,7 +136,7 @@ export default function Dashboard() {
       <CommandStrip
         counts={commandCounts}
         activeFilter={revenueStateFilter}
-        onFilterChange={setRevenueStateFilter}
+        onFilterChange={handleFilterChange}
       />
 
       {/* Action Required + Top Movers */}
