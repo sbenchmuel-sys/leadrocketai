@@ -22,7 +22,7 @@ export default function LeadDetail() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [activeTab, setActiveTab] = useState("timeline");
   const location = useLocation();
-  const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "leads";
+  const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
 
   const handleDelete = async () => {
@@ -85,6 +85,7 @@ export default function LeadDetail() {
         lead={lead}
         isConnected={isConnected}
         isDeleting={isDeleting}
+        originContext={originContext}
         onDelete={handleDelete}
         onUpdate={handleUpdate}
         onSyncComplete={loadLead}
