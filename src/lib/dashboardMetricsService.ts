@@ -9,6 +9,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { differenceInDays, parseISO } from "date-fns";
 import type { EnrichedLead, DealStage, Motion, RevenueState } from "@/lib/dashboardUtils";
 import { enrichLead, classifyRevenueState } from "@/lib/dashboardUtils";
+import { isDemoMode } from "@/lib/demoMode";
+import { demoLeads } from "@/lib/demoData";
 
 // ============================================
 // TYPES
@@ -218,6 +220,37 @@ function deriveWarmingUpLeads(leads: EnrichedLead[]): EnrichedLead[] {
 }
 
 // ============================================
+// DEMO MODE METRICS
+// ============================================
+
+function buildDemoMetrics(): DashboardMetrics {
+  const leads = demoLeads;
+  const openLeads = leads.filter(l => l.stage !== "closed_won" && l.stage !== "closed_lost");
+
+  const revenueStateCounts: Record<RevenueState, number> = {
+    active: 0, action_required: 0, heating_up: 0, long_cycle: 0, automation: 0,
+  };
+  for (const lead of leads) {
+    if (lead.revenueState) revenueStateCounts[lead.revenueState]++;
+  }
+
+  return {
+    needs_action_count: leads.filter(l => l.needs_action).length,
+    active_count: openLeads.length,
+    automation_running_count: 0,
+    momentum_score: 12,
+    stale_count: 0,
+    nurture_ready_count: 0,
+    warming_up_count: revenueStateCounts.heating_up,
+    revenueStateCounts,
+    leads,
+    staleLeads: [],
+    nurtureCandidates: [],
+    warmingUpLeads: leads.filter(l => l.revenueState === "heating_up"),
+  };
+}
+
+// ============================================
 // PUBLIC API
 // ============================================
 
@@ -229,6 +262,11 @@ function deriveWarmingUpLeads(leads: EnrichedLead[]): EnrichedLead[] {
 export async function getDashboardMetrics(
   _workspace_id?: string
 ): Promise<DashboardMetrics> {
+  // In demo mode, skip database and use curated dataset
+  if (isDemoMode()) {
+    return buildDemoMetrics();
+  }
+
   const leads = await fetchLeads();
 
   const staleLeads = deriveStaleLeads(leads);
