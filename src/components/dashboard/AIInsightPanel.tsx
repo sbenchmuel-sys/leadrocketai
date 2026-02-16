@@ -103,6 +103,7 @@ export function AIInsightPanel({ leads }: AIInsightPanelProps) {
             <span className="text-[11px] text-muted-foreground">Recommended:</span>
             <Link
               to={`/app/leads/${signal.leadId}`}
+              state={{ originContext: "dashboard" }}
               className="text-[11px] font-medium text-primary hover:underline"
             >
               {signal.action} →

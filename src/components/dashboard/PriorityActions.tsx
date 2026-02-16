@@ -78,7 +78,7 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
   };
 
   const handleNavigateToLead = (lead: EnrichedLead) => {
-    navigate(`/app/leads/${lead.id}`);
+    navigate(`/app/leads/${lead.id}`, { state: { originContext: "dashboard" } });
   };
 
   const getActionButton = (lead: EnrichedLead) => {
@@ -119,7 +119,7 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
 
     return (
       <Button size="sm" variant="outline" className="h-8 text-xs" asChild>
-        <Link to={`/app/leads/${lead.id}`}>
+        <Link to={`/app/leads/${lead.id}`} state={{ originContext: "dashboard" }}>
           <Eye className="h-3 w-3 mr-1" />
           View
         </Link>
