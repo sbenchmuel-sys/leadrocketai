@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
 import { formatDistanceToNow } from "date-fns";
+import { isDemoMode } from "@/lib/demoMode";
 import type { RevenueState } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
@@ -17,6 +18,7 @@ import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 
 function getGreeting(): string {
+  if (isDemoMode()) return "Revenue Operations Overview";
   const hour = new Date().getHours();
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
@@ -30,7 +32,7 @@ export default function Dashboard() {
   const [, setTick] = useState(0);
   const location = useLocation();
 
-  useAutomationPoller();
+  if (!isDemoMode()) useAutomationPoller();
 
   const [revenueStateFilter, setRevenueStateFilter] = useState<RevenueState>("active");
 
@@ -89,7 +91,7 @@ export default function Dashboard() {
       <div className="flex items-start justify-between">
         <div className="space-y-0.5">
           <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-            {getGreeting()}.
+            {getGreeting()}{isDemoMode() ? "" : "."}
           </h1>
           <div className="flex items-center gap-2">
             <p className="text-muted-foreground text-sm">
@@ -102,12 +104,14 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-        <Button asChild size="sm">
-          <Link to="/app/leads">
-            <Plus className="h-4 w-4 mr-1" />
-            Add Lead
-          </Link>
-        </Button>
+        {!isDemoMode() && (
+          <Button asChild size="sm">
+            <Link to="/app/leads">
+              <Plus className="h-4 w-4 mr-1" />
+              Add Lead
+            </Link>
+          </Button>
+        )}
       </div>
 
       {/* Command Strip */}
