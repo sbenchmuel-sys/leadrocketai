@@ -665,18 +665,21 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                   />
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
-                <TableHead className="py-2">
-                  {revenueStateFilter === "heating_up" ? (
-                    <span className="inline-flex items-center gap-0.5">
-                      Score
-                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                    </span>
-                  ) : "Phase"}
-                </TableHead>
+                {revenueStateFilter !== "heating_up" && (
+                  <TableHead className="py-2">Phase</TableHead>
+                )}
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                )}
+                {revenueStateFilter === "heating_up" && (
+                  <TableHead className="py-2 text-right w-16">
+                    <span className="inline-flex items-center gap-0.5">
+                      Score
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </span>
+                  </TableHead>
                 )}
                 {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
                   <TableHead className="py-2 text-right">Action</TableHead>
@@ -749,14 +752,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                       </div>
                     </TableCell>
 
-                    {/* Phase or Score (heating_up) */}
-                    {revenueStateFilter === "heating_up" ? (
-                      <TableCell className="py-2">
-                        <span className="text-sm font-semibold text-foreground">
-                          {scoreMap.get(lead.id) ?? 0}
-                        </span>
-                      </TableCell>
-                    ) : (
+                    {/* Phase (hidden in heating_up) */}
+                    {revenueStateFilter !== "heating_up" && (
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <ModeDropdown
                           leadId={lead.id}
@@ -809,6 +806,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                             </Button>
                           )}
                         </div>
+                      </TableCell>
+                    )}
+
+                    {/* Score (heating_up only, right-aligned, before Action) */}
+                    {revenueStateFilter === "heating_up" && (
+                      <TableCell className="py-2 text-right w-16">
+                        <span className="text-[13px] font-semibold text-foreground/90 tabular-nums">
+                          {scoreMap.get(lead.id) ?? 0}
+                        </span>
                       </TableCell>
                     )}
 
