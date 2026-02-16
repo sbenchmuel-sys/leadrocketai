@@ -29,6 +29,7 @@ type NavItem = {
 const navItems: NavItem[] = [
 { to: "/app", icon: LayoutDashboard, label: "Dashboard" },
 { to: "/app/leads", icon: Users, label: "Leads" },
+{ to: "/app/inbox", icon: Inbox, label: "Inbox" },
 { to: "/app/knowledge", icon: BookOpen, label: "Knowledge Base" },
 { to: "/app/settings", icon: Settings, label: "Settings" }];
 
