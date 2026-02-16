@@ -62,7 +62,8 @@ const DASHBOARD_LEAD_COLUMNS = `
   stage, needs_action, next_action_key, next_action_label, action_reason_code,
   meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
   nurture_cadence, auto_nurture_eligible, source_type, motion,
-  nurture_mode, nurture_status, eligible_at
+  nurture_mode, nurture_status, eligible_at,
+  has_future_meeting, milestones_json, risks_json
 `;
 
 async function fetchLeads(): Promise<EnrichedLead[]> {

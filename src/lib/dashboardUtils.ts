@@ -247,6 +247,10 @@ export interface EnrichedLead extends LeadListItem {
   nurture_status?: string;
   eligible_at?: string | null;
   revenueState?: RevenueState;
+  // Extra fields for Closing Power Score (carried through from query)
+  has_future_meeting?: boolean;
+  milestones_json?: any;
+  risks_json?: any;
 }
 
 // Enrich lead with data from database fields (no local derivation needed anymore)
@@ -264,6 +268,9 @@ export function enrichLead(lead: LeadListItem & {
   nurture_mode?: string;
   nurture_status?: string;
   eligible_at?: string | null;
+  has_future_meeting?: boolean;
+  milestones_json?: any;
+  risks_json?: any;
 }): EnrichedLead {
   const stage = (lead.stage as DealStage) || "new";
   const sourceType = (lead.source_type as SourceType) || "manual_entry";
