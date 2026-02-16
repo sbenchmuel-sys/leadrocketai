@@ -675,7 +675,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               <TableRow className="text-xs border-b border-border/60">
                 <TableHead className="w-1 p-0" />
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="w-[40px] min-w-[40px] py-1 px-0 text-center text-[10px] text-muted-foreground/50">#</TableHead>
+                  <TableHead className="w-[40px] min-w-[40px] py-1.5 px-0 text-center text-[10px] text-muted-foreground/50">#</TableHead>
                 )}
                 <TableHead className="w-10 py-1.5">
                   <Checkbox
@@ -685,9 +685,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1 w-[300px] max-w-[300px]" : "py-2")}>Lead</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[320px] max-w-[320px]" : "py-2")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-1 text-right w-[90px] min-w-[90px] px-2">
+                  <TableHead className="py-1.5 text-right w-[90px] min-w-[90px] px-2">
                     <span className="inline-flex items-center gap-0.5">
                       Score
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -697,13 +697,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2">Phase</TableHead>
                 )}
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1 w-[140px] min-w-[140px]" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px]" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
                 )}
                 {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1 w-[80px] min-w-[80px]" : "py-2", "text-right")}>Action</TableHead>
+                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[80px] min-w-[80px]" : "py-2", "text-right")}>Action</TableHead>
                 )}
               </TableRow>
             </TableHeader>
@@ -757,11 +757,11 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </td>
                     {/* Ranking index (heating_up only) */}
                     {isHeatingUp && (
-                      <td className="w-[40px] min-w-[40px] px-0 text-center py-0.5">
+                      <td className="w-[40px] min-w-[40px] px-0 text-center py-1">
                         <span className="text-[10px] tabular-nums text-muted-foreground/40">{index + 1}</span>
                       </td>
                     )}
-                    <TableCell className={cn(isHeatingUp ? "py-0.5" : "py-2")} onClick={(e) => e.stopPropagation()}>
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2")} onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
@@ -770,17 +770,20 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Lead */}
-                    <TableCell className={cn(isHeatingUp ? "py-0.5 w-[300px] max-w-[300px]" : "py-2")}>
-                      <div className={cn("flex gap-2", isHeatingUp ? "items-start" : "items-center")}>
-                        <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size={isHeatingUp ? "sm" : "sm"} className={isHeatingUp ? "h-6 w-6 text-[10px] mt-0.5" : undefined} />
-                        <div className="min-w-0 overflow-hidden">
-                          <p className={cn("font-medium text-foreground truncate", isHeatingUp ? "text-[13px] leading-tight" : "text-sm")}>{lead.name}</p>
-                          <p className={cn("text-muted-foreground truncate", isHeatingUp ? "text-[11px] leading-tight" : "text-xs")}>{lead.company}</p>
+                    <TableCell className={cn(isHeatingUp ? "py-1 w-[320px] max-w-[320px]" : "py-2")}>
+                      <div className="flex items-center gap-2">
+                        <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                          <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                           {isHeatingUp && (() => {
                             const bd = breakdownMap.get(lead.id);
                             const [engagement, progress] = bd ? getAccelerationLines(lead, bd) : ["Engagement trending upward", "Engagement increasing"];
                             return (
-                              <p className="text-[10px] leading-tight text-muted-foreground/60 truncate">{engagement} · {progress}</p>
+                              <div className="mt-0.5 space-y-0">
+                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{engagement}</p>
+                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{progress}</p>
+                              </div>
                             );
                           })()}
                         </div>
@@ -788,7 +791,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {isHeatingUp && (
-                      <TableCell className="py-0.5 text-right w-[90px] min-w-[90px] px-2 align-top pt-1.5">
+                      <TableCell className="py-1 text-right w-[90px] min-w-[90px] px-2 align-middle">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
                           const isTop3 = index < 3;
@@ -817,14 +820,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
 
                     {/* Last Activity */}
-                    <TableCell className={cn(isHeatingUp ? "py-0.5 align-top pt-1.5" : "py-2", "hidden md:table-cell")}>
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden md:table-cell")}>
                       <span className={cn("text-xs", lastEmail.className)}>
                         {lastEmail.text}
                       </span>
                     </TableCell>
 
                     {/* Next Action */}
-                    <TableCell className={cn(isHeatingUp ? "py-0.5 align-top pt-1.5" : "py-2", "hidden lg:table-cell")}>
+                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden lg:table-cell")}>
                       <p className="text-xs text-muted-foreground truncate max-w-[180px]">
                         {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                       </p>
