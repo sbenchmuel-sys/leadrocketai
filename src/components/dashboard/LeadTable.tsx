@@ -73,11 +73,15 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
   return { text, className };
 }
 
-import { calculateClosingPower } from "@/lib/closingPowerUtils";
+import { calculateClosingPower, type ScoreBreakdown } from "@/lib/closingPowerUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 
 // Bridge EnrichedLead → LeadDetail shape for calculateClosingPower
 function getClosingScore(lead: EnrichedLead): number {
+  return getClosingBreakdown(lead).total;
+}
+
+function getClosingBreakdown(lead: EnrichedLead): ScoreBreakdown {
   const asDetail = {
     ...lead,
     has_future_meeting: lead.has_future_meeting ?? lead.hasMeeting,
@@ -88,7 +92,17 @@ function getClosingScore(lead: EnrichedLead): number {
     last_outbound_at: lead.last_outbound_at ?? null,
     last_activity_at: lead.last_activity_at ?? null,
   } as unknown as LeadDetail;
-  return calculateClosingPower(asDetail).total;
+  return calculateClosingPower(asDetail);
+}
+
+// Top 1-2 positive signals for heating_up acceleration tags
+function getAccelerationSignals(lead: EnrichedLead, breakdown: ScoreBreakdown): string[] {
+  const positive = breakdown.factors
+    .filter(f => f.points > 0)
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 2)
+    .map(f => f.label);
+  return positive.length > 0 ? positive : ["Engagement trending upward"];
 }
 
 interface LeadTableProps {
@@ -111,12 +125,21 @@ const stageBadgeVariants: Record<DealStage, string> = {
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
 export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter }: LeadTableProps) {
-  // Memoize closing scores to avoid recalculating during sort + render
+  // Memoize closing scores + breakdowns for heating_up
   const scoreMap = useMemo(() => {
     if (revenueStateFilter !== "heating_up") return new Map<string, number>();
     const map = new Map<string, number>();
     for (const lead of leads) {
       map.set(lead.id, getClosingScore(lead));
+    }
+    return map;
+  }, [leads, revenueStateFilter]);
+
+  const breakdownMap = useMemo(() => {
+    if (revenueStateFilter !== "heating_up") return new Map<string, ScoreBreakdown>();
+    const map = new Map<string, ScoreBreakdown>();
+    for (const lead of leads) {
+      map.set(lead.id, getClosingBreakdown(lead));
     }
     return map;
   }, [leads, revenueStateFilter]);
@@ -656,7 +679,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 </TableHead>
                 <TableHead className={cn("py-2", revenueStateFilter === "heating_up" && "max-w-[300px] w-[300px]")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-2 text-right w-[70px] px-2">
+                  <TableHead className="py-2 text-right w-[90px] px-2">
                     <span className="inline-flex items-center gap-0.5">
                       Score
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -742,13 +765,22 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                       </div>
                     </TableCell>
 
-                    {/* Score (heating_up only, right after Lead) */}
+                    {/* Score + signals (heating_up only, right after Lead) */}
                     {revenueStateFilter === "heating_up" && (
-                      <TableCell className="py-2 text-right w-[70px] px-2">
+                      <TableCell className="py-2 text-right w-[90px] px-2">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
+                          const bd = breakdownMap.get(lead.id);
                           const color = s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
-                          return <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>;
+                          const signals = bd ? getAccelerationSignals(lead, bd) : ["Engagement trending upward"];
+                          return (
+                            <div>
+                              <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>
+                              <p className="text-[10px] leading-tight text-muted-foreground mt-0.5 truncate">
+                                {signals.join(" · ")}
+                              </p>
+                            </div>
+                          );
                         })()}
                       </TableCell>
                     )}
