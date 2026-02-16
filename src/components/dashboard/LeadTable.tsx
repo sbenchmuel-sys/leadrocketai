@@ -812,9 +812,11 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     {/* Score (heating_up only, right-aligned, before Action) */}
                     {revenueStateFilter === "heating_up" && (
                       <TableCell className="py-2 text-right w-16">
-                        <span className="text-[13px] font-semibold text-foreground/90 tabular-nums">
-                          {scoreMap.get(lead.id) ?? 0}
-                        </span>
+                        {(() => {
+                          const s = scoreMap.get(lead.id) ?? 0;
+                          const color = s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
+                          return <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>;
+                        })()}
                       </TableCell>
                     )}
 
