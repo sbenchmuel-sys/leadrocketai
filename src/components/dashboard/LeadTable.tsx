@@ -687,7 +687,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 </TableHead>
                 <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[320px] max-w-[320px]" : "py-2")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-1.5 text-right w-[90px] min-w-[90px] px-2">
+                  <TableHead className="py-1.5 text-right w-[90px] min-w-[90px] pr-6">
                     <span className="inline-flex items-center gap-0.5">
                       Score
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -697,13 +697,16 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2">Phase</TableHead>
                 )}
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px]" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px] pl-6" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
                 <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
                 )}
-                {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[80px] min-w-[80px]" : "py-2", "text-right")}>Action</TableHead>
+                {revenueStateFilter === "action_required" && (
+                  <TableHead className="py-2 text-right">Action</TableHead>
+                )}
+                {revenueStateFilter === "heating_up" && (
+                  <TableHead className="py-1.5 w-[80px] min-w-[80px] text-right">Action</TableHead>
                 )}
               </TableRow>
             </TableHeader>
@@ -773,25 +776,38 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     <TableCell className={cn(isHeatingUp ? "py-1 w-[320px] max-w-[320px]" : "py-2")}>
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
-                        <div className="min-w-0 flex-1 overflow-hidden">
-                          <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
-                          {isHeatingUp && (() => {
-                            const bd = breakdownMap.get(lead.id);
-                            const [engagement, progress] = bd ? getAccelerationLines(lead, bd) : ["Engagement trending upward", "Engagement increasing"];
-                            return (
-                              <div className="mt-0.5 space-y-0">
-                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{engagement}</p>
-                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{progress}</p>
-                              </div>
-                            );
-                          })()}
-                        </div>
+                        {isHeatingUp ? (
+                          <div className="min-w-0 flex-1 overflow-hidden flex">
+                            {/* 60% name/company */}
+                            <div className="w-[60%] min-w-0 pr-2">
+                              <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
+                            </div>
+                            {/* 40% acceleration signals */}
+                            <div className="w-[40%] min-w-0 flex flex-col justify-center gap-[2px]">
+                              {(() => {
+                                const bd = breakdownMap.get(lead.id);
+                                const [engagement, progress] = bd ? getAccelerationLines(lead, bd) : ["Engagement trending upward", "Engagement increasing"];
+                                return (
+                                  <>
+                                    <p className="text-[10px] leading-tight text-muted-foreground/60 truncate">{engagement}</p>
+                                    <p className="text-[10px] leading-tight text-muted-foreground/60 truncate">{progress}</p>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="min-w-0 flex-1 overflow-hidden">
+                            <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                            <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
+                          </div>
+                        )}
                       </div>
                     </TableCell>
 
                     {isHeatingUp && (
-                      <TableCell className="py-1 text-right w-[90px] min-w-[90px] px-2 align-middle">
+                      <TableCell className="py-1 text-right w-[90px] min-w-[90px] pr-6 align-middle">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
                           const isTop3 = index < 3;
@@ -820,7 +836,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
 
                     {/* Last Activity */}
-                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden md:table-cell")}>
+                    <TableCell className={cn(isHeatingUp ? "py-1 pl-6" : "py-2", "hidden md:table-cell")}>
                       <span className={cn("text-xs", lastEmail.className)}>
                         {lastEmail.text}
                       </span>
@@ -863,8 +879,32 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
 
                     {/* Action button for action_required / heating_up */}
-                    {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                      <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "text-right")}>{getActionButton(lead)}</TableCell>
+                    {revenueStateFilter === "action_required" && (
+                      <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
+                    )}
+                    {isHeatingUp && (
+                      <TableCell className="py-1 text-right w-[80px] min-w-[80px]" onClick={(e) => e.stopPropagation()}>
+                        {lead.next_action_key ? (
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => handleOpenEmailDialog(lead, "")}
+                          >
+                            <Mail className="h-3 w-3 mr-1" />
+                            Reply
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 p-0"
+                            onClick={() => handleOpenEmailDialog(lead, "")}
+                            title="Compose email"
+                          >
+                            <Mail className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </TableCell>
                     )}
 
                   </TableRow>
