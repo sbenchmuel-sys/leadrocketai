@@ -303,6 +303,43 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // ── Bridge to interactions table for lead timeline ──
+        // Try matching normalizedPhone suffix against leads.phone
+        // Leads store local numbers (e.g. "9210029244"), webhook gets full E.164 (e.g. "919210029244")
+        const { data: matchedLead } = await supabase
+          .from("leads")
+          .select("id, owner_user_id")
+          .filter("phone", "neq", "")
+          .not("phone", "is", null)
+          .limit(100);
+
+        if (matchedLead && matchedLead.length > 0) {
+          const lead = matchedLead.find((l: any) => {
+            const leadPhone = (l.phone || "").replace(/\D/g, "");
+            return leadPhone.length >= 4 && normalizedPhone.endsWith(leadPhone);
+          });
+
+          if (lead) {
+            const { error: intxErr } = await supabase
+              .from("interactions")
+              .insert({
+                lead_id: lead.id,
+                type: "whatsapp_inbound",
+                source: "whatsapp",
+                body_text: bodyText,
+                occurred_at: timestamp,
+                direction: "inbound",
+                from_email: `+${normalizedPhone}`,
+              });
+
+            if (intxErr) {
+              console.error("[whatsapp-webhook] Failed to bridge to interactions:", intxErr);
+            } else {
+              console.log("[whatsapp-webhook] Bridged inbound to lead:", lead.id);
+            }
+          }
+        }
+
         processed++;
         console.log(
           "[whatsapp-webhook] Stored message:",

@@ -80,14 +80,11 @@ export async function decryptToken(encryptedBase64: string): Promise<string> {
  * Used to handle migration from plaintext to encrypted tokens
  */
 export function isEncrypted(value: string): boolean {
-  // Encrypted tokens are base64 and longer due to IV + auth tag overhead
-  // A typical access token is ~150 chars, encrypted would be ~200+ chars base64
-  // We check if it looks like base64 and has the right structure
+  // Encrypted values are base64(IV + ciphertext + authTag)
+  // Minimum: IV (12 bytes) + auth tag (16 bytes) + at least 1 byte ciphertext = 29 bytes
   try {
-    if (value.length < 50) return false;
     const decoded = atob(value);
-    // IV (12 bytes) + at least some ciphertext + auth tag (16 bytes)
-    return decoded.length >= IV_LENGTH + 16 + 10;
+    return decoded.length >= IV_LENGTH + 16 + 1;
   } catch {
     // If atob fails, it's not valid base64 (probably a raw token)
     return false;
