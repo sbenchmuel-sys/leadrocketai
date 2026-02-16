@@ -521,3 +521,216 @@ export const demoLeads: EnrichedLead[] = [
   ...longCycle,
   ...active,
 ].map(buildLead);
+
+// =============================================
+// DEMO LEAD DETAIL (for lead detail page)
+// =============================================
+
+const allDemoInputs = [...actionRequired, ...heatingUp, ...longCycle, ...active];
+
+export function getDemoLeadDetail(leadId: string) {
+  const input = allDemoInputs.find((l) => l.id === leadId);
+  if (!input) return null;
+  return {
+    id: input.id,
+    company: input.company,
+    name: input.name,
+    email: input.email,
+    strategy: "fast" as const,
+    status: "active" as const,
+    stage: input.stage,
+    owner_user_id: "demo-user",
+    created_at: input.created_at,
+    last_activity_at: input.last_activity_at,
+    meeting_link: null,
+    personal_notes: input.deal_outlook,
+    pref_email_drafts: true,
+    pref_linkedin_drafts: false,
+    milestones_json: null,
+    risks_json: null,
+    next_step: input.next_step,
+    next_step_reason: null,
+    deal_outlook: input.deal_outlook,
+    deal_factors_json: null,
+    last_ai_run_at: null,
+    job_title: "VP of Operations",
+    phone: "+1 555 012 3456",
+    industry: "Technology",
+    country: input.country,
+    initial_message: null,
+    motion: input.motion,
+    source_type: input.source_type,
+    needs_action: input.needs_action,
+    next_action_key: input.next_action_key,
+    next_action_label: input.next_action_label,
+    has_future_meeting: input.meeting_summary_count > 0,
+    last_inbound_at: input.last_inbound_at,
+    last_outbound_at: input.last_outbound_at,
+    eligible_at: input.eligible_at,
+    nurture_cadence: input.nurture_cadence,
+    mode_changed_at: null,
+    nurture_status: input.nurture_status,
+    nurture_mode: input.nurture_mode,
+    nurture_theme: null,
+  };
+}
+
+// =============================================
+// DEMO INTERACTIONS (emails + WhatsApp per lead)
+// =============================================
+
+interface DemoInteraction {
+  id: string;
+  lead_id: string;
+  type: string;
+  source: string;
+  occurred_at: string;
+  subject: string | null;
+  from_email: string | null;
+  to_email: string | null;
+  body_text: string;
+  ai_summary: string | null;
+  ai_intent: string | null;
+  ai_reply_worthy: boolean | null;
+  gmail_message_id: string | null;
+  hidden: boolean;
+}
+
+function buildDemoInteractionsForLead(input: DemoLeadInput): DemoInteraction[] {
+  const items: DemoInteraction[] = [];
+  const repEmail = "you@yourcompany.com";
+  const base = input.id;
+
+  // Outbound intro email
+  items.push({
+    id: `${base}-int-1`, lead_id: input.id, type: "email_outbound", source: "gmail",
+    occurred_at: input.first_outbound_at || input.created_at,
+    subject: `Introduction — ${input.company} x YourCompany`,
+    from_email: repEmail, to_email: input.email,
+    body_text: `Hi ${input.name.split(" ")[0]},\n\nI wanted to reach out regarding how we've been helping companies like ${input.company} streamline their operations and drive measurable results.\n\nWould you be open to a brief call next week to explore if there's a fit?\n\nBest regards`,
+    ai_summary: "Initial outreach — value proposition intro", ai_intent: "outreach", ai_reply_worthy: false,
+    gmail_message_id: `demo-gm-${base}-1`, hidden: false,
+  });
+
+  // Inbound reply (if lead has inbound)
+  if (input.last_inbound_at) {
+    items.push({
+      id: `${base}-int-2`, lead_id: input.id, type: "email_inbound", source: "gmail",
+      occurred_at: input.last_inbound_at,
+      subject: `Re: Introduction — ${input.company} x YourCompany`,
+      from_email: input.email, to_email: repEmail,
+      body_text: `Hi,\n\nThanks for reaching out. We've actually been looking into solutions in this space. Could you send over some more details on pricing and implementation timelines?\n\nLooking forward to learning more.\n\nBest,\n${input.name.split(" ")[0]}`,
+      ai_summary: "Positive response — requesting pricing and timeline details",
+      ai_intent: "pricing_inquiry", ai_reply_worthy: true,
+      gmail_message_id: `demo-gm-${base}-2`, hidden: false,
+    });
+  }
+
+  // Follow-up outbound
+  if (input.last_outbound_at && input.last_outbound_at !== input.first_outbound_at) {
+    items.push({
+      id: `${base}-int-3`, lead_id: input.id, type: "email_outbound", source: "gmail",
+      occurred_at: input.last_outbound_at,
+      subject: `Re: Introduction — ${input.company} x YourCompany`,
+      from_email: repEmail, to_email: input.email,
+      body_text: `Hi ${input.name.split(" ")[0]},\n\nGreat to hear there's interest. I've attached our pricing overview and typical implementation timeline (6-8 weeks for enterprise).\n\nHappy to jump on a quick call to walk through the details. Would Thursday or Friday work?\n\nBest regards`,
+      ai_summary: "Follow-up with pricing details and meeting proposal", ai_intent: null, ai_reply_worthy: false,
+      gmail_message_id: `demo-gm-${base}-3`, hidden: false,
+    });
+  }
+
+  // Meeting notes (if has meetings)
+  if (input.meeting_summary_count > 0) {
+    items.push({
+      id: `${base}-int-4`, lead_id: input.id, type: "meeting", source: "manual",
+      occurred_at: daysAgo(5),
+      subject: `Discovery Call — ${input.company}`,
+      from_email: null, to_email: null,
+      body_text: `Attendees: ${input.name}, VP Operations; Sarah (CTO)\n\nKey Discussion Points:\n- Current pain points with existing system\n- Integration requirements with their tech stack\n- Timeline: Looking to implement by end of Q2\n- Budget: Allocated, pending final approval\n\nAction Items:\n1. Send detailed proposal with pricing tiers\n2. Schedule technical deep-dive with their engineering team\n3. Provide customer references in their industry`,
+      ai_summary: "Discovery call — budget allocated, Q2 timeline, pending technical validation",
+      ai_intent: null, ai_reply_worthy: false, gmail_message_id: null, hidden: false,
+    });
+  }
+
+  // WhatsApp messages (for leads with phone / recent activity)
+  if (input.last_inbound_at) {
+    items.push({
+      id: `${base}-int-5`, lead_id: input.id, type: "whatsapp_outbound", source: "whatsapp",
+      occurred_at: daysAgo(2),
+      subject: null,
+      from_email: null, to_email: null,
+      body_text: `Hi ${input.name.split(" ")[0]}, just wanted to check if you had a chance to review the proposal we sent over. Happy to clarify anything! 👋`,
+      ai_summary: null, ai_intent: null, ai_reply_worthy: false, gmail_message_id: null, hidden: false,
+    });
+
+    items.push({
+      id: `${base}-int-6`, lead_id: input.id, type: "whatsapp_inbound", source: "whatsapp",
+      occurred_at: daysAgo(1),
+      subject: null,
+      from_email: null, to_email: null,
+      body_text: `Yes, I shared it with our team. We should have feedback by end of week. Can we schedule a quick call Monday?`,
+      ai_summary: "Positive — team reviewing, requesting follow-up call", ai_intent: "meeting_request",
+      ai_reply_worthy: true, gmail_message_id: null, hidden: false,
+    });
+  }
+
+  return items.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+}
+
+// Build all demo interactions
+const _allDemoInteractions: DemoInteraction[] = allDemoInputs.flatMap(buildDemoInteractionsForLead);
+
+export function getDemoInteractions(leadId: string): DemoInteraction[] {
+  return _allDemoInteractions.filter((i) => i.lead_id === leadId);
+}
+
+// =============================================
+// DEMO DRAFTS
+// =============================================
+
+interface DemoDraft {
+  id: string;
+  lead_id: string;
+  channel: string;
+  draft_type: string;
+  subject: string | null;
+  body_text: string;
+  status: string;
+  created_at: string;
+  created_by: string | null;
+  to_recipient: string | null;
+  step_key: string | null;
+  nurture_theme: string | null;
+  nurture_cadence: string | null;
+}
+
+function buildDemoDraftsForLead(input: DemoLeadInput): DemoDraft[] {
+  const drafts: DemoDraft[] = [];
+  const base = input.id;
+
+  // Email draft
+  drafts.push({
+    id: `${base}-draft-1`, lead_id: input.id, channel: "email", draft_type: "follow_up",
+    subject: `Next Steps — ${input.company} Partnership`,
+    body_text: `Hi ${input.name.split(" ")[0]},\n\nFollowing up on our recent conversation. I wanted to share a few additional resources that might be helpful as your team evaluates options:\n\n1. Case study from a similar company in your industry\n2. Our security whitepaper (relevant to the compliance questions raised)\n3. ROI calculator customized for your use case\n\nWould any of these be useful? Happy to walk through them on a quick call.\n\nBest regards`,
+    status: "pending", created_at: daysAgo(1), created_by: "demo-user",
+    to_recipient: input.email, step_key: null, nurture_theme: null, nurture_cadence: null,
+  });
+
+  // WhatsApp draft
+  drafts.push({
+    id: `${base}-draft-2`, lead_id: input.id, channel: "whatsapp", draft_type: "quick_follow_up",
+    subject: null,
+    body_text: `Hey ${input.name.split(" ")[0]}, just circling back on the proposal. Any questions from the team? Happy to hop on a quick call anytime this week 👋`,
+    status: "pending", created_at: daysAgo(1), created_by: "demo-user",
+    to_recipient: null, step_key: null, nurture_theme: null, nurture_cadence: null,
+  });
+
+  return drafts;
+}
+
+const _allDemoDrafts: DemoDraft[] = allDemoInputs.flatMap(buildDemoDraftsForLead);
+
+export function getDemoDrafts(leadId: string): DemoDraft[] {
+  return _allDemoDrafts.filter((d) => d.lead_id === leadId);
+}
