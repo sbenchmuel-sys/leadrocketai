@@ -95,14 +95,19 @@ function getClosingBreakdown(lead: EnrichedLead): ScoreBreakdown {
   return calculateClosingPower(asDetail);
 }
 
-// Top 1-2 positive signals for heating_up acceleration tags
-function getAccelerationSignals(lead: EnrichedLead, breakdown: ScoreBreakdown): string[] {
-  const positive = breakdown.factors
-    .filter(f => f.points > 0)
-    .sort((a, b) => b.points - a.points)
-    .slice(0, 2)
-    .map(f => f.label);
-  return positive.length > 0 ? positive : ["Engagement trending upward"];
+// Derive structured engagement + progress signals for heating_up rows
+function getAccelerationLines(lead: EnrichedLead, breakdown: ScoreBreakdown): [string, string] {
+  const engagementLabels = ["Fast reply (<24h)", "Meeting booked", "WhatsApp engaged", "WhatsApp inbound"];
+  const progressLabels = ["Pricing mentioned", "Decision maker involved", "Docs requested", "Closing stage"];
+
+  const positive = breakdown.factors.filter(f => f.points > 0);
+  const engagement = positive.find(f => engagementLabels.includes(f.label))?.label || null;
+  const progress = positive.find(f => progressLabels.includes(f.label))?.label || null;
+
+  return [
+    engagement || "Engagement trending upward",
+    progress || "Engagement increasing",
+  ];
 }
 
 interface LeadTableProps {
@@ -670,7 +675,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               <TableRow className="text-xs border-b border-border/60">
                 <TableHead className="w-1 p-0" />
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="w-6 py-1.5 px-0 text-center text-[10px] text-muted-foreground/50">#</TableHead>
+                  <TableHead className="w-[40px] min-w-[40px] py-1.5 px-0 text-center text-[10px] text-muted-foreground/50">#</TableHead>
                 )}
                 <TableHead className="w-10 py-1.5">
                   <Checkbox
@@ -680,9 +685,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 max-w-[300px] w-[300px]" : "py-2")}>Lead</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[320px] max-w-[320px]" : "py-2")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
-                  <TableHead className="py-1.5 text-right w-[90px] px-2">
+                  <TableHead className="py-1.5 text-right w-[90px] min-w-[90px] px-2">
                     <span className="inline-flex items-center gap-0.5">
                       Score
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -692,13 +697,13 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2">Phase</TableHead>
                 )}
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px]" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
                   <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
                 )}
                 {(revenueStateFilter === "action_required" || revenueStateFilter === "heating_up") && (
-                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5" : "py-2", "text-right")}>Action</TableHead>
+                  <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[80px] min-w-[80px]" : "py-2", "text-right")}>Action</TableHead>
                 )}
               </TableRow>
             </TableHeader>
@@ -752,7 +757,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </td>
                     {/* Ranking index (heating_up only) */}
                     {isHeatingUp && (
-                      <td className="w-6 px-0 text-center py-1">
+                      <td className="w-[40px] min-w-[40px] px-0 text-center py-1">
                         <span className="text-[10px] tabular-nums text-muted-foreground/40">{index + 1}</span>
                       </td>
                     )}
@@ -765,34 +770,36 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Lead */}
-                    <TableCell className={cn(isHeatingUp ? "py-1 max-w-[300px] w-[300px]" : "py-2")}>
+                    <TableCell className={cn(isHeatingUp ? "py-1 w-[320px] max-w-[320px]" : "py-2")}>
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
-                        <div className="min-w-0 max-w-[220px]">
+                        <div className="min-w-0 flex-1 overflow-hidden">
                           <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
                           <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
+                          {isHeatingUp && (() => {
+                            const bd = breakdownMap.get(lead.id);
+                            const [engagement, progress] = bd ? getAccelerationLines(lead, bd) : ["Engagement trending upward", "Engagement increasing"];
+                            return (
+                              <div className="mt-0.5 space-y-0">
+                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{engagement}</p>
+                                <p className="text-[10px] leading-tight text-muted-foreground/70 truncate">{progress}</p>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     </TableCell>
 
-                    {/* Score + signals (heating_up only, right after Lead) */}
                     {isHeatingUp && (
-                      <TableCell className="py-1 text-right w-[90px] px-2">
+                      <TableCell className="py-1 text-right w-[90px] min-w-[90px] px-2 align-middle">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
-                          const bd = breakdownMap.get(lead.id);
                           const isTop3 = index < 3;
                           const color = isTop3
-                            ? "text-foreground font-bold"
-                            : s >= 60 ? "text-foreground" : s >= 30 ? "text-foreground/70" : "text-muted-foreground";
-                          const signals = bd ? getAccelerationSignals(lead, bd) : ["Engagement trending upward"];
+                            ? "text-foreground brightness-110"
+                            : s >= 60 ? "text-foreground/90" : s < 40 ? "text-muted-foreground" : "text-foreground/70";
                           return (
-                            <div>
-                              <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{s}</span>
-                              <p className="text-[10px] leading-tight text-muted-foreground mt-0.5 truncate">
-                                {signals.join(" · ")}
-                              </p>
-                            </div>
+                            <span className={cn("text-[15px] font-medium tabular-nums", color)}>{s}</span>
                           );
                         })()}
                       </TableCell>
