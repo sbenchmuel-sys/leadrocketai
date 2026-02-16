@@ -74,34 +74,18 @@ export function RepProfileCard() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <User className="h-5 w-5" />
-            Your Profile
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex justify-center py-6">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <div className="flex justify-center py-6">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <User className="h-5 w-5" />
-          Your Profile
-        </CardTitle>
-        <CardDescription>
-          Your information for email signatures and personalization
-        </CardDescription>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+    <div className="space-y-4">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
           disabled={isSyncing}
           onClick={async () => {
             const result = await syncFromKB("rep_profile");
@@ -130,8 +114,7 @@ export function RepProfileCard() {
           {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           Sync from KB & Emails
         </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
+
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="fullName">Full Name</Label>
@@ -218,7 +201,6 @@ export function RepProfileCard() {
             Save Profile
           </Button>
         </div>
-      </CardContent>
-    </Card>
+    </div>
   );
 }
