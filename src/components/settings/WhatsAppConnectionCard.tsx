@@ -69,26 +69,29 @@ export function WhatsAppConnectionCard() {
         .maybeSingle();
 
       // Auto-create workspace if none exists
+      // The trigger auto_add_workspace_creator handles adding the user as admin
       if (!membership) {
-        const { data: newWs, error: wsErr } = await supabase
+        const { error: wsErr } = await supabase
           .from("workspaces")
-          .insert({ name: "My Workspace", plan: "free" })
-          .select("id")
-          .single();
+          .insert({ name: "My Workspace", plan: "free" });
 
-        if (wsErr || !newWs) {
+        if (wsErr) {
           throw new Error("Could not create workspace. Please contact support.");
         }
 
-        const { error: memInsertErr } = await supabase
+        // Re-fetch membership (trigger created it)
+        const { data: newMembership } = await supabase
           .from("workspace_members")
-          .insert({ workspace_id: newWs.id, user_id: user!.id, role: "admin" as const });
+          .select("workspace_id")
+          .eq("user_id", user!.id)
+          .limit(1)
+          .maybeSingle();
 
-        if (memInsertErr) {
+        if (!newMembership) {
           throw new Error("Could not set up workspace membership.");
         }
 
-        membership = { workspace_id: newWs.id };
+        membership = { workspace_id: newMembership.workspace_id };
       }
 
       const { data, error } = await supabase.functions.invoke("whatsapp-connect", {
