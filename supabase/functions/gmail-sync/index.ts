@@ -1276,13 +1276,18 @@ serve(async (req) => {
     // If so, preserve automation fields instead of overwriting them
     const { data: currentLeadState } = await serviceSupabase
       .from("leads")
-      .select("eligible_at, needs_action")
+      .select("eligible_at, needs_action, motion, nurture_status")
       .eq("id", leadId)
       .single();
 
-    const hasActiveAutomation = currentLeadState?.needs_action === true
+    const hasActiveSequence = currentLeadState?.needs_action === true
       && currentLeadState?.eligible_at
       && new Date(currentLeadState.eligible_at).getTime() > Date.now();
+
+    const hasActiveNurture = currentLeadState?.motion === "nurture"
+      && currentLeadState?.nurture_status === "active";
+
+    const hasActiveAutomation = hasActiveSequence || hasActiveNurture;
 
     // Update lead with computed values
     const leadUpdate: LeadUpdate & { auto_nurture_eligible?: boolean } = {
