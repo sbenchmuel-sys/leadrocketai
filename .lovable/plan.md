@@ -1,51 +1,38 @@
 
 
-## Problem Summary
+## Problem
 
-Two wiring gaps prevent WhatsApp messages from appearing in the Inbox and Lead Card:
+Gmail sync runs every few minutes and recalculates lead automation fields. Its "preservation" check only protects leads where `needs_action = true AND eligible_at is in the future`. 
 
-1. **Inbox shows "0 msgs"**: The `message_count` field on the conversation record is never incremented when outbound messages are sent via `whatsapp-send`. The conversation appears in the list but looks empty.
+Nurture automation starts with `needs_action = false` (it only flips to `true` when the cadence date arrives). So gmail-sync sees nurture leads as having no active automation and overwrites their fields -- turning automation off.
 
-2. **Lead Card Timeline is blank for WhatsApp**: Outbound WhatsApp messages are NOT bridged to the `interactions` table. Only the inbound webhook bridges messages. Since no real inbound messages have arrived yet, the lead timeline shows nothing for WhatsApp.
+## Fix
 
----
+Expand the automation preservation in `gmail-sync` to also recognize nurture leads.
 
-## Fix 1: Update `whatsapp-send` Edge Function
+### 1. Fetch nurture fields in the state query (line 1279)
 
-After successfully sending a WhatsApp message and storing it in the `messages` table, the function must:
-
-- **Increment `message_count`** on the conversation record
-- **Bridge to the `interactions` table** with type `whatsapp_outbound`, matching the lead by phone number suffix (same pattern the inbound webhook uses)
-
-## Fix 2: Update `whatsapp-webhook` Edge Function
-
-The inbound webhook already bridges to interactions, but it should also **properly increment `message_count`** on the conversation. Currently it tries to increment but uses a stale value from a query that doesn't select `message_count`.
-
-## Fix 3: Backfill existing data
-
-Run a one-time SQL update to fix the `message_count` for the existing conversation and bridge the 7 existing outbound messages to the `interactions` table so they appear on the lead timeline immediately.
-
----
-
-## Technical Details
-
-### whatsapp-send changes
-After the message insert into `messages`, add:
-
+Change the select from:
 ```text
-1. UPDATE conversations SET message_count = message_count + 1, last_message_at = NOW() WHERE id = conversationId
-2. Look up matching lead by phone suffix (same logic as webhook)
-3. INSERT into interactions: type = 'whatsapp_outbound', source = 'whatsapp', direction = 'outbound'
+"eligible_at, needs_action"
+```
+to:
+```text
+"eligible_at, needs_action, motion, nurture_status"
 ```
 
-### whatsapp-webhook changes
-Fix the message_count increment to use SQL increment instead of reading a stale value:
+### 2. Broaden the preservation check (lines 1283-1285)
+
+Add a nurture-specific condition:
 
 ```text
-UPDATE conversations SET message_count = message_count + 1, last_message_at = timestamp WHERE id = conversationId
+hasActiveSequence = needs_action === true AND eligible_at > now()
+hasActiveNurture  = motion === 'nurture' AND nurture_status === 'active'
+hasActiveAutomation = hasActiveSequence OR hasActiveNurture
 ```
 
-### Backfill SQL migration
-- Update conversation `message_count` to match actual message count
-- Insert interaction records for the 7 existing outbound messages so they appear on the lead timeline
+This ensures nurture leads keep their `needs_action`, `eligible_at`, `next_action_key`, `next_action_label`, and `action_reason_code` fields intact across sync cycles -- even when `needs_action` is currently `false`.
 
+### Files Changed
+
+- `supabase/functions/gmail-sync/index.ts` -- ~5 lines changed around line 1277-1285
