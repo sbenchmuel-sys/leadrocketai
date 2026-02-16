@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, Loader2, Zap, RefreshCw, Trash2, Leaf, Search } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -657,7 +657,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                   />
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
-                <TableHead className="py-2">{revenueStateFilter === "heating_up" ? "Score" : "Phase"}</TableHead>
+                <TableHead className="py-2">
+                  {revenueStateFilter === "heating_up" ? (
+                    <span className="inline-flex items-center gap-0.5">
+                      Score
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </span>
+                  ) : "Phase"}
+                </TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
@@ -673,7 +680,9 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 if (!searchQuery) return true;
                 const q = searchQuery.toLowerCase();
                 return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
-              }).map((lead, index) => {
+              })
+              .sort((a, b) => revenueStateFilter === "heating_up" ? getQuickScore(b) - getQuickScore(a) : 0)
+              .map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
                 const nurtureMode = (lead as any).nurture_mode;
