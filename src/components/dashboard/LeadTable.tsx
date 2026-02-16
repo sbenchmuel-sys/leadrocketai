@@ -760,11 +760,11 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </td>
                     {/* Ranking index (heating_up only) */}
                     {isHeatingUp && (
-                      <td className="w-[40px] min-w-[40px] px-0 text-center py-1">
+                      <td className="w-[40px] min-w-[40px] px-0 text-center py-2">
                         <span className="text-[10px] tabular-nums text-muted-foreground/40">{index + 1}</span>
                       </td>
                     )}
-                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2")} onClick={(e) => e.stopPropagation()}>
+                    <TableCell className={cn("py-2")} onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(checked) => handleSelectLead(lead.id, !!checked)}
@@ -773,7 +773,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Lead */}
-                    <TableCell className={cn(isHeatingUp ? "py-1 w-[320px] max-w-[320px]" : "py-2")}>
+                    <TableCell className={cn(isHeatingUp ? "py-2 w-[320px] max-w-[320px]" : "py-2")}>
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
                         {isHeatingUp ? (
@@ -807,7 +807,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {isHeatingUp && (
-                      <TableCell className="py-1 text-right w-[90px] min-w-[90px] pr-6 align-middle">
+                      <TableCell className="py-2 text-right w-[90px] min-w-[90px] pr-6 align-middle">
                         {(() => {
                           const s = scoreMap.get(lead.id) ?? 0;
                           const isTop3 = index < 3;
@@ -836,14 +836,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     )}
 
                     {/* Last Activity */}
-                    <TableCell className={cn(isHeatingUp ? "py-1 pl-6" : "py-2", "hidden md:table-cell")}>
+                    <TableCell className={cn(isHeatingUp ? "py-2 pl-6" : "py-2", "hidden md:table-cell")}>
                       <span className={cn("text-xs", lastEmail.className)}>
                         {lastEmail.text}
                       </span>
                     </TableCell>
 
                     {/* Next Action */}
-                    <TableCell className={cn(isHeatingUp ? "py-1" : "py-2", "hidden lg:table-cell")}>
+                    <TableCell className={cn("py-2", "hidden lg:table-cell")}>
                       <p className="text-xs text-muted-foreground truncate max-w-[180px]">
                         {lead.next_action_label || (lead.stage === "new" ? "Ready for outreach" : "—")}
                       </p>
@@ -883,7 +883,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                       <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
                     )}
                     {isHeatingUp && (
-                      <TableCell className="py-1 text-right w-[80px] min-w-[80px]" onClick={(e) => e.stopPropagation()}>
+                      <TableCell className="py-2 text-right w-[80px] min-w-[80px]" onClick={(e) => e.stopPropagation()}>
                         {lead.next_action_key ? (
                           <Button
                             size="sm"
