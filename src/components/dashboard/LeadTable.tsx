@@ -654,7 +654,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
-                <TableHead className="py-2">Lead</TableHead>
+                <TableHead className={cn("py-2", revenueStateFilter === "heating_up" && "max-w-[300px] w-[300px]")}>Lead</TableHead>
                 {revenueStateFilter === "heating_up" && (
                   <TableHead className="py-2 text-right w-[70px] px-2">
                     <span className="inline-flex items-center gap-0.5">
@@ -732,10 +732,10 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     </TableCell>
 
                     {/* Lead */}
-                    <TableCell className="py-2">
+                    <TableCell className={cn("py-2", revenueStateFilter === "heating_up" && "max-w-[300px] w-[300px]")}>
                       <div className="flex items-center gap-2">
                         <LeadAvatar name={lead.name} company={lead.company} leadId={lead.id} size="sm" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 max-w-[220px]">
                           <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
                           <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                         </div>
