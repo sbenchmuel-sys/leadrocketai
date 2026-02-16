@@ -73,6 +73,26 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
   return { text, className };
 }
 
+// Lightweight closing-power score using available EnrichedLead fields
+function getQuickScore(lead: EnrichedLead): number {
+  let score = 10;
+  if (lead.hasMeeting || lead.stage === "post_meeting" || lead.stage === "closing") score += 20;
+  if (lead.stage === "closing") score += 10;
+  if (lead.last_inbound_at && lead.last_outbound_at) {
+    const inbound = new Date(lead.last_inbound_at).getTime();
+    const outbound = new Date(lead.last_outbound_at).getTime();
+    const gapH = Math.abs(inbound - outbound) / (1000 * 60 * 60);
+    if (inbound > outbound && gapH < 24) score += 10;
+    else if (inbound < outbound) {
+      const d = (Date.now() - new Date(lead.last_outbound_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (d > 10) score -= 15;
+      else if (d > 7) score -= 10;
+    }
+  }
+  if (lead.needs_action && lead.next_action_key) score += 5;
+  return Math.max(0, Math.min(100, score));
+}
+
 interface LeadTableProps {
   leads: EnrichedLead[];
   isLoading: boolean;
@@ -637,7 +657,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                   />
                 </TableHead>
                 <TableHead className="py-2">Lead</TableHead>
-                <TableHead className="py-2">Phase</TableHead>
+                <TableHead className="py-2">{revenueStateFilter === "heating_up" ? "Score" : "Phase"}</TableHead>
                 <TableHead className="py-2 hidden md:table-cell">Last Activity</TableHead>
                 <TableHead className="py-2 hidden lg:table-cell">Next Action</TableHead>
                 {revenueStateFilter !== "heating_up" && (
@@ -712,17 +732,25 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                       </div>
                     </TableCell>
 
-                    {/* Phase with mode dropdown */}
-                    <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
-                      <ModeDropdown
-                        leadId={lead.id}
-                        leadName={lead.name}
-                        currentPhase={lead.displayPhase}
-                        directionArrow={directionArrow}
-                        onNurtureSelect={() => setNurtureSwitchLead(lead)}
-                        onUpdated={onLeadUpdated}
-                      />
-                    </TableCell>
+                    {/* Phase or Score (heating_up) */}
+                    {revenueStateFilter === "heating_up" ? (
+                      <TableCell className="py-2">
+                        <span className="text-sm font-semibold text-foreground">
+                          {getQuickScore(lead)}
+                        </span>
+                      </TableCell>
+                    ) : (
+                      <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                        <ModeDropdown
+                          leadId={lead.id}
+                          leadName={lead.name}
+                          currentPhase={lead.displayPhase}
+                          directionArrow={directionArrow}
+                          onNurtureSelect={() => setNurtureSwitchLead(lead)}
+                          onUpdated={onLeadUpdated}
+                        />
+                      </TableCell>
+                    )}
 
                     {/* Last Activity */}
                     <TableCell className="py-2 hidden md:table-cell">
