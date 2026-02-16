@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Table,
@@ -73,24 +73,22 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
   return { text, className };
 }
 
-// Lightweight closing-power score using available EnrichedLead fields
-function getQuickScore(lead: EnrichedLead): number {
-  let score = 10;
-  if (lead.hasMeeting || lead.stage === "post_meeting" || lead.stage === "closing") score += 20;
-  if (lead.stage === "closing") score += 10;
-  if (lead.last_inbound_at && lead.last_outbound_at) {
-    const inbound = new Date(lead.last_inbound_at).getTime();
-    const outbound = new Date(lead.last_outbound_at).getTime();
-    const gapH = Math.abs(inbound - outbound) / (1000 * 60 * 60);
-    if (inbound > outbound && gapH < 24) score += 10;
-    else if (inbound < outbound) {
-      const d = (Date.now() - new Date(lead.last_outbound_at).getTime()) / (1000 * 60 * 60 * 24);
-      if (d > 10) score -= 15;
-      else if (d > 7) score -= 10;
-    }
-  }
-  if (lead.needs_action && lead.next_action_key) score += 5;
-  return Math.max(0, Math.min(100, score));
+import { calculateClosingPower } from "@/lib/closingPowerUtils";
+import type { LeadDetail } from "@/lib/supabaseQueries";
+
+// Bridge EnrichedLead → LeadDetail shape for calculateClosingPower
+function getClosingScore(lead: EnrichedLead): number {
+  const asDetail = {
+    ...lead,
+    has_future_meeting: lead.has_future_meeting ?? lead.hasMeeting,
+    milestones_json: lead.milestones_json ?? null,
+    risks_json: lead.risks_json ?? null,
+    deal_outlook: lead.deal_outlook ?? null,
+    last_inbound_at: lead.last_inbound_at ?? null,
+    last_outbound_at: lead.last_outbound_at ?? null,
+    last_activity_at: lead.last_activity_at ?? null,
+  } as unknown as LeadDetail;
+  return calculateClosingPower(asDetail).total;
 }
 
 interface LeadTableProps {
@@ -681,7 +679,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 const q = searchQuery.toLowerCase();
                 return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
               })
-              .sort((a, b) => revenueStateFilter === "heating_up" ? getQuickScore(b) - getQuickScore(a) : 0)
+              .sort((a, b) => revenueStateFilter === "heating_up" ? getClosingScore(b) - getClosingScore(a) : 0)
               .map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
@@ -745,7 +743,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     {revenueStateFilter === "heating_up" ? (
                       <TableCell className="py-2">
                         <span className="text-sm font-semibold text-foreground">
-                          {getQuickScore(lead)}
+                          {getClosingScore(lead)}
                         </span>
                       </TableCell>
                     ) : (
