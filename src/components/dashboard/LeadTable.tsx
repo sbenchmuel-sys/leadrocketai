@@ -335,58 +335,55 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
     // New leads without action get Smart Intro button
     if (lead.stage === "new" && !lead.needs_action) {
       return (
-        <div className="flex items-center gap-1">
-          <Popover 
-            open={instructionsPopover === lead.id} 
-            onOpenChange={(open) => !open && setInstructionsPopover(null)}
-          >
-            <PopoverTrigger asChild>
-              <Button 
-                size="sm" 
-                variant="default" 
-                onClick={(e) => openInstructionsPopover(lead.id, e)}
-              >
-                <Sparkles className="h-4 w-4 mr-1" />
-                Draft
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-80" align="end">
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-warning" />
-                  <span className="text-sm font-medium">Add instructions (optional)</span>
-                </div>
-                <Input
-                  value={tempInstructions}
-                  onChange={(e) => setTempInstructions(e.target.value)}
-                  placeholder="e.g., Mention the healthcare conference..."
-                  className="text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      confirmInstructions(lead);
-                    }
-                  }}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
-                    onClick={() => setInstructionsPopover(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    onClick={() => confirmInstructions(lead)}
-                  >
-                    Generate Draft
-                  </Button>
-                </div>
+        <Popover 
+          open={instructionsPopover === lead.id} 
+          onOpenChange={(open) => !open && setInstructionsPopover(null)}
+        >
+          <PopoverTrigger asChild>
+            <Button 
+              size="sm" 
+              variant="default" 
+              onClick={(e) => openInstructionsPopover(lead.id, e)}
+            >
+              <Sparkles className="h-4 w-4 mr-1" />
+              Draft
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80" align="end">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-warning" />
+                <span className="text-sm font-medium">Add instructions (optional)</span>
               </div>
-            </PopoverContent>
-          </Popover>
-          {renderEmailComposeButton(lead)}
-        </div>
+              <Input
+                value={tempInstructions}
+                onChange={(e) => setTempInstructions(e.target.value)}
+                placeholder="e.g., Mention the healthcare conference..."
+                className="text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    confirmInstructions(lead);
+                  }
+                }}
+              />
+              <div className="flex justify-end gap-2">
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => setInstructionsPopover(null)}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  size="sm" 
+                  onClick={() => confirmInstructions(lead)}
+                >
+                  Generate Draft
+                </Button>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       );
     }
 
@@ -411,60 +408,53 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
       const label = labelMap[actionType] || "Action";
       const icon = iconMap[actionType] || null;
       return (
-        <div className="flex items-center gap-1">
-          <Popover 
-            open={instructionsPopover === lead.id}
-            onOpenChange={(open) => !open && setInstructionsPopover(null)}
-          >
-            <PopoverTrigger asChild>
-              <Button
-                size="sm"
-                variant="default"
-                onClick={(e) => openInstructionsPopover(lead.id, e)}
-              >
-                {icon}
-                <span>{label}</span>
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-80" align="end" onClick={(e) => e.stopPropagation()}>
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-warning" />
-                  <span className="text-sm font-medium">Add instructions (optional)</span>
-                </div>
-                <Input
-                  value={tempInstructions}
-                  onChange={(e) => setTempInstructions(e.target.value)}
-                  placeholder="e.g., Mention the healthcare conference..."
-                  className="text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      confirmInstructions(lead);
-                    }
-                  }}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setInstructionsPopover(null)}>
-                    Cancel
-                  </Button>
-                  <Button size="sm" onClick={() => confirmInstructions(lead)}>
-                    Continue
-                  </Button>
-                </div>
+        <Popover 
+          open={instructionsPopover === lead.id}
+          onOpenChange={(open) => !open && setInstructionsPopover(null)}
+        >
+          <PopoverTrigger asChild>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={(e) => openInstructionsPopover(lead.id, e)}
+            >
+              {icon}
+              <span>{label}</span>
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80" align="end" onClick={(e) => e.stopPropagation()}>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-warning" />
+                <span className="text-sm font-medium">Add instructions (optional)</span>
               </div>
-            </PopoverContent>
-          </Popover>
-          {renderEmailComposeButton(lead)}
-        </div>
+              <Input
+                value={tempInstructions}
+                onChange={(e) => setTempInstructions(e.target.value)}
+                placeholder="e.g., Mention the healthcare conference..."
+                className="text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    confirmInstructions(lead);
+                  }
+                }}
+              />
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setInstructionsPopover(null)}>
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={() => confirmInstructions(lead)}>
+                  Continue
+                </Button>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       );
     }
 
-    // Default
-    return (
-      <div className="flex items-center gap-1">
-        {renderEmailComposeButton(lead)}
-      </div>
-    );
+    // Default — no action needed
+    return null;
   };
 
   return (
