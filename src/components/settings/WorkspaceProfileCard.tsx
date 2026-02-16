@@ -138,63 +138,50 @@ export function WorkspaceProfileCard() {
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Building2 className="h-5 w-5" />
-          Workspace Profile
-        </CardTitle>
-        <CardDescription>
-          Configure your company and product information for AI-generated emails
-        </CardDescription>
-        {autoFilledFields.length > 0 && (
-          <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            Some fields were auto-filled from your knowledge base. Review and save to confirm.
-          </div>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-          disabled={isSyncing}
-          onClick={async () => {
-            const result = await syncFromKB("workspace");
-            if (!result?.workspace) {
-              toast.info("No workspace data found in knowledge base");
-              return;
-            }
-            const ws = result.workspace;
-            const filled: string[] = [];
-            const v = getHighConfidenceValue;
-            // Always replace with KB data (sync = override with latest KB)
-            if (v(ws.company_name)) { setCompanyName(v(ws.company_name)!); filled.push("company_name"); }
-            if (v(ws.product_name)) { setProductName(v(ws.product_name)!); filled.push("product_name"); }
-            if (v(ws.product_description)) { setProductDescription(v(ws.product_description)!); filled.push("product_description"); }
-            if (v(ws.primary_value_props)) { setValueProps(v(ws.primary_value_props)!); filled.push("value_props"); }
-            if (v(ws.meeting_timezone)) { setMeetingTimezone(v(ws.meeting_timezone)!); filled.push("timezone"); }
-            if (filled.length > 0) {
-              setAutoFilledFields(prev => [...prev, ...filled]);
-              toast.success(`Synced ${filled.length} field(s) from knowledge base. Review and save.`);
-            } else {
-              toast.info("No high-confidence data found in knowledge base.");
-            }
-          }}
-        >
-          {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          Sync from KB
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="space-y-4">
+      {autoFilledFields.length > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          Some fields were auto-filled from your knowledge base. Review and save to confirm.
+        </div>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+        disabled={isSyncing}
+        onClick={async () => {
+          const result = await syncFromKB("workspace");
+          if (!result?.workspace) {
+            toast.info("No workspace data found in knowledge base");
+            return;
+          }
+          const ws = result.workspace;
+          const filled: string[] = [];
+          const v = getHighConfidenceValue;
+          if (v(ws.company_name)) { setCompanyName(v(ws.company_name)!); filled.push("company_name"); }
+          if (v(ws.product_name)) { setProductName(v(ws.product_name)!); filled.push("product_name"); }
+          if (v(ws.product_description)) { setProductDescription(v(ws.product_description)!); filled.push("product_description"); }
+          if (v(ws.primary_value_props)) { setValueProps(v(ws.primary_value_props)!); filled.push("value_props"); }
+          if (v(ws.meeting_timezone)) { setMeetingTimezone(v(ws.meeting_timezone)!); filled.push("timezone"); }
+          if (filled.length > 0) {
+            setAutoFilledFields(prev => [...prev, ...filled]);
+            toast.success(`Synced ${filled.length} field(s) from knowledge base. Review and save.`);
+          } else {
+            toast.info("No high-confidence data found in knowledge base.");
+          }
+        }}
+      >
+        {isSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        Sync from KB
+      </Button>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="companyName" className="flex items-center gap-1.5">
@@ -308,7 +295,6 @@ export function WorkspaceProfileCard() {
             Save Workspace Profile
           </Button>
         </div>
-      </CardContent>
-    </Card>
+    </div>
   );
 }

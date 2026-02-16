@@ -374,47 +374,22 @@ export function CadenceSettingsCard() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Sequence & Cadence Settings
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>);
-
+      <div className="flex justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
   }
 
   if (!settings) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Sequence & Cadence Settings
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">Failed to load settings</p>
-        </CardContent>
-      </Card>);
-
+      <div>
+        <p className="text-muted-foreground">Failed to load settings</p>
+      </div>
+    );
   }
 
   return (
-    <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Sequence & Cadence Settings
-          </CardTitle>
-          <CardDescription>Configure email and WhatsApp sequences</CardDescription>
-        </CardHeader>
-
-          <CardContent className="space-y-6">
+    <div className="space-y-6">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="motions" className="flex items-center gap-1">
@@ -973,7 +948,7 @@ export function CadenceSettingsCard() {
                 Save Settings
               </Button>
             </div>
-          </CardContent>
-    </Card>);
+    </div>);
+
 
 }
