@@ -21,7 +21,7 @@ export default function Settings() {
         <p className="text-muted-foreground">Manage your account and integrations</p>
       </div>
 
-      <Accordion type="multiple" defaultValue={["workspace"]} className="max-w-2xl space-y-2">
+      <Accordion type="multiple" defaultValue={[]} className="max-w-2xl space-y-2">
         <AccordionItem value="workspace" className="border rounded-lg px-4">
           <AccordionTrigger className="hover:no-underline">
             <div className="flex items-center gap-3">
