@@ -82,12 +82,6 @@ export async function fetchDecryptedMessages(
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not authenticated");
 
-  const resp = await supabase.functions.invoke("decrypt-messages", {
-    body: null,
-    headers: {},
-  });
-
-  // Use fetch directly to pass query params
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/decrypt-messages?conversation_id=${conversationId}`;
   const fetchResp = await fetch(url, {
     headers: {
