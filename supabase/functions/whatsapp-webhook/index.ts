@@ -21,9 +21,10 @@ Deno.serve(async (req) => {
     const challenge = url.searchParams.get("hub.challenge");
 
     const expectedToken = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
-    console.log("[whatsapp-webhook] Verify check:", { mode, token, expectedToken: expectedToken?.substring(0, 5) + "...", match: token === expectedToken });
+    const verifyToken = "leadrocket-wa-verify-2026";
+    console.log("[whatsapp-webhook] Verify check:", { mode, tokenMatch: token === verifyToken });
 
-    if (mode === "subscribe" && token === expectedToken) {
+    if (mode === "subscribe" && token === verifyToken) {
       console.log("[whatsapp-webhook] Verification successful");
       return new Response(challenge, { status: 200, headers: corsHeaders });
     }
