@@ -2,9 +2,10 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw } from "lucide-react";
+import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical } from "lucide-react";
 import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 import { useEffect, useState } from "react";
+import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
 import {
   AlertDialog,
@@ -111,6 +112,24 @@ export default function DashboardLayout() {
           <div className="text-xs text-muted-foreground mb-2 truncate">
             {user?.email}
           </div>
+          <Button
+            variant={isDemoMode() ? "default" : "outline"}
+            size="sm"
+            className="w-full"
+            onClick={() => {
+              const current = isDemoMode();
+              if (current) {
+                // Remove from localStorage and reload
+                localStorage.removeItem("VITE_DEMO_MODE");
+              } else {
+                localStorage.setItem("VITE_DEMO_MODE", "true");
+              }
+              window.location.reload();
+            }}
+          >
+            <FlaskConical className="h-4 w-4 mr-2" />
+            {isDemoMode() ? "Exit Demo Mode" : "Enter Demo Mode"}
+          </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="ghost" size="sm" className="w-full text-destructive hover:text-destructive hover:bg-destructive/10" disabled={isResetting}>
