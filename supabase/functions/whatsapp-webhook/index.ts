@@ -233,14 +233,18 @@ Deno.serve(async (req) => {
 
         if (existingConvo) {
           conversationId = existingConvo.id;
-          // Update conversation timestamps
+          // Fetch current message_count and increment
+          const { data: convoData } = await supabase
+            .from("conversations")
+            .select("message_count")
+            .eq("id", existingConvo.id)
+            .single();
+          
           await supabase
             .from("conversations")
             .update({
               last_message_at: timestamp,
-              message_count: (existingConvo as any).message_count
-                ? (existingConvo as any).message_count + 1
-                : 1,
+              message_count: (convoData?.message_count ?? 0) + 1,
             })
             .eq("id", conversationId);
         } else {
