@@ -2,20 +2,40 @@
 
 ## Problem
 
-When leads are moved to Nurture, the scheduled email times don't appear on the lead detail card. The root cause is that three critical nurture fields are missing from the database query:
+When connecting WhatsApp (or any integration that triggers auto-workspace creation), the app:
+1. Successfully creates a new workspace (RLS allows authenticated inserts)
+2. Fails to insert the user as a workspace member because the RLS INSERT policy on `workspace_members` has a bug
 
-- `nurture_status` (needed to show/hide the nurture card)
-- `nurture_mode` (needed to display "Review" vs "Auto" mode)
-- `nurture_theme` (needed for theme display)
-
-These fields exist in the database and are set correctly by `motionUpdater.ts`, but the `getLeadDetail` query in `supabaseQueries.ts` never fetches them. The code accesses them via `(lead as any)` casts, which silently returns `undefined` instead of the actual values.
+The policy intended to allow the "first member" of a new workspace to insert themselves, but the subquery compares `workspace_members_1.workspace_id = workspace_members_1.workspace_id` (column vs itself -- always true), so `NOT EXISTS` is always false. Since the user also isn't an admin yet, the entire policy evaluates to false and the insert is denied.
 
 ## Fix
 
-**File: `src/lib/supabaseQueries.ts`**
+**Database migration** -- Fix the `workspace_members` INSERT policy:
 
-1. Add `nurture_status`, `nurture_mode`, and `nurture_theme` to the `LeadDetail` type Pick list (line 131).
-2. Add the same three columns to the `.select()` string in the `getLeadDetail` query (line 150).
+Replace the broken policy with one that correctly checks whether the user is either:
+- An existing admin of the workspace, OR
+- Inserting themselves as the first member of a workspace that has no members yet, AND the `user_id` matches `auth.uid()`
 
-This is a 2-line change that will make the NurturePreviewCard render correctly, showing scheduled email dates, cadence info, and preview/generate buttons.
+```sql
+DROP POLICY "Admins can insert workspace members" ON public.workspace_members;
+
+CREATE POLICY "Admins or first member can insert workspace members"
+  ON public.workspace_members
+  FOR INSERT
+  WITH CHECK (
+    -- Existing admin can add members
+    is_workspace_admin(workspace_id, auth.uid())
+    OR
+    -- First member: no existing members for this workspace, and inserting yourself
+    (
+      user_id = auth.uid()
+      AND NOT EXISTS (
+        SELECT 1 FROM public.workspace_members wm
+        WHERE wm.workspace_id = workspace_members.workspace_id
+      )
+    )
+  );
+```
+
+No frontend code changes are needed -- the `WhatsAppConnectionCard.tsx` logic is already correct.
 
