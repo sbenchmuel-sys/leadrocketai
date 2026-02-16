@@ -111,6 +111,16 @@ const stageBadgeVariants: Record<DealStage, string> = {
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
 export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter }: LeadTableProps) {
+  // Memoize closing scores to avoid recalculating during sort + render
+  const scoreMap = useMemo(() => {
+    if (revenueStateFilter !== "heating_up") return new Map<string, number>();
+    const map = new Map<string, number>();
+    for (const lead of leads) {
+      map.set(lead.id, getClosingScore(lead));
+    }
+    return map;
+  }, [leads, revenueStateFilter]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -679,7 +689,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 const q = searchQuery.toLowerCase();
                 return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
               })
-              .sort((a, b) => revenueStateFilter === "heating_up" ? getClosingScore(b) - getClosingScore(a) : 0)
+              .sort((a, b) => revenueStateFilter === "heating_up" ? (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0) : 0)
               .map((lead, index) => {
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
@@ -743,7 +753,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                     {revenueStateFilter === "heating_up" ? (
                       <TableCell className="py-2">
                         <span className="text-sm font-semibold text-foreground">
-                          {getClosingScore(lead)}
+                          {scoreMap.get(lead.id) ?? 0}
                         </span>
                       </TableCell>
                     ) : (
