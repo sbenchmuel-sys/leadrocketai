@@ -485,7 +485,8 @@ function deriveAction(
   stopPauseRules: StopPauseRules,
   flows: Flows,
   timezone: string | null,
-  strategy: string
+  strategy: string,
+  motion: string = "outbound_prospecting"
 ): ActionResult & { auto_nurture_eligible?: boolean } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
@@ -636,8 +637,9 @@ function deriveAction(
 
   // ============================================
   // C) PRE-MEETING FOLLOW-UP (no inbound yet, no meetings)
+  // Skip entirely for nurture leads -- they should only get nurture cadence actions (section E)
   // ============================================
-  if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
+  if (motion !== "nurture" && metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
     const firstOutTime = new Date(metrics.first_outbound_at).getTime();
     const daysSinceFirst = (now - firstOutTime) / DAY;
     const daysSinceLast = (now - lastOutTime) / DAY;
@@ -907,7 +909,7 @@ serve(async (req) => {
     // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status")
       .eq("id", leadId)
       .single();
 
@@ -916,6 +918,7 @@ serve(async (req) => {
     const ownerUserId = leadData?.owner_user_id || user.id;
     const hasFutureMeeting = leadData?.has_future_meeting || false;
     const actionDismissedAt = leadData?.action_dismissed_at || null;
+    const leadMotion = leadData?.motion || "outbound_prospecting";
 
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
@@ -1240,7 +1243,8 @@ serve(async (req) => {
       cadenceSettings.stop_pause_rules,
       cadenceSettings.flows,
       timezone,
-      strategy
+      strategy,
+      leadMotion
     );
 
     // ============================================
@@ -1306,6 +1310,17 @@ serve(async (req) => {
       last_nurture_outbound_at: metrics.last_nurture_outbound_at,
       last_activity_at: new Date().toISOString(),
     };
+
+    // For active nurture leads, explicitly delete all automation fields from the update
+    // to prevent any leakage from overwriting nurture state
+    if (hasActiveNurture) {
+      console.log(`[gmail-sync] Lead ${leadId}: Active nurture -- preserving all automation fields`);
+      delete (leadUpdate as Record<string, unknown>).needs_action;
+      delete (leadUpdate as Record<string, unknown>).next_action_key;
+      delete (leadUpdate as Record<string, unknown>).next_action_label;
+      delete (leadUpdate as Record<string, unknown>).eligible_at;
+      delete (leadUpdate as Record<string, unknown>).action_reason_code;
+    }
 
     // Handle action_dismissed_at field
     if (shouldClearDismissal) {

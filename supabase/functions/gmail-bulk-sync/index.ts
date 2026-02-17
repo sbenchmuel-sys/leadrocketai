@@ -575,20 +575,40 @@ async function syncLeadEmails(
     ? new Date(Math.max(...activityDates)).toISOString()
     : new Date().toISOString();
 
+  // Fetch current lead state to protect nurture leads from action overwrites
+  const { data: currentState } = await serviceSupabase
+    .from("leads")
+    .select("motion, nurture_status")
+    .eq("id", leadId)
+    .single();
+
+  const isActiveNurture = currentState?.motion === "nurture"
+    && currentState?.nurture_status === "active";
+
+  // Build update payload -- always update metrics, but protect nurture action fields
+  const updatePayload: Record<string, unknown> = {
+    stage: newStage,
+    first_outbound_at: metrics.first_outbound_at,
+    last_outbound_at: metrics.last_outbound_at,
+    last_inbound_at: metrics.last_inbound_at,
+    meeting_summary_count: metrics.meeting_summary_count,
+    last_activity_at: lastActivityAt,
+  };
+
+  if (isActiveNurture) {
+    // Preserve nurture automation fields -- don't overwrite with prospecting actions
+    console.log(`[gmail-bulk-sync] Preserving nurture state for lead ${leadId}`);
+  } else {
+    // Apply derived action for non-nurture leads
+    updatePayload.needs_action = actionResult.needs_action;
+    updatePayload.next_action_key = actionResult.next_action_key;
+    updatePayload.next_action_label = actionResult.next_action_label;
+  }
+
   // Update lead
   await serviceSupabase
     .from("leads")
-    .update({
-      stage: newStage,
-      needs_action: actionResult.needs_action,
-      next_action_key: actionResult.next_action_key,
-      next_action_label: actionResult.next_action_label,
-      first_outbound_at: metrics.first_outbound_at,
-      last_outbound_at: metrics.last_outbound_at,
-      last_inbound_at: metrics.last_inbound_at,
-      meeting_summary_count: metrics.meeting_summary_count,
-      last_activity_at: lastActivityAt,
-    })
+    .update(updatePayload)
     .eq("id", leadId);
 
   return { synced, errors, stage: newStage };
