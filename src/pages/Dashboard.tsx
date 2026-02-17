@@ -18,14 +18,6 @@ import { TopMovers } from "@/components/dashboard/TopMovers";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
 
-function getGreeting(): string {
-  if (isDemoMode()) return "Revenue Operations Overview";
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
-
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -104,23 +96,16 @@ export default function Dashboard() {
   const activeCount = metrics?.active_count ?? 0;
 
   return (
-    <div className="space-y-3">
-      {/* Greeting Header */}
+    <div className="space-y-2">
+      {/* Header */}
       <div className="flex items-start justify-between">
-        <div className="space-y-0.5">
-          <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-            {getGreeting()}{isDemoMode() ? "" : "."}
-          </h1>
-          <div className="flex items-center gap-2">
-            <p className="text-muted-foreground text-sm">
-              Your assistant is monitoring {activeCount} open lead{activeCount !== 1 ? "s" : ""}.
-            </p>
-            {lastRefreshedAt && (
-              <span className="text-xs text-muted-foreground/50">
-                · Updated {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
-              </span>
-            )}
-          </div>
+        <div>
+          <p className="text-sm font-medium text-muted-foreground tracking-wide uppercase">Revenue Engine</p>
+          <p className="text-lg font-semibold text-foreground tracking-tight mt-0.5">
+            {activeCount} Active Conversations
+            <span className="text-muted-foreground mx-1.5">·</span>
+            {commandCounts.action_required} Pending Intervention
+          </p>
         </div>
         {!isDemoMode() && (
           <Button asChild size="sm">

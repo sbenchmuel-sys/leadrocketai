@@ -20,7 +20,7 @@ const segments: { key: DashboardFilter; label: string }[] = [
 export function CommandStrip({ counts, activeFilter, onFilterChange }: CommandStripProps) {
   return (
     <div className="border-b border-border">
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-5">
         {segments.map((seg) => {
           const isActive = activeFilter === seg.key;
           return (
@@ -43,7 +43,7 @@ export function CommandStrip({ counts, activeFilter, onFilterChange }: CommandSt
                 {counts[seg.key]}
               </span>
               {isActive && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+                <span className="absolute bottom-0 left-0 right-0 h-px bg-primary" />
               )}
             </button>
           );
