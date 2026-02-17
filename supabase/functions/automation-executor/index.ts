@@ -235,15 +235,25 @@ serve(async (req) => {
           continue;
         }
 
-        const actionKey = lead.next_action_key || "send_pre_2_followup";
+        const actionKey = lead.next_action_key;
 
-        // Determine AI task type
-        let aiTask = "pre_email_2_followup";
-        if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
-        else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
-        else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
-        else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
-        else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
+        // Determine AI task type — motion-aware resolution
+        let aiTask: string;
+        if (actionKey) {
+          if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
+          else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
+          else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
+          else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
+          else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
+          else aiTask = "pre_email_2_followup"; // truly unknown key
+        } else {
+          // No action key — infer from motion
+          if (lead.motion === "nurture") {
+            aiTask = "nurture_email_single";
+          } else {
+            aiTask = "pre_email_1_intro"; // first outbound if no key
+          }
+        }
 
         logEntry.ai_task = aiTask;
 
@@ -302,6 +312,7 @@ serve(async (req) => {
               task: aiTask,
               payload: {
                 lead_id: lead.id,
+                motion: lead.motion,
                 lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
                 custom_instructions: null,
@@ -463,6 +474,56 @@ serve(async (req) => {
         logEntry.gmail_message_id = gmailMessageId;
         logEntry.completed_at = new Date().toISOString();
         await supabase.from("automation_log").insert(logEntry);
+
+        // --- POST-SEND STATE UPDATE ---
+        const postUpdate: Record<string, unknown> = {
+          needs_action: false,
+          eligible_at: null,
+          last_outbound_at: new Date().toISOString(),
+          last_activity_at: new Date().toISOString(),
+        };
+
+        if (aiTask === "nurture_email_single") {
+          // Nurture: increment count and schedule next based on cadence
+          const cadenceDays = lead.nurture_cadence === "weekly" ? 7
+            : lead.nurture_cadence === "monthly" ? 30 : 14;
+          const nextEligible = new Date(Date.now() + cadenceDays * 86400000);
+          nextEligible.setHours(9, 30, 0, 0);
+          const nextCount = (lead.nurture_outbound_count || 0) + 1;
+
+          Object.assign(postUpdate, {
+            nurture_outbound_count: nextCount,
+            last_nurture_outbound_at: new Date().toISOString(),
+            next_action_key: `send_nurture_${nextCount + 1}`,
+            next_action_label: `Nurture email #${nextCount + 1}`,
+            needs_action: true,
+            eligible_at: nextEligible.toISOString(),
+            action_reason_code: "NURTURE_DUE",
+          });
+        } else if (["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup"].includes(aiTask)) {
+          // Outbound sequence: schedule next step
+          const NEXT_STEP: Record<string, { key: string; label: string }> = {
+            pre_email_1_intro: { key: "send_pre_2", label: "Follow-up 1" },
+            pre_email_2_followup: { key: "send_pre_3", label: "Follow-up 2" },
+            pre_email_3_followup: { key: "send_pre_4", label: "Breakup Email" },
+          };
+          const nextStep = NEXT_STEP[aiTask];
+          if (nextStep) {
+            const nextEligible = new Date(Date.now() + 2 * 86400000);
+            nextEligible.setHours(9, 30, 0, 0);
+            Object.assign(postUpdate, {
+              next_action_key: nextStep.key,
+              next_action_label: nextStep.label,
+              needs_action: true,
+              eligible_at: nextEligible.toISOString(),
+              action_reason_code: "FOLLOWUP_DUE",
+            });
+          }
+        }
+        // pre_email_4_breakup: no next step, stays needs_action=false
+
+        await supabase.from("leads").update(postUpdate).eq("id", lead.id);
+        console.log(`[automation-executor] Post-send state updated for lead ${lead.id}:`, JSON.stringify(postUpdate));
 
         sentLeads.push({ leadId: lead.id, leadName: lead.name, subject });
         processed++;
