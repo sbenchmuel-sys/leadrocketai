@@ -1,119 +1,126 @@
 
-
-# Fix: Nurture Leads Getting Wrong Playbook in Automation
+# Fix: Gmail Sync Overwriting Nurture Leads with Prospecting Actions
 
 ## Root Cause
 
-Two bugs in the `automation-executor` edge function cause nurture leads to receive outbound prospecting emails instead of nurture content:
+There are **two sync functions** that run periodically and overwrite nurture lead state:
 
-1. **Wrong default task**: When `next_action_key` is null (common for nurture leads in review mode), the code defaults to `"send_pre_2_followup"` (an outbound prospecting task) instead of checking the lead's `motion` field to pick the right task.
+### 1. `gmail-bulk-sync` (Primary Culprit)
+This function has **zero protection** for nurture leads. When it syncs emails for a lead, it:
+- Calls `deriveAction()` which doesn't check the lead's `motion` field
+- Blindly overwrites `needs_action`, `next_action_key`, `next_action_label` with prospecting follow-up actions (e.g., `send_pre_2`, `send_pre_3`)
+- This triggers the automation-executor to send outbound prospecting emails instead of nurture emails
 
-2. **No post-send state update**: After successfully sending an email, the automation-executor never clears `needs_action` / `eligible_at` or schedules the next step, so the lead can be re-picked on the next poll cycle.
+### 2. `gmail-sync` (Secondary Issue)
+This function has a `hasActiveAutomation` guard, but it only works when `needs_action` is already `true` AND `eligible_at` is in the future. For nurture leads in "review" mode (where `needs_action` is `false`), the guard doesn't activate, and `deriveAction` can still overwrite action keys with prospecting follow-ups.
 
 ## Changes
 
-### 1. Fix AI Task Resolution in `automation-executor` (Critical)
+### 1. Protect Nurture Leads in `gmail-bulk-sync/index.ts`
 
-In `supabase/functions/automation-executor/index.ts`, replace the task-mapping block (lines 238-246) with motion-aware logic:
+Before the `leads.update` call (line 578-592), add a check for the lead's current motion and nurture status. If the lead is in nurture mode, preserve its automation fields:
 
+- Fetch current `motion`, `nurture_status`, `needs_action`, `eligible_at` before updating
+- If `motion === "nurture" && nurture_status === "active"`, skip overwriting `needs_action`, `next_action_key`, `next_action_label`
+- Still update metrics fields like `first_outbound_at`, `last_outbound_at`, `last_inbound_at`, `meeting_summary_count`, `last_activity_at`
+
+### 2. Strengthen Nurture Guard in `gmail-sync/index.ts`
+
+Update the `hasActiveAutomation` check (lines 1283-1290) to also protect nurture leads even when `needs_action` is false:
+
+Current logic:
 ```text
-Before:
-  const actionKey = lead.next_action_key || "send_pre_2_followup";
-  let aiTask = "pre_email_2_followup";
-
-After:
-  const actionKey = lead.next_action_key;
-  let aiTask: string;
-
-  if (actionKey) {
-    // Derive from explicit action key
-    if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
-    else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
-    else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
-    else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
-    else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
-    else aiTask = "pre_email_2_followup"; // truly unknown key
-  } else {
-    // No action key -- infer from motion
-    if (lead.motion === "nurture") {
-      aiTask = "nurture_email_single";
-    } else {
-      aiTask = "pre_email_1_intro"; // first outbound if no key
-    }
-  }
+hasActiveSequence = needs_action === true && eligible_at > now
+hasActiveNurture = motion === "nurture" && nurture_status === "active"
+hasActiveAutomation = hasActiveSequence || hasActiveNurture
 ```
 
-### 2. Add Post-Send State Update (Critical)
+The `hasActiveNurture` check is correct but the protection on lines 1296-1300 only conditionally preserves fields. Ensure that when `hasActiveNurture` is true, the `next_action_key` and `next_action_label` are explicitly preserved (not set to `undefined` which would leave existing values, but currently the `finalAction` values can still leak through if the conditional logic has edge cases).
 
-After a successful send and interaction logging (after line 465), add logic to:
-- Clear `needs_action = false` and `eligible_at = null` immediately
-- For outbound sequences: schedule next step with the correct `eligible_at` based on cadence intervals
-- For nurture leads: increment `nurture_outbound_count`, set `last_nurture_outbound_at`, and schedule next nurture step based on cadence (7/14/30 days)
-- Update `last_outbound_at` and `last_activity_at` timestamps
+Additionally, add a dedicated guard in `deriveAction()` itself:
+- Accept the lead's `motion` as a parameter
+- If `motion === "nurture"`, skip sections C (outbound follow-up) and return early with nurture-appropriate action or no action
 
-```text
-// Post-send state update
-const postUpdate = {
-  needs_action: false,
-  eligible_at: null,
-  last_outbound_at: new Date().toISOString(),
-  last_activity_at: new Date().toISOString(),
-};
+### 3. Protect `eligible_at` in `gmail-bulk-sync`
 
-if (aiTask === "nurture_email_single") {
-  // Increment nurture count and schedule next
-  const cadenceDays = lead.nurture_cadence === "weekly" ? 7
-    : lead.nurture_cadence === "monthly" ? 30 : 14;
-  const nextEligible = new Date(Date.now() + cadenceDays * 86400000);
-  nextEligible.setHours(9, 30, 0, 0);
-  const nextCount = (lead.nurture_outbound_count || 0) + 1;
-
-  Object.assign(postUpdate, {
-    nurture_outbound_count: nextCount,
-    last_nurture_outbound_at: new Date().toISOString(),
-    next_action_key: `send_nurture_${nextCount + 1}`,
-    next_action_label: `Nurture email #${nextCount + 1}`,
-    needs_action: true,
-    eligible_at: nextEligible.toISOString(),
-    action_reason_code: "NURTURE_DUE",
-  });
-} else if (isOutboundSequence(aiTask)) {
-  // Schedule next outbound step
-  const nextStep = getNextStep(aiTask);
-  if (nextStep) {
-    const nextEligible = new Date(Date.now() + 2 * 86400000);
-    nextEligible.setHours(9, 30, 0, 0);
-    Object.assign(postUpdate, {
-      next_action_key: nextStep.key,
-      next_action_label: nextStep.label,
-      needs_action: true,
-      eligible_at: nextEligible.toISOString(),
-      action_reason_code: "FOLLOWUP_DUE",
-    });
-  }
-}
-
-await supabase.from("leads").update(postUpdate).eq("id", lead.id);
-```
-
-### 3. Add Motion Context to AI Payload
-
-Pass the lead's motion to the `ai_task` call so the AI model generates content appropriate for the lead's current phase:
-
-```text
-payload: {
-  lead_id: lead.id,
-  lead_context: `Name: ...\nMotion: ${lead.motion}\n...`,
-  motion: lead.motion,  // <-- add explicit motion field
-}
-```
+Currently `gmail-bulk-sync` doesn't update `eligible_at`, but it overwrites `needs_action` which can desync with the existing `eligible_at` value on nurture leads.
 
 ## Files Modified
 
-- `supabase/functions/automation-executor/index.ts` -- Fix task resolution + add post-send updates
+- `supabase/functions/gmail-bulk-sync/index.ts` -- Add nurture lead protection before update
+- `supabase/functions/gmail-sync/index.ts` -- Strengthen nurture guard in deriveAction and update logic
+
+## Technical Details
+
+### gmail-bulk-sync Fix (lines 564-592)
+
+Before the update block, fetch the lead's current state:
+
+```text
+// Fetch current lead state to protect nurture leads
+const { data: currentState } = await serviceSupabase
+  .from("leads")
+  .select("motion, nurture_status, needs_action, eligible_at, next_action_key, next_action_label, action_reason_code")
+  .eq("id", leadId)
+  .single();
+
+const isActiveNurture = currentState?.motion === "nurture" 
+  && currentState?.nurture_status === "active";
+
+const updatePayload: Record<string, unknown> = {
+  stage: newStage,
+  first_outbound_at: metrics.first_outbound_at,
+  last_outbound_at: metrics.last_outbound_at,
+  last_inbound_at: metrics.last_inbound_at,
+  meeting_summary_count: metrics.meeting_summary_count,
+  last_activity_at: lastActivityAt,
+};
+
+if (isActiveNurture) {
+  // Preserve nurture automation fields -- don't overwrite with prospecting actions
+  console.log(`[gmail-bulk-sync] Preserving nurture state for lead ${leadId}`);
+} else {
+  // Apply derived action for non-nurture leads
+  updatePayload.needs_action = actionResult.needs_action;
+  updatePayload.next_action_key = actionResult.next_action_key;
+  updatePayload.next_action_label = actionResult.next_action_label;
+}
+```
+
+### gmail-sync Fix (lines 1293-1308)
+
+Ensure the nurture protection covers all action fields, and also add a motion parameter to `deriveAction` to skip outbound follow-up logic for nurture leads:
+
+```text
+// In deriveAction function signature, add motion parameter:
+function deriveAction(
+  leadId, metrics, nurtureCadence, stage,
+  ...,
+  motion: string  // <-- new parameter
+)
+
+// At the start of section C (outbound follow-ups, line 640):
+if (motion === "nurture") {
+  // Skip outbound follow-up logic for nurture leads
+  // Fall through to section E (nurture cadence) instead
+}
+```
+
+And in the update block (lines 1293-1308), when `hasActiveNurture` is true, explicitly preserve all automation fields:
+
+```text
+if (hasActiveNurture) {
+  // For active nurture leads, preserve ALL automation/nurture fields
+  delete leadUpdate.needs_action;  // or set to currentLeadState value
+  delete leadUpdate.next_action_key;
+  delete leadUpdate.next_action_label;
+  delete leadUpdate.eligible_at;
+  delete leadUpdate.action_reason_code;
+}
+```
 
 ## What This Prevents
 
-- Nurture leads will always get `nurture_email_single` content, not outbound follow-ups
-- Post-send state is properly updated so leads don't get double-sent
-- Next nurture/outbound steps are correctly scheduled based on the lead's actual motion
+- Nurture leads will no longer have their action keys overwritten to `send_pre_2/3/4` by background syncs
+- The automation-executor will only receive nurture-appropriate tasks for nurture leads
+- Metrics (outbound timestamps, counts) still update correctly even for protected nurture leads
