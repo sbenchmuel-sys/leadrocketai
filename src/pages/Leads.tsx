@@ -401,7 +401,7 @@ export default function Leads() {
                     <TableHead>Country</TableHead>
                     <TableHead>Company</TableHead>
                     <TableHead>Source</TableHead>
-                    <TableHead>Outlook</TableHead>
+                    <TableHead>Sentiment</TableHead>
                     <TableHead>Last Activity</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
@@ -434,8 +434,6 @@ export default function Leads() {
                           currentSourceType={(lead.source_type || "manual_entry") as SourceType}
                           onUpdated={loadLeads}
                         />
-                      </TableCell>
-                      <TableCell>
                       </TableCell>
                       <TableCell>
                         {lead.deal_outlook && (
