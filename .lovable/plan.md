@@ -1,111 +1,119 @@
 
 
-# Cost-Saving Strategies for Lead Rocket AI
+# Fix: Nurture Leads Getting Wrong Playbook in Automation
 
-## Current Cost Drivers
+## Root Cause
 
-Every AI call currently goes fresh to the Lovable AI Gateway with no reuse. The biggest savings come from **avoiding duplicate calls** and **downgrading models** where quality impact is minimal.
+Two bugs in the `automation-executor` edge function cause nurture leads to receive outbound prospecting emails instead of nurture content:
 
----
+1. **Wrong default task**: When `next_action_key` is null (common for nurture leads in review mode), the code defaults to `"send_pre_2_followup"` (an outbound prospecting task) instead of checking the lead's `motion` field to pick the right task.
 
-## Strategy 1: Draft Caching (Highest Impact)
+2. **No post-send state update**: After successfully sending an email, the automation-executor never clears `needs_action` / `eligible_at` or schedules the next step, so the lead can be re-picked on the next poll cycle.
 
-**Problem**: If a user previews a draft, edits nothing, and clicks "Regenerate," the full AI call repeats. Automated sequences also regenerate from scratch on retry.
+## Changes
 
-**Solution**: Cache generated drafts in the `drafts` table keyed by `(lead_id, step_key, status='pending')`. Before calling AI, check if an unexpired pending draft already exists.
+### 1. Fix AI Task Resolution in `automation-executor` (Critical)
 
-- Already partially done in `nurture-pre-generate` (it checks for existing drafts)
-- Apply the same pattern to `automation-executor` before calling `ai_task`
-- On the frontend, reuse the last draft if the user hasn't changed inputs
+In `supabase/functions/automation-executor/index.ts`, replace the task-mapping block (lines 238-246) with motion-aware logic:
 
-**Estimated savings**: 10-15% of total AI calls avoided
+```text
+Before:
+  const actionKey = lead.next_action_key || "send_pre_2_followup";
+  let aiTask = "pre_email_2_followup";
 
----
+After:
+  const actionKey = lead.next_action_key;
+  let aiTask: string;
 
-## Strategy 2: Downgrade Follow-Up Models (High Impact)
+  if (actionKey) {
+    // Derive from explicit action key
+    if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
+    else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
+    else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
+    else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
+    else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
+    else aiTask = "pre_email_2_followup"; // truly unknown key
+  } else {
+    // No action key -- infer from motion
+    if (lead.motion === "nurture") {
+      aiTask = "nurture_email_single";
+    } else {
+      aiTask = "pre_email_1_intro"; // first outbound if no key
+    }
+  }
+```
 
-**Problem**: Follow-up emails (steps 2-4) use Gemini Flash, which is fine, but `nurture_sequence` (generating 4 emails at once) uses Gemini Pro unnecessarily.
+### 2. Add Post-Send State Update (Critical)
 
-**Solution**: Move `nurture_sequence` from `PRO_MODEL_TASKS` to Flash. It generates templated nurture emails, not deep analytical work. Also consider using `gemini-2.5-flash-lite` for:
-- `intent_router` (simple JSON classification)
-- `analyze_outgoing_email` (post-send stage detection)
-- `pre_email_4_breakup` (short breakup emails)
+After a successful send and interaction logging (after line 465), add logic to:
+- Clear `needs_action = false` and `eligible_at = null` immediately
+- For outbound sequences: schedule next step with the correct `eligible_at` based on cadence intervals
+- For nurture leads: increment `nurture_outbound_count`, set `last_nurture_outbound_at`, and schedule next nurture step based on cadence (7/14/30 days)
+- Update `last_outbound_at` and `last_activity_at` timestamps
 
-**Estimated savings**: 20-30% cost reduction on those tasks (Pro is ~40x more expensive than Flash)
+```text
+// Post-send state update
+const postUpdate = {
+  needs_action: false,
+  eligible_at: null,
+  last_outbound_at: new Date().toISOString(),
+  last_activity_at: new Date().toISOString(),
+};
 
----
+if (aiTask === "nurture_email_single") {
+  // Increment nurture count and schedule next
+  const cadenceDays = lead.nurture_cadence === "weekly" ? 7
+    : lead.nurture_cadence === "monthly" ? 30 : 14;
+  const nextEligible = new Date(Date.now() + cadenceDays * 86400000);
+  nextEligible.setHours(9, 30, 0, 0);
+  const nextCount = (lead.nurture_outbound_count || 0) + 1;
 
-## Strategy 3: Batch Analysis Instead of Per-Lead (Medium Impact)
+  Object.assign(postUpdate, {
+    nurture_outbound_count: nextCount,
+    last_nurture_outbound_at: new Date().toISOString(),
+    next_action_key: `send_nurture_${nextCount + 1}`,
+    next_action_label: `Nurture email #${nextCount + 1}`,
+    needs_action: true,
+    eligible_at: nextEligible.toISOString(),
+    action_reason_code: "NURTURE_DUE",
+  });
+} else if (isOutboundSequence(aiTask)) {
+  // Schedule next outbound step
+  const nextStep = getNextStep(aiTask);
+  if (nextStep) {
+    const nextEligible = new Date(Date.now() + 2 * 86400000);
+    nextEligible.setHours(9, 30, 0, 0);
+    Object.assign(postUpdate, {
+      next_action_key: nextStep.key,
+      next_action_label: nextStep.label,
+      needs_action: true,
+      eligible_at: nextEligible.toISOString(),
+      action_reason_code: "FOLLOWUP_DUE",
+    });
+  }
+}
 
-**Problem**: `extract_milestones_risks`, `extract_deal_factors`, and `recommend_next_steps` each make a separate Pro model call. For a single lead review, that's 3 Pro calls.
+await supabase.from("leads").update(postUpdate).eq("id", lead.id);
+```
 
-**Solution**: Combine these into a single "lead_deep_analysis" task with one Pro call that returns all three outputs in one JSON response. The prompts are already structured similarly.
+### 3. Add Motion Context to AI Payload
 
-**Estimated savings**: ~60% reduction on analysis calls (3 calls become 1)
+Pass the lead's motion to the `ai_task` call so the AI model generates content appropriate for the lead's current phase:
 
----
+```text
+payload: {
+  lead_id: lead.id,
+  lead_context: `Name: ...\nMotion: ${lead.motion}\n...`,
+  motion: lead.motion,  // <-- add explicit motion field
+}
+```
 
-## Strategy 4: Knowledge Base Query Caching (Medium Impact)
+## Files Modified
 
-**Problem**: Every AI task that needs KB context runs a fresh `ilike` text search against `kb_chunks`. For the same lead, the same KB results return repeatedly.
+- `supabase/functions/automation-executor/index.ts` -- Fix task resolution + add post-send updates
 
-**Solution**: Add an in-memory cache (or simple DB cache table) for KB query results, keyed by `(user_id, lead_id, query_hash)` with a 1-hour TTL. KB content rarely changes within an hour.
+## What This Prevents
 
-**Estimated savings**: Reduces DB load and latency (not direct AI cost, but reduces edge function execution time)
-
----
-
-## Strategy 5: Skip Redundant Conversation Analysis (Medium Impact)
-
-**Problem**: `conversation-analyze` runs on every new message, even if the previous analysis was minutes ago for the same conversation.
-
-**Solution**: Add a cooldown check -- skip re-analysis if the last analysis for this conversation was less than 5 minutes ago and no new messages arrived since. The `message_window_end` field already tracks this.
-
-**Estimated savings**: 15-25% of conversation analysis calls avoided in active chats
-
----
-
-## Strategy 6: Rep Profile/Signature Preloading (Low Impact, Easy Win)
-
-**Problem**: `automation-executor` fetches `rep_profiles` and `rep_signatures` separately for every lead in the batch, even though they're the same user.
-
-**Solution**: Fetch once before the loop and reuse. This doesn't save AI costs but reduces execution time and DB calls per batch.
-
----
-
-## Summary: Estimated Impact on Per-Lead Cost
-
-| Strategy | Effort | Savings |
-|---|---|---|
-| Draft caching | Low | 10-15% fewer AI calls |
-| Downgrade models for simple tasks | Low | 20-30% on affected tasks |
-| Batch analysis (3-in-1) | Medium | ~60% on analysis calls |
-| KB query caching | Medium | Latency + DB savings |
-| Conversation analysis cooldown | Low | 15-25% on analysis calls |
-| Rep profile preloading | Low | Execution time savings |
-
-**Combined estimated reduction**: 25-40% overall AI cost, bringing the per-lead lifecycle cost from ~$0.045 down to ~$0.027-0.034.
-
----
-
-## Technical Details
-
-### Draft Caching Implementation
-- Add a check in `automation-executor` before the AI call (around line 269):
-  - Query `drafts` for `(lead_id, step_key, status='pending')` created within the last 24 hours
-  - If found, reuse its `body_text` instead of calling `ai_task`
-  
-### Model Downgrade Changes
-- In `ai_task/index.ts`, update the `PRO_MODEL_TASKS` array (line 1368) to remove `nurture_sequence`
-- Create a new `LITE_MODEL_TASKS` array for `intent_router` and `analyze_outgoing_email`
-- Add model selection logic: lite tasks use `gemini-2.5-flash-lite`, standard use `flash`, complex use `pro`
-
-### Batch Analysis
-- Create a new combined prompt `lead_deep_analysis` that merges `extract_milestones_risks`, `extract_deal_factors`, and `recommend_next_steps` into one call
-- Return a combined JSON with all three sections
-- Update the frontend callers to use the new unified task
-
-### Conversation Analysis Cooldown  
-- In `conversation-analyze/index.ts`, after fetching `priorAnalysis` (line 154), check if `priorAnalysis.created_at` is within the last 5 minutes
-- If so, return the existing analysis without calling AI
-
+- Nurture leads will always get `nurture_email_single` content, not outbound follow-ups
+- Post-send state is properly updated so leads don't get double-sent
+- Next nurture/outbound steps are correctly scheduled based on the lead's actual motion
