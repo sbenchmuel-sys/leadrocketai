@@ -153,12 +153,31 @@ Deno.serve(async (req) => {
     // ── 4. Fetch prior analysis for context continuity ─────────
     const { data: priorAnalysis } = await supabase
       .from("conversation_analysis")
-      .select("summary_short, summary_text, extracted_features, sentiment, topics, urgency")
+      .select("id, summary_short, summary_text, extracted_features, sentiment, topics, urgency, created_at")
       .eq("conversation_id", conversation_id)
       .eq("workspace_id", workspace_id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    // --- STRATEGY 5: Conversation Analysis Cooldown ---
+    // Skip re-analysis if last analysis was within 5 minutes
+    if (priorAnalysis?.created_at) {
+      const lastAnalysisAge = Date.now() - new Date(priorAnalysis.created_at).getTime();
+      const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+      if (lastAnalysisAge < COOLDOWN_MS) {
+        console.log(`[conversation-analyze] ♻️ Cooldown: last analysis ${Math.round(lastAnalysisAge / 1000)}s ago, reusing`);
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            analysis_id: priorAnalysis.id,
+            extracted: priorAnalysis.extracted_features,
+            cached: true,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
 
     // ── 5. Build the user prompt ───────────────────────────────
     const contactContext = contact

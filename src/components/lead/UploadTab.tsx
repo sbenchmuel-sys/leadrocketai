@@ -103,52 +103,24 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         }
       }
 
-      // Step 2: Extract milestones and risks
-      toast.info("Step 2/4: Extracting milestones and risks...");
-      const milestonesResult = await runTask("extract_milestones_risks", {
+      // Step 2: Deep analysis (milestones, deal factors, recommendations in one call)
+      toast.info("Step 2/2: Running deep analysis...");
+      const deepResult = await runTask("lead_deep_analysis", {
         lead_context: leadContext,
         interactions_text: cleanedMeetingNotes,
       });
 
       let milestonesData = { milestones: [], risks: [] };
-      if (milestonesResult.ok && milestonesResult.content) {
-        try {
-          milestonesData = JSON.parse(extractJson(milestonesResult.content));
-        } catch (e) {
-          console.error("Failed to parse milestones/risks:", e);
-        }
-      }
-
-      // Step 3: Extract deal factors
-      toast.info("Step 3/4: Analyzing deal factors...");
-      const factorsResult = await runTask("extract_deal_factors", {
-        lead_context: leadContext,
-        interactions_text: cleanedMeetingNotes,
-      });
-
       let factorsData = null;
-      if (factorsResult.ok && factorsResult.content) {
-        try {
-          factorsData = JSON.parse(extractJson(factorsResult.content));
-        } catch (e) {
-          console.error("Failed to parse deal factors:", e);
-        }
-      }
-
-      // Step 4: Recommend next steps
-      toast.info("Step 4/4: Generating recommendations...");
-      const recsResult = await runTask("recommend_next_steps", {
-        lead_context: leadContext,
-        milestones_risks_json: JSON.stringify(milestonesData),
-        deal_factors_json: JSON.stringify(factorsData),
-      });
-
       let recsData = { recommendations: [], best_next_step: null };
-      if (recsResult.ok && recsResult.content) {
+      if (deepResult.ok && deepResult.content) {
         try {
-          recsData = JSON.parse(extractJson(recsResult.content));
+          const parsed = JSON.parse(extractJson(deepResult.content));
+          milestonesData = { milestones: parsed.milestones || [], risks: parsed.risks || [] };
+          factorsData = parsed.deal_factors || null;
+          recsData = { recommendations: parsed.recommendations || [], best_next_step: parsed.best_next_step || null };
         } catch (e) {
-          console.error("Failed to parse recommendations:", e);
+          console.error("Failed to parse deep analysis:", e);
         }
       }
 

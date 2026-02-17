@@ -114,77 +114,36 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       const interactionsText = buildInteractionsText(interactions, 15);
       console.log("[AI Analysis] Payload size:", interactionsText.length, "chars");
 
-      // Step 1: Extract milestones and risks
-      toast.info("Extracting milestones and risks...");
-      const milestonesResult = await runTask("extract_milestones_risks", {
+      // Single batch analysis call (Strategy 3: 3-in-1)
+      toast.info("Running deep analysis...");
+      const deepResult = await runTask("lead_deep_analysis", {
         lead_context: buildLeadContext(),
         interactions_text: interactionsText,
         lead_id: lead.id,
       });
 
       let parsedMilestones: { milestones: Milestone[]; risks: Risk[] } = { milestones: [], risks: [] };
-      if (milestonesResult.ok && milestonesResult.content) {
-        try {
-          const extracted = extractJsonFromAIContent(milestonesResult.content);
-          console.log("[AI Analysis] Milestones raw:", extracted);
-          parsedMilestones = JSON.parse(extracted);
-          hasAnyData = true;
-        } catch (e) {
-          console.error("[AI Analysis] Milestones parse error:", e, milestonesResult.content);
-          toast.error("Couldn't parse milestones/risks result");
-        }
-      } else if (!milestonesResult.ok) {
-        toast.error(milestonesResult.error || "Failed to extract milestones");
-      }
-
-      // Step 2: Extract deal factors
-      toast.info("Analyzing deal factors...");
-      const factorsResult = await runTask("extract_deal_factors", {
-        lead_context: buildLeadContext(),
-        interactions_text: interactionsText,
-        lead_id: lead.id,
-      });
-
       let parsedFactors: DealFactors | null = null;
-      if (factorsResult.ok && factorsResult.content) {
-        try {
-          const extracted = extractJsonFromAIContent(factorsResult.content);
-          console.log("[AI Analysis] Deal factors raw:", extracted);
-          parsedFactors = JSON.parse(extracted);
-          hasAnyData = true;
-        } catch (e) {
-          console.error("[AI Analysis] Deal factors parse error:", e, factorsResult.content);
-          toast.error("Couldn't parse deal factors result");
-        }
-      } else if (!factorsResult.ok) {
-        toast.error(factorsResult.error || "Failed to extract deal factors");
-      }
-
-      // Step 3: Get recommendations
-      toast.info("Generating recommendations...");
-      const recsResult = await runTask("recommend_next_steps", {
-        lead_context: buildLeadContext(),
-        milestones_risks_json: JSON.stringify(parsedMilestones),
-        deal_factors_json: JSON.stringify(parsedFactors),
-        lead_id: lead.id,
-      });
-
       let parsedRecs: { recommendations: Recommendation[]; best_next_step: NextStep | null } = {
         recommendations: [],
         best_next_step: null,
       };
-      if (recsResult.ok && recsResult.content) {
+
+      if (deepResult.ok && deepResult.content) {
         try {
-          const extracted = extractJsonFromAIContent(recsResult.content);
-          console.log("[AI Analysis] Recommendations raw:", extracted);
-          parsedRecs = JSON.parse(extracted);
+          const extracted = extractJsonFromAIContent(deepResult.content);
+          console.log("[AI Analysis] Deep analysis raw:", extracted);
+          const parsed = JSON.parse(extracted);
+          parsedMilestones = { milestones: parsed.milestones || [], risks: parsed.risks || [] };
+          parsedFactors = parsed.deal_factors || null;
+          parsedRecs = { recommendations: parsed.recommendations || [], best_next_step: parsed.best_next_step || null };
           hasAnyData = true;
         } catch (e) {
-          console.error("[AI Analysis] Recommendations parse error:", e, recsResult.content);
-          toast.error("Couldn't parse recommendations result");
+          console.error("[AI Analysis] Deep analysis parse error:", e, deepResult.content);
+          toast.error("Couldn't parse analysis result");
         }
-      } else if (!recsResult.ok) {
-        toast.error(recsResult.error || "Failed to get recommendations");
+      } else if (!deepResult.ok) {
+        toast.error(deepResult.error || "Failed to run analysis");
       }
 
       // Only update lead if we have at least some valid data
