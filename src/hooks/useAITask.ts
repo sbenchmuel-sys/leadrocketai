@@ -12,6 +12,7 @@ export type AITaskType =
   | "extract_milestones_risks"
   | "extract_deal_factors"
   | "recommend_next_steps"
+  | "lead_deep_analysis"
   | "linkedin_connect"
   | "linkedin_followup"
   | "inbound_intro"

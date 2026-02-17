@@ -17,6 +17,7 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
+  "lead_deep_analysis",
   "linkedin_followup",
   "reply_to_thread",
   "re_engagement_intro",
@@ -655,6 +656,51 @@ Deal factors:
 {{DEAL_FACTORS_JSON}}
 
 Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}`,
+
+  // --- STRATEGY 3: Batch Analysis (3-in-1) ---
+  lead_deep_analysis: `Perform a comprehensive lead analysis combining milestones/risks extraction, deal factor assessment, and next step recommendations.
+
+Return JSON ONLY in this exact schema:
+{
+  "milestones": [
+    {"description":"...","status":"completed|pending","date":"YYYY-MM-DD|null","evidence":"short quote <=200 chars"}
+  ],
+  "risks": [
+    {"issue":"...","level":"low|medium|high","evidence":"short quote <=200 chars"}
+  ],
+  "deal_factors": {
+    "engagement_level":"high|medium|low",
+    "reply_latency":"fast|medium|slow|unknown",
+    "decision_maker_involved": true|false|"unknown",
+    "identified_champion": "none|unknown|role_or_name",
+    "budget_status":"known|unknown|blocked|in_review",
+    "timeline":"urgent|normal|long|unknown",
+    "procurement_stage":"none|security|legal|procurement|contract_redlines|unknown",
+    "overall_outlook":"positive|neutral|negative",
+    "reasoning":"1-3 sentences grounded in evidence"
+  },
+  "recommendations": [
+    {"title":"...", "why":"...", "action":"email|linkedin|meeting|internal", "priority":"P0|P1|P2"}
+  ],
+  "best_next_step": {"title":"...", "why":"...", "action":"email|linkedin|meeting|internal"}
+}
+
+Rules:
+- Only include milestones/risks supported by evidence from interactions or knowledge context
+- Evidence must be <=200 chars
+- If uncertain on deal factors, use "unknown"
+- Recommendations must be specific and actionable
+- Prefer P0 actions that unblock the next gate
+- Keep all reasoning short and fact-based
+
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Interactions (most recent first):
+{{INTERACTIONS_TEXT}}
+
+Knowledge Context (includes meeting summaries):
 {{KNOWLEDGE_CONTEXT}}`,
 
   linkedin_connect: `Write a LinkedIn connection note under 300 characters.
@@ -1364,16 +1410,24 @@ OUTPUT
 Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 };
 
-// Tasks that require the pro model
+// --- STRATEGY 2: Model Tiering ---
+// Pro model: deep analytical tasks only
 const PRO_MODEL_TASKS = [
   "post_meeting_recap",
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
+  "lead_deep_analysis",
   "post_meeting_followup_email",
   "post_meeting_followup_personalized",
   "reply_to_thread",
-  "nurture_sequence",
+  // nurture_sequence moved to Flash (doesn't need Pro-level reasoning)
+];
+
+// Lite model: simple classification/analysis tasks
+const LITE_MODEL_TASKS = [
+  "intent_router",
+  "analyze_outgoing_email",
 ];
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
@@ -1627,10 +1681,12 @@ serve(async (req) => {
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
 
-    // Select model based on task
+    // Select model based on task tier
     const model = PRO_MODEL_TASKS.includes(task)
       ? "google/gemini-2.5-pro"
-      : "google/gemini-2.5-flash";
+      : LITE_MODEL_TASKS.includes(task)
+        ? "google/gemini-2.5-flash-lite"
+        : "google/gemini-2.5-flash";
 
     console.log(`[ai_task] Task: ${task}, Model: ${model}, User: ${user.id}`);
 

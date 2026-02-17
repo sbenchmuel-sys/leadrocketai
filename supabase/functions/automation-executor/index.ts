@@ -74,6 +74,22 @@ serve(async (req) => {
 
     console.log(`[automation-executor] Found ${eligibleLeads.length} eligible leads`);
 
+    // --- STRATEGY 6: Rep Profile/Signature Preloading ---
+    // Fetch once before the loop and reuse for all leads (same owner in batch)
+    const firstOwnerId = eligibleLeads[0]?.owner_user_id;
+    const { data: repProfileCache } = await supabase
+      .from("rep_profiles")
+      .select("full_name, company_name, job_title, calendar_link, phone, email, linkedin_url")
+      .eq("user_id", firstOwnerId)
+      .single();
+
+    const { data: repSignatureCache } = await supabase
+      .from("rep_signatures")
+      .select("signature_text")
+      .eq("user_id", firstOwnerId)
+      .eq("is_default", true)
+      .single();
+
     let processed = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -252,110 +268,118 @@ serve(async (req) => {
           continue;
         }
 
-        // Fetch rep profile and signature
-        const { data: repProfile } = await supabase
-          .from("rep_profiles")
-          .select("full_name, company_name, job_title, calendar_link, phone, email, linkedin_url")
-          .eq("user_id", lead.owner_user_id)
-          .single();
+        // --- STRATEGY 1: Draft Caching ---
+        // Check for an existing pending draft for this lead+step before calling AI
+        const { data: cachedDraft } = await supabase
+          .from("drafts")
+          .select("body_text, subject")
+          .eq("lead_id", lead.id)
+          .eq("step_key", actionKey)
+          .eq("status", "pending")
+          .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        const { data: repSignature } = await supabase
-          .from("rep_signatures")
-          .select("signature_text")
-          .eq("user_id", lead.owner_user_id)
-          .eq("is_default", true)
-          .single();
-
-        // Generate draft via ai_task
-        const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseServiceKey}`,
-          },
-          body: JSON.stringify({
-            task: aiTask,
-            payload: {
-              lead_id: lead.id,
-              lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
-              rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
-              custom_instructions: null,
-            },
-          }),
-        });
-
-        if (!aiResponse.ok) {
-          const errText = await aiResponse.text();
-          console.error(`[automation-executor] AI task failed for lead ${lead.id}:`, errText);
-          logEntry.status = "failed";
-          logEntry.error_message = `AI generation failed: ${errText.substring(0, 200)}`;
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          // Retry: push eligible_at forward 15 min
-          await supabase.from("leads").update({
-            eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-          }).eq("id", lead.id);
-          errors.push(`Lead ${lead.id}: AI failed`);
-          continue;
-        }
-
-        const aiResult = await aiResponse.json();
-        if (!aiResult.ok || !aiResult.content) {
-          logEntry.status = "failed";
-          logEntry.error_message = "AI returned no content";
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          await supabase.from("leads").update({
-            eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-          }).eq("id", lead.id);
-          errors.push(`Lead ${lead.id}: No AI content`);
-          continue;
-        }
-
-        // Resolve placeholders
-        const repFirstName = repProfile?.full_name?.split(" ")[0] || "";
-        let draftBody = aiResult.content
-          .replace(/\{Rep'?s?\s*first\s*name\}/gi, repFirstName)
-          .replace(/\[Rep'?s?\s*first\s*name\]/gi, repFirstName)
-          .replace(/\{Your\s*Name\}/gi, repFirstName)
-          .replace(/\[Your\s*Name\]/gi, repFirstName)
-          .replace(/\{Sender\s*Name\}/gi, repFirstName)
-          .replace(/\[Sender\s*Name\]/gi, repFirstName)
-          .replace(/\{First\s*Name\}/gi, repFirstName)
-          .replace(/\[First\s*Name\]/gi, repFirstName);
-
-        // Append signature
-        if (repSignature?.signature_text) {
-          draftBody += `\n\n${repSignature.signature_text}`;
-        } else if (repProfile?.full_name) {
-          const sigParts = [repProfile.full_name];
-          if (repProfile.job_title) sigParts.push(repProfile.job_title);
-          if (repProfile.company_name) sigParts.push(repProfile.company_name);
-          if (repProfile.phone) sigParts.push(repProfile.phone);
-          if (repProfile.email) sigParts.push(repProfile.email);
-          draftBody += `\n\n${sigParts.join("\n")}`;
-        }
-
-        // Unsubscribe footer
-        draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
-
-        // Subject line
-        const leadFirstName = lead.name.split(" ")[0];
-        const companyName = lead.company !== "Unknown Company" ? lead.company : null;
+        let draftBody: string;
         let subject: string;
-        if (aiTask === "pre_email_1_intro") {
-          subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
-        } else if (aiTask === "pre_email_2_followup") {
-          subject = `Following up - ${leadFirstName}`;
-        } else if (aiTask === "pre_email_3_followup") {
-          subject = `Checking in - ${leadFirstName}`;
-        } else if (aiTask === "pre_email_4_breakup") {
-          subject = `Closing the loop - ${leadFirstName}`;
-        } else if (aiTask === "nurture_email_single") {
-          subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+        const repProfile = repProfileCache;
+        const repSignature = repSignatureCache;
+
+        if (cachedDraft?.body_text) {
+          console.log(`[automation-executor] ♻️ Reusing cached draft for lead ${lead.id}, step ${actionKey}`);
+          draftBody = cachedDraft.body_text;
+          subject = cachedDraft.subject || `Following up - ${lead.name.split(" ")[0]}`;
         } else {
-          subject = `Following up - ${leadFirstName}`;
-        }
+          // Generate draft via ai_task
+          const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              task: aiTask,
+              payload: {
+                lead_id: lead.id,
+                lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
+                rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
+                custom_instructions: null,
+              },
+            }),
+          });
+
+          if (!aiResponse.ok) {
+            const errText = await aiResponse.text();
+            console.error(`[automation-executor] AI task failed for lead ${lead.id}:`, errText);
+            logEntry.status = "failed";
+            logEntry.error_message = `AI generation failed: ${errText.substring(0, 200)}`;
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            await supabase.from("leads").update({
+              eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            }).eq("id", lead.id);
+            errors.push(`Lead ${lead.id}: AI failed`);
+            continue;
+          }
+
+          const aiResult = await aiResponse.json();
+          if (!aiResult.ok || !aiResult.content) {
+            logEntry.status = "failed";
+            logEntry.error_message = "AI returned no content";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            await supabase.from("leads").update({
+              eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            }).eq("id", lead.id);
+            errors.push(`Lead ${lead.id}: No AI content`);
+            continue;
+          }
+
+          // Resolve placeholders
+          const repFirstName = repProfile?.full_name?.split(" ")[0] || "";
+          draftBody = aiResult.content
+            .replace(/\{Rep'?s?\s*first\s*name\}/gi, repFirstName)
+            .replace(/\[Rep'?s?\s*first\s*name\]/gi, repFirstName)
+            .replace(/\{Your\s*Name\}/gi, repFirstName)
+            .replace(/\[Your\s*Name\]/gi, repFirstName)
+            .replace(/\{Sender\s*Name\}/gi, repFirstName)
+            .replace(/\[Sender\s*Name\]/gi, repFirstName)
+            .replace(/\{First\s*Name\}/gi, repFirstName)
+            .replace(/\[First\s*Name\]/gi, repFirstName);
+
+          // Append signature
+          if (repSignature?.signature_text) {
+            draftBody += `\n\n${repSignature.signature_text}`;
+          } else if (repProfile?.full_name) {
+            const sigParts = [repProfile.full_name];
+            if (repProfile.job_title) sigParts.push(repProfile.job_title);
+            if (repProfile.company_name) sigParts.push(repProfile.company_name);
+            if (repProfile.phone) sigParts.push(repProfile.phone);
+            if (repProfile.email) sigParts.push(repProfile.email);
+            draftBody += `\n\n${sigParts.join("\n")}`;
+          }
+
+          // Unsubscribe footer
+          draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
+
+          // Subject line
+          const leadFirstName = lead.name.split(" ")[0];
+          const companyName = lead.company !== "Unknown Company" ? lead.company : null;
+          if (aiTask === "pre_email_1_intro") {
+            subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
+          } else if (aiTask === "pre_email_2_followup") {
+            subject = `Following up - ${leadFirstName}`;
+          } else if (aiTask === "pre_email_3_followup") {
+            subject = `Checking in - ${leadFirstName}`;
+          } else if (aiTask === "pre_email_4_breakup") {
+            subject = `Closing the loop - ${leadFirstName}`;
+          } else if (aiTask === "nurture_email_single") {
+            subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+          } else {
+            subject = `Following up - ${leadFirstName}`;
+          }
+        } // end else (no cached draft)
 
         logEntry.subject = subject;
 
