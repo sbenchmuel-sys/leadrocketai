@@ -100,10 +100,10 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-sm font-medium text-muted-foreground tracking-wide uppercase">Revenue Engine</p>
-          <p className="text-lg font-semibold text-foreground tracking-tight mt-0.5">
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">Revenue Engine</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
             {activeCount} Active Conversations
-            <span className="text-muted-foreground mx-1.5">·</span>
+            <span className="mx-1.5">·</span>
             {commandCounts.action_required} Pending Intervention
           </p>
         </div>
