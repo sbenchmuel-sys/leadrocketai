@@ -23,59 +23,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<{ onboarding_done: boolean; role: string } | null>(null);
 
   useEffect(() => {
-    // Listen for auth changes FIRST (avoid missing events during init)
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      // Only do synchronous state updates here (avoid deadlocks)
+    let isMounted = true;
+
+    const loadProfileForUser = async (userId: string) => {
+      try {
+        await createProfileIfMissing();
+        const prof = await getCurrentProfile();
+        if (isMounted) setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
+      } catch (err) {
+        console.error("[AuthContext] Failed to load profile:", err);
+        if (isMounted) setProfile(null);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    // Listener for ONGOING auth changes — does NOT control isLoading
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!isMounted) return;
       setSession(session);
       setUser(session?.user ?? null);
-
       if (!session?.user) {
         setProfile(null);
-        setIsLoading(false);
       }
     });
 
-    // THEN get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (!session?.user) {
-        setProfile(null);
-        setIsLoading(false);
+    // INITIAL load — controls isLoading, waits for profile fetch
+    const initializeAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!isMounted) return;
+        setSession(session);
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          await loadProfileForUser(session.user.id);
+        } else {
+          setProfile(null);
+          setIsLoading(false);
+        }
+      } catch {
+        if (isMounted) setIsLoading(false);
       }
-    });
+    };
 
-    return () => subscription.unsubscribe();
+    initializeAuth();
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  // Fetch profile when user becomes available
-  useEffect(() => {
-    if (!user) return;
 
-    setIsLoading(true);
-    // Defer supabase calls off the auth callback tick
-    setTimeout(() => {
-      loadProfile();
-    }, 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
 
-  const loadProfile = async () => {
-    console.log("[AuthContext] loadProfile started");
-    try {
-      await createProfileIfMissing();
-      const prof = await getCurrentProfile();
-      console.log("[AuthContext] profile loaded:", prof);
-      setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
-    } catch (err) {
-      console.error("[AuthContext] Failed to load profile:", err);
-      setProfile(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const signUp = async (email: string, password: string) => {
     const redirectUrl = `${window.location.origin}/`;
