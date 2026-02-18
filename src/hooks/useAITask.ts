@@ -30,6 +30,8 @@ export type AITaskType =
   | "reply_to_thread"
   | "analyze_outgoing_email"
   | "whatsapp_message"
+  | "whatsapp_classify_intent"
+  | "whatsapp_reply_suggestion"
   | "re_engagement_intro";
 
 export interface AITaskResponse {

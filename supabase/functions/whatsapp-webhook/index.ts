@@ -7,44 +7,140 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+const WA_API = "https://graph.facebook.com/v21.0";
+const VERIFY_TOKEN = "leadrocket-wa-verify-2026";
+
+// ── Utility: normalize to E.164 digits only ──────────────
+function normalizePhone(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+// ── Utility: check if acceleration window is active ──────
+function isAccelerationActive(lead: any): boolean {
+  if (!lead?.acceleration_until) return false;
+  return new Date(lead.acceleration_until) > new Date();
+}
+
+// ── Utility: resolve effective automation mode ────────────
+function getEffectiveMode(lead: any, workspaceSettings: any): string {
+  if (isAccelerationActive(lead)) return "acceleration";
+  if (lead?.automation_mode) return lead.automation_mode;
+  return workspaceSettings?.default_mode ?? "suggest_only";
+}
+
+// ── Decision Engine ───────────────────────────────────────
+function shouldAutoSend(opts: {
+  effective_mode: string;
+  intent: string;
+  confidence: number;
+  workspaceSettings: any;
+  lead: any;
+  message_text: string;
+}): { allowed: boolean; reason: string } {
+  const { effective_mode, intent, confidence, workspaceSettings, lead, message_text } = opts;
+
+  // Safety: too short
+  if (message_text.trim().length < 3) {
+    return { allowed: false, reason: "message_too_short" };
+  }
+
+  // Safety: low confidence threshold
+  if (confidence < 0.70) {
+    return { allowed: false, reason: "low_confidence" };
+  }
+
+  // Safety: unsubscribe intent
+  if (intent === "unsubscribe") {
+    return { allowed: false, reason: "unsubscribe_intent" };
+  }
+
+  // Block on keywords
+  const blockedKeywords: string[] = workspaceSettings?.blocked_keywords ?? [
+    "discount", "lawyer", "contract", "refund", "cancel", "compliance", "lawsuit",
+  ];
+  const lowerText = message_text.toLowerCase();
+  const matchedKeyword = blockedKeywords.find((kw: string) => lowerText.includes(kw.toLowerCase()));
+  if (matchedKeyword) {
+    return { allowed: false, reason: `blocked_keyword:${matchedKeyword}` };
+  }
+
+  // Mode-specific logic
+  switch (effective_mode) {
+    case "manual":
+    case "suggest_only":
+      return { allowed: false, reason: `mode_${effective_mode}` };
+
+    case "full_auto":
+      return { allowed: true, reason: "full_auto" };
+
+    case "acceleration":
+      if (confidence >= 0.75 && !["legal", "negotiation", "complaint", "unsubscribe"].includes(intent)) {
+        return { allowed: true, reason: "acceleration_mode" };
+      }
+      return { allowed: false, reason: "acceleration_blocked_intent_or_confidence" };
+
+    case "hybrid": {
+      const threshold = workspaceSettings?.confidence_threshold ?? 0.85;
+      const allowedIntents = ["acknowledgment", "scheduling", "clarification"];
+      const blockedStages: string[] = workspaceSettings?.blocked_stages ?? ["negotiation", "contract_sent"];
+      if (
+        confidence >= threshold &&
+        allowedIntents.includes(intent) &&
+        !blockedStages.includes(lead?.stage ?? "")
+      ) {
+        return { allowed: true, reason: "hybrid_approved" };
+      }
+      return { allowed: false, reason: "hybrid_policy_blocked" };
+    }
+
+    default:
+      return { allowed: false, reason: "unknown_mode" };
+  }
+}
+
+// ── Extract message body by type ──────────────────────────
+function extractBodyText(msg: any): string {
+  if (msg.type === "text") return msg.text?.body ?? "";
+  if (msg.type === "image") return `[Image] ${msg.image?.caption ?? ""}`;
+  if (msg.type === "document") return `[Document] ${msg.document?.filename ?? ""}`;
+  if (msg.type === "audio") return "[Audio message]";
+  if (msg.type === "video") return `[Video] ${msg.video?.caption ?? ""}`;
+  if (msg.type === "location") return `[Location] ${msg.location?.latitude},${msg.location?.longitude}`;
+  if (msg.type === "contacts") return "[Contact card]";
+  if (msg.type === "sticker") return "[Sticker]";
+  if (msg.type === "reaction") return `[Reaction] ${msg.reaction?.emoji ?? ""}`;
+  return `[${msg.type ?? "unknown"}]`;
+}
+
 Deno.serve(async (req) => {
-  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // ── GET → Meta webhook verification ──────────────────────────
+  // ── GET → Meta webhook verification ──────────────────────
   if (req.method === "GET") {
     const url = new URL(req.url);
     const mode = url.searchParams.get("hub.mode");
     const token = url.searchParams.get("hub.verify_token");
     const challenge = url.searchParams.get("hub.challenge");
 
-    const expectedToken = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
-    const verifyToken = "leadrocket-wa-verify-2026";
-    console.log("[whatsapp-webhook] Verify check:", { mode, tokenMatch: token === verifyToken });
+    console.log("[whatsapp-webhook] Verify check:", { mode, tokenMatch: token === VERIFY_TOKEN });
 
-    if (mode === "subscribe" && token === verifyToken) {
+    if (mode === "subscribe" && token === VERIFY_TOKEN) {
       console.log("[whatsapp-webhook] Verification successful");
       return new Response(challenge, { status: 200, headers: corsHeaders });
     }
-
-    console.warn("[whatsapp-webhook] Verification failed", { mode, token, expectedLen: expectedToken?.length });
     return new Response("Forbidden", { status: 403, headers: corsHeaders });
   }
 
-  // ── POST → Inbound message ingestion ─────────────────────────
   if (req.method !== "POST") {
-    return new Response("Method not allowed", {
-      status: 405,
-      headers: corsHeaders,
-    });
+    return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  const supabase = createClient(supabaseUrl, serviceKey);
 
   let body: any;
   try {
@@ -56,7 +152,6 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Meta sends an array of entries, each with an array of changes
   const entries = body?.entry ?? [];
   let processed = 0;
   let skipped = 0;
@@ -70,18 +165,16 @@ Deno.serve(async (req) => {
       const value = change?.value;
       if (!value) continue;
 
-      // ── Status update events (sent/delivered/read/failed) ─────────
-      // These arrive as value.statuses[] — process BEFORE message ingestion
+      // ── Status update events ────────────────────────────
       const statuses = value?.statuses ?? [];
       for (const statusEvent of statuses) {
         const providerMsgId = statusEvent?.id;
-        const newStatus: string = statusEvent?.status; // sent | delivered | read | failed
+        const newStatus: string = statusEvent?.status;
         const recipientId: string = statusEvent?.recipient_id;
 
         if (!providerMsgId || !newStatus) continue;
         if (!["sent", "delivered", "read", "failed"].includes(newStatus)) continue;
 
-        // Update message record
         const { error: statusErr } = await supabase
           .from("messages")
           .update({ status: newStatus })
@@ -95,32 +188,32 @@ Deno.serve(async (req) => {
         console.log(`[whatsapp-webhook] Status update: ${providerMsgId} → ${newStatus}`);
         statusUpdated++;
 
-        // ── Lead intelligence updates ──────────────────────────────
+        // Lead intelligence on status events
         if (newStatus === "read" || newStatus === "failed") {
-          // Find lead by recipient phone suffix
           const normalizedRecipient = (recipientId || "").replace(/\D/g, "");
           if (!normalizedRecipient) continue;
 
           const { data: allLeads } = await supabase
             .from("leads")
-            .select("id, needs_action, next_action_key")
+            .select("id, needs_action, next_action_key, phone, whatsapp_number, engagement_score")
             .filter("phone", "neq", "")
             .not("phone", "is", null)
             .limit(100);
 
           const matchedLead = (allLeads ?? []).find((l: any) => {
-            const lp = (l.phone || "").replace(/\D/g, "");
+            const lp = normalizePhone(l.whatsapp_number || l.phone || "");
             return lp.length >= 4 && normalizedRecipient.endsWith(lp);
           });
 
           if (matchedLead) {
             if (newStatus === "read") {
+              // Section 7: read → update last_read_at + engagement_score +5
               await supabase.from("leads").update({
                 last_read_at: new Date().toISOString(),
+                engagement_score: (matchedLead.engagement_score ?? 0) + 5,
               } as any).eq("id", matchedLead.id);
-              console.log(`[whatsapp-webhook] Marked last_read_at for lead ${matchedLead.id}`);
+              console.log(`[whatsapp-webhook] Read receipt: lead ${matchedLead.id} +5 engagement`);
             } else if (newStatus === "failed") {
-              // Only set needs_action if not already set with higher priority action
               if (!matchedLead.needs_action || matchedLead.next_action_key === "whatsapp_reply") {
                 await supabase.from("leads").update({
                   needs_action: true,
@@ -134,21 +227,18 @@ Deno.serve(async (req) => {
         }
       }
 
-      // If this change only contained status events (no messages[]), skip message ingestion
+      // Skip if no messages
       const hasMessages = (value?.messages ?? []).length > 0;
       if (!hasMessages) continue;
 
-      const wabaId = entry?.id; // The WABA ID from the entry
-      const phoneNumberId =
-        value?.metadata?.phone_number_id;
-
+      const phoneNumberId = value?.metadata?.phone_number_id;
       if (!phoneNumberId) {
         console.warn("[whatsapp-webhook] Missing phone_number_id, skipping");
         skipped++;
         continue;
       }
 
-      // Find the integration that owns this phone_number_id
+      // Find integration
       const { data: integration, error: intErr } = await supabase
         .from("integrations")
         .select("id, workspace_id, user_id")
@@ -158,29 +248,27 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (intErr || !integration) {
-        console.warn(
-          "[whatsapp-webhook] No active integration for phone_number_id:",
-          phoneNumberId,
-          intErr
-        );
+        console.warn("[whatsapp-webhook] No active integration for phone_number_id:", phoneNumberId);
         skipped++;
         continue;
       }
 
-      const { workspace_id, user_id: ownerUserId, id: integrationId } =
-        integration;
+      const { workspace_id, user_id: ownerUserId, id: integrationId } = integration;
 
-      // Process contacts (status updates, etc.) – we only care about messages
+      // Load workspace automation settings
+      const { data: workspaceSettings } = await supabase
+        .from("workspace_automation_settings")
+        .select("*")
+        .eq("workspace_id", workspace_id)
+        .maybeSingle();
+
       const messages = value?.messages ?? [];
 
       for (const msg of messages) {
         const providerMessageId = msg?.id;
-        if (!providerMessageId) {
-          skipped++;
-          continue;
-        }
+        if (!providerMessageId) { skipped++; continue; }
 
-        // ── Idempotency check ──────────────────────────
+        // Idempotency check
         const { data: existing } = await supabase
           .from("messages")
           .select("id")
@@ -189,48 +277,88 @@ Deno.serve(async (req) => {
           .maybeSingle();
 
         if (existing) {
-          console.log(
-            "[whatsapp-webhook] Duplicate message, skipping:",
-            providerMessageId
-          );
+          console.log("[whatsapp-webhook] Duplicate message, skipping:", providerMessageId);
           skipped++;
           continue;
         }
 
-        const senderPhone = msg?.from; // e.g. "14155238886"
+        const senderPhone = msg?.from ?? "";
+        const normalizedPhone = normalizePhone(senderPhone);
         const timestamp = msg?.timestamp
           ? new Date(parseInt(msg.timestamp) * 1000).toISOString()
           : new Date().toISOString();
 
-        // Extract message body based on type
-        let bodyText = "";
-        if (msg.type === "text") {
-          bodyText = msg.text?.body ?? "";
-        } else if (msg.type === "image") {
-          bodyText = `[Image] ${msg.image?.caption ?? ""}`;
-        } else if (msg.type === "document") {
-          bodyText = `[Document] ${msg.document?.filename ?? ""}`;
-        } else if (msg.type === "audio") {
-          bodyText = "[Audio message]";
-        } else if (msg.type === "video") {
-          bodyText = `[Video] ${msg.video?.caption ?? ""}`;
-        } else if (msg.type === "location") {
-          bodyText = `[Location] ${msg.location?.latitude},${msg.location?.longitude}`;
-        } else if (msg.type === "contacts") {
-          bodyText = `[Contact card]`;
-        } else if (msg.type === "sticker") {
-          bodyText = "[Sticker]";
-        } else if (msg.type === "reaction") {
-          bodyText = `[Reaction] ${msg.reaction?.emoji ?? ""}`;
-        } else {
-          bodyText = `[${msg.type ?? "unknown"}]`;
+        const bodyText = extractBodyText(msg);
+
+        // ── SECTION 2: Sales-first auto lead creation ──────
+        // Try to find lead by whatsapp_number first, then phone suffix
+        let matchedLead: any = null;
+
+        // 2.1 Try exact whatsapp_number match (E.164)
+        if (normalizedPhone) {
+          const { data: waLead } = await supabase
+            .from("leads")
+            .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
+            .eq("whatsapp_number", normalizedPhone)
+            .maybeSingle();
+          if (waLead) matchedLead = waLead;
         }
 
-        // ── Resolve or create contact ──────────────────
-        let contactId: string;
-        const normalizedPhone = senderPhone.replace(/\D/g, "");
+        // 2.2 Fallback: phone suffix match
+        if (!matchedLead) {
+          const { data: allLeads } = await supabase
+            .from("leads")
+            .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
+            .filter("phone", "neq", "")
+            .not("phone", "is", null)
+            .limit(100);
 
-        // Look up by identity
+          matchedLead = (allLeads ?? []).find((l: any) => {
+            const lp = normalizePhone(l.whatsapp_number || l.phone || "");
+            return lp.length >= 4 && normalizedPhone.endsWith(lp);
+          }) ?? null;
+        }
+
+        // 2.3 Auto-create minimal lead if none found
+        if (!matchedLead) {
+          const accelerationUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          const { data: newLead, error: newLeadErr } = await supabase
+            .from("leads")
+            .insert({
+              name: "WhatsApp Lead",
+              email: `wa_${normalizedPhone}@auto.leadrocket`,
+              company: "Unknown",
+              strategy: "reply",
+              whatsapp_number: normalizedPhone,
+              source_type: "whatsapp_inbound",
+              stage: "new",
+              auto_created: true,
+              engagement_score: 5,
+              acceleration_until: accelerationUntil,
+              owner_user_id: ownerUserId,
+              wa_opted_in: true,
+            } as any)
+            .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
+            .single();
+
+          if (newLeadErr || !newLead) {
+            console.error("[whatsapp-webhook] Failed to auto-create lead:", newLeadErr);
+          } else {
+            matchedLead = newLead;
+            // Log auto-creation
+            await supabase.from("automation_logs").insert({
+              workspace_id,
+              lead_id: newLead.id,
+              decision: "auto_created_from_whatsapp",
+              reason: `phone:${normalizedPhone}`,
+            } as any);
+            console.log("[whatsapp-webhook] Auto-created lead:", newLead.id);
+          }
+        }
+
+        // ── Resolve / create contact ───────────────────────
+        let contactId: string;
+
         const { data: identityRow } = await supabase
           .from("contact_identities")
           .select("contact_id")
@@ -241,13 +369,8 @@ Deno.serve(async (req) => {
 
         if (identityRow) {
           contactId = identityRow.contact_id;
-          // Update last_activity_at on the contact
-          await supabase
-            .from("contacts")
-            .update({ last_activity_at: timestamp })
-            .eq("id", contactId);
+          await supabase.from("contacts").update({ last_activity_at: timestamp }).eq("id", contactId);
         } else {
-          // Auto-create unclassified contact
           const { data: newContact, error: cErr } = await supabase
             .from("contacts")
             .insert({
@@ -260,17 +383,12 @@ Deno.serve(async (req) => {
             .single();
 
           if (cErr || !newContact) {
-            console.error(
-              "[whatsapp-webhook] Failed to create contact:",
-              cErr
-            );
+            console.error("[whatsapp-webhook] Failed to create contact:", cErr);
             skipped++;
             continue;
           }
 
           contactId = newContact.id;
-
-          // Create the phone identity
           await supabase.from("contact_identities").insert({
             workspace_id,
             contact_id: contactId,
@@ -278,21 +396,14 @@ Deno.serve(async (req) => {
             value: normalizedPhone,
             is_primary: true,
           });
-
-          console.log(
-            "[whatsapp-webhook] Created new contact:",
-            contactId,
-            "for phone:",
-            normalizedPhone
-          );
         }
 
-        // ── Resolve or create conversation ─────────────
+        // ── Resolve / create conversation ──────────────────
         let conversationId: string;
 
         const { data: existingConvo } = await supabase
           .from("conversations")
-          .select("id")
+          .select("id, message_count")
           .eq("workspace_id", workspace_id)
           .eq("contact_id", contactId)
           .eq("channel", "whatsapp")
@@ -302,20 +413,10 @@ Deno.serve(async (req) => {
 
         if (existingConvo) {
           conversationId = existingConvo.id;
-          // Fetch current message_count and increment
-          const { data: convoData } = await supabase
-            .from("conversations")
-            .select("message_count")
-            .eq("id", existingConvo.id)
-            .single();
-          
-          await supabase
-            .from("conversations")
-            .update({
-              last_message_at: timestamp,
-              message_count: (convoData?.message_count ?? 0) + 1,
-            })
-            .eq("id", conversationId);
+          await supabase.from("conversations").update({
+            last_message_at: timestamp,
+            message_count: (existingConvo.message_count ?? 0) + 1,
+          }).eq("id", conversationId);
         } else {
           const { data: newConvo, error: cvErr } = await supabase
             .from("conversations")
@@ -334,23 +435,57 @@ Deno.serve(async (req) => {
             .single();
 
           if (cvErr || !newConvo) {
-            console.error(
-              "[whatsapp-webhook] Failed to create conversation:",
-              cvErr
-            );
+            console.error("[whatsapp-webhook] Failed to create conversation:", cvErr);
             skipped++;
             continue;
           }
           conversationId = newConvo.id;
         }
 
-        // ── Encrypt and store message ──────────────────
-        const encryptedBody = await encryptToken(bodyText);
-        const expiresAt = new Date(
-          Date.now() + 72 * 60 * 60 * 1000
-        ).toISOString();
+        // ── SECTION 4: Intent classification ──────────────
+        let intent = "unknown";
+        let aiConfidence = 0;
+        let riskFlags: string[] = [];
 
-        // Resolve sender identity ID for the message
+        if (bodyText && !bodyText.startsWith("[")) {
+          try {
+            const intentRes = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${serviceKey}`,
+              },
+              body: JSON.stringify({
+                task: "whatsapp_classify_intent",
+                payload: {
+                  message_text: bodyText,
+                  lead_stage: matchedLead?.stage ?? "new",
+                },
+              }),
+            });
+
+            if (intentRes.ok) {
+              const intentData = await intentRes.json();
+              if (intentData?.ok && intentData?.content) {
+                try {
+                  const parsed = JSON.parse(intentData.content);
+                  intent = parsed.intent ?? intent;
+                  aiConfidence = typeof parsed.confidence === "number" ? parsed.confidence : aiConfidence;
+                  riskFlags = Array.isArray(parsed.risk_flags) ? parsed.risk_flags : [];
+                } catch {
+                  console.warn("[whatsapp-webhook] Failed to parse intent JSON");
+                }
+              }
+            }
+          } catch (err) {
+            console.error("[whatsapp-webhook] Intent classification failed:", err);
+          }
+        }
+
+        // ── Encrypt and store inbound message ─────────────
+        const encryptedBody = await encryptToken(bodyText);
+        const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+
         const { data: senderIdentity } = await supabase
           .from("contact_identities")
           .select("id")
@@ -360,17 +495,20 @@ Deno.serve(async (req) => {
           .eq("value", normalizedPhone)
           .maybeSingle();
 
-        const { error: msgErr } = await supabase.from("messages").insert({
+        const { data: storedMsg, error: msgErr } = await supabase.from("messages").insert({
           workspace_id,
           conversation_id: conversationId,
           direction: "inbound",
           body_ciphertext: encryptedBody,
           expires_at: expiresAt,
           provider_message_id: providerMessageId,
+          whatsapp_message_id: providerMessageId,
           sender_identity_id: senderIdentity?.id ?? null,
           media_type: msg.type !== "text" ? msg.type : null,
           created_at: timestamp,
-        });
+          intent,
+          ai_confidence: aiConfidence > 0 ? aiConfidence : null,
+        } as any).select("id").single();
 
         if (msgErr) {
           console.error("[whatsapp-webhook] Failed to store message:", msgErr);
@@ -378,66 +516,154 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // ── Bridge to interactions table + update lead state ──
-        // Try matching normalizedPhone suffix against leads.phone
-        // Leads store local numbers (e.g. "9210029244"), webhook gets full E.164 (e.g. "919210029244")
-        const { data: matchedLeads } = await supabase
-          .from("leads")
-          .select("id, owner_user_id, needs_action, next_action_key")
-          .filter("phone", "neq", "")
-          .not("phone", "is", null)
-          .limit(100);
+        const storedMsgId = storedMsg?.id ?? null;
 
-        let matchedLeadId: string | null = null;
+        // ── Bridge to interactions + update lead state ─────
+        if (matchedLead) {
+          const { error: intxErr } = await supabase.from("interactions").insert({
+            lead_id: matchedLead.id,
+            type: "whatsapp_inbound",
+            source: "whatsapp",
+            body_text: bodyText,
+            occurred_at: timestamp,
+            direction: "inbound",
+            from_email: `+${normalizedPhone}`,
+          });
+          if (intxErr) {
+            console.error("[whatsapp-webhook] Failed to bridge to interactions:", intxErr);
+          }
 
-        if (matchedLeads && matchedLeads.length > 0) {
-          const lead = matchedLeads.find((l: any) => {
-            const leadPhone = (l.phone || "").replace(/\D/g, "");
-            return leadPhone.length >= 4 && normalizedPhone.endsWith(leadPhone);
+          // Engagement score: inbound +10
+          const newScore = (matchedLead.engagement_score ?? 0) + 10;
+          const leadUpdate: Record<string, any> = {
+            last_inbound_at: timestamp,
+            last_activity_at: timestamp,
+            engagement_score: newScore,
+          };
+
+          // Acceleration: expire if past window
+          if (matchedLead.acceleration_until && new Date(matchedLead.acceleration_until) < new Date()) {
+            leadUpdate.acceleration_until = null;
+          }
+
+          // ── SECTION 5: Decision Engine ────────────────────
+          const effectiveMode = getEffectiveMode(matchedLead, workspaceSettings);
+          const decision = shouldAutoSend({
+            effective_mode: effectiveMode,
+            intent,
+            confidence: aiConfidence,
+            workspaceSettings,
+            lead: matchedLead,
+            message_text: bodyText,
           });
 
-          if (lead) {
-            matchedLeadId = lead.id;
-
-            // Insert interaction for lead timeline
-            const { error: intxErr } = await supabase
-              .from("interactions")
-              .insert({
-                lead_id: lead.id,
-                type: "whatsapp_inbound",
-                source: "whatsapp",
-                body_text: bodyText,
-                occurred_at: timestamp,
-                direction: "inbound",
-                from_email: `+${normalizedPhone}`,
+          if (decision.allowed) {
+            // ── SECTION 6: Auto Send Execution ───────────────
+            try {
+              // Generate AI reply
+              const replyRes = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${serviceKey}`,
+                },
+                body: JSON.stringify({
+                  task: "whatsapp_reply_suggestion",
+                  payload: {
+                    message_text: bodyText,
+                    lead_stage: matchedLead.stage,
+                    intent,
+                    lead_name: matchedLead.name ?? "there",
+                  },
+                }),
               });
 
-            if (intxErr) {
-              console.error("[whatsapp-webhook] Failed to bridge to interactions:", intxErr);
-            } else {
-              console.log("[whatsapp-webhook] Bridged inbound to lead:", lead.id);
+              let replyText: string | null = null;
+              if (replyRes.ok) {
+                const replyData = await replyRes.json();
+                if (replyData?.ok && replyData?.content) {
+                  replyText = replyData.content.trim();
+                }
+              }
+
+              if (replyText) {
+                // Load integration credentials to verify it exists
+                const { data: integrationData } = await supabase
+                  .from("integrations")
+                  .select("credentials_encrypted, provider_account_id")
+                  .eq("id", integrationId)
+                  .single();
+
+                if (integrationData?.credentials_encrypted && integrationData?.provider_account_id) {
+                  // Fire-and-forget send via whatsapp-send
+                  // We store the automated outbound message directly here instead of calling whatsapp-send
+                  // to avoid circular auth issues from webhook context
+
+                  // Store automated outbound message
+                  const encryptedReply = await encryptToken(replyText);
+                  const replyExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+                  const { data: autoMsg } = await supabase.from("messages").insert({
+                    workspace_id,
+                    conversation_id: conversationId,
+                    direction: "outbound",
+                    body_ciphertext: encryptedReply,
+                    expires_at: replyExpiresAt,
+                    is_automated: true,
+                    intent,
+                    ai_confidence: aiConfidence > 0 ? aiConfidence : null,
+                    status: "sent",
+                  } as any).select("id").single();
+
+                  // Update conversation count
+                  await supabase.from("conversations").update({
+                    message_count: (existingConvo?.message_count ?? 1) + 2,
+                    last_message_at: new Date().toISOString(),
+                  }).eq("id", conversationId);
+
+                  // engagement_score +5 for auto-send
+                  leadUpdate.engagement_score = newScore + 5;
+
+                  // Log auto-sent
+                  await supabase.from("automation_logs").insert({
+                    workspace_id,
+                    lead_id: matchedLead.id,
+                    message_id: autoMsg?.id ?? null,
+                    decision: "auto_sent",
+                    reason: effectiveMode,
+                  } as any);
+
+                  console.log(`[whatsapp-webhook] Auto-sent reply for lead ${matchedLead.id} in ${effectiveMode} mode`);
+                }
+              }
+            } catch (sendErr) {
+              console.error("[whatsapp-webhook] Auto-send failed:", sendErr);
             }
 
-            // Update lead state: last_inbound_at, last_activity_at, needs_action
-            // Only set needs_action if not already actioned (avoid overwriting existing actions)
-            const leadUpdate: Record<string, any> = {
-              last_inbound_at: timestamp,
-              last_activity_at: timestamp,
-            };
-            if (!lead.needs_action && lead.next_action_key !== "ooo_return_followup") {
+            // Clear needs_action for auto-sent
+            leadUpdate.needs_action = false;
+          } else {
+            // Suggestion only: flag needs_action
+            if (!matchedLead.needs_action && matchedLead.next_action_key !== "ooo_return_followup") {
               leadUpdate.needs_action = true;
               leadUpdate.next_action_key = "whatsapp_reply";
               leadUpdate.next_action_label = "Reply via WhatsApp";
             }
-            await supabase.from("leads").update(leadUpdate).eq("id", lead.id);
-            console.log("[whatsapp-webhook] Updated lead state for:", lead.id);
+
+            // Log suggestion-only decision
+            await supabase.from("automation_logs").insert({
+              workspace_id,
+              lead_id: matchedLead.id,
+              message_id: storedMsgId,
+              decision: "suggestion_only",
+              reason: decision.reason,
+            } as any);
           }
+
+          await supabase.from("leads").update(leadUpdate as any).eq("id", matchedLead.id);
+          console.log(`[whatsapp-webhook] Lead ${matchedLead.id} updated. Mode: ${effectiveMode}, Decision: ${decision.reason}`);
         }
 
-        // ── Trigger conversation analysis for AI reply suggestions ──
-        // Fire-and-forget: don't block the webhook response
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        // ── Trigger conversation analysis (fire-and-forget) ─
         fetch(`${supabaseUrl}/functions/v1/conversation-analyze`, {
           method: "POST",
           headers: {
@@ -450,12 +676,7 @@ Deno.serve(async (req) => {
         });
 
         processed++;
-        console.log(
-          "[whatsapp-webhook] Stored message:",
-          providerMessageId,
-          "for contact:",
-          contactId
-        );
+        console.log("[whatsapp-webhook] Processed message:", providerMessageId);
       }
     }
   }

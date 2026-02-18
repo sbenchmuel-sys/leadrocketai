@@ -1408,6 +1408,73 @@ Knowledge Context:
 
 OUTPUT
 Return the WhatsApp message text ONLY. No JSON. No markdown.`,
+
+  // ── WhatsApp intent classifier ──────────────────────────
+  whatsapp_classify_intent: `You are an AI intent classifier for WhatsApp business messages.
+
+TASK
+Classify the intent of the following inbound WhatsApp message.
+
+INPUT
+Message: {{MESSAGE_TEXT}}
+Lead Stage: {{LEAD_STAGE}}
+
+INTENTS (choose one):
+- acknowledgment: simple confirmation, thanks, or positive reception
+- scheduling: asking about or confirming a meeting/call
+- clarification: asking a question about the product/service
+- objection: expressing concern, hesitation, or pushback
+- complaint: expressing dissatisfaction or reporting an issue
+- unsubscribe: asking to be removed or stop contact
+- negotiation: discussing pricing, terms, or conditions
+- legal: mentioning lawyers, contracts, compliance, lawsuits
+- positive_interest: expressing clear buying intent
+- unknown: cannot determine intent
+
+RISK FLAGS (list zero or more):
+- "pricing_sensitivity": mentions cost concerns
+- "competitor_mention": mentions a competing product
+- "legal_risk": mentions legal action or compliance
+- "churn_risk": indicates intent to cancel or leave
+- "escalation_needed": human must handle this
+
+OUTPUT
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "intent": "<intent>",
+  "confidence": <float between 0.0 and 1.0>,
+  "risk_flags": ["<flag1>", "<flag2>"]
+}`,
+
+  // ── WhatsApp auto-reply suggestion ─────────────────────
+  whatsapp_reply_suggestion: `You are an AI writing an automated WhatsApp reply for a B2B sales context.
+
+TASK
+Generate a short, natural WhatsApp reply to the inbound message below.
+
+CONTEXT
+Inbound Message: {{MESSAGE_TEXT}}
+Detected Intent: {{INTENT}}
+Lead Stage: {{LEAD_STAGE}}
+Lead Name: {{LEAD_NAME}}
+
+FORMAT RULES (MANDATORY)
+- Maximum 50 words
+- Start with "Hey {{LEAD_NAME}}," or "Hi {{LEAD_NAME}},"
+- NO sign-off or signature
+- 1-2 sentences only
+- Conversational, friendly, professional
+- One clear next step or question
+- NO placeholders in the final output
+
+SAFETY
+- Never make pricing commitments
+- Never make legal statements
+- If intent is unclear, ask a clarifying question
+- If topic is sensitive (legal, complaint), acknowledge and say a human will follow up
+
+OUTPUT
+Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 };
 
 // --- STRATEGY 2: Model Tiering ---
