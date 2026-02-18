@@ -137,6 +137,9 @@ serve(async (req) => {
     }
 
     // Find eligible leads (existing automation email flow)
+    // CRITICAL: Exclude nurture leads — they are handled separately by the nurture pre-generate pipeline.
+    // Nurture leads in "review" mode need manual approval; "automatic" mode is handled by its own flow.
+    // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
       .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed")
@@ -146,6 +149,7 @@ serve(async (req) => {
       .in("status", ["active", "new"])
       .eq("unsubscribed", false)
       .neq("next_action_key", "ooo_return_followup") // OOO returns are handled above — no email needed
+      .neq("motion", "nurture") // SAFETY: nurture leads must never enter the prospecting email pipeline
       .limit(20);
 
     if (ownerFilter) {
@@ -373,21 +377,28 @@ serve(async (req) => {
         const actionKey = lead.next_action_key;
 
         // Determine AI task type — motion-aware resolution
+        // SAFETY: nurture leads are blocked by the query filter above, but double-check here
+        // to ensure we never send a prospecting email to a nurture lead via any code path.
+        if (lead.motion === "nurture") {
+          console.warn(`[automation-executor] BLOCKED: nurture lead ${lead.id} reached email send path — skipping`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "Nurture lead blocked from prospecting email pipeline";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
         let aiTask: string;
         if (actionKey) {
           if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
           else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
           else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
           else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
-          else if (actionKey.startsWith("send_nurture")) aiTask = "nurture_email_single";
-          else aiTask = "pre_email_2_followup"; // truly unknown key
+          else if (actionKey.startsWith("send_nurture") || actionKey.startsWith("nurture_")) aiTask = "nurture_email_single";
+          else aiTask = "pre_email_2_followup"; // truly unknown key — prospecting fallback (non-nurture only)
         } else {
-          // No action key — infer from motion
-          if (lead.motion === "nurture") {
-            aiTask = "nurture_email_single";
-          } else {
-            aiTask = "pre_email_1_intro"; // first outbound if no key
-          }
+          aiTask = "pre_email_1_intro"; // first outbound if no key (non-nurture leads only at this point)
         }
 
         logEntry.ai_task = aiTask;
