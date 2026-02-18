@@ -609,6 +609,7 @@ export type Database = {
           nurture_outbound_count: number
           nurture_status: string
           nurture_theme: string | null
+          ooo_until: string | null
           owner_user_id: string
           personal_notes: string | null
           phone: string | null
@@ -660,6 +661,7 @@ export type Database = {
           nurture_outbound_count?: number
           nurture_status?: string
           nurture_theme?: string | null
+          ooo_until?: string | null
           owner_user_id: string
           personal_notes?: string | null
           phone?: string | null
@@ -711,6 +713,7 @@ export type Database = {
           nurture_outbound_count?: number
           nurture_status?: string
           nurture_theme?: string | null
+          ooo_until?: string | null
           owner_user_id?: string
           personal_notes?: string | null
           phone?: string | null

@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
+import { isOutOfOfficeReply, getOOOEligibleAt } from "../_shared/oooDetection.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -459,6 +460,42 @@ async function syncLeadEmails(
         });
       }
 
+      // OOO / Auto-reply detection — must run BEFORE counting as real inbound
+      if (direction === "inbound" && !isBounce) {
+        const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
+        if (oooResult.isOOO) {
+          const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
+          const returnDateStr = oooResult.returnDate
+            ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
+            : "approximately 7 days";
+
+          console.log(`[gmail-bulk-sync] Lead ${leadId}: OOO detected (${oooResult.confidence}). Pausing until ${eligibleAt}`);
+
+          await serviceSupabase.from("leads").update({
+            ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
+            eligible_at: eligibleAt,
+            needs_action: false,
+            next_action_key: null,
+            next_action_label: null,
+            action_reason_code: null,
+          }).eq("id", leadId);
+
+          await serviceSupabase.from("interactions").insert({
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
+            body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). Out of office — returning ${returnDateStr}. Automation paused until then.`,
+            occurred_at: occurredAt,
+            gmail_message_id: gmailMessageId,
+            gmail_thread_id: threadId,
+          });
+
+          existingMessageIds.add(gmailMessageId);
+          synced++;
+          continue;
+        }
+      }
+
       const { error: insertError } = await serviceSupabase
         .from("interactions")
         .insert({
@@ -565,6 +602,42 @@ async function syncLeadEmails(
           });
         }
 
+        // OOO detection in thread messages
+        if (direction === "inbound" && !isBounceT) {
+          const oooResultT = isOutOfOfficeReply(headers, subject, bodyText);
+          if (oooResultT.isOOO) {
+            const eligibleAt = getOOOEligibleAt(oooResultT.returnDate);
+            const returnDateStr = oooResultT.returnDate
+              ? oooResultT.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
+              : "approximately 7 days";
+
+            console.log(`[gmail-bulk-sync] Lead ${leadId}: OOO in thread (${oooResultT.confidence}). Pausing until ${eligibleAt}`);
+
+            await serviceSupabase.from("leads").update({
+              ooo_until: oooResultT.returnDate ? oooResultT.returnDate.toISOString() : eligibleAt,
+              eligible_at: eligibleAt,
+              needs_action: false,
+              next_action_key: null,
+              next_action_label: null,
+              action_reason_code: null,
+            }).eq("id", leadId);
+
+            await serviceSupabase.from("interactions").insert({
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
+              body_text: `📵 OOO auto-reply detected (${oooResultT.confidence} signal). Out of office — returning ${returnDateStr}. Automation paused until then.`,
+              occurred_at: occurredAt,
+              gmail_message_id: gmailMessageId,
+              gmail_thread_id: threadId,
+            });
+
+            existingMessageIds.add(gmailMessageId);
+            synced++;
+            continue;
+          }
+        }
+
         const { error: insertError } = await serviceSupabase
           .from("interactions")
           .insert({
@@ -614,6 +687,9 @@ async function syncLeadEmails(
   };
 
   for (const interaction of allInteractions || []) {
+    // Skip OOO system notes — they must not pollute inbound metrics
+    if (interaction.type === "system_note") continue;
+
     const isOutbound = interaction.direction === "outbound" || interaction.type === "email_outbound";
     const isInbound = interaction.direction === "inbound" || interaction.type === "email_inbound";
 

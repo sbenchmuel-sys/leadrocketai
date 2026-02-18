@@ -4,7 +4,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine } from "lucide-react";
+import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   MOTION_LABELS, MOTION_COLORS,
@@ -151,7 +151,15 @@ export default function LeadDetailHeader({
       <div className="flex items-center gap-6 py-3">
         {/* LEFT — Identity */}
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-bold text-foreground leading-tight truncate">{lead.name}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg font-bold text-foreground leading-tight truncate">{lead.name}</h1>
+            {(lead as any).ooo_until && new Date((lead as any).ooo_until) > new Date() && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 shrink-0">
+                <Plane className="h-2.5 w-2.5" />
+                OOO until {new Date((lead as any).ooo_until).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground leading-snug truncate">
             {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}{lead.country ? ` · ${lead.country}` : ""}
           </p>

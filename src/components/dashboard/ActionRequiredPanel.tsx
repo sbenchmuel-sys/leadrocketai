@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AlertCircle, Mail, FileText, Eye, Send, X, RefreshCw } from "lucide-react";
+import { AlertCircle, Mail, FileText, Eye, Send, X, RefreshCw, Plane } from "lucide-react";
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -70,6 +70,17 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
         >
           <RefreshCw className="h-3 w-3 mr-1" />
           Nurture
+        </Button>
+      );
+    }
+
+    if (actionType === "view" && (lead as any).next_action_key === "ooo_return_followup") {
+      return (
+        <Button size="sm" variant="outline" className="h-7 text-xs border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30" asChild>
+          <Link to={`/app/leads/${lead.id}`} state={{ originContext: "dashboard" }}>
+            <Plane className="h-3 w-3 mr-1" />
+            Follow up
+          </Link>
         </Button>
       );
     }
