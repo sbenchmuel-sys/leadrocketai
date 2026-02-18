@@ -423,6 +423,42 @@ async function syncLeadEmails(
         hasClosingKeywords = true;
       }
 
+      // Bounce / undeliverable detection
+      const fromLower = from.toLowerCase();
+      const subjectLower = subject.toLowerCase();
+      const isBounce = (
+        fromLower.includes("postmaster") ||
+        fromLower.includes("mailer-daemon") ||
+        fromLower.includes("mail delivery") ||
+        subjectLower.includes("delivery status notification") ||
+        subjectLower.includes("undeliverable") ||
+        subjectLower.includes("mail delivery failed") ||
+        subjectLower.includes("returned mail") ||
+        subjectLower.includes("failure notice") ||
+        subjectLower.includes("delivery failure")
+      );
+
+      if (isBounce) {
+        console.log(`[gmail-bulk-sync] Lead ${leadId}: Bounce detected (subject: "${subject}") — stopping automation`);
+        await serviceSupabase.from("leads").update({
+          unsubscribed: true,
+          needs_action: false,
+          eligible_at: null,
+          next_action_key: null,
+          next_action_label: null,
+          action_reason_code: null,
+          nurture_status: "inactive",
+        }).eq("id", leadId);
+
+        await serviceSupabase.from("interactions").insert({
+          lead_id: leadId,
+          type: "system_note",
+          source: "automation",
+          body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
+          occurred_at: new Date().toISOString(),
+        });
+      }
+
       const { error: insertError } = await serviceSupabase
         .from("interactions")
         .insert({
@@ -491,6 +527,42 @@ async function syncLeadEmails(
 
         if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
           hasClosingKeywords = true;
+        }
+
+        // Bounce / undeliverable detection in thread messages
+        const fromLowerT = from.toLowerCase();
+        const subjectLowerT = subject.toLowerCase();
+        const isBounceT = (
+          fromLowerT.includes("postmaster") ||
+          fromLowerT.includes("mailer-daemon") ||
+          fromLowerT.includes("mail delivery") ||
+          subjectLowerT.includes("delivery status notification") ||
+          subjectLowerT.includes("undeliverable") ||
+          subjectLowerT.includes("mail delivery failed") ||
+          subjectLowerT.includes("returned mail") ||
+          subjectLowerT.includes("failure notice") ||
+          subjectLowerT.includes("delivery failure")
+        );
+
+        if (isBounceT) {
+          console.log(`[gmail-bulk-sync] Lead ${leadId}: Bounce detected in thread (subject: "${subject}") — stopping automation`);
+          await serviceSupabase.from("leads").update({
+            unsubscribed: true,
+            needs_action: false,
+            eligible_at: null,
+            next_action_key: null,
+            next_action_label: null,
+            action_reason_code: null,
+            nurture_status: "inactive",
+          }).eq("id", leadId);
+
+          await serviceSupabase.from("interactions").insert({
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
+            body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
+            occurred_at: new Date().toISOString(),
+          });
         }
 
         const { error: insertError } = await serviceSupabase

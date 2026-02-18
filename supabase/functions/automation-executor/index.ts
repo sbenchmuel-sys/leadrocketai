@@ -257,23 +257,49 @@ serve(async (req) => {
 
         logEntry.ai_task = aiTask;
 
-        // Retry check: max 2 retries per lead+action
-        const { count: retryCount } = await supabase
+        // GUARD 1: Daily per-lead cap — max 1 automated email per lead per day
+        // This is the critical safety net: Gmail returns "sent" for bounced/undeliverable emails,
+        // so counting only "failed" records is useless. We cap by total "sent" today.
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const { count: todaySentCount } = await supabase
+          .from("automation_log")
+          .select("id", { count: "exact", head: true })
+          .eq("lead_id", lead.id)
+          .eq("status", "sent")
+          .gte("created_at", todayStart.toISOString());
+
+        if ((todaySentCount || 0) >= 1) {
+          console.log(`[automation-executor] Lead ${lead.id}: Daily cap reached (${todaySentCount} sent today) — pushing to tomorrow`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "Daily send limit reached (1 per lead per day)";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          tomorrow.setHours(9, 30, 0, 0);
+          await supabase.from("leads").update({ eligible_at: tomorrow.toISOString() }).eq("id", lead.id);
+          skipped++;
+          continue;
+        }
+
+        // GUARD 2: Action-level dedup — this specific action was already sent successfully
+        // Prevents re-sending the same step (e.g. send_nurture_1) if eligible_at was reset by a bug
+        const { count: actionSentCount } = await supabase
           .from("automation_log")
           .select("id", { count: "exact", head: true })
           .eq("lead_id", lead.id)
           .eq("action_key", actionKey)
-          .eq("status", "failed");
+          .eq("status", "sent");
 
-        if ((retryCount || 0) >= 2) {
+        if ((actionSentCount || 0) >= 1) {
+          console.log(`[automation-executor] Lead ${lead.id}: Action ${actionKey} already sent — clearing and skipping duplicate`);
           logEntry.status = "skipped";
-          logEntry.error_message = "Max retries (2) exceeded for this action";
+          logEntry.error_message = "Action already sent — skipping duplicate";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
-          await supabase.from("leads").update({
-            needs_action: false,
-            eligible_at: null,
-          }).eq("id", lead.id);
+          await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
           skipped++;
           continue;
         }
@@ -419,6 +445,7 @@ serve(async (req) => {
             body: draftBody,
             leadId: lead.id,
             ownerUserId: lead.owner_user_id,
+            skipStateUpdate: true, // automation-executor handles post-send state; don't let gmail-send overwrite it
           }),
         });
 
