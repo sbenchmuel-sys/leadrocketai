@@ -309,23 +309,28 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // ── Bridge to interactions table for lead timeline ──
+        // ── Bridge to interactions table + update lead state ──
         // Try matching normalizedPhone suffix against leads.phone
         // Leads store local numbers (e.g. "9210029244"), webhook gets full E.164 (e.g. "919210029244")
-        const { data: matchedLead } = await supabase
+        const { data: matchedLeads } = await supabase
           .from("leads")
-          .select("id, owner_user_id")
+          .select("id, owner_user_id, needs_action, next_action_key")
           .filter("phone", "neq", "")
           .not("phone", "is", null)
           .limit(100);
 
-        if (matchedLead && matchedLead.length > 0) {
-          const lead = matchedLead.find((l: any) => {
+        let matchedLeadId: string | null = null;
+
+        if (matchedLeads && matchedLeads.length > 0) {
+          const lead = matchedLeads.find((l: any) => {
             const leadPhone = (l.phone || "").replace(/\D/g, "");
             return leadPhone.length >= 4 && normalizedPhone.endsWith(leadPhone);
           });
 
           if (lead) {
+            matchedLeadId = lead.id;
+
+            // Insert interaction for lead timeline
             const { error: intxErr } = await supabase
               .from("interactions")
               .insert({
@@ -343,8 +348,37 @@ Deno.serve(async (req) => {
             } else {
               console.log("[whatsapp-webhook] Bridged inbound to lead:", lead.id);
             }
+
+            // Update lead state: last_inbound_at, last_activity_at, needs_action
+            // Only set needs_action if not already actioned (avoid overwriting existing actions)
+            const leadUpdate: Record<string, any> = {
+              last_inbound_at: timestamp,
+              last_activity_at: timestamp,
+            };
+            if (!lead.needs_action && lead.next_action_key !== "ooo_return_followup") {
+              leadUpdate.needs_action = true;
+              leadUpdate.next_action_key = "whatsapp_reply";
+              leadUpdate.next_action_label = "Reply via WhatsApp";
+            }
+            await supabase.from("leads").update(leadUpdate).eq("id", lead.id);
+            console.log("[whatsapp-webhook] Updated lead state for:", lead.id);
           }
         }
+
+        // ── Trigger conversation analysis for AI reply suggestions ──
+        // Fire-and-forget: don't block the webhook response
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        fetch(`${supabaseUrl}/functions/v1/conversation-analyze`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({ conversation_id: conversationId }),
+        }).catch((err) => {
+          console.error("[whatsapp-webhook] Failed to trigger conversation-analyze:", err);
+        });
 
         processed++;
         console.log(
