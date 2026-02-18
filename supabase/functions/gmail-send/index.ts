@@ -265,13 +265,6 @@ serve(async (req) => {
             .eq("id", leadId)
             .single();
 
-          // Get current lead data for AI analysis
-          const { data: leadData, error: leadError } = await serviceSupabase
-            .from("leads")
-            .select("stage, next_action_key, next_action_label, company, name")
-            .eq("id", leadId)
-            .single();
-
           if (leadData && !leadError) {
             // If this send was triggered by automation-executor, skip the AI state update.
             // The executor already handles post-send state correctly; overwriting here would
