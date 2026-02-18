@@ -149,8 +149,18 @@ function deriveEngagementLevel(lead: LeadDetail, closingPower: number): "hot" | 
 // MAIN RESOLVER
 // ============================================
 
-export async function contextResolver(leadId: string): Promise<ResolvedContext> {
-  // Parallel fetch all data
+export interface ContextPrefetched {
+  repProfile?: RepProfile | null;
+  workspaceProfile?: WorkspaceProfile | null;
+  knowledgeDocs?: KnowledgeDocument[];
+}
+
+export async function contextResolver(leadId: string, prefetched?: ContextPrefetched): Promise<ResolvedContext> {
+  // Parallel fetch all data — skip anything already prefetched by the caller
+  const needsRepProfile = !prefetched || prefetched.repProfile === undefined;
+  const needsWorkspaceProfile = !prefetched || prefetched.workspaceProfile === undefined;
+  const needsKnowledgeDocs = !prefetched || prefetched.knowledgeDocs === undefined;
+
   const [
     lead,
     emailThread,
@@ -164,9 +174,9 @@ export async function contextResolver(leadId: string): Promise<ResolvedContext> 
     getLeadEmailThread(leadId, 10),
     getLeadMeetingPacks(leadId),
     getLeadInteractions(leadId),
-    getRepProfile().catch(() => null),
-    getWorkspaceProfile().catch(() => null),
-    getKnowledgeDocuments().catch(() => [] as KnowledgeDocument[]),
+    needsRepProfile ? getRepProfile().catch(() => null) : Promise.resolve(prefetched!.repProfile ?? null),
+    needsWorkspaceProfile ? getWorkspaceProfile().catch(() => null) : Promise.resolve(prefetched!.workspaceProfile ?? null),
+    needsKnowledgeDocs ? getKnowledgeDocuments().catch(() => [] as KnowledgeDocument[]) : Promise.resolve(prefetched!.knowledgeDocs ?? [] as KnowledgeDocument[]),
   ]);
 
   const motion = (lead.motion as Motion) || "outbound_prospecting";

@@ -235,6 +235,7 @@ export function EmailActionDialog({
   // Attachments state
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
   const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
+  const [kbDocsLoading, setKbDocsLoading] = useState(false);
   
   // Profile state
   const [repProfile, setRepProfile] = useState<RepProfile | null>(null);
@@ -286,15 +287,14 @@ export function EmailActionDialog({
 
   async function loadData() {
     try {
-      const [sigs, docs, rep, workspace] = await Promise.all([
+      // Load signatures + profiles in parallel — KB docs are lazy-loaded separately
+      const [sigs, rep, workspace] = await Promise.all([
         getSignatures(),
-        getKnowledgeDocuments(),
         getRepProfile().catch(() => null),
         getWorkspaceProfile().catch(() => null),
       ]);
       
       setSignatures(sigs);
-      setKnowledgeDocs(docs);
       setRepProfile(rep);
       setWorkspaceProfile(workspace);
       setProfilesLoaded(true);
@@ -314,6 +314,20 @@ export function EmailActionDialog({
     } catch (err) {
       console.error("Failed to load data:", err);
       setProfilesLoaded(true); // Still mark as loaded to prevent indefinite waiting
+    }
+  }
+
+  // Lazy-load KB docs only when the attachments panel is opened
+  async function loadKbDocs() {
+    if (knowledgeDocs.length > 0 || kbDocsLoading) return;
+    setKbDocsLoading(true);
+    try {
+      const docs = await getKnowledgeDocuments();
+      setKnowledgeDocs(docs);
+    } catch (err) {
+      console.error("Failed to load KB docs:", err);
+    } finally {
+      setKbDocsLoading(false);
     }
   }
 
@@ -369,6 +383,8 @@ Calendar Link: ${repProfile.calendar_link || ''}
       const pipelineResult = await streamDraft({
         lead_id: lead.id,
         channel: "email",
+        // Pass already-loaded profiles to skip duplicate DB fetches in contextResolver
+        prefetched: profilesLoaded ? { repProfile, workspaceProfile } : undefined,
         instructions: instructions.trim() || null,
         motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
         onToken: (token) => {
