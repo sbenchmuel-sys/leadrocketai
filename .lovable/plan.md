@@ -1,131 +1,166 @@
 
-# Fix: Stop Sending on Failure + Fix Remaining Nurture → Prospecting Switches
+# Speeding Up Email Generation — Full Analysis & Plan
 
-## What Happened Yesterday (Root Cause Analysis)
+## Where Time Is Actually Being Spent
 
-Looking at the automation logs, three separate bugs combined to cause the spam:
-
-### Bug 1: The "Infinite Retry" Loop (No Send Limit)
-The retry guard only counts **failed** log entries:
-```
-.eq("status", "failed")
-```
-But yesterday, all 9+ emails to Naveen and 8+ to Ansh showed **status: "sent"** — meaning Gmail accepted the send. The address was undeliverable at the recipient's mail server (bounce), but Gmail's API returned success. Since no `failed` logs were recorded, the retry guard **never fired**. Every 60 seconds the poller triggered another send.
-
-### Bug 2: Post-Send Loop — `eligible_at` Set Too Soon
-After each successful send, `automation-executor` sets `eligible_at` to the next date (e.g., March 3). But a gmail-sync or gmail-bulk-sync running in between can **overwrite `needs_action` and `eligible_at`** for leads that don't yet have the nurture protection correctly applied — resetting the timer and making the lead immediately eligible again.
-
-### Bug 3: The `gmail-send` Background Task Overwrites Automation State
-After every send (automated or manual), `gmail-send` fires a background task that calls `ai_task/analyze_outgoing_email` and then **unconditionally overwrites** the lead's `next_action_key`, `next_action_label`, and `needs_action` with what the AI suggests (lines 298-309). This can reset a just-scheduled `eligible_at` nurture step back to a prospecting key.
-
-### Bug 4: Nurture Leads Still Getting Prospecting Action Keys
-The DB query confirms: several active nurture leads still have `next_action_key: NULL` and `needs_action: false` with `eligible_at` set — meaning the automation-executor will pick them up but has no `actionKey`, fall through to the no-key path, and send `nurture_email_single`. This part is now working. BUT some still have `send_pre_*` keys from stale data that wasn't caught in the last cleanup.
-
----
-
-## Fixes Required
-
-### Fix 1: Add a Per-Lead Send Limit Guard (Critical — stops the spam)
-
-In `automation-executor`, replace the retry check that only counts `failed` records with a check that counts **total sends** for the same lead+action within the last 24 hours:
-
-```
-// BEFORE: only counts 'failed' — useless since Gmail returns success on undeliverable
-.eq("status", "failed")
-
-// AFTER: count total 'sent' records in the last 24 hours
-// If we've already sent to this lead today for this action, stop
-```
-
-Also add a hard **daily per-lead cap** of 1 automated email per lead per day (regardless of action key). This is the safety net that prevents the loop even if other bugs exist.
-
-### Fix 2: Fix the `gmail-send` Background Task Overwriting Automation State
-
-In `gmail-send/index.ts`, the background AI analysis (lines 270-309) **must not overwrite automation fields** when the send was triggered by automation (i.e., when called from `automation-executor`). The executor already does the post-send state update correctly.
-
-Add a parameter `skipStateUpdate: true` that automation sends pass in, and in the background task, skip the lead state update when this flag is present.
-
-### Fix 3: Detect Bounces / Undeliverable in Gmail Sync and Stop Automation
-
-When `gmail-sync` or `gmail-bulk-sync` processes a lead's inbox, check for bounce-back messages (subject patterns like "Delivery Status Notification", "Undeliverable:", sender from "postmaster" or "mailer-daemon"). If a bounce is detected for a lead:
-- Set `unsubscribed = true` (stops all future automation)
-- Set `needs_action = false`, `eligible_at = null`
-- Log a system note to the lead's timeline explaining the bounce
-
-### Fix 4: Database Cleanup — Fix Remaining Stale Nurture Leads
-
-A SQL update to fix all active nurture leads that currently have `send_pre_*` action keys (still stale from before the previous fixes):
-
-```sql
-UPDATE leads 
-SET next_action_key = 'send_nurture_1', 
-    next_action_label = 'Nurture email #1'
-WHERE motion = 'nurture' 
-  AND nurture_status = 'active' 
-  AND next_action_key LIKE 'send_pre_%';
-```
-
----
-
-## Files Modified
-
-- `supabase/functions/automation-executor/index.ts` — Fix 1: replace retry guard with daily send cap
-- `supabase/functions/gmail-send/index.ts` — Fix 2: skip background state update for automation sends
-- `supabase/functions/gmail-sync/index.ts` — Fix 3: detect bounce-back emails and stop automation
-- `supabase/functions/gmail-bulk-sync/index.ts` — Fix 3: same bounce detection
-- Database migration — Fix 4: clean up remaining stale nurture leads
-
-## Technical Detail: The Daily Cap Logic
+The generation pipeline has multiple sequential and parallel steps. Here is an honest breakdown of what takes time:
 
 ```text
-// New guard in automation-executor (replaces the failed-only retry check):
+Client opens dialog
+    │
+    ├─► loadData() [parallel in browser] ─────────────────── ~300-600ms
+    │       getSignatures()
+    │       getKnowledgeDocuments()   ← fetches up to 50 KB chunks (slow)
+    │       getRepProfile()
+    │       getWorkspaceProfile()
+    │
+    └─► generateEmail() → streamDraft() ──────────────────── starts immediately
+            │
+            ├─ contextResolver() [parallel in browser] ─────── ~400-900ms
+            │       getLeadDetail()
+            │       getLeadEmailThread()
+            │       getLeadMeetingPacks()
+            │       getLeadInteractions()
+            │       getRepProfile()           ← DUPLICATE - already in loadData()
+            │       getWorkspaceProfile()     ← DUPLICATE - already in loadData()
+            │       getKnowledgeDocuments()   ← DUPLICATE - already in loadData()
+            │
+            ├─ playbookResolver() ──────────────────────────── <5ms (local)
+            ├─ scoreAndSelectModel() ───────────────────────── <5ms (local)
+            ├─ buildAIPayload() ────────────────────────────── <5ms (local)
+            │
+            └─ fetch → Edge Function ──────────────────────── ~200-500ms network round trip
+                    │
+                    ├─ JWT validation (createClient + getUser) ─── ~100-300ms
+                    ├─ DB query (load cadence if lead_id) ────────── ~100-200ms
+                    ├─ Text KB search (ilike on kb_chunks) ──────── ~200-500ms
+                    │
+                    └─ AI Gateway → Gemini Flash/Pro ────────────── ~500-3000ms
+                            First token: ~400-800ms (Flash) or ~800-2000ms (Pro)
+                            Full response: ~1-4s streaming
+```
 
-// 1. Max 1 automated send per lead per day
-const todayStart = new Date();
-todayStart.setHours(0, 0, 0, 0);
+**Total before first token appears: ~1.5 to 3.5 seconds.** This is the main pain felt by the user.
 
-const { count: todaySentCount } = await supabase
-  .from("automation_log")
-  .select("id", { count: "exact", head: true })
-  .eq("lead_id", lead.id)
-  .eq("status", "sent")
-  .gte("created_at", todayStart.toISOString());
+---
 
-if ((todaySentCount || 0) >= 1) {
-  // Already sent to this lead today — skip and push eligible_at to tomorrow
-  logEntry.status = "skipped";
-  logEntry.error_message = "Daily send limit reached (1 per lead per day)";
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(9, 30, 0, 0);
-  await supabase.from("leads").update({ eligible_at: tomorrow.toISOString() }).eq("id", lead.id);
-  skipped++;
-  continue;
-}
+## The Key Problems
 
-// 2. Also keep the action-level guard but check SENT not FAILED
-const { count: actionSentCount } = await supabase
-  .from("automation_log")
-  .select("id", { count: "exact", head: true })
-  .eq("lead_id", lead.id)
-  .eq("action_key", actionKey)
-  .eq("status", "sent");
+### Problem 1: Triplicated Profile Fetches
+`contextResolver()` fetches `getRepProfile()`, `getWorkspaceProfile()`, and `getKnowledgeDocuments()` — but `loadData()` in the dialog already fetches all three at the same time. This is **3 unnecessary database round trips** adding ~300-600ms in duplicate overhead.
 
-if ((actionSentCount || 0) >= 1) {
-  // This specific action was already successfully sent — advance to next step
-  // Don't re-send; the post-send update should have already scheduled next
-  logEntry.status = "skipped";
-  logEntry.error_message = "Action already sent — skipping duplicate";
-  await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
-  skipped++;
-  continue;
+### Problem 2: Heavy KB Fetch on Every Dialog Open
+`getKnowledgeDocuments()` fetches up to 50 rows of full KB chunk content in `loadData()`. This data is only used for the attachments panel. That data does not need to block generation — and most of it is never needed.
+
+### Problem 3: Cadence Settings: Sequential DB Query Inside Edge Function
+When a `lead_id` is present, the edge function runs **two sequential DB queries** (one to get `owner_user_id`, then another to get cadence settings) before it can even send to the AI gateway. These are sequential, not parallel.
+
+### Problem 4: KB Search Is a Full iLike Table Scan
+The `getTextBasedKnowledgeContext()` function uses `ilike '%term%'` pattern matching on `kb_chunks.content`. This is a **sequential scan** on the table (no index on content). On larger knowledge bases it gets increasingly slow.
+
+### Problem 5: Pro Model for Many Tasks That Don't Need It
+Several tasks in `PRO_MODEL_TASKS` could be served by Flash. `reply_to_thread` and `post_meeting_followup_email` are good candidates — Flash is fast enough for typical replies and saves ~1-2s vs Pro.
+
+### Problem 6: No Draft Caching
+When a user closes and reopens the same lead's dialog, the entire pipeline runs again from scratch. There is no reuse of a recently generated draft.
+
+---
+
+## Can Moving to Direct Google APIs Help?
+
+**Short answer: marginally, and it adds significant complexity.** The Lovable AI Gateway is already calling Gemini under the hood. The latency you're seeing is mostly:
+- Client-side data fetching (your own DB queries)
+- The AI model's actual Time-To-First-Token
+
+Going direct to Google's API would save the ~30-80ms gateway hop but would require managing a `GOOGLE_API_KEY` secret, handling auth/refresh, and building your own retry logic for 429s. It's not worth it for the speed gain.
+
+**The real wins are in eliminating wasted DB round trips and switching Pro → Flash for eligible tasks.**
+
+---
+
+## Proposed Fixes (Ordered by Impact)
+
+### Fix 1: Eliminate Triplicated Profile Fetches (High Impact, ~300-600ms saved)
+
+Pass `repProfile` and `workspaceProfile` from `loadData()` into `streamDraft()` directly. The `contextResolver` should accept optional pre-fetched profiles to skip re-fetching them.
+
+In `generateDraft.ts`, add optional fields to `GenerateDraftInput`:
+```
+repProfile?: RepProfile | null;
+workspaceProfile?: WorkspaceProfile | null;
+```
+
+In `contextResolver.ts`, accept these as optional parameters. If already provided, skip the DB fetch:
+```typescript
+export async function contextResolver(
+  leadId: string,
+  prefetched?: { repProfile?: RepProfile | null; workspaceProfile?: WorkspaceProfile | null }
+)
+```
+
+In `EmailActionDialog.tsx`, pass the loaded profiles into `streamDraft()` once they're available (they load in parallel already).
+
+### Fix 2: Don't Wait for KB Docs Before Starting Generation (Medium Impact, ~200-400ms saved)
+
+The `getKnowledgeDocuments()` call in `loadData()` fetches full content of up to 50 KB chunks — only used for the attachments panel. Move this to a lazy load triggered when the user opens the attachments panel, not on dialog open. This unblocks `loadData()` from blocking on a 50-row content fetch.
+
+### Fix 3: Parallelize Edge Function DB Queries (Medium Impact, ~100-200ms saved)
+
+Inside the `ai_task` edge function, the cadence settings lookup makes 2 sequential queries:
+1. Get `owner_user_id` from `leads`
+2. Get `cadence_settings` from `workspace_profiles`
+
+These can be parallelized with a single JOIN query or run concurrently with the KB search:
+```typescript
+// Instead of: await query1 then await query2
+// Do: const [leadData, textContext] = await Promise.all([...])
+```
+
+### Fix 4: Switch `reply_to_thread` and `post_meeting_followup_email` to Flash (High Impact, ~1-2s saved for those tasks)
+
+`reply_to_thread` is currently assigned to Pro. For typical sales replies (not complex legal/compliance scenarios), Flash is fast and high quality. The complexity scorer already handles edge cases — if a thread has objections or legal keywords, it scores high and the edge function already detects that. Move `reply_to_thread` from `PRO_MODEL_TASKS` to the default (Flash) tier, unless the complexity score is above threshold.
+
+The **right fix** is to honor the client-side complexity scorer's model choice inside the edge function, rather than having a hardcoded task list. Pass `model_hint` from the client:
+```typescript
+// In generateDraft.ts, pass complexity.model_used as model_hint to the payload
+payload.model_hint = complexity.model_used;
+
+// In ai_task edge function, use model_hint if provided:
+const model = payload?.model_hint || (PRO_MODEL_TASKS.includes(task) ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash");
+```
+
+### Fix 5: Short-Lived Draft Cache (Medium Impact — eliminates re-generation on re-open)
+
+Add a simple in-memory cache in `generateDraft.ts` keyed by `lead_id + intent`. Cache lasts 5 minutes. On re-open of the same lead's dialog, serve the cached draft instantly while the pipeline runs a background refresh.
+
+```typescript
+const DRAFT_CACHE = new Map<string, { result: DraftPipelineResult; expires: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCachedDraft(key: string): DraftPipelineResult | null {
+  const entry = DRAFT_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) { DRAFT_CACHE.delete(key); return null; }
+  return entry.result;
 }
 ```
 
-## What This Prevents Going Forward
+---
 
-- A lead can receive at most 1 automated email per day, even if bugs reset `eligible_at`
-- A specific action (e.g., `send_nurture_1`) will never be sent twice to the same lead
-- Bounce-back emails detected in Gmail sync will permanently stop automation for that lead
-- `gmail-send` background AI analysis will no longer overwrite automation scheduling
-- Remaining stale nurture leads will be corrected immediately
+## Files to Modify
+
+| File | Change | Impact |
+|---|---|---|
+| `src/lib/generateDraft.ts` | Accept optional pre-fetched profiles; add draft cache | ~300-600ms + repeat opens |
+| `src/lib/contextResolver.ts` | Accept optional pre-fetched profiles to skip duplicate fetches | ~300-600ms |
+| `src/components/dashboard/EmailActionDialog.tsx` | Pass profiles into streamDraft; lazy-load KB docs | ~200-400ms |
+| `supabase/functions/ai_task/index.ts` | Parallelize cadence DB queries; honor `model_hint` from client; move `reply_to_thread` to Flash | ~100-200ms + 1-2s on reply tasks |
+
+## What This Will NOT Do
+
+- Eliminate the AI model's own generation time (~400-800ms TTFT for Flash is the hard floor set by Google's infrastructure)
+- Solve cold-start latency on edge function first invocation after inactivity (~500ms one-time penalty)
+
+## Expected Total Improvement
+
+From ~1.5-3.5s before first token appears → **~0.7-1.5s before first token appears** after all fixes. Repeat opens of same lead dialog become near-instant (cached draft).
