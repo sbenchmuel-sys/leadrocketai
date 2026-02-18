@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -780,7 +780,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                           <div className="min-w-0 flex-1 overflow-hidden flex">
                             {/* 60% name/company */}
                             <div className="w-[60%] min-w-0 pr-2">
-                              <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                              <div className="flex items-center gap-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                                {(lead as any).unsubscribed && (
+                                  <span className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0 rounded text-[9px] font-semibold bg-destructive/10 text-destructive border border-destructive/20">
+                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                    Bounced
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                             </div>
                             {/* 40% acceleration signals */}
@@ -799,7 +807,15 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                           </div>
                         ) : (
                           <div className="min-w-0 flex-1 overflow-hidden">
-                            <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{lead.name}</p>
+                              {(lead as any).unsubscribed && (
+                                <span className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0 rounded text-[9px] font-semibold bg-destructive/10 text-destructive border border-destructive/20">
+                                  <AlertTriangle className="h-2.5 w-2.5" />
+                                  Bounced
+                                </span>
+                              )}
+                            </div>
                             <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                           </div>
                         )}
