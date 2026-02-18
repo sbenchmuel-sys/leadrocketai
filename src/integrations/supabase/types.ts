@@ -593,6 +593,7 @@ export type Database = {
           last_inbound_at: string | null
           last_nurture_outbound_at: string | null
           last_outbound_at: string | null
+          last_read_at: string | null
           meeting_link: string | null
           meeting_summary_count: number
           milestones_json: Json | null
@@ -645,6 +646,7 @@ export type Database = {
           last_inbound_at?: string | null
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
+          last_read_at?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
@@ -697,6 +699,7 @@ export type Database = {
           last_inbound_at?: string | null
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
+          last_read_at?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
@@ -944,6 +947,7 @@ export type Database = {
           media_type: string | null
           provider_message_id: string | null
           sender_identity_id: string | null
+          status: string
           workspace_id: string
         }
         Insert: {
@@ -956,6 +960,7 @@ export type Database = {
           media_type?: string | null
           provider_message_id?: string | null
           sender_identity_id?: string | null
+          status?: string
           workspace_id: string
         }
         Update: {
@@ -968,6 +973,7 @@ export type Database = {
           media_type?: string | null
           provider_message_id?: string | null
           sender_identity_id?: string | null
+          status?: string
           workspace_id?: string
         }
         Relationships: [
