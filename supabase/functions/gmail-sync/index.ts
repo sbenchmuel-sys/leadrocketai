@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
+import { isOutOfOfficeReply, getOOOEligibleAt } from "../_shared/oooDetection.ts";
 
 // ============================================
 // CADENCE SETTINGS TYPES (mirrored from frontend)
@@ -162,7 +163,8 @@ type ActionReasonCode =
   | "POST_MEETING_FOLLOWUP_DUE"
   | "CLOSING_FOLLOWUP_DUE"
   | "NURTURE_SWITCH_RECOMMENDED"
-  | "NURTURE_CAMPAIGN_START";
+  | "NURTURE_CAMPAIGN_START"
+  | "OOO_RETURN";
 
 // Deterministic jitter based on lead_id + action_key (no flicker between syncs)
 function getDeterministicJitter(leadId: string, actionKey: string, jitterPercent: number): number {
@@ -1082,6 +1084,47 @@ serve(async (req) => {
           });
         }
 
+        // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated
+        // OOO replies should NOT count as real inbound activity
+        if (direction === "inbound" && !isBounce) {
+          const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
+          if (oooResult.isOOO) {
+            const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
+            const returnDateStr = oooResult.returnDate
+              ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
+              : "approximately 7 days";
+            const leadName = leadEmailNorm; // we don't have name here, use email as fallback
+
+            console.log(`[gmail-sync] Lead ${leadId}: OOO auto-reply detected (confidence: ${oooResult.confidence}). Return date: ${returnDateStr}. Pausing until ${eligibleAt}`);
+
+            // Update lead: pause automation, set ooo_until, do NOT touch last_inbound_at
+            await serviceSupabase.from("leads").update({
+              ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
+              eligible_at: eligibleAt,
+              needs_action: false,
+              next_action_key: null,
+              next_action_label: null,
+              action_reason_code: null,
+            }).eq("id", leadId);
+
+            // Log as system_note so it appears in timeline but doesn't affect metrics
+            await serviceSupabase.from("interactions").insert({
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
+              body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${leadName} is out of office — returning ${returnDateStr}. Automation paused until then.`,
+              occurred_at: occurredAt,
+              gmail_message_id: gmailMessageId,
+              gmail_thread_id: threadId,
+            });
+
+            // Skip normal interaction insert — this is not a real inbound
+            existingMessageIds.add(gmailMessageId);
+            synced++;
+            continue;
+          }
+        }
+
         // Unsubscribe detection in inbound emails
         if (direction === "inbound") {
           const bodyLower = bodyText.toLowerCase();
@@ -1206,6 +1249,9 @@ serve(async (req) => {
     };
 
     for (const interaction of allInteractions || []) {
+      // Skip OOO system notes — they must not pollute inbound metrics
+      if (interaction.type === "system_note") continue;
+
       const dir = interaction.direction || (interaction.type?.includes("inbound") ? "inbound" : "outbound");
       const occurredAt = interaction.occurred_at;
       const bodyLower = (interaction.body_text || "").toLowerCase();
