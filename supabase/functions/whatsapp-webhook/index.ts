@@ -112,6 +112,32 @@ function extractBodyText(msg: any): string {
   return `[${msg.type ?? "unknown"}]`;
 }
 
+// ── Robust JSON extractor (handles LLM markdown wrapping) ──
+function extractJsonFromResponse(content: string): unknown {
+  // 1. Direct parse (fastest path)
+  try { return JSON.parse(content); } catch { /* continue */ }
+
+  // 2. Strip markdown code fences
+  const stripped = content.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  try { return JSON.parse(stripped); } catch { /* continue */ }
+
+  // 3. Find JSON object boundaries
+  const first = stripped.indexOf("{");
+  const last = stripped.lastIndexOf("}");
+  if (first !== -1 && last > first) {
+    const slice = stripped.slice(first, last + 1);
+    try { return JSON.parse(slice); } catch { /* continue */ }
+
+    // 4. Repair common issues: control chars + trailing commas
+    const repaired = slice
+      .replace(/[\x00-\x1F\x7F]/g, " ")
+      .replace(/,(\s*[}\]])/g, "$1");
+    try { return JSON.parse(repaired); } catch { /* continue */ }
+  }
+
+  throw new Error("Could not extract valid JSON from LLM response");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -468,12 +494,14 @@ Deno.serve(async (req) => {
               const intentData = await intentRes.json();
               if (intentData?.ok && intentData?.content) {
                 try {
-                  const parsed = JSON.parse(intentData.content);
-                  intent = parsed.intent ?? intent;
-                  aiConfidence = typeof parsed.confidence === "number" ? parsed.confidence : aiConfidence;
+                  const parsed = extractJsonFromResponse(intentData.content) as any;
+                  const KNOWN_INTENTS = ["acknowledgment","scheduling","clarification","objection","complaint","unsubscribe","negotiation","legal","positive_interest","unknown"];
+                  intent = KNOWN_INTENTS.includes(parsed.intent) ? parsed.intent : intent;
+                  aiConfidence = typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : aiConfidence;
                   riskFlags = Array.isArray(parsed.risk_flags) ? parsed.risk_flags : [];
+                  console.log(`[whatsapp-webhook] Intent classified: ${intent} (confidence: ${aiConfidence})`);
                 } catch {
-                  console.warn("[whatsapp-webhook] Failed to parse intent JSON");
+                  console.warn("[whatsapp-webhook] Failed to parse intent JSON. Raw content:", intentData.content?.slice(0, 200));
                 }
               }
             }
