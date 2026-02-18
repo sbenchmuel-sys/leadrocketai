@@ -1,126 +1,131 @@
 
-# Fix: Gmail Sync Overwriting Nurture Leads with Prospecting Actions
+# Fix: Stop Sending on Failure + Fix Remaining Nurture → Prospecting Switches
 
-## Root Cause
+## What Happened Yesterday (Root Cause Analysis)
 
-There are **two sync functions** that run periodically and overwrite nurture lead state:
+Looking at the automation logs, three separate bugs combined to cause the spam:
 
-### 1. `gmail-bulk-sync` (Primary Culprit)
-This function has **zero protection** for nurture leads. When it syncs emails for a lead, it:
-- Calls `deriveAction()` which doesn't check the lead's `motion` field
-- Blindly overwrites `needs_action`, `next_action_key`, `next_action_label` with prospecting follow-up actions (e.g., `send_pre_2`, `send_pre_3`)
-- This triggers the automation-executor to send outbound prospecting emails instead of nurture emails
+### Bug 1: The "Infinite Retry" Loop (No Send Limit)
+The retry guard only counts **failed** log entries:
+```
+.eq("status", "failed")
+```
+But yesterday, all 9+ emails to Naveen and 8+ to Ansh showed **status: "sent"** — meaning Gmail accepted the send. The address was undeliverable at the recipient's mail server (bounce), but Gmail's API returned success. Since no `failed` logs were recorded, the retry guard **never fired**. Every 60 seconds the poller triggered another send.
 
-### 2. `gmail-sync` (Secondary Issue)
-This function has a `hasActiveAutomation` guard, but it only works when `needs_action` is already `true` AND `eligible_at` is in the future. For nurture leads in "review" mode (where `needs_action` is `false`), the guard doesn't activate, and `deriveAction` can still overwrite action keys with prospecting follow-ups.
+### Bug 2: Post-Send Loop — `eligible_at` Set Too Soon
+After each successful send, `automation-executor` sets `eligible_at` to the next date (e.g., March 3). But a gmail-sync or gmail-bulk-sync running in between can **overwrite `needs_action` and `eligible_at`** for leads that don't yet have the nurture protection correctly applied — resetting the timer and making the lead immediately eligible again.
 
-## Changes
+### Bug 3: The `gmail-send` Background Task Overwrites Automation State
+After every send (automated or manual), `gmail-send` fires a background task that calls `ai_task/analyze_outgoing_email` and then **unconditionally overwrites** the lead's `next_action_key`, `next_action_label`, and `needs_action` with what the AI suggests (lines 298-309). This can reset a just-scheduled `eligible_at` nurture step back to a prospecting key.
 
-### 1. Protect Nurture Leads in `gmail-bulk-sync/index.ts`
+### Bug 4: Nurture Leads Still Getting Prospecting Action Keys
+The DB query confirms: several active nurture leads still have `next_action_key: NULL` and `needs_action: false` with `eligible_at` set — meaning the automation-executor will pick them up but has no `actionKey`, fall through to the no-key path, and send `nurture_email_single`. This part is now working. BUT some still have `send_pre_*` keys from stale data that wasn't caught in the last cleanup.
 
-Before the `leads.update` call (line 578-592), add a check for the lead's current motion and nurture status. If the lead is in nurture mode, preserve its automation fields:
+---
 
-- Fetch current `motion`, `nurture_status`, `needs_action`, `eligible_at` before updating
-- If `motion === "nurture" && nurture_status === "active"`, skip overwriting `needs_action`, `next_action_key`, `next_action_label`
-- Still update metrics fields like `first_outbound_at`, `last_outbound_at`, `last_inbound_at`, `meeting_summary_count`, `last_activity_at`
+## Fixes Required
 
-### 2. Strengthen Nurture Guard in `gmail-sync/index.ts`
+### Fix 1: Add a Per-Lead Send Limit Guard (Critical — stops the spam)
 
-Update the `hasActiveAutomation` check (lines 1283-1290) to also protect nurture leads even when `needs_action` is false:
+In `automation-executor`, replace the retry check that only counts `failed` records with a check that counts **total sends** for the same lead+action within the last 24 hours:
 
-Current logic:
-```text
-hasActiveSequence = needs_action === true && eligible_at > now
-hasActiveNurture = motion === "nurture" && nurture_status === "active"
-hasActiveAutomation = hasActiveSequence || hasActiveNurture
+```
+// BEFORE: only counts 'failed' — useless since Gmail returns success on undeliverable
+.eq("status", "failed")
+
+// AFTER: count total 'sent' records in the last 24 hours
+// If we've already sent to this lead today for this action, stop
 ```
 
-The `hasActiveNurture` check is correct but the protection on lines 1296-1300 only conditionally preserves fields. Ensure that when `hasActiveNurture` is true, the `next_action_key` and `next_action_label` are explicitly preserved (not set to `undefined` which would leave existing values, but currently the `finalAction` values can still leak through if the conditional logic has edge cases).
+Also add a hard **daily per-lead cap** of 1 automated email per lead per day (regardless of action key). This is the safety net that prevents the loop even if other bugs exist.
 
-Additionally, add a dedicated guard in `deriveAction()` itself:
-- Accept the lead's `motion` as a parameter
-- If `motion === "nurture"`, skip sections C (outbound follow-up) and return early with nurture-appropriate action or no action
+### Fix 2: Fix the `gmail-send` Background Task Overwriting Automation State
 
-### 3. Protect `eligible_at` in `gmail-bulk-sync`
+In `gmail-send/index.ts`, the background AI analysis (lines 270-309) **must not overwrite automation fields** when the send was triggered by automation (i.e., when called from `automation-executor`). The executor already does the post-send state update correctly.
 
-Currently `gmail-bulk-sync` doesn't update `eligible_at`, but it overwrites `needs_action` which can desync with the existing `eligible_at` value on nurture leads.
+Add a parameter `skipStateUpdate: true` that automation sends pass in, and in the background task, skip the lead state update when this flag is present.
+
+### Fix 3: Detect Bounces / Undeliverable in Gmail Sync and Stop Automation
+
+When `gmail-sync` or `gmail-bulk-sync` processes a lead's inbox, check for bounce-back messages (subject patterns like "Delivery Status Notification", "Undeliverable:", sender from "postmaster" or "mailer-daemon"). If a bounce is detected for a lead:
+- Set `unsubscribed = true` (stops all future automation)
+- Set `needs_action = false`, `eligible_at = null`
+- Log a system note to the lead's timeline explaining the bounce
+
+### Fix 4: Database Cleanup — Fix Remaining Stale Nurture Leads
+
+A SQL update to fix all active nurture leads that currently have `send_pre_*` action keys (still stale from before the previous fixes):
+
+```sql
+UPDATE leads 
+SET next_action_key = 'send_nurture_1', 
+    next_action_label = 'Nurture email #1'
+WHERE motion = 'nurture' 
+  AND nurture_status = 'active' 
+  AND next_action_key LIKE 'send_pre_%';
+```
+
+---
 
 ## Files Modified
 
-- `supabase/functions/gmail-bulk-sync/index.ts` -- Add nurture lead protection before update
-- `supabase/functions/gmail-sync/index.ts` -- Strengthen nurture guard in deriveAction and update logic
+- `supabase/functions/automation-executor/index.ts` — Fix 1: replace retry guard with daily send cap
+- `supabase/functions/gmail-send/index.ts` — Fix 2: skip background state update for automation sends
+- `supabase/functions/gmail-sync/index.ts` — Fix 3: detect bounce-back emails and stop automation
+- `supabase/functions/gmail-bulk-sync/index.ts` — Fix 3: same bounce detection
+- Database migration — Fix 4: clean up remaining stale nurture leads
 
-## Technical Details
-
-### gmail-bulk-sync Fix (lines 564-592)
-
-Before the update block, fetch the lead's current state:
+## Technical Detail: The Daily Cap Logic
 
 ```text
-// Fetch current lead state to protect nurture leads
-const { data: currentState } = await serviceSupabase
-  .from("leads")
-  .select("motion, nurture_status, needs_action, eligible_at, next_action_key, next_action_label, action_reason_code")
-  .eq("id", leadId)
-  .single();
+// New guard in automation-executor (replaces the failed-only retry check):
 
-const isActiveNurture = currentState?.motion === "nurture" 
-  && currentState?.nurture_status === "active";
+// 1. Max 1 automated send per lead per day
+const todayStart = new Date();
+todayStart.setHours(0, 0, 0, 0);
 
-const updatePayload: Record<string, unknown> = {
-  stage: newStage,
-  first_outbound_at: metrics.first_outbound_at,
-  last_outbound_at: metrics.last_outbound_at,
-  last_inbound_at: metrics.last_inbound_at,
-  meeting_summary_count: metrics.meeting_summary_count,
-  last_activity_at: lastActivityAt,
-};
+const { count: todaySentCount } = await supabase
+  .from("automation_log")
+  .select("id", { count: "exact", head: true })
+  .eq("lead_id", lead.id)
+  .eq("status", "sent")
+  .gte("created_at", todayStart.toISOString());
 
-if (isActiveNurture) {
-  // Preserve nurture automation fields -- don't overwrite with prospecting actions
-  console.log(`[gmail-bulk-sync] Preserving nurture state for lead ${leadId}`);
-} else {
-  // Apply derived action for non-nurture leads
-  updatePayload.needs_action = actionResult.needs_action;
-  updatePayload.next_action_key = actionResult.next_action_key;
-  updatePayload.next_action_label = actionResult.next_action_label;
+if ((todaySentCount || 0) >= 1) {
+  // Already sent to this lead today — skip and push eligible_at to tomorrow
+  logEntry.status = "skipped";
+  logEntry.error_message = "Daily send limit reached (1 per lead per day)";
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 30, 0, 0);
+  await supabase.from("leads").update({ eligible_at: tomorrow.toISOString() }).eq("id", lead.id);
+  skipped++;
+  continue;
+}
+
+// 2. Also keep the action-level guard but check SENT not FAILED
+const { count: actionSentCount } = await supabase
+  .from("automation_log")
+  .select("id", { count: "exact", head: true })
+  .eq("lead_id", lead.id)
+  .eq("action_key", actionKey)
+  .eq("status", "sent");
+
+if ((actionSentCount || 0) >= 1) {
+  // This specific action was already successfully sent — advance to next step
+  // Don't re-send; the post-send update should have already scheduled next
+  logEntry.status = "skipped";
+  logEntry.error_message = "Action already sent — skipping duplicate";
+  await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+  skipped++;
+  continue;
 }
 ```
 
-### gmail-sync Fix (lines 1293-1308)
+## What This Prevents Going Forward
 
-Ensure the nurture protection covers all action fields, and also add a motion parameter to `deriveAction` to skip outbound follow-up logic for nurture leads:
-
-```text
-// In deriveAction function signature, add motion parameter:
-function deriveAction(
-  leadId, metrics, nurtureCadence, stage,
-  ...,
-  motion: string  // <-- new parameter
-)
-
-// At the start of section C (outbound follow-ups, line 640):
-if (motion === "nurture") {
-  // Skip outbound follow-up logic for nurture leads
-  // Fall through to section E (nurture cadence) instead
-}
-```
-
-And in the update block (lines 1293-1308), when `hasActiveNurture` is true, explicitly preserve all automation fields:
-
-```text
-if (hasActiveNurture) {
-  // For active nurture leads, preserve ALL automation/nurture fields
-  delete leadUpdate.needs_action;  // or set to currentLeadState value
-  delete leadUpdate.next_action_key;
-  delete leadUpdate.next_action_label;
-  delete leadUpdate.eligible_at;
-  delete leadUpdate.action_reason_code;
-}
-```
-
-## What This Prevents
-
-- Nurture leads will no longer have their action keys overwritten to `send_pre_2/3/4` by background syncs
-- The automation-executor will only receive nurture-appropriate tasks for nurture leads
-- Metrics (outbound timestamps, counts) still update correctly even for protected nurture leads
+- A lead can receive at most 1 automated email per day, even if bugs reset `eligible_at`
+- A specific action (e.g., `send_nurture_1`) will never be sent twice to the same lead
+- Bounce-back emails detected in Gmail sync will permanently stop automation for that lead
+- `gmail-send` background AI analysis will no longer overwrite automation scheduling
+- Remaining stale nurture leads will be corrected immediately
