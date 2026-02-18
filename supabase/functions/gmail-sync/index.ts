@@ -1045,6 +1045,43 @@ serve(async (req) => {
           hasClosingKeywords = true;
         }
 
+        // Bounce / undeliverable detection — check before unsubscribe
+        // These are system-generated messages sent from postmaster/mailer-daemon
+        const fromLower = from.toLowerCase();
+        const subjectLower = subject.toLowerCase();
+        const isBounce = (
+          fromLower.includes("postmaster") ||
+          fromLower.includes("mailer-daemon") ||
+          fromLower.includes("mail delivery") ||
+          subjectLower.includes("delivery status notification") ||
+          subjectLower.includes("undeliverable") ||
+          subjectLower.includes("mail delivery failed") ||
+          subjectLower.includes("returned mail") ||
+          subjectLower.includes("failure notice") ||
+          subjectLower.includes("delivery failure")
+        );
+
+        if (isBounce) {
+          console.log(`[gmail-sync] Lead ${leadId}: Bounce detected (subject: "${subject}", from: "${from}") — stopping automation`);
+          await serviceSupabase.from("leads").update({
+            unsubscribed: true,
+            needs_action: false,
+            eligible_at: null,
+            next_action_key: null,
+            next_action_label: null,
+            action_reason_code: null,
+            nurture_status: "inactive",
+          }).eq("id", leadId);
+
+          await serviceSupabase.from("interactions").insert({
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
+            body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
+            occurred_at: new Date().toISOString(),
+          });
+        }
+
         // Unsubscribe detection in inbound emails
         if (direction === "inbound") {
           const bodyLower = bodyText.toLowerCase();
