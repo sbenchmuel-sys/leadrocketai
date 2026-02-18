@@ -64,6 +64,36 @@ export type Database = {
           },
         ]
       }
+      automation_logs: {
+        Row: {
+          created_at: string
+          decision: string
+          id: string
+          lead_id: string | null
+          message_id: string | null
+          reason: string | null
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          decision: string
+          id?: string
+          lead_id?: string | null
+          message_id?: string | null
+          reason?: string | null
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          decision?: string
+          id?: string
+          lead_id?: string | null
+          message_id?: string | null
+          reason?: string | null
+          workspace_id?: string
+        }
+        Relationships: []
+      }
       contact_identities: {
         Row: {
           contact_id: string
@@ -571,10 +601,13 @@ export type Database = {
       }
       leads: {
         Row: {
+          acceleration_until: string | null
           action_dismissed_at: string | null
           action_instructions: string | null
           action_reason_code: string | null
+          auto_created: boolean
           auto_nurture_eligible: boolean | null
+          automation_mode: string | null
           company: string
           country: string | null
           created_at: string
@@ -582,6 +615,7 @@ export type Database = {
           deal_outlook: string | null
           eligible_at: string | null
           email: string
+          engagement_score: number
           first_outbound_at: string | null
           has_future_meeting: boolean
           id: string
@@ -623,12 +657,16 @@ export type Database = {
           strategy: string
           unsubscribed: boolean
           wa_opted_in: boolean
+          whatsapp_number: string | null
         }
         Insert: {
+          acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
           action_reason_code?: string | null
+          auto_created?: boolean
           auto_nurture_eligible?: boolean | null
+          automation_mode?: string | null
           company: string
           country?: string | null
           created_at?: string
@@ -636,6 +674,7 @@ export type Database = {
           deal_outlook?: string | null
           eligible_at?: string | null
           email: string
+          engagement_score?: number
           first_outbound_at?: string | null
           has_future_meeting?: boolean
           id?: string
@@ -677,12 +716,16 @@ export type Database = {
           strategy: string
           unsubscribed?: boolean
           wa_opted_in?: boolean
+          whatsapp_number?: string | null
         }
         Update: {
+          acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
           action_reason_code?: string | null
+          auto_created?: boolean
           auto_nurture_eligible?: boolean | null
+          automation_mode?: string | null
           company?: string
           country?: string | null
           created_at?: string
@@ -690,6 +733,7 @@ export type Database = {
           deal_outlook?: string | null
           eligible_at?: string | null
           email?: string
+          engagement_score?: number
           first_outbound_at?: string | null
           has_future_meeting?: boolean
           id?: string
@@ -731,6 +775,7 @@ export type Database = {
           strategy?: string
           unsubscribed?: boolean
           wa_opted_in?: boolean
+          whatsapp_number?: string | null
         }
         Relationships: []
       }
@@ -941,42 +986,54 @@ export type Database = {
       }
       messages: {
         Row: {
+          ai_confidence: number | null
           body_ciphertext: string | null
           conversation_id: string
           created_at: string
           direction: Database["public"]["Enums"]["message_direction"]
           expires_at: string
           id: string
+          intent: string | null
+          is_automated: boolean
           media_type: string | null
           provider_message_id: string | null
           sender_identity_id: string | null
           status: string
+          whatsapp_message_id: string | null
           workspace_id: string
         }
         Insert: {
+          ai_confidence?: number | null
           body_ciphertext?: string | null
           conversation_id: string
           created_at?: string
           direction: Database["public"]["Enums"]["message_direction"]
           expires_at?: string
           id?: string
+          intent?: string | null
+          is_automated?: boolean
           media_type?: string | null
           provider_message_id?: string | null
           sender_identity_id?: string | null
           status?: string
+          whatsapp_message_id?: string | null
           workspace_id: string
         }
         Update: {
+          ai_confidence?: number | null
           body_ciphertext?: string | null
           conversation_id?: string
           created_at?: string
           direction?: Database["public"]["Enums"]["message_direction"]
           expires_at?: string
           id?: string
+          intent?: string | null
+          is_automated?: boolean
           media_type?: string | null
           provider_message_id?: string | null
           sender_identity_id?: string | null
           status?: string
+          whatsapp_message_id?: string | null
           workspace_id?: string
         }
         Relationships: [
@@ -1269,6 +1326,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      workspace_automation_settings: {
+        Row: {
+          after_hours_auto: boolean
+          blocked_keywords: Json
+          blocked_stages: Json
+          confidence_threshold: number
+          created_at: string
+          default_mode: string
+          id: string
+          updated_at: string
+          weekend_auto: boolean
+          workspace_id: string
+        }
+        Insert: {
+          after_hours_auto?: boolean
+          blocked_keywords?: Json
+          blocked_stages?: Json
+          confidence_threshold?: number
+          created_at?: string
+          default_mode?: string
+          id?: string
+          updated_at?: string
+          weekend_auto?: boolean
+          workspace_id: string
+        }
+        Update: {
+          after_hours_auto?: boolean
+          blocked_keywords?: Json
+          blocked_stages?: Json
+          confidence_threshold?: number
+          created_at?: string
+          default_mode?: string
+          id?: string
+          updated_at?: string
+          weekend_auto?: boolean
+          workspace_id?: string
+        }
+        Relationships: []
       }
       workspace_members: {
         Row: {

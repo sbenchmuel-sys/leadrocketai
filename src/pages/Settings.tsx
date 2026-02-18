@@ -1,6 +1,7 @@
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
 import { WhatsAppConnectionCard } from "@/components/settings/WhatsAppConnectionCard";
+import { WhatsAppAutomationCard } from "@/components/settings/WhatsAppAutomationCard";
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
@@ -11,7 +12,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug } from "lucide-react";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -99,6 +100,22 @@ export default function Settings() {
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
+          </AccordionContent>
+        </AccordionItem>
+
+
+        <AccordionItem value="wa-automation" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Zap className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">WhatsApp Automation Policy</div>
+                <div className="text-sm text-muted-foreground font-normal">Control when AI auto-sends WhatsApp replies workspace-wide</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <WhatsAppAutomationCard />
           </AccordionContent>
         </AccordionItem>
 

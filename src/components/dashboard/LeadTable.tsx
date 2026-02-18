@@ -76,13 +76,24 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
 import { calculateClosingPower, type ScoreBreakdown } from "@/lib/closingPowerUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 
-// WA indicator: icon + pending reply speed (PART 5)
+// WA indicator: icon + pending reply speed + acceleration badge
 function WaIndicator({ lead }: { lead: EnrichedLead }) {
   const lastInbound = (lead as any).last_inbound_at as string | null;
   const lastOutbound = (lead as any).last_outbound_at as string | null;
   const nextActionKey = (lead as any).next_action_key as string | null;
+  const accelerationUntil = (lead as any).acceleration_until as string | null;
+  const isAccelerating = accelerationUntil && new Date(accelerationUntil) > new Date();
   const isWaActive = nextActionKey === "whatsapp_reply" || nextActionKey === "whatsapp_failed";
-  if (!isWaActive && !lastInbound) return null;
+  if (!isWaActive && !lastInbound && !isAccelerating) return null;
+
+  // Countdown for acceleration mode
+  let countdownLabel: string | null = null;
+  if (isAccelerating && accelerationUntil) {
+    const msLeft = new Date(accelerationUntil).getTime() - Date.now();
+    const hoursLeft = Math.ceil(msLeft / (1000 * 60 * 60));
+    countdownLabel = hoursLeft > 0 ? `${hoursLeft}h` : null;
+  }
+
   let speedLabel: string | null = null;
   let speedClass = "text-muted-foreground";
   if (lastInbound) {
@@ -97,9 +108,16 @@ function WaIndicator({ lead }: { lead: EnrichedLead }) {
     }
   }
   return (
-    <span className="inline-flex items-center gap-0.5 shrink-0" title="WhatsApp active">
+    <span className="inline-flex items-center gap-0.5 shrink-0" title={isAccelerating ? `🚀 Acceleration Mode — ${countdownLabel} remaining` : "WhatsApp active"}>
       <MessageSquare className="h-3 w-3 text-[hsl(var(--success))]" />
-      {speedLabel && <span className={cn("text-[9px] font-semibold tabular-nums", speedClass)}>{speedLabel}</span>}
+      {isAccelerating && (
+        <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-primary/10 text-primary border border-primary/20">
+          🚀 {countdownLabel}
+        </span>
+      )}
+      {!isAccelerating && speedLabel && (
+        <span className={cn("text-[9px] font-semibold tabular-nums", speedClass)}>{speedLabel}</span>
+      )}
     </span>
   );
 }
