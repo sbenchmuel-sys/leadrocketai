@@ -23,6 +23,7 @@ export type DecryptedMessage = {
   media_type: string | null;
   created_at: string;
   sender_identity_id: string | null;
+  status: "sent" | "delivered" | "read" | "failed";
 };
 
 export type ConversationAnalysis = {

@@ -60,6 +60,7 @@ Deno.serve(async (req) => {
   const entries = body?.entry ?? [];
   let processed = 0;
   let skipped = 0;
+  let statusUpdated = 0;
 
   for (const entry of entries) {
     const changes = entry?.changes ?? [];
@@ -68,6 +69,74 @@ Deno.serve(async (req) => {
 
       const value = change?.value;
       if (!value) continue;
+
+      // ── Status update events (sent/delivered/read/failed) ─────────
+      // These arrive as value.statuses[] — process BEFORE message ingestion
+      const statuses = value?.statuses ?? [];
+      for (const statusEvent of statuses) {
+        const providerMsgId = statusEvent?.id;
+        const newStatus: string = statusEvent?.status; // sent | delivered | read | failed
+        const recipientId: string = statusEvent?.recipient_id;
+
+        if (!providerMsgId || !newStatus) continue;
+        if (!["sent", "delivered", "read", "failed"].includes(newStatus)) continue;
+
+        // Update message record
+        const { error: statusErr } = await supabase
+          .from("messages")
+          .update({ status: newStatus })
+          .eq("provider_message_id", providerMsgId);
+
+        if (statusErr) {
+          console.error("[whatsapp-webhook] Failed to update message status:", statusErr);
+          continue;
+        }
+
+        console.log(`[whatsapp-webhook] Status update: ${providerMsgId} → ${newStatus}`);
+        statusUpdated++;
+
+        // ── Lead intelligence updates ──────────────────────────────
+        if (newStatus === "read" || newStatus === "failed") {
+          // Find lead by recipient phone suffix
+          const normalizedRecipient = (recipientId || "").replace(/\D/g, "");
+          if (!normalizedRecipient) continue;
+
+          const { data: allLeads } = await supabase
+            .from("leads")
+            .select("id, needs_action, next_action_key")
+            .filter("phone", "neq", "")
+            .not("phone", "is", null)
+            .limit(100);
+
+          const matchedLead = (allLeads ?? []).find((l: any) => {
+            const lp = (l.phone || "").replace(/\D/g, "");
+            return lp.length >= 4 && normalizedRecipient.endsWith(lp);
+          });
+
+          if (matchedLead) {
+            if (newStatus === "read") {
+              await supabase.from("leads").update({
+                last_read_at: new Date().toISOString(),
+              } as any).eq("id", matchedLead.id);
+              console.log(`[whatsapp-webhook] Marked last_read_at for lead ${matchedLead.id}`);
+            } else if (newStatus === "failed") {
+              // Only set needs_action if not already set with higher priority action
+              if (!matchedLead.needs_action || matchedLead.next_action_key === "whatsapp_reply") {
+                await supabase.from("leads").update({
+                  needs_action: true,
+                  next_action_key: "whatsapp_failed",
+                  next_action_label: "WhatsApp message failed — retry",
+                } as any).eq("id", matchedLead.id);
+                console.log(`[whatsapp-webhook] Flagged failed delivery for lead ${matchedLead.id}`);
+              }
+            }
+          }
+        }
+      }
+
+      // If this change only contained status events (no messages[]), skip message ingestion
+      const hasMessages = (value?.messages ?? []).length > 0;
+      if (!hasMessages) continue;
 
       const wabaId = entry?.id; // The WABA ID from the entry
       const phoneNumberId =
@@ -392,7 +461,7 @@ Deno.serve(async (req) => {
   }
 
   return new Response(
-    JSON.stringify({ ok: true, processed, skipped }),
+    JSON.stringify({ ok: true, processed, skipped, statusUpdated }),
     {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

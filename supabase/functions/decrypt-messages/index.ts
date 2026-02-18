@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
   // Fetch messages with metadata
   const { data: messages, error: msgErr } = await supabase
     .from("messages")
-    .select("id, direction, body_ciphertext, media_type, created_at, expires_at, sender_identity_id, provider_message_id")
+    .select("id, direction, body_ciphertext, media_type, created_at, expires_at, sender_identity_id, provider_message_id, status")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -128,6 +128,7 @@ Deno.serve(async (req) => {
         media_type: msg.media_type,
         created_at: msg.created_at,
         sender_identity_id: msg.sender_identity_id,
+        status: (msg as any).status ?? "sent",
       };
     })
   );

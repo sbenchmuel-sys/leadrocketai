@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, MessageSquare, Mail, Clock } from "lucide-react";
+import { ArrowLeft, MessageSquare, Mail, Clock, Check, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -98,7 +98,7 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded }: P
           <div className="text-sm text-muted-foreground text-center py-8">No messages</div>
         ) : (
           messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+            <MessageBubble key={msg.id} message={msg} channel={conversation.channel} />
           ))
         )}
         <div ref={bottomRef} />
@@ -107,8 +107,23 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded }: P
   );
 }
 
-function MessageBubble({ message }: { message: DecryptedMessage }) {
+function WaStatusIcon({ status }: { status: DecryptedMessage["status"] }) {
+  if (status === "read") {
+    return <CheckCheck className="h-3 w-3 text-[hsl(var(--info))]" aria-label="Read" />;
+  }
+  if (status === "delivered") {
+    return <CheckCheck className="h-3 w-3 text-primary-foreground/50" aria-label="Delivered" />;
+  }
+  if (status === "failed") {
+    return <span className="text-[9px] font-semibold text-destructive uppercase tracking-wide">Failed</span>;
+  }
+  // sent
+  return <Check className="h-3 w-3 text-primary-foreground/40" aria-label="Sent" />;
+}
+
+function MessageBubble({ message, channel }: { message: DecryptedMessage; channel?: string }) {
   const isOutbound = message.direction === "outbound";
+  const isWa = channel === "whatsapp";
 
   return (
     <div className={cn("flex", isOutbound ? "justify-end" : "justify-start")}>
@@ -138,10 +153,13 @@ function MessageBubble({ message }: { message: DecryptedMessage }) {
         )}
 
         <div className={cn(
-          "text-[10px] mt-1",
-          isOutbound ? "text-primary-foreground/60" : "text-muted-foreground"
+          "flex items-center gap-1 text-[10px] mt-1",
+          isOutbound ? "justify-end text-primary-foreground/60" : "text-muted-foreground"
         )}>
-          {format(new Date(message.created_at), "MMM d, h:mm a")}
+          <span>{format(new Date(message.created_at), "MMM d, h:mm a")}</span>
+          {isOutbound && isWa && (
+            <WaStatusIcon status={message.status} />
+          )}
         </div>
       </div>
     </div>

@@ -154,6 +154,15 @@ function ChannelBadge({ type }: { type: string }) {
   );
 }
 
+/* ── WA delivery status badge for timeline ── */
+function WaDeliveryBadge({ bodyText }: { bodyText: string }) {
+  // Parse status hint from body_text set by outbound send logic: "[status:read]" etc.
+  // This is a lightweight approach — the interactions table doesn't store raw status,
+  // so we embed a hint in ai_summary or check the source field for quick display.
+  // For now, render nothing — status is shown live in the Inbox ConversationThread.
+  return null;
+}
+
 /* ── Hide button ── */
 function HideButton({ interactionId, isHidden, onToggle }: { interactionId: string; isHidden: boolean; onToggle: (id: string, hidden: boolean) => void }) {
   return (
