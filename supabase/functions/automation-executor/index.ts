@@ -91,6 +91,51 @@ serve(async (req) => {
       }
     }
 
+    // -------------------------------------------------------
+    // STEP 0.5: WHATSAPP 6-HOUR NO-REPLY CHECK (PART 2)
+    // If a lead sent an inbound WA message >6h ago and we
+    // haven't replied (no outbound in that window), surface
+    // needs_action so the rep sees it in the dashboard.
+    // Safety: skip leads already flagged, OOO leads, unsubscribed.
+    // -------------------------------------------------------
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+
+    let waCheckQuery = supabase
+      .from("leads")
+      .select("id, name, last_inbound_at, last_outbound_at, needs_action, next_action_key, ooo_until")
+      .not("last_inbound_at", "is", null)
+      .lte("last_inbound_at", sixHoursAgo)   // inbound was >6h ago
+      .eq("needs_action", false)              // not already actioned
+      .eq("unsubscribed", false)
+      .in("status", ["active", "new"])
+      .is("ooo_until", null)                  // not OOO
+      .limit(30);
+
+    if (ownerFilter) {
+      waCheckQuery = waCheckQuery.eq("owner_user_id", ownerFilter);
+    }
+
+    const { data: pendingWaLeads } = await waCheckQuery;
+
+    if (pendingWaLeads && pendingWaLeads.length > 0) {
+      for (const lead of pendingWaLeads) {
+        // Check if last_outbound_at is AFTER last_inbound_at → already replied
+        const lastIn = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+        const lastOut = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+        if (lastOut >= lastIn) continue; // rep already replied — skip
+
+        // Flag as needing action: WhatsApp reply pending
+        await supabase.from("leads").update({
+          needs_action: true,
+          next_action_key: "whatsapp_reply",
+          next_action_label: "Reply via WhatsApp",
+          action_reason_code: "REPLY_PENDING",
+        } as any).eq("id", lead.id);
+
+        console.log(`[automation-executor] WA 6h no-reply flagged for lead ${lead.id}`);
+      }
+    }
+
     // Find eligible leads (existing automation email flow)
     let query = supabase
       .from("leads")
@@ -186,6 +231,45 @@ serve(async (req) => {
           skipped++;
           continue;
         }
+
+        // ── PART 6: WhatsApp automation safety guard ──────────────
+        // WA auto-sends are blocked unless BOTH conditions are true:
+        //   1. workspace cadence_settings.whatsapp.automation_enabled = true
+        //   2. lead.wa_opted_in = true
+        // Default for both is false — manual-send-only by default.
+        const isWaActionKey = (lead.next_action_key || "").startsWith("whatsapp_");
+        if (isWaActionKey) {
+          // Fetch wa_opted_in for this lead
+          const { data: waLead } = await supabase
+            .from("leads")
+            .select("wa_opted_in")
+            .eq("id", lead.id)
+            .single();
+
+          // Fetch workspace cadence to check automation_enabled
+          const { data: wpProfile } = await supabase
+            .from("workspace_profiles")
+            .select("cadence_settings")
+            .eq("user_id", lead.owner_user_id)
+            .single();
+
+          const cadence = (wpProfile?.cadence_settings as any) ?? {};
+          const waAutomationEnabled = cadence?.whatsapp?.automation_enabled === true;
+          const leadOptedIn = (waLead as any)?.wa_opted_in === true;
+
+          if (!waAutomationEnabled || !leadOptedIn) {
+            logEntry.status = "skipped";
+            logEntry.error_message = waAutomationEnabled
+              ? "Lead not opted in to WhatsApp automation"
+              : "WhatsApp automation disabled at workspace level";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            console.log(`[automation-executor] WA auto-send blocked for lead ${lead.id}: wa_automation=${waAutomationEnabled}, opted_in=${leadOptedIn}`);
+            skipped++;
+            continue;
+          }
+        }
+
 
         // Check for unsubscribe keyword in last inbound
         if (freshLead.last_inbound_at) {
