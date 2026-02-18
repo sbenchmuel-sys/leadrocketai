@@ -41,7 +41,57 @@ serve(async (req) => {
 
     const now = new Date().toISOString();
 
-    // Find eligible leads
+    // -------------------------------------------------------
+    // STEP 0: OOO RETURN DETECTION
+    // Find leads where ooo_until has passed and eligible_at
+    // has arrived — surface "Back in office" action without
+    // sending an email. needs_action is currently false for
+    // these leads (set during OOO detection in gmail-sync).
+    // -------------------------------------------------------
+    let oooQuery = supabase
+      .from("leads")
+      .select("id, name, company, owner_user_id, ooo_until, eligible_at")
+      .not("ooo_until", "is", null)
+      .lte("ooo_until", now)          // OOO period has ended
+      .not("eligible_at", "is", null)
+      .lte("eligible_at", now)        // eligible_at has arrived
+      .eq("needs_action", false)      // not yet surfaced
+      .eq("unsubscribed", false)
+      .in("status", ["active", "new"])
+      .limit(20);
+
+    if (ownerFilter) {
+      oooQuery = oooQuery.eq("owner_user_id", ownerFilter);
+    }
+
+    const { data: oooLeads } = await oooQuery;
+
+    if (oooLeads && oooLeads.length > 0) {
+      console.log(`[automation-executor] Found ${oooLeads.length} OOO-returning leads`);
+      for (const lead of oooLeads) {
+        const leadFirstName = lead.name.split(" ")[0];
+        await supabase.from("leads").update({
+          needs_action: true,
+          next_action_key: "ooo_return_followup",
+          next_action_label: `Back in office — follow up with ${leadFirstName}`,
+          action_reason_code: "OOO_RETURN",
+          ooo_until: null, // clear OOO flag now that we've surfaced it
+        }).eq("id", lead.id);
+
+        // Log a system note in the timeline
+        await supabase.from("interactions").insert({
+          lead_id: lead.id,
+          type: "system_note",
+          source: "automation",
+          body_text: `${lead.name} is back in the office. Follow-up action surfaced.`,
+          occurred_at: new Date().toISOString(),
+        });
+
+        console.log(`[automation-executor] OOO return surfaced for lead ${lead.id} (${lead.name})`);
+      }
+    }
+
+    // Find eligible leads (existing automation email flow)
     let query = supabase
       .from("leads")
       .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed")
@@ -50,6 +100,7 @@ serve(async (req) => {
       .lte("eligible_at", now)
       .in("status", ["active", "new"])
       .eq("unsubscribed", false)
+      .neq("next_action_key", "ooo_return_followup") // OOO returns are handled above — no email needed
       .limit(20);
 
     if (ownerFilter) {
