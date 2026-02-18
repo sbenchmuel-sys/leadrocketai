@@ -13,12 +13,37 @@ import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
 // TYPES
 // ============================================
 
+import type { RepProfile } from "@/lib/repProfileQueries";
+import type { WorkspaceProfile } from "@/lib/workspaceProfileQueries";
+import type { KnowledgeDocument } from "@/lib/repProfileQueries";
+import type { ContextPrefetched } from "@/lib/contextResolver";
+
+// ============================================
+// DRAFT CACHE (5-minute in-memory)
+// ============================================
+
+const DRAFT_CACHE = new Map<string, { result: DraftPipelineResult; expires: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCachedDraft(key: string): DraftPipelineResult | null {
+  const entry = DRAFT_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) { DRAFT_CACHE.delete(key); return null; }
+  return entry.result;
+}
+
+function setCachedDraft(key: string, result: DraftPipelineResult): void {
+  DRAFT_CACHE.set(key, { result, expires: Date.now() + CACHE_TTL });
+}
+
 export interface GenerateDraftInput {
   lead_id: string;
   channel?: "email" | "linkedin" | "whatsapp";
   override_intent?: AITaskType | null;
   instructions?: string | null;
   motion_override?: Motion | null;
+  // Optional pre-fetched data to skip duplicate DB round trips
+  prefetched?: ContextPrefetched;
 }
 
 export interface DraftPipelineResult {
@@ -252,12 +277,30 @@ export interface StreamDraftInput extends GenerateDraftInput {
 }
 
 export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelineResult> {
-  const { lead_id, channel = "email", override_intent, instructions, motion_override, onToken, onSubject, onPipelineReady } = input;
+  const { lead_id, channel = "email", override_intent, instructions, motion_override, prefetched, onToken, onSubject, onPipelineReady } = input;
 
   console.log("[streamDraft] Starting streaming pipeline for lead", lead_id);
 
-  // Step 1: Resolve context
-  const resolvedContext = await contextResolver(lead_id);
+  // Check cache first (keyed by lead + intent override + instructions)
+  const cacheKey = `${lead_id}::${channel}::${override_intent || "auto"}::${instructions || ""}::${motion_override || ""}`;
+  const cached = getCachedDraft(cacheKey);
+  if (cached) {
+    console.log("[streamDraft] Cache hit — serving cached draft instantly");
+    onSubject(cached.suggested_subject || "");
+    onPipelineReady(cached);
+    // Stream the cached draft text token by token for consistent UX
+    if (cached.draft_text) {
+      const chunkSize = 50;
+      for (let i = 0; i < cached.draft_text.length; i += chunkSize) {
+        onToken(cached.draft_text.slice(i, i + chunkSize));
+        await new Promise(r => setTimeout(r, 0)); // yield to UI
+      }
+    }
+    return cached;
+  }
+
+  // Step 1: Resolve context (pass prefetched profiles to skip duplicate DB fetches)
+  const resolvedContext = await contextResolver(lead_id, prefetched);
 
   // Apply motion override if provided
   if (motion_override && motion_override !== resolvedContext.motion) {
@@ -312,7 +355,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
         "Authorization": `Bearer ${authToken}`,
         "apikey": supabaseKey,
       },
-      body: JSON.stringify({ task: finalIntent, payload: { ...aiPayload, stream: true } }),
+      body: JSON.stringify({ task: finalIntent, payload: { ...aiPayload, stream: true, model_hint: complexity.model_used } }),
     });
 
     if (!resp.ok || !resp.body) {
@@ -391,6 +434,11 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     ...partialResult,
     draft_text: fullText || null,
   };
+
+  // Cache the result for 5 minutes (only if we got a good draft)
+  if (fullText) {
+    setCachedDraft(cacheKey, result);
+  }
 
   console.log("[streamDraft] Complete:", { hasDraft: !!fullText, intent: finalIntent });
   return result;

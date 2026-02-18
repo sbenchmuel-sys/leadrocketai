@@ -1412,16 +1412,16 @@ Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 
 // --- STRATEGY 2: Model Tiering ---
 // Pro model: deep analytical tasks only
+// Note: reply_to_thread and post_meeting_followup_email removed — now handled by client model_hint
 const PRO_MODEL_TASKS = [
   "post_meeting_recap",
   "extract_milestones_risks",
   "extract_deal_factors",
   "recommend_next_steps",
   "lead_deep_analysis",
-  "post_meeting_followup_email",
   "post_meeting_followup_personalized",
-  "reply_to_thread",
-  // nurture_sequence moved to Flash (doesn't need Pro-level reasoning)
+  // reply_to_thread → uses model_hint from complexity scorer (Flash for simple, Pro for complex)
+  // post_meeting_followup_email → uses model_hint from complexity scorer
 ];
 
 // Lite model: simple classification/analysis tasks
@@ -1543,43 +1543,38 @@ serve(async (req) => {
     let enhancedPayload = { ...payload };
     let knowledgeContextUsed = false;
 
-    // Load cadence settings from workspace if available
+    // Load cadence settings from workspace if available — run in parallel with KB search later
     let cadenceSettings = DEFAULT_CADENCE_SETTINGS;
+    let cadencePromise: Promise<void> = Promise.resolve();
     if (payload?.lead_id) {
-      try {
-        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        const adminClient = createClient(supabaseUrl, supabaseServiceKey);
-        
-        // Get lead's owner to find workspace settings
-        const { data: leadData } = await adminClient
-          .from("leads")
-          .select("owner_user_id")
-          .eq("id", payload.lead_id)
-          .single();
-        
-        if (leadData?.owner_user_id) {
-          const { data: workspaceData } = await adminClient
-            .from("workspace_profiles")
-            .select("cadence_settings")
-            .eq("user_id", leadData.owner_user_id)
+      cadencePromise = (async () => {
+        try {
+          const supabaseServiceKeyInner = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+          const adminClient = createClient(supabaseUrl, supabaseServiceKeyInner);
+          
+          // Single JOIN query instead of 2 sequential queries
+          const { data: combined } = await adminClient
+            .from("leads")
+            .select("owner_user_id, workspace_profiles!inner(cadence_settings)")
+            .eq("id", payload.lead_id)
             .maybeSingle();
           
-          if (workspaceData?.cadence_settings) {
-            // Deep merge with defaults
+          const wsCadence = (combined as any)?.workspace_profiles?.cadence_settings;
+          if (wsCadence) {
             cadenceSettings = {
               ...DEFAULT_CADENCE_SETTINGS,
-              ...workspaceData.cadence_settings,
+              ...wsCadence,
               modes: {
-                fast: { ...DEFAULT_CADENCE_SETTINGS.modes.fast, ...(workspaceData.cadence_settings as any)?.modes?.fast },
-                nurture: { ...DEFAULT_CADENCE_SETTINGS.modes.nurture, ...(workspaceData.cadence_settings as any)?.modes?.nurture },
+                fast: { ...DEFAULT_CADENCE_SETTINGS.modes.fast, ...wsCadence?.modes?.fast },
+                nurture: { ...DEFAULT_CADENCE_SETTINGS.modes.nurture, ...wsCadence?.modes?.nurture },
               },
             };
-            console.log(`[ai_task] Loaded workspace cadence settings for user ${leadData.owner_user_id}`);
+            console.log(`[ai_task] Loaded workspace cadence settings (joined)`);
           }
+        } catch (err) {
+          console.error("[ai_task] Failed to load cadence settings, using defaults:", err);
         }
-      } catch (err) {
-        console.error("[ai_task] Failed to load cadence settings, using defaults:", err);
-      }
+      })();
     }
 
     // Inject cadence_days for followup_sequence_4 task
@@ -1595,52 +1590,43 @@ serve(async (req) => {
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
+    // Run cadence fetch AND KB search in parallel
+    let kbSearchPromise: Promise<string> = Promise.resolve("");
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
-      // Gate KB injection for outbound first touch — cold outreach must NOT be driven by long knowledge dumps
       if (isOutboundFirstTouch) {
         console.log(`[ai_task] ⚡ Outbound first touch — skipping full KB search, limiting to 1 chunk (600 char cap)`);
       }
-
-      // Build a query from the available context
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
       if (payload?.lead_context) queryParts.push(String(payload.lead_context).slice(0, 500));
       if (payload?.meeting_summary) queryParts.push(String(payload.meeting_summary).slice(0, 500));
-      
       const searchQuery = queryParts.join("\n").slice(0, 2000);
-      
+
       if (searchQuery.length > 50) {
-        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const supabaseServiceKeyForKb = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        
-        const textContext = await getTextBasedKnowledgeContext(
-          searchQuery,
-          supabaseUrl,
-          supabaseServiceKey,
-          user.id,
-          leadId
-        );
-        
-        if (textContext) {
-          // For outbound first touch: cap KB context to 600 chars max
-          if (isOutboundFirstTouch) {
-            const capped = textContext.slice(0, 600);
-            enhancedPayload.knowledge_context = capped;
-            knowledgeContextUsed = true;
-            console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${textContext.length} chars`);
-          } else {
-            enhancedPayload.knowledge_context = textContext;
-            knowledgeContextUsed = true;
-            console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)${leadId ? ` for lead ${leadId}` : ""}`);
-          }
-        } else {
-          console.log(`[ai_task] ⚠️ No text matches found for task ${task}`);
-        }
-      } else {
-        console.log(`[ai_task] Skipping knowledge search - query too short (${searchQuery.length} chars)`);
+        kbSearchPromise = getTextBasedKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
       }
+    }
+
+    // Await both in parallel
+    const [textContext] = await Promise.all([kbSearchPromise, cadencePromise]);
+
+    if (textContext) {
+      if (isOutboundFirstTouch) {
+        const capped = textContext.slice(0, 600);
+        enhancedPayload.knowledge_context = capped;
+        knowledgeContextUsed = true;
+        console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${textContext.length} chars`);
+      } else {
+        enhancedPayload.knowledge_context = textContext;
+        knowledgeContextUsed = true;
+        console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)`);
+      }
+    } else if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
+      console.log(`[ai_task] ⚠️ No text matches found for task ${task}`);
     }
 
     // Remaining explicit flags (motion/isFirstTouch already read above)
@@ -1681,12 +1667,16 @@ serve(async (req) => {
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
 
-    // Select model based on task tier
-    const model = PRO_MODEL_TASKS.includes(task)
-      ? "google/gemini-2.5-pro"
-      : LITE_MODEL_TASKS.includes(task)
-        ? "google/gemini-2.5-flash-lite"
-        : "google/gemini-2.5-flash";
+    // Select model: honor client-side model_hint (from complexity scorer) if provided,
+    // otherwise fall back to server-side task tier
+    const clientModelHint = payload?.model_hint ? String(payload.model_hint) : null;
+    const model = clientModelHint && ["google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"].includes(clientModelHint)
+      ? clientModelHint
+      : PRO_MODEL_TASKS.includes(task)
+        ? "google/gemini-2.5-pro"
+        : LITE_MODEL_TASKS.includes(task)
+          ? "google/gemini-2.5-flash-lite"
+          : "google/gemini-2.5-flash";
 
     console.log(`[ai_task] Task: ${task}, Model: ${model}, User: ${user.id}`);
 
