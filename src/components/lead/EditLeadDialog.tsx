@@ -8,7 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Pencil, Loader2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
+import { Pencil, Loader2, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { LeadDetail } from "@/lib/supabaseQueries";
@@ -25,6 +27,8 @@ const editLeadSchema = z.object({
   meeting_link: z.string().trim().max(500).optional().or(z.literal("")),
   personal_notes: z.string().trim().max(2000).optional().or(z.literal("")),
   initial_message: z.string().trim().max(5000).optional().or(z.literal("")),
+  wa_opted_in: z.boolean(),
+  automation_mode: z.enum(["manual", "suggest_only", "hybrid", "full_auto"]).nullable(),
 });
 
 type EditLeadFormData = z.infer<typeof editLeadSchema>;
@@ -52,6 +56,8 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
       meeting_link: lead.meeting_link || "",
       personal_notes: lead.personal_notes || "",
       initial_message: lead.initial_message || "",
+      wa_opted_in: lead.wa_opted_in ?? false,
+      automation_mode: (lead.automation_mode as "manual" | "suggest_only" | "hybrid" | "full_auto" | null) ?? null,
     },
   });
 
@@ -72,6 +78,8 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
           meeting_link: data.meeting_link || null,
           personal_notes: data.personal_notes || null,
           initial_message: data.initial_message || null,
+          wa_opted_in: data.wa_opted_in,
+          automation_mode: data.automation_mode,
         })
         .eq("id", lead.id);
 
@@ -245,6 +253,71 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
                   </FormItem>
                 )}
               />
+            </div>
+
+            <Separator />
+
+            {/* WhatsApp Automation Section */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <MessageCircle className="h-4 w-4 text-[hsl(142,71%,45%)]" />
+                WhatsApp Automation
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="automation_mode"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Automation Mode</FormLabel>
+                      <Select
+                        onValueChange={(val) => field.onChange(val === "workspace_default" ? null : val)}
+                        value={field.value ?? "workspace_default"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="workspace_default">Workspace Default</SelectItem>
+                          <SelectItem value="manual">Manual (no auto-replies)</SelectItem>
+                          <SelectItem value="suggest_only">Suggest Only</SelectItem>
+                          <SelectItem value="hybrid">Hybrid (low-risk auto)</SelectItem>
+                          <SelectItem value="full_auto">Full Auto</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="wa_opted_in"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-col justify-end pb-1">
+                      <FormLabel>WA Automation Opted In</FormLabel>
+                      <div className="flex items-center gap-3 pt-1">
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <span className="text-sm text-muted-foreground">
+                          {field.value ? "Enabled" : "Disabled"}
+                        </span>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Both opt-in and mode must be set for automation to execute. Mode defaults to the workspace setting if not overridden here.
+              </p>
             </div>
 
             <FormField
