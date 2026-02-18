@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle, MessageSquare } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -75,6 +75,36 @@ function formatLastEmail(dateStr: string | null): { text: string; className: str
 
 import { calculateClosingPower, type ScoreBreakdown } from "@/lib/closingPowerUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
+
+// WA indicator: icon + pending reply speed (PART 5)
+function WaIndicator({ lead }: { lead: EnrichedLead }) {
+  const lastInbound = (lead as any).last_inbound_at as string | null;
+  const lastOutbound = (lead as any).last_outbound_at as string | null;
+  const nextActionKey = (lead as any).next_action_key as string | null;
+  const isWaActive = nextActionKey === "whatsapp_reply" || nextActionKey === "whatsapp_failed";
+  if (!isWaActive && !lastInbound) return null;
+  let speedLabel: string | null = null;
+  let speedClass = "text-muted-foreground";
+  if (lastInbound) {
+    const inTs = new Date(lastInbound).getTime();
+    const outTs = lastOutbound ? new Date(lastOutbound).getTime() : 0;
+    if (inTs > outTs) {
+      const hrsWaiting = differenceInHours(new Date(), new Date(lastInbound));
+      if (hrsWaiting >= 6) {
+        speedLabel = `${hrsWaiting}h`;
+        speedClass = hrsWaiting >= 24 ? "text-destructive" : "text-warning";
+      }
+    }
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 shrink-0" title="WhatsApp active">
+      <MessageSquare className="h-3 w-3 text-[hsl(var(--success))]" />
+      {speedLabel && <span className={cn("text-[9px] font-semibold tabular-nums", speedClass)}>{speedLabel}</span>}
+    </span>
+  );
+}
+
+
 
 // Bridge EnrichedLead → LeadDetail shape for calculateClosingPower
 function getClosingScore(lead: EnrichedLead): number {
@@ -788,6 +818,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                                     Bounced
                                   </span>
                                 )}
+                                <WaIndicator lead={lead} />
                               </div>
                               <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                             </div>
@@ -815,6 +846,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                                   Bounced
                                 </span>
                               )}
+                              <WaIndicator lead={lead} />
                             </div>
                             <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
                           </div>

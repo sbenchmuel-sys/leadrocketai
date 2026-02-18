@@ -622,6 +622,7 @@ export type Database = {
           status: string
           strategy: string
           unsubscribed: boolean
+          wa_opted_in: boolean
         }
         Insert: {
           action_dismissed_at?: string | null
@@ -675,6 +676,7 @@ export type Database = {
           status?: string
           strategy: string
           unsubscribed?: boolean
+          wa_opted_in?: boolean
         }
         Update: {
           action_dismissed_at?: string | null
@@ -728,6 +730,7 @@ export type Database = {
           status?: string
           strategy?: string
           unsubscribed?: boolean
+          wa_opted_in?: boolean
         }
         Relationships: []
       }
