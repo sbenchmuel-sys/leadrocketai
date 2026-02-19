@@ -63,7 +63,7 @@ const DASHBOARD_LEAD_COLUMNS = `
   meeting_summary_count, last_outbound_at, last_inbound_at, first_outbound_at,
   nurture_cadence, auto_nurture_eligible, source_type, motion,
   nurture_mode, nurture_status, eligible_at,
-  has_future_meeting, milestones_json, risks_json
+  has_future_meeting, milestones_json, risks_json, ooo_until
 `;
 
 async function fetchLeads(): Promise<EnrichedLead[]> {
@@ -173,6 +173,10 @@ function deriveWarmingUpLeads(leads: EnrichedLead[]): EnrichedLead[] {
 
   return leads.filter((lead) => {
     if (lead.stage === "closed_won" || lead.stage === "closed_lost") return false;
+
+    // Skip OOO leads — an OOO reply is not genuine engagement
+    const oooUntil = (lead as any).ooo_until as string | null;
+    if (oooUntil && new Date(oooUntil).getTime() > now.getTime()) return false;
 
     // --- Engagement signals (at least one) ---
     let hasEngagement = false;

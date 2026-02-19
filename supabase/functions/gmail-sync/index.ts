@@ -911,7 +911,7 @@ serve(async (req) => {
     // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until")
       .eq("id", leadId)
       .single();
 
@@ -1363,7 +1363,7 @@ serve(async (req) => {
     // If so, preserve automation fields instead of overwriting them
     const { data: currentLeadState } = await serviceSupabase
       .from("leads")
-      .select("eligible_at, needs_action, motion, nurture_status")
+      .select("eligible_at, needs_action, motion, nurture_status, ooo_until")
       .eq("id", leadId)
       .single();
 
@@ -1373,6 +1373,11 @@ serve(async (req) => {
 
     const hasActiveNurture = currentLeadState?.motion === "nurture"
       && currentLeadState?.nurture_status === "active";
+
+    // OOO guard: if lead is currently in OOO state (ooo_until in the future), preserve OOO fields
+    // and do NOT overwrite with reply_now or any inbound-derived action
+    const hasActiveOOO = !!currentLeadState?.ooo_until
+      && new Date(currentLeadState.ooo_until).getTime() > Date.now();
 
     const hasActiveAutomation = hasActiveSequence || hasActiveNurture;
 
@@ -1387,7 +1392,8 @@ serve(async (req) => {
       action_reason_code: hasActiveAutomation ? undefined : finalAction.action_reason_code,
       first_outbound_at: metrics.first_outbound_at,
       last_outbound_at: metrics.last_outbound_at,
-      last_inbound_at: metrics.last_inbound_at,
+      // Don't update last_inbound_at while OOO is active — the OOO email is not a real engagement signal
+      last_inbound_at: hasActiveOOO ? undefined : metrics.last_inbound_at,
       meeting_summary_count: metrics.meeting_summary_count,
       nurture_outbound_count: metrics.nurture_outbound_count,
       last_nurture_outbound_at: metrics.last_nurture_outbound_at,
@@ -1403,6 +1409,17 @@ serve(async (req) => {
       delete (leadUpdate as Record<string, unknown>).next_action_label;
       delete (leadUpdate as Record<string, unknown>).eligible_at;
       delete (leadUpdate as Record<string, unknown>).action_reason_code;
+    }
+
+    // For OOO leads, preserve all OOO-set automation fields
+    if (hasActiveOOO) {
+      console.log(`[gmail-sync] Lead ${leadId}: Active OOO until ${currentLeadState.ooo_until} -- preserving OOO state, suppressing reply_now`);
+      delete (leadUpdate as Record<string, unknown>).needs_action;
+      delete (leadUpdate as Record<string, unknown>).next_action_key;
+      delete (leadUpdate as Record<string, unknown>).next_action_label;
+      delete (leadUpdate as Record<string, unknown>).eligible_at;
+      delete (leadUpdate as Record<string, unknown>).action_reason_code;
+      delete (leadUpdate as Record<string, unknown>).last_inbound_at;
     }
 
     // Handle action_dismissed_at field
