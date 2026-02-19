@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { encryptToken } from "../_shared/encryption.ts";
+import { encryptToken, safeDecryptToken } from "../_shared/encryption.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -615,7 +615,7 @@ Deno.serve(async (req) => {
               }
 
               if (replyText) {
-                // Load integration credentials to verify it exists
+                // Load integration credentials
                 const { data: integrationData } = await supabase
                   .from("integrations")
                   .select("credentials_encrypted, provider_account_id")
@@ -623,11 +623,39 @@ Deno.serve(async (req) => {
                   .single();
 
                 if (integrationData?.credentials_encrypted && integrationData?.provider_account_id) {
-                  // Fire-and-forget send via whatsapp-send
-                  // We store the automated outbound message directly here instead of calling whatsapp-send
-                  // to avoid circular auth issues from webhook context
+                  // Decrypt credentials to make real WhatsApp Cloud API call
+                  const credsJson = await safeDecryptToken(integrationData.credentials_encrypted);
+                  const creds = JSON.parse(credsJson);
+                  const accessToken = await safeDecryptToken(creds.access_token);
+                  const phoneNumberId = integrationData.provider_account_id;
 
-                  // Store automated outbound message
+                  // Make the actual WhatsApp Cloud API call
+                  const waPayload = {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: normalizedPhone,
+                    type: "text",
+                    text: { body: replyText },
+                  };
+
+                  const waRes = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
+                    method: "POST",
+                    headers: {
+                      Authorization: `Bearer ${accessToken}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify(waPayload),
+                  });
+
+                  const waData = await waRes.json();
+                  if (!waRes.ok) {
+                    throw new Error(`WA API error: ${waData?.error?.message ?? JSON.stringify(waData)}`);
+                  }
+
+                  const providerAutoMsgId = waData?.messages?.[0]?.id ?? null;
+                  console.log(`[whatsapp-webhook] WA API call succeeded, provider_message_id: ${providerAutoMsgId}`);
+
+                  // Store automated outbound message with real provider_message_id
                   const encryptedReply = await encryptToken(replyText);
                   const replyExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
                   const { data: autoMsg } = await supabase.from("messages").insert({
@@ -639,6 +667,7 @@ Deno.serve(async (req) => {
                     is_automated: true,
                     intent,
                     ai_confidence: aiConfidence > 0 ? aiConfidence : null,
+                    provider_message_id: providerAutoMsgId,
                     status: "sent",
                   } as any).select("id").single();
 
