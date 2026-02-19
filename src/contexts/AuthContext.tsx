@@ -25,7 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
-    const loadProfileForUser = async (userId: string) => {
+    const loadProfileForUser = async () => {
       try {
         await createProfileIfMissing();
         const prof = await getCurrentProfile();
@@ -38,17 +38,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    // Listener for ONGOING auth changes — does NOT control isLoading
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Listener for ONGOING auth changes (sign-in, sign-out, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
       setSession(session);
       setUser(session?.user ?? null);
+
       if (!session?.user) {
         setProfile(null);
+        setIsLoading(false);
+      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        // New sign-in: set loading and fetch profile via setTimeout to avoid
+        // Supabase client deadlock (auth state change callback must return first)
+        setIsLoading(true);
+        setTimeout(() => {
+          if (isMounted) loadProfileForUser();
+        }, 0);
       }
     });
 
-    // INITIAL load — controls isLoading, waits for profile fetch
+    // INITIAL load — controls isLoading for the first render
     const initializeAuth = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -56,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(session);
         setUser(session?.user ?? null);
         if (session?.user) {
-          await loadProfileForUser(session.user.id);
+          await loadProfileForUser();
         } else {
           setProfile(null);
           setIsLoading(false);
