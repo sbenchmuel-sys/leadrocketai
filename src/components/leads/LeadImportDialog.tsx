@@ -301,10 +301,6 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                   <span className="text-muted-foreground">Motion</span>
                   <span className="font-medium text-foreground capitalize">{preset.motion.replace(/_/g, ' ')}</span>
                 </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Motion</span>
-                  <span className="font-medium text-foreground capitalize">{preset.motion.replace(/_/g, ' ')}</span>
-                </div>
                 {autoSendIntro && isOutbound && (
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Auto-intro</span>
