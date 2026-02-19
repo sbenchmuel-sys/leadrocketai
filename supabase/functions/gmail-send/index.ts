@@ -222,15 +222,49 @@ serve(async (req) => {
                              sendResponse.status === 401 ||
                              sendResponse.status === 403;
       
+      // Parse Gmail error for a better message
+      let gmailErrorMessage = "Failed to send email";
+      try {
+        const parsed = JSON.parse(errorText);
+        if (parsed?.error?.message) {
+          gmailErrorMessage = parsed.error.message;
+        }
+      } catch { /* use default */ }
+
+      // For 404 (thread/message not found), strip threading and retry as a fresh email
+      if (sendResponse.status === 404 && threadId) {
+        console.log("[gmail-send] Thread not found (404), retrying as fresh email without threadId");
+        const retryPayload = { raw: encodedEmail }; // no threadId
+        const retryResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(retryPayload),
+        });
+        if (retryResponse.ok) {
+          const retryData = await retryResponse.json();
+          console.log(`[gmail-send] Retry succeeded, message ID: ${retryData.id}`);
+          // Continue with retryData as sendData — fall through by reassigning
+          return new Response(
+            JSON.stringify({ ok: true, messageId: retryData.id }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        const retryError = await retryResponse.text();
+        console.error("[gmail-send] Retry also failed:", retryResponse.status, retryError);
+      }
+
       return new Response(JSON.stringify({ 
         ok: false, 
         error: needsReconnect
           ? "Gmail permissions need updating - please reauthorize Gmail in Settings"
-          : "Failed to send email",
+          : gmailErrorMessage,
         needsReconnect,
       }), {
-        // Return 200 for reconnect errors so supabase.functions.invoke doesn't throw
-        status: needsReconnect ? 200 : 500,
+        // Always return 200 so the JSON error body is readable by the frontend
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -395,8 +429,8 @@ serve(async (req) => {
         needsReconnect,
       }),
       { 
-        // Return 200 for reconnect errors so supabase.functions.invoke doesn't throw
-        status: needsReconnect ? 200 : 500, 
+        // Always return 200 so the JSON body is readable by the frontend
+        status: 200, 
         headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } 
       }
     );
