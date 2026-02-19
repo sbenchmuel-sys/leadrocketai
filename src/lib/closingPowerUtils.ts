@@ -48,7 +48,11 @@ export function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
   }
 
   // ── Email reply speed ──────────────────────────────────────
-  if (lead.last_inbound_at && lead.last_outbound_at) {
+  // Only count inbound signals if NOT an OOO reply (ooo_until set and in future)
+  const oooUntil = (lead as any).ooo_until as string | null;
+  const isOOO = !!oooUntil && new Date(oooUntil).getTime() > Date.now();
+
+  if (!isOOO && lead.last_inbound_at && lead.last_outbound_at) {
     const inbound = parseISO(lead.last_inbound_at).getTime();
     const outbound = parseISO(lead.last_outbound_at).getTime();
     const replyGapHours = Math.abs(inbound - outbound) / (1000 * 60 * 60);
@@ -59,7 +63,7 @@ export function calculateClosingPower(lead: LeadDetail): ScoreBreakdown {
       if (d > 10) { factors.push({ label: "No reply after 10d", points: -15 }); score -= 15; }
       else if (d > 7) { factors.push({ label: "Slow reply (>7d)", points: -10 }); score -= 10; }
     }
-  } else if (lead.last_outbound_at && !lead.last_inbound_at) {
+  } else if (!isOOO && lead.last_outbound_at && !lead.last_inbound_at) {
     const d = differenceInDays(new Date(), parseISO(lead.last_outbound_at));
     if (d > 10) { factors.push({ label: "No reply after 10d", points: -15 }); score -= 15; }
   }

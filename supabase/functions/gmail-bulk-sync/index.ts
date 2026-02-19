@@ -723,22 +723,27 @@ async function syncLeadEmails(
     ? new Date(Math.max(...activityDates)).toISOString()
     : new Date().toISOString();
 
-  // Fetch current lead state to protect nurture leads from action overwrites
+  // Fetch current lead state to protect nurture leads and OOO leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
-    .select("motion, nurture_status")
+    .select("motion, nurture_status, ooo_until")
     .eq("id", leadId)
     .single();
 
   const isActiveNurture = currentState?.motion === "nurture"
     && currentState?.nurture_status === "active";
 
-  // Build update payload -- always update metrics, but protect nurture action fields
+  // OOO guard: if lead is currently in OOO state, do not overwrite with reply_now
+  const isActiveOOO = !!currentState?.ooo_until
+    && new Date(currentState.ooo_until).getTime() > Date.now();
+
+  // Build update payload -- always update metrics, but protect nurture/OOO action fields
   const updatePayload: Record<string, unknown> = {
     stage: newStage,
     first_outbound_at: metrics.first_outbound_at,
     last_outbound_at: metrics.last_outbound_at,
-    last_inbound_at: metrics.last_inbound_at,
+    // Don't update last_inbound_at while OOO is active — OOO email is not real engagement
+    last_inbound_at: isActiveOOO ? undefined : metrics.last_inbound_at,
     meeting_summary_count: metrics.meeting_summary_count,
     last_activity_at: lastActivityAt,
   };
@@ -746,8 +751,11 @@ async function syncLeadEmails(
   if (isActiveNurture) {
     // Preserve nurture automation fields -- don't overwrite with prospecting actions
     console.log(`[gmail-bulk-sync] Preserving nurture state for lead ${leadId}`);
+  } else if (isActiveOOO) {
+    // Preserve OOO state -- don't overwrite with reply_now derived from the OOO email
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: Active OOO until ${currentState.ooo_until} -- suppressing action overwrite`);
   } else {
-    // Apply derived action for non-nurture leads
+    // Apply derived action for non-nurture, non-OOO leads
     updatePayload.needs_action = actionResult.needs_action;
     updatePayload.next_action_key = actionResult.next_action_key;
     updatePayload.next_action_label = actionResult.next_action_label;

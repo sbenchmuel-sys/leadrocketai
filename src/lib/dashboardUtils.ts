@@ -186,24 +186,31 @@ export function classifyRevenueState(
   lead: EnrichedLead,
   warmingUpIds: Set<string>
 ): RevenueState {
+  // --- OOO GATE: if lead is currently out of office, suppress action_required escalation ---
+  const oooUntil = (lead as any).ooo_until as string | null;
+  const isOOO = !!oooUntil && new Date(oooUntil).getTime() > Date.now();
+
   // --- 0. AUTOMATION (highest priority — divert automated leads) ---
   const hasSequenceAutomation = !!lead.eligible_at && lead.needs_action;
   const hasNurtureAutomation = lead.nurture_mode === "auto" && lead.nurture_status === "active";
   if (hasSequenceAutomation || hasNurtureAutomation) return "automation";
 
   // --- 1. ACTION REQUIRED ---
-  if (lead.needs_action) return "action_required";
-  // Unreplied inbound (has inbound but last outbound is before last inbound)
-  if (lead.last_inbound_at) {
-    const inboundTs = new Date(lead.last_inbound_at).getTime();
-    const outboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
-    if (inboundTs > outboundTs) return "action_required";
-  }
-  // Meeting completed with no follow-up sent (post_meeting stage, no outbound after meeting)
-  if (lead.stage === "post_meeting" && lead.hasMeeting) {
-    const lastActivity = new Date(lead.last_activity_at).getTime();
-    const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
-    if (lastOutbound < lastActivity) return "action_required";
+  // Skip action_required escalation for OOO leads — they are paused, not pending
+  if (!isOOO) {
+    if (lead.needs_action) return "action_required";
+    // Unreplied inbound (has inbound but last outbound is before last inbound)
+    if (lead.last_inbound_at) {
+      const inboundTs = new Date(lead.last_inbound_at).getTime();
+      const outboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+      if (inboundTs > outboundTs) return "action_required";
+    }
+    // Meeting completed with no follow-up sent (post_meeting stage, no outbound after meeting)
+    if (lead.stage === "post_meeting" && lead.hasMeeting) {
+      const lastActivity = new Date(lead.last_activity_at).getTime();
+      const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+      if (lastOutbound < lastActivity) return "action_required";
+    }
   }
 
   // --- 2. HEATING UP ---
