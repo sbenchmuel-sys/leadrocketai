@@ -1,63 +1,85 @@
 
-# Fix: Robust Intent JSON Parsing in WhatsApp Webhook
+# Fix: Auto-Send Actually Calls WhatsApp Cloud API
 
 ## Root Cause
 
-In `supabase/functions/whatsapp-webhook/index.ts`, lines 470–477, the intent classification response from `ai_task` is parsed with a bare `JSON.parse(intentData.content)`. The LLM (Gemini Flash) occasionally wraps its JSON output in markdown code fences (` ```json ... ``` `) or adds a trailing comma/explanation sentence — both of which cause `JSON.parse` to throw, the `catch` block silently sets `intent = "unknown"` and `aiConfidence = 0`, and the decision engine then correctly blocks automation due to `low_confidence`.
+In `supabase/functions/whatsapp-webhook/index.ts`, lines 626–663 (the "Section 6: Auto Send Execution" block), when the decision engine approves an automated reply, the code:
+
+1. Generates the AI reply text (correct)
+2. Stores the message in the `messages` table with `status: "sent"` (incorrect assumption)
+3. Logs `auto_sent` to `automation_logs`
+
+But it **never makes an HTTP request to the WhatsApp Cloud API** (`https://graph.facebook.com/v21.0/{phoneNumberId}/messages`). The comment even acknowledges this: *"We store the automated outbound message directly here instead of calling whatsapp-send to avoid circular auth issues from webhook context."*
+
+The fix is straightforward: decrypt the integration credentials (already done for Gmail in the codebase) and make the WhatsApp Cloud API call directly inside the webhook's auto-send block.
+
+## Why This Hasn't Been Simple to Spot
+
+The logs say `Auto-sent reply` and `automation_logs` shows `decision: "auto_sent"` — it looks like it worked from a database perspective. But the actual Meta Graph API call was never made, so the message never leaves the system.
 
 ## What the Fix Does
 
-A `extractJsonFromResponse` helper function is added directly inside `whatsapp-webhook/index.ts`. This function is called in place of the bare `JSON.parse`. No changes to `ai_task`, email logic, or any other file.
-
-The helper follows this cascade:
-
-1. **Direct parse** — try `JSON.parse(content)` first (fastest path, works when LLM is well-behaved)
-2. **Strip markdown code fences** — remove ` ```json ... ``` ` wrappers and retry parse
-3. **Find JSON object boundaries** — use a regex to locate the first `{` and last `}` in the string and retry parse on that substring
-4. **Repair common issues** — remove control characters (`\x00–\x1F`), fix trailing commas before `}` or `]`, then retry parse
-5. **Throw if all fail** — so the existing `catch` block logs the warning and continues
-
-Additionally, two small defensive improvements are added to the same block:
-- Log the raw `intentData.content` (first 200 chars) when parse fails, so the actual LLM output is visible in edge function logs for debugging.
-- Validate that the extracted `intent` value is one of the known intent strings before trusting it.
-
-## Technical Changes
-
 **File: `supabase/functions/whatsapp-webhook/index.ts`**
 
-1. Add `extractJsonFromResponse(content: string): unknown` utility function near the top of the file (after the existing utility functions, around line 115).
+Inside the "Section 6: Auto Send Execution" block (around lines 617–665), after generating `replyText` and confirming credentials exist:
 
-2. Replace the parse block at lines 470–477:
+1. Import `safeDecryptToken` from `../_shared/encryption.ts` at the top of the file (already imported for `encryptToken`, just add `safeDecryptToken` to the same import).
 
-```
-// BEFORE (fragile):
-const parsed = JSON.parse(intentData.content);
-intent = parsed.intent ?? intent;
-aiConfidence = typeof parsed.confidence === "number" ? parsed.confidence : aiConfidence;
-riskFlags = Array.isArray(parsed.risk_flags) ? parsed.risk_flags : [];
-```
-
-```
-// AFTER (robust):
-const parsed = extractJsonFromResponse(intentData.content) as any;
-const KNOWN_INTENTS = ["acknowledgment","scheduling","clarification","objection","complaint","unsubscribe","negotiation","legal","positive_interest","unknown"];
-intent = KNOWN_INTENTS.includes(parsed.intent) ? parsed.intent : (intent);
-aiConfidence = typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : aiConfidence;
-riskFlags = Array.isArray(parsed.risk_flags) ? parsed.risk_flags : [];
-console.log(`[whatsapp-webhook] Intent classified: ${intent} (confidence: ${aiConfidence})`);
+2. Decrypt the access token from `integrationData.credentials_encrypted`:
+```typescript
+const credsJson = await safeDecryptToken(integrationData.credentials_encrypted);
+const creds = JSON.parse(credsJson);
+const accessToken = await safeDecryptToken(creds.access_token);
+const phoneNumberId = integrationData.provider_account_id;
 ```
 
-3. Update the `catch` block to log the raw content for debugging:
-
+3. Normalize the recipient phone number (the sender's number from the inbound message):
+```typescript
+const recipientPhone = normalizedPhone; // already computed earlier in the loop
 ```
-} catch (parseErr) {
-  console.warn("[whatsapp-webhook] Failed to parse intent JSON. Raw content:", intentData.content?.slice(0, 200));
+
+4. Make the actual WhatsApp Cloud API call:
+```typescript
+const waPayload = {
+  messaging_product: "whatsapp",
+  recipient_type: "individual",
+  to: recipientPhone,
+  type: "text",
+  text: { body: replyText },
+};
+
+const waRes = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify(waPayload),
+});
+
+const waData = await waRes.json();
+if (!waRes.ok) {
+  throw new Error(`WA API error: ${waData?.error?.message ?? JSON.stringify(waData)}`);
 }
+const providerAutoMsgId = waData?.messages?.[0]?.id ?? null;
 ```
+
+5. Store the message in `messages` with the real `provider_message_id` from Meta (so delivery status webhooks can update it):
+```typescript
+// Store with the real provider_message_id (not null)
+const { data: autoMsg } = await supabase.from("messages").insert({
+  ...
+  provider_message_id: providerAutoMsgId,
+  status: "sent",
+}).select("id").single();
+```
+
+6. If the WhatsApp API call fails, the error is caught by the existing `try/catch` block, which logs `Auto-send failed` — no change needed there.
 
 ## Scope
 
 - Only `supabase/functions/whatsapp-webhook/index.ts` is modified
-- No changes to `ai_task`, email automation, database schema, or any other file
-- Fully additive and backwards-compatible
-- The function will be redeployed automatically
+- Add `safeDecryptToken` to the existing encryption import on line 2
+- Replace the fake "store-only" auto-send block with a real WA Cloud API call + then store
+- No schema changes, no other files touched
+- The function will be redeployed automatically after the change
