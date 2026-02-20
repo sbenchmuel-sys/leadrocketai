@@ -175,18 +175,11 @@ export function OutlookConnectionCard() {
 
       if (!wsId) throw new Error("No workspace found. Please refresh and try again.");
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
-      if (!token) throw new Error("Not authenticated");
-
-      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: wsId }),
+      const { data, error: fnError } = await supabase.functions.invoke("outlook-auth", {
+        body: { workspaceId: wsId },
       });
 
-      const data = await resp.json();
+      if (fnError) throw new Error(fnError.message);
       if (data.not_configured) {
         throw new Error("Outlook integration not fully configured yet. Please contact your administrator.");
       }
