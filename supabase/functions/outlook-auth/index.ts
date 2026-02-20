@@ -51,20 +51,24 @@ serve(async (req) => {
       });
     }
 
-    const { redirectUrl, workspaceId } = await req.json();
-    if (!redirectUrl || !workspaceId) {
-      return new Response(JSON.stringify({ ok: false, error: "redirectUrl and workspaceId required" }), {
+    // Body may only contain workspaceId (redirectUrl is optional)
+    const body = await req.json().catch(() => ({}));
+    const workspaceId: string | undefined = body.workspaceId ?? body.workspace_id;
+    if (!workspaceId) {
+      return new Response(JSON.stringify({ ok: false, error: "workspaceId required" }), {
         status: 400,
         headers: { ...cors, "Content-Type": "application/json" },
       });
     }
 
     const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
-    if (!clientId) {
-      return new Response(JSON.stringify({ ok: false, error: "Microsoft OAuth not configured" }), {
-        status: 500,
-        headers: { ...cors, "Content-Type": "application/json" },
-      });
+    const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET");
+    if (!clientId || !clientSecret) {
+      logger.warn("mail.outlook.credentials_missing", { step: "auth" });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Microsoft credentials not configured", not_configured: true }),
+        { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+      );
     }
 
     // Generate CSRF token and store in oauth_states (reuse existing table)

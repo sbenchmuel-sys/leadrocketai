@@ -10,6 +10,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "./encryption.ts";
 import { logger } from "./logger.ts";
+import { OutlookGraphClient, MicrosoftCredentialsMissingError } from "./outlookGraphClient.ts";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -55,30 +56,16 @@ export async function getFreshOutlookToken(
   logger.info("mail.outlook.token_refresh_attempt", { mail_account_id: mailAccountId });
 
   try {
-    const refreshToken = await safeDecryptToken(account.refresh_token ?? "");
-    const clientId = Deno.env.get("MICROSOFT_CLIENT_ID")!;
-    const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
+    const refreshTokenValue = await safeDecryptToken(account.refresh_token ?? "");
 
-    const resp = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret,
-        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read",
-      }),
-    });
+    // Throws MicrosoftCredentialsMissingError if env vars absent — bubbles up safely
+    const tokens = await OutlookGraphClient.refreshToken(
+      refreshTokenValue,
+      "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read"
+    );
 
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`Token refresh HTTP ${resp.status}: ${body}`);
-    }
-
-    const tokens = await resp.json();
     const newAccessToken: string = tokens.access_token;
-    const newRefreshToken: string = tokens.refresh_token ?? refreshToken;
+    const newRefreshToken: string = tokens.refresh_token ?? refreshTokenValue;
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
     // Encrypt and persist
