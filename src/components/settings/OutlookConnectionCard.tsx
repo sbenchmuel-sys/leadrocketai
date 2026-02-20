@@ -117,44 +117,19 @@ export function OutlookConnectionCard() {
     }
   }, []);
 
-  /** Probe outlook-auth with a dummy call (no workspaceId) just to see if credentials are present. */
-  const checkCredentials = useCallback(async () => {
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
-      if (!token) { setCredentialsConfigured(false); return; }
-
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        // Intentionally omit workspaceId — we only care about the 503 not_configured signal
-        body: JSON.stringify({}),
-      });
-      const json = await resp.json().catch(() => ({}));
-      // 503 with not_configured = credentials missing
-      // 400 (workspaceId required) = credentials ARE present
-      if (json.not_configured) {
-        setCredentialsConfigured(false);
-      } else {
-        setCredentialsConfigured(true);
-      }
-    } catch {
-      setCredentialsConfigured(null);
-    }
-  }, []);
-
   useEffect(() => {
     (async () => {
       const wsId = await fetchWorkspaceId();
       setWorkspaceId(wsId);
-      await Promise.all([
-        wsId ? fetchHealth(wsId) : Promise.resolve(),
-        checkCredentials(),
-      ]);
-      if (!wsId) setIsLoading(false);
+      if (wsId) {
+        await fetchHealth(wsId);
+      } else {
+        setIsLoading(false);
+      }
+      // Assume credentials configured until proven otherwise at connect time
+      setCredentialsConfigured(true);
     })();
-  }, [fetchWorkspaceId, fetchHealth, checkCredentials]);
+  }, [fetchWorkspaceId, fetchHealth]);
 
   const handleConnect = async () => {
     if (credentialsConfigured === false) return;
@@ -186,11 +161,15 @@ export function OutlookConnectionCard() {
 
       const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
 
+      if (data.not_configured) {
+        setCredentialsConfigured(false);
+        throw new Error("Outlook integration not fully configured. Please contact your administrator.");
+      }
       if (!resp.ok || !data.ok) {
         throw new Error(data.error || `Request failed (${resp.status})`);
       }
       if (!data.authUrl) {
-        throw new Error(data.error || "Failed to get auth URL");
+        throw new Error("Failed to get auth URL");
       }
 
       // Open in a popup to avoid breaking the preview iframe
