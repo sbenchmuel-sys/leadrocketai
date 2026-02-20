@@ -156,7 +156,10 @@ export function OutlookConnectionCard() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ workspaceId: wsId }),
+        body: JSON.stringify({
+          workspaceId: wsId,
+          redirectUrl: window.location.href,
+        }),
       });
 
       const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
