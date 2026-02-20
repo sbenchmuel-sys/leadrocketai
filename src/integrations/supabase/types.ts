@@ -24,6 +24,7 @@ export type Database = {
           gmail_message_id: string | null
           id: string
           lead_id: string
+          mail_account_id: string | null
           owner_user_id: string
           status: string
           subject: string | null
@@ -37,6 +38,7 @@ export type Database = {
           gmail_message_id?: string | null
           id?: string
           lead_id: string
+          mail_account_id?: string | null
           owner_user_id: string
           status?: string
           subject?: string | null
@@ -50,6 +52,7 @@ export type Database = {
           gmail_message_id?: string | null
           id?: string
           lead_id?: string
+          mail_account_id?: string | null
           owner_user_id?: string
           status?: string
           subject?: string | null
@@ -60,6 +63,13 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "automation_log_mail_account_id_fkey"
+            columns: ["mail_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
             referencedColumns: ["id"]
           },
         ]
@@ -778,6 +788,53 @@ export type Database = {
           whatsapp_number?: string | null
         }
         Relationships: []
+      }
+      mail_accounts: {
+        Row: {
+          created_at: string
+          display_name: string
+          email_address: string
+          external_user_id: string | null
+          id: string
+          is_default: boolean
+          provider: string
+          status: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          display_name: string
+          email_address: string
+          external_user_id?: string | null
+          id?: string
+          is_default?: boolean
+          provider: string
+          status?: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string
+          email_address?: string
+          external_user_id?: string | null
+          id?: string
+          is_default?: boolean
+          provider?: string
+          status?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_accounts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       manager_views: {
         Row: {
