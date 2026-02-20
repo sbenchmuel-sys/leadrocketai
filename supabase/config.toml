@@ -3,6 +3,18 @@ project_id = "ntzeiflqqluwgdfmatjh"
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+[functions.outlook-webhook]
+verify_jwt = false
+
+[functions.outlook-subscription-check]
+verify_jwt = false
+
+[functions.outlook-send]
+verify_jwt = false
+
+[functions.outlook-health]
+verify_jwt = false
+
 [functions.whatsapp-connect]
 verify_jwt = false
 
