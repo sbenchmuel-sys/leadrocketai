@@ -1015,6 +1015,25 @@ serve(async (req) => {
           continue;
         }
 
+        // STRICT DIRECTION FILTER: Only sync emails that are directly between the rep and the lead.
+        // Skip 3rd-party emails (newsletters, notifications, etc.) that happen to be addressed to the lead.
+        const repEmail = connection.gmail_email?.toLowerCase().trim() || "";
+        const fromEmailsForFilter = extractEmailAddresses(from);
+        const toEmailsForFilter = extractEmailAddresses(to);
+        const isFromLead_check = fromEmailsForFilter.some(e => e === leadEmailNorm.toLowerCase());
+        const isFromRep_check = repEmail && fromEmailsForFilter.some(e => e === repEmail);
+        const isToLead_check = toEmailsForFilter.some(e => e === leadEmailNorm.toLowerCase());
+        const isToRep_check = repEmail && toEmailsForFilter.some(e => e === repEmail);
+
+        // Only allow: (lead → rep) or (rep → lead). Skip everything else.
+        const isDirectConversation = (isFromLead_check && isToRep_check) || (isFromRep_check && isToLead_check);
+        if (!isDirectConversation) {
+          console.log(
+            `[gmail-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
+          );
+          continue;
+        }
+
         // Server-side date guard: skip messages older than sync start date
         const msgDate = getHeader(headers, "Date");
         const msgInternalDate = parseInt(message.internalDate);
@@ -1125,10 +1144,15 @@ serve(async (req) => {
           }
         }
 
-        // Unsubscribe detection in inbound emails
-        if (direction === "inbound") {
+        // Unsubscribe detection in inbound emails.
+        // IMPORTANT: Only trigger if:
+        //   1. The email is FROM the lead (direction === "inbound")
+        //   2. There is NO List-Unsubscribe header (which indicates a newsletter/bulk email, not a human reply)
+        //   3. The phrase matches a human opt-out, not a newsletter footer link
+        const hasListUnsubscribeHeader = !!getHeader(headers, "List-Unsubscribe");
+        if (direction === "inbound" && !hasListUnsubscribeHeader) {
           const bodyLower = bodyText.toLowerCase();
-          if (/\bunsubscribe\b/.test(bodyLower) || /\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower)) {
+          if (/\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower) || /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)) {
             console.log(`[gmail-sync] Lead ${leadId}: Unsubscribe keyword detected in inbound email`);
             await serviceSupabase.from("leads").update({
               unsubscribed: true,
