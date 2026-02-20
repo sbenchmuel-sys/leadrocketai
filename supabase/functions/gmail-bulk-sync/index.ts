@@ -723,10 +723,10 @@ async function syncLeadEmails(
     ? new Date(Math.max(...activityDates)).toISOString()
     : new Date().toISOString();
 
-  // Fetch current lead state to protect nurture leads and OOO leads from action overwrites
+  // Fetch current lead state to protect nurture, OOO, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
-    .select("motion, nurture_status, ooo_until")
+    .select("motion, nurture_status, ooo_until, eligible_at, needs_action")
     .eq("id", leadId)
     .single();
 
@@ -737,7 +737,14 @@ async function syncLeadEmails(
   const isActiveOOO = !!currentState?.ooo_until
     && new Date(currentState.ooo_until).getTime() > Date.now();
 
-  // Build update payload -- always update metrics, but protect nurture/OOO action fields
+  // Automation guard: if the automation engine has already scheduled a future step,
+  // do not overwrite needs_action/next_action_key with deriveAction() result.
+  // eligible_at in the future + needs_action=true means the executor has queued a send.
+  const isAutomationScheduled = !!currentState?.eligible_at
+    && new Date(currentState.eligible_at).getTime() > Date.now()
+    && currentState?.needs_action === true;
+
+  // Build update payload -- always update metrics, but protect nurture/OOO/automation action fields
   const updatePayload: Record<string, unknown> = {
     stage: newStage,
     first_outbound_at: metrics.first_outbound_at,
@@ -754,8 +761,12 @@ async function syncLeadEmails(
   } else if (isActiveOOO) {
     // Preserve OOO state -- don't overwrite with reply_now derived from the OOO email
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Active OOO until ${currentState.ooo_until} -- suppressing action overwrite`);
+  } else if (isAutomationScheduled) {
+    // Preserve automation-scheduled state -- the executor has already queued a future send.
+    // Overwriting needs_action/next_action_key here would kill the scheduled follow-up.
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: Automation scheduled until ${currentState.eligible_at} -- suppressing action overwrite`);
   } else {
-    // Apply derived action for non-nurture, non-OOO leads
+    // Apply derived action for non-nurture, non-OOO, non-automation-scheduled leads
     updatePayload.needs_action = actionResult.needs_action;
     updatePayload.next_action_key = actionResult.next_action_key;
     updatePayload.next_action_label = actionResult.next_action_label;
