@@ -102,13 +102,14 @@ serve(async (req) => {
 
     let waCheckQuery = supabase
       .from("leads")
-      .select("id, name, last_inbound_at, last_outbound_at, needs_action, next_action_key, ooo_until")
+      .select("id, name, phone, last_inbound_at, last_outbound_at, needs_action, next_action_key, ooo_until")
       .not("last_inbound_at", "is", null)
       .lte("last_inbound_at", sixHoursAgo)   // inbound was >6h ago
       .eq("needs_action", false)              // not already actioned
       .eq("unsubscribed", false)
       .in("status", ["active", "new"])
       .is("ooo_until", null)                  // not OOO
+      .not("phone", "is", null)               // only flag if phone number exists
       .limit(30);
 
     if (ownerFilter) {
