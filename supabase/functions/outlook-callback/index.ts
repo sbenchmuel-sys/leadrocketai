@@ -212,7 +212,13 @@ serve(async (req) => {
       is_default: isDefault,
     });
 
-    // --- Redirect back to app ---
+    // --- Redirect back to app (or show success page if redirect_url missing) ---
+    if (!stateData.redirect_url) {
+      // No redirect URL — show a self-closing success page for popup flows
+      const successHtml = `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5}.box{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}h1{color:#16a34a}p{color:#666}</style></head><body><div class="box"><h1>✓ Connected!</h1><p>Your Outlook account has been connected successfully.</p><p>This window will close automatically…</p></div><script>window.close();setTimeout(()=>window.close(),1500)</script></body></html>`;
+      return new Response(successHtml, { headers: HTML_HEADERS });
+    }
+
     const redirectTarget = new URL(stateData.redirect_url);
     redirectTarget.searchParams.set("outlook_connected", "true");
     redirectTarget.searchParams.set("outlook_email", emailAddress);
