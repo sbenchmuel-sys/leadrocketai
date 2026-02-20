@@ -403,9 +403,12 @@ serve(async (req) => {
 
         logEntry.ai_task = aiTask;
 
-        // GUARD 1: Daily per-lead cap — max 1 automated email per lead per day
-        // This is the critical safety net: Gmail returns "sent" for bounced/undeliverable emails,
-        // so counting only "failed" records is useless. We cap by total "sent" today.
+        // GUARD 1: Daily per-lead cap — enforced atomically at DB level via unique index.
+        // We no longer do a pre-flight SELECT count (racy under concurrent runs).
+        // Instead, we attempt the INSERT after send and let the DB reject the duplicate.
+        // See: automation_log_one_per_day_unique index (WHERE status = 'sent').
+        // Pre-flight check for TODAY is still done as a fast-path skip to avoid
+        // wasting an AI call + send on a lead that already got an email today.
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
 
@@ -417,7 +420,7 @@ serve(async (req) => {
           .gte("created_at", todayStart.toISOString());
 
         if ((todaySentCount || 0) >= 1) {
-          console.log(`[automation-executor] Lead ${lead.id}: Daily cap reached (${todaySentCount} sent today) — pushing to tomorrow`);
+          console.log(`[automation-executor] Lead ${lead.id}: Pre-flight daily cap hit (${todaySentCount} sent today) — pushing to tomorrow`);
           logEntry.status = "skipped";
           logEntry.error_message = "Daily send limit reached (1 per lead per day)";
           logEntry.completed_at = new Date().toISOString();
@@ -595,11 +598,30 @@ serve(async (req) => {
           }),
         });
 
-        if (!sendResponse.ok) {
-          const sendErr = await sendResponse.text();
+        // gmail-send always returns HTTP 200 (even on error) so the JSON body is readable.
+        // We must check sendResult.ok (the JSON field) — NOT sendResponse.ok (the HTTP status).
+        const sendResult = await sendResponse.json();
+
+        if (!sendResult.ok) {
+          const sendErr = sendResult.error || "Unknown send error";
           console.error(`[automation-executor] Send failed for lead ${lead.id}:`, sendErr);
+
+          if (sendResult.needsReconnect) {
+            console.warn(`[automation-executor] Gmail needs reconnect for user ${lead.owner_user_id}`);
+            await supabase.from("leads").update({
+              needs_action: false,
+              eligible_at: null,
+            }).eq("id", lead.id);
+            logEntry.status = "failed";
+            logEntry.error_message = "Gmail needs reconnection";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            skipped++;
+            continue;
+          }
+
           logEntry.status = "failed";
-          logEntry.error_message = `Gmail send failed: ${sendErr.substring(0, 200)}`;
+          logEntry.error_message = `Gmail send failed: ${String(sendErr).substring(0, 200)}`;
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           // Retry: push eligible_at forward 15 min
@@ -607,21 +629,6 @@ serve(async (req) => {
             eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
           }).eq("id", lead.id);
           errors.push(`Lead ${lead.id}: Send failed`);
-          continue;
-        }
-
-        const sendResult = await sendResponse.json();
-        if (sendResult.needsReconnect) {
-          console.warn(`[automation-executor] Gmail needs reconnect for user ${lead.owner_user_id}`);
-          await supabase.from("leads").update({
-            needs_action: false,
-            eligible_at: null,
-          }).eq("id", lead.id);
-          logEntry.status = "failed";
-          logEntry.error_message = "Gmail needs reconnection";
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          skipped++;
           continue;
         }
 
@@ -642,11 +649,22 @@ serve(async (req) => {
           occurred_at: new Date().toISOString(),
         });
 
-        // Log success
+        // ATOMIC LOG INSERT: The unique index (automation_log_one_per_day_unique) enforces
+        // at most one 'sent' record per (lead_id, action_key, day). If a concurrent executor
+        // run already committed a 'sent' record for this lead+action today, this upsert is
+        // silently ignored — blocking the duplicate at the DB level.
         logEntry.status = "sent";
         logEntry.gmail_message_id = gmailMessageId;
         logEntry.completed_at = new Date().toISOString();
-        await supabase.from("automation_log").insert(logEntry);
+        const { error: logInsertError } = await (supabase.from("automation_log") as any)
+          .upsert(logEntry, { onConflict: "lead_id,action_key,date_trunc('day', created_at AT TIME ZONE 'UTC')", ignoreDuplicates: true });
+
+        if (logInsertError) {
+          // Conflict means a concurrent run already sent this email today — skip post-send state update
+          console.warn(`[automation-executor] Duplicate blocked by DB for lead ${lead.id}, action ${actionKey}: ${logInsertError.message}`);
+          skipped++;
+          continue;
+        }
 
         // --- POST-SEND STATE UPDATE ---
         const postUpdate: Record<string, unknown> = {
