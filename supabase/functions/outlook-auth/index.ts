@@ -54,6 +54,7 @@ serve(async (req) => {
     // Body may only contain workspaceId (redirectUrl is optional)
     const body = await req.json().catch(() => ({}));
     const workspaceId: string | undefined = body.workspaceId ?? body.workspace_id;
+    const redirectUrl: string | undefined = body.redirectUrl ?? body.redirect_url;
     if (!workspaceId) {
       return new Response(JSON.stringify({ ok: false, error: "workspaceId required" }), {
         status: 400,
