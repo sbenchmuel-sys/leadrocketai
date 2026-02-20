@@ -791,38 +791,53 @@ export type Database = {
       }
       mail_accounts: {
         Row: {
+          access_token: string | null
           created_at: string
           display_name: string
           email_address: string
+          error_reason: string | null
           external_user_id: string | null
           id: string
           is_default: boolean
+          last_sync_at: string | null
           provider: string
+          refresh_token: string | null
           status: string
+          token_expires_at: string | null
           updated_at: string
           workspace_id: string
         }
         Insert: {
+          access_token?: string | null
           created_at?: string
           display_name: string
           email_address: string
+          error_reason?: string | null
           external_user_id?: string | null
           id?: string
           is_default?: boolean
+          last_sync_at?: string | null
           provider: string
+          refresh_token?: string | null
           status?: string
+          token_expires_at?: string | null
           updated_at?: string
           workspace_id: string
         }
         Update: {
+          access_token?: string | null
           created_at?: string
           display_name?: string
           email_address?: string
+          error_reason?: string | null
           external_user_id?: string | null
           id?: string
           is_default?: boolean
+          last_sync_at?: string | null
           provider?: string
+          refresh_token?: string | null
           status?: string
+          token_expires_at?: string | null
           updated_at?: string
           workspace_id?: string
         }
@@ -832,6 +847,44 @@ export type Database = {
             columns: ["workspace_id"]
             isOneToOne: false
             referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mail_event_log: {
+        Row: {
+          event_type: string
+          id: string
+          mail_account_id: string | null
+          payload: Json | null
+          processed_at: string
+          provider: string
+          provider_message_id: string
+        }
+        Insert: {
+          event_type?: string
+          id?: string
+          mail_account_id?: string | null
+          payload?: Json | null
+          processed_at?: string
+          provider: string
+          provider_message_id: string
+        }
+        Update: {
+          event_type?: string
+          id?: string
+          mail_account_id?: string | null
+          payload?: Json | null
+          processed_at?: string
+          provider?: string
+          provider_message_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_event_log_mail_account_id_fkey"
+            columns: ["mail_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
             referencedColumns: ["id"]
           },
         ]
@@ -1228,6 +1281,62 @@ export type Database = {
           zoom_meeting_sync_enabled?: boolean
         }
         Relationships: []
+      }
+      outlook_subscriptions: {
+        Row: {
+          change_types: string[]
+          client_state: string | null
+          created_at: string
+          error_reason: string | null
+          expiration_at: string
+          id: string
+          last_renewed_at: string | null
+          mail_account_id: string
+          notification_url: string | null
+          resource: string
+          status: string
+          subscription_id: string
+          updated_at: string
+        }
+        Insert: {
+          change_types?: string[]
+          client_state?: string | null
+          created_at?: string
+          error_reason?: string | null
+          expiration_at: string
+          id?: string
+          last_renewed_at?: string | null
+          mail_account_id: string
+          notification_url?: string | null
+          resource?: string
+          status?: string
+          subscription_id: string
+          updated_at?: string
+        }
+        Update: {
+          change_types?: string[]
+          client_state?: string | null
+          created_at?: string
+          error_reason?: string | null
+          expiration_at?: string
+          id?: string
+          last_renewed_at?: string | null
+          mail_account_id?: string
+          notification_url?: string | null
+          resource?: string
+          status?: string
+          subscription_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outlook_subscriptions_mail_account_id_fkey"
+            columns: ["mail_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
