@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ArrowRight, SkipForward, ShieldCheck, Lock, Eye, Mail, Info } from "lucide-react";
+import { ArrowRight, SkipForward, ShieldCheck, Lock, Eye, Mail, Info, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +20,7 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
   const { isConnected: isGmailConnected } = useGmailConnection();
   const [selectedProvider, setSelectedProvider] = useState<Provider>(null);
   const [outlookConfigured, setOutlookConfigured] = useState<boolean | null>(null);
+  const [outlookConnectedEmail, setOutlookConnectedEmail] = useState<string | null>(null);
 
   const checkOutlookCredentials = useCallback(async () => {
     try {
@@ -48,11 +49,58 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
     }
   }, []);
 
+  /** After OAuth redirect, fetch the connected Outlook account email via the health endpoint. */
+  const fetchOutlookConnectedEmail = useCallback(async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) return;
+
+      // Get workspace id first
+      const { data: membership } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .limit(1)
+        .maybeSingle();
+
+      if (!membership?.workspace_id) return;
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const resp = await fetch(
+        `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${membership.workspace_id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (!resp.ok) return;
+      const json = await resp.json();
+      const connected = json?.accounts?.find(
+        (a: { status: string; email_address: string }) => a.status === "connected"
+      );
+      if (connected?.email_address) {
+        setOutlookConnectedEmail(connected.email_address);
+      }
+    } catch {
+      // silently ignore
+    }
+  }, []);
+
   useEffect(() => {
     checkOutlookCredentials();
-  }, [checkOutlookCredentials]);
 
-  const isAnyConnected = isGmailConnected; // expand when Outlook onboarding connect is added
+    // Detect post-OAuth redirect for Outlook
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("outlook_connected") === "true") {
+      setSelectedProvider("outlook");
+      fetchOutlookConnectedEmail();
+      // Clean up the URL param without a page reload
+      const url = new URL(window.location.href);
+      url.searchParams.delete("outlook_connected");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [checkOutlookCredentials, fetchOutlookConnectedEmail]);
+
+  const isOutlookConnected = !!outlookConnectedEmail;
+  const isAnyConnected = isGmailConnected || isOutlookConnected;
 
   return (
     <div className="flex flex-col items-center text-center space-y-8">
@@ -77,7 +125,18 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
           <Eye className="h-3.5 w-3.5 text-primary/70" />
           <span>Read-only access</span>
         </div>
-      </div>
+        </div>
+
+      {/* Outlook connected banner */}
+      {isOutlookConnected && (
+        <div className="w-full max-w-lg rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center gap-3">
+          <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
+          <div className="text-left">
+            <p className="text-sm font-medium text-foreground">Outlook connected</p>
+            <p className="text-xs text-muted-foreground">{outlookConnectedEmail}</p>
+          </div>
+        </div>
+      )}
 
       {/* Provider selection cards */}
       <div className="w-full max-w-lg grid grid-cols-2 gap-4">
