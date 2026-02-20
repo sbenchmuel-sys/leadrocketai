@@ -162,28 +162,34 @@ export function OutlookConnectionCard() {
       setIsConnecting(true);
 
       // Always re-fetch workspace_id to avoid stale state race conditions
-      let wsId = await fetchWorkspaceId();
+      let wsId = workspaceId ?? await fetchWorkspaceId();
       if (!wsId) {
-        // Create workspace if none exists
-        const { error: insertError } = await supabase
-          .from("workspaces")
-          .insert({ name: "My Workspace", plan: "free" });
-        if (insertError) throw new Error("Failed to create workspace");
-        wsId = await fetchWorkspaceId();
-        setWorkspaceId(wsId);
+        toast.error("No workspace found", { description: "Please refresh the page and try again." });
+        setIsConnecting(false);
+        return;
       }
+      setWorkspaceId(wsId);
 
-      if (!wsId) throw new Error("No workspace found. Please refresh and try again.");
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated");
 
-      const { data, error: fnError } = await supabase.functions.invoke("outlook-auth", {
-        body: { workspaceId: wsId },
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ workspaceId: wsId }),
       });
 
-      if (fnError) throw new Error(fnError.message);
-      if (data.not_configured) {
-        throw new Error("Outlook integration not fully configured yet. Please contact your administrator.");
+      const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
+
+      if (!resp.ok || !data.ok) {
+        throw new Error(data.error || `Request failed (${resp.status})`);
       }
-      if (!data.ok || !data.authUrl) {
+      if (!data.authUrl) {
         throw new Error(data.error || "Failed to get auth URL");
       }
 
