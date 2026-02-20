@@ -1,0 +1,2 @@
+ALTER TABLE public.mail_accounts DROP CONSTRAINT mail_accounts_status_check;
+ALTER TABLE public.mail_accounts ADD CONSTRAINT mail_accounts_status_check CHECK (status = ANY (ARRAY['connected'::text, 'expired'::text, 'error'::text, 'disconnected'::text]));
