@@ -165,20 +165,19 @@ export function OutlookConnectionCard() {
     try {
       setIsConnecting(true);
 
-      let wsId = workspaceId;
+      // Always re-fetch workspace_id to avoid stale state race conditions
+      let wsId = await fetchWorkspaceId();
       if (!wsId) {
-        await supabase.from("workspaces").insert({ name: "My Workspace", plan: "free" });
-        const { data: newMembership } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .maybeSingle();
-        wsId = newMembership?.workspace_id ?? null;
+        // Create workspace if none exists
+        const { error: insertError } = await supabase
+          .from("workspaces")
+          .insert({ name: "My Workspace", plan: "free" });
+        if (insertError) throw new Error("Failed to create workspace");
+        wsId = await fetchWorkspaceId();
         setWorkspaceId(wsId);
       }
 
-      if (!wsId) throw new Error("No workspace found.");
+      if (!wsId) throw new Error("No workspace found. Please refresh and try again.");
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const { data: sessionData } = await supabase.auth.getSession();
