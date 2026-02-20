@@ -1,85 +1,60 @@
 
-# Fix: Auto-Send Actually Calls WhatsApp Cloud API
+## Root Cause: Race Condition in the Daily Cap Check
 
-## Root Cause
+### What the Database Proves
 
-In `supabase/functions/whatsapp-webhook/index.ts`, lines 626–663 (the "Section 6: Auto Send Execution" block), when the decision engine approves an automated reply, the code:
+The automation log shows leads like "Rudy Siregar" receiving **10 emails** in 14 minutes, and others getting 4 emails within **2 seconds** of each other. This is a textbook race condition — not a logic error.
 
-1. Generates the AI reply text (correct)
-2. Stores the message in the `messages` table with `status: "sent"` (incorrect assumption)
-3. Logs `auto_sent` to `automation_logs`
+### Why the "1 email per day" guard fails
 
-But it **never makes an HTTP request to the WhatsApp Cloud API** (`https://graph.facebook.com/v21.0/{phoneNumberId}/messages`). The comment even acknowledges this: *"We store the automated outbound message directly here instead of calling whatsapp-send to avoid circular auth issues from webhook context."*
+The cron job runs automation-executor **every 15 minutes**. Each run queries for all eligible leads and processes them in a loop. Here is what happens when a lead is picked up in two near-simultaneous or closely-spaced runs:
 
-The fix is straightforward: decrypt the integration credentials (already done for Gmail in the codebase) and make the WhatsApp Cloud API call directly inside the webhook's auto-send block.
-
-## Why This Hasn't Been Simple to Spot
-
-The logs say `Auto-sent reply` and `automation_logs` shows `decision: "auto_sent"` — it looks like it worked from a database perspective. But the actual Meta Graph API call was never made, so the message never leaves the system.
-
-## What the Fix Does
-
-**File: `supabase/functions/whatsapp-webhook/index.ts`**
-
-Inside the "Section 6: Auto Send Execution" block (around lines 617–665), after generating `replyText` and confirming credentials exist:
-
-1. Import `safeDecryptToken` from `../_shared/encryption.ts` at the top of the file (already imported for `encryptToken`, just add `safeDecryptToken` to the same import).
-
-2. Decrypt the access token from `integrationData.credentials_encrypted`:
-```typescript
-const credsJson = await safeDecryptToken(integrationData.credentials_encrypted);
-const creds = JSON.parse(credsJson);
-const accessToken = await safeDecryptToken(creds.access_token);
-const phoneNumberId = integrationData.provider_account_id;
+```text
+Run #1 (14:18:42):  Fetches lead — todaySentCount = 0 → PASSES cap check
+Run #2 (14:18:43):  Fetches lead — todaySentCount = 0 → PASSES cap check (Run #1 hasn't written to DB yet!)
+Run #1 (14:18:43):  Sends email → writes "sent" to automation_log
+Run #2 (14:18:43):  Sends email → writes "sent" to automation_log  ← DUPLICATE
 ```
 
-3. Normalize the recipient phone number (the sender's number from the inbound message):
-```typescript
-const recipientPhone = normalizedPhone; // already computed earlier in the loop
+The guard at line 412 (`SELECT count(*) WHERE status='sent' AND gte created_at today`) reads from the database **before** the current run has committed its own write. So concurrent or overlapping runs both read `count = 0`, both pass, and both send.
+
+This is confirmed by the timestamps: most duplicate pairs are within **1–2 seconds** of each other — physically impossible unless two execution instances ran in parallel and read the same count simultaneously.
+
+### Secondary Issue: The gmail-send 500→200 change made things worse
+
+The last diff changed `gmail-send` to always return HTTP 200 (even on error). The automation-executor checks `if (!sendResponse.ok)` at line 598 — with the old 500 it would skip and push `eligible_at` forward 15 minutes. Now with 200, this check **never triggers**, so even if gmail-send internally fails, the executor proceeds to write `status: "sent"` to automation_log and schedule the next step. This compounded the blast for the Feb 19 batch (3 sends per lead within seconds).
+
+### The Fix: Atomic Database-Level Lock
+
+The only reliable fix for a race condition is to make the "check + write" operation **atomic at the database level**, using PostgreSQL's `INSERT ... ON CONFLICT DO NOTHING` pattern with a unique constraint. This is a 2-part change:
+
+**Part 1 — Database migration:** Add a unique partial index to `automation_log` that enforces at most one `sent` record per `(lead_id, action_key)` per calendar day:
+```sql
+CREATE UNIQUE INDEX automation_log_one_per_day_unique
+ON automation_log (lead_id, action_key, date_trunc('day', created_at))
+WHERE status = 'sent';
 ```
 
-4. Make the actual WhatsApp Cloud API call:
-```typescript
-const waPayload = {
-  messaging_product: "whatsapp",
-  recipient_type: "individual",
-  to: recipientPhone,
-  type: "text",
-  text: { body: replyText },
-};
+This means even if two concurrent runs try to insert a `sent` record for the same lead+action on the same day, the database will reject the second one at the INSERT level — no race condition possible.
 
-const waRes = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify(waPayload),
-});
+**Part 2 — Edge function guard enhancement:** In `automation-executor/index.ts`, change the automation_log INSERT at line 649 to use `upsert` with `ignoreDuplicates: true`. If the insert is rejected by the unique constraint, log a "duplicate blocked by DB" message and skip — don't send. This replaces the pre-flight count-check (which is racy) with a post-send atomic commit (which is safe).
 
-const waData = await waRes.json();
-if (!waRes.ok) {
-  throw new Error(`WA API error: ${waData?.error?.message ?? JSON.stringify(waData)}`);
-}
-const providerAutoMsgId = waData?.messages?.[0]?.id ?? null;
-```
+Additionally, restore the `sendResponse.ok` check to correctly catch the HTTP status from gmail-send. Since gmail-send now always returns 200, the executor must check `sendResult.ok` (the JSON body) instead of the HTTP status code.
 
-5. Store the message in `messages` with the real `provider_message_id` from Meta (so delivery status webhooks can update it):
-```typescript
-// Store with the real provider_message_id (not null)
-const { data: autoMsg } = await supabase.from("messages").insert({
-  ...
-  provider_message_id: providerAutoMsgId,
-  status: "sent",
-}).select("id").single();
-```
+### Technical Changes Summary
 
-6. If the WhatsApp API call fails, the error is caught by the existing `try/catch` block, which logs `Auto-send failed` — no change needed there.
+| Change | Location | Why |
+|--------|----------|-----|
+| Add unique partial index on `automation_log` | Database migration | Atomic DB-level dedup — prevents concurrent inserts |
+| Replace pre-flight count check with post-send conflict detection | `automation-executor/index.ts` | Eliminates the read-before-write race window |
+| Fix `sendResponse.ok` → `sendResult.ok` check | `automation-executor/index.ts` | gmail-send now always returns 200; must check JSON body |
+| Keep existing GUARD 2 (action-level dedup) | `automation-executor/index.ts` | Still useful as a first-pass filter, but DB constraint is the true safety |
 
-## Scope
+### What This Does NOT Change
+- The cron schedule (still every 15 min — the fix makes concurrent runs safe)
+- The existing OOO, nurture, meeting, unsubscribe, and reply safety checks
+- The gmail-send function (no changes needed there)
+- Any existing data (the unique index is on new inserts only)
 
-- Only `supabase/functions/whatsapp-webhook/index.ts` is modified
-- Add `safeDecryptToken` to the existing encryption import on line 2
-- Replace the fake "store-only" auto-send block with a real WA Cloud API call + then store
-- No schema changes, no other files touched
-- The function will be redeployed automatically after the change
+### No Data Recovery Needed
+The damaged leads have already been over-sent. The fix prevents this from happening again. Affected leads can be left as-is since they received the emails (unpleasantly), or manually reviewed via the dashboard.
