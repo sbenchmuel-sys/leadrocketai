@@ -33,8 +33,16 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      const json = await resp.json().catch(() => ({}));
-      setOutlookConfigured(!json.not_configured);
+
+      // 503 = credentials not configured server-side
+      // 400 = credentials exist but workspaceId missing (probe success — configured)
+      // Other statuses: assume configured unless explicitly told otherwise
+      if (resp.status === 503) {
+        const json = await resp.json().catch(() => ({}));
+        setOutlookConfigured(!json.not_configured);
+      } else {
+        setOutlookConfigured(true);
+      }
     } catch {
       setOutlookConfigured(null);
     }
