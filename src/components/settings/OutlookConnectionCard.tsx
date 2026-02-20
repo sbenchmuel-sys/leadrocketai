@@ -26,25 +26,20 @@ interface OutlookHealthData {
 }
 
 /** Small helper that wraps Button in an optional tooltip (used for the disabled-credentials state). */
-function ConnectButton({
-  onClick,
-  disabled,
-  tooltip,
-  loading,
-  variant,
-  size,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  tooltip?: string;
-  loading?: boolean;
-  variant?: "default" | "outline" | "ghost";
-  size?: "default" | "sm" | "lg";
-  children: React.ReactNode;
-}) {
+const ConnectButton = React.forwardRef<
+  HTMLButtonElement,
+  {
+    onClick: () => void;
+    disabled?: boolean;
+    tooltip?: string;
+    loading?: boolean;
+    variant?: "default" | "outline" | "ghost";
+    size?: "default" | "sm" | "lg";
+    children: React.ReactNode;
+  }
+>(({ onClick, disabled, tooltip, loading, variant, size, children }, ref) => {
   const btn = (
-    <Button onClick={onClick} disabled={disabled} variant={variant} size={size}>
+    <Button ref={ref} onClick={onClick} disabled={disabled} variant={variant} size={size}>
       {loading ? (
         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
       ) : (
@@ -70,7 +65,8 @@ function ConnectButton({
     );
   }
   return btn;
-}
+});
+ConnectButton.displayName = "ConnectButton";
 
 export function OutlookConnectionCard() {
   const { user } = useAuth();
@@ -198,7 +194,23 @@ export function OutlookConnectionCard() {
         throw new Error(data.error || "Failed to get auth URL");
       }
 
-      window.location.href = data.authUrl;
+      // Open in a popup to avoid breaking the preview iframe
+      const popup = window.open(data.authUrl, "outlook_oauth", "width=520,height=650,left=200,top=100");
+      if (!popup) {
+        // Fallback: navigate current tab if popup blocked
+        window.location.href = data.authUrl;
+        return;
+      }
+
+      // Poll until the popup closes, then refresh health
+      const poll = setInterval(async () => {
+        if (popup.closed) {
+          clearInterval(poll);
+          setIsConnecting(false);
+          const wsId = await fetchWorkspaceId();
+          if (wsId) await fetchHealth(wsId);
+        }
+      }, 800);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to connect Outlook";
       toast.error("Connection failed", { description: message });
