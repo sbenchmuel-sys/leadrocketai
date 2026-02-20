@@ -1,0 +1,115 @@
+// ============================================================
+// outlook-auth — generates Microsoft OAuth URL
+// POST /outlook-auth  { redirectUrl: string }
+// ============================================================
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { logger } from "../_shared/logger.ts";
+
+function corsHeaders(origin: string): Record<string, string> {
+  const allowed =
+    origin.includes("localhost") ||
+    origin.endsWith(".lovableproject.com") ||
+    origin.endsWith(".lovable.app") ||
+    origin === "https://drivepilot.app" ||
+    origin === "https://www.drivepilot.app";
+  return {
+    "Access-Control-Allow-Origin": allowed ? origin : "",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
+}
+
+serve(async (req) => {
+  const origin = req.headers.get("Origin") ?? "";
+  const cors = corsHeaders(origin);
+
+  if (req.method === "OPTIONS") return new Response(null, { headers: cors });
+
+  try {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const token = authHeader.replace("Bearer ", "");
+    const { data: { user }, error: authError } = await userClient.auth.getUser(token);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+
+    const { redirectUrl, workspaceId } = await req.json();
+    if (!redirectUrl || !workspaceId) {
+      return new Response(JSON.stringify({ ok: false, error: "redirectUrl and workspaceId required" }), {
+        status: 400,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+
+    const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
+    if (!clientId) {
+      return new Response(JSON.stringify({ ok: false, error: "Microsoft OAuth not configured" }), {
+        status: 500,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+
+    // Generate CSRF token and store in oauth_states (reuse existing table)
+    const csrfToken = crypto.randomUUID();
+    const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+    await serviceClient.from("oauth_states").insert({
+      user_id: user.id,
+      csrf_token: csrfToken,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    });
+
+    const state = btoa(JSON.stringify({
+      user_id: user.id,
+      workspace_id: workspaceId,
+      redirect_url: redirectUrl,
+      csrf: csrfToken,
+      provider: "outlook",
+    }));
+
+    const callbackUrl = `${supabaseUrl}/functions/v1/outlook-callback`;
+
+    const authUrl = new URL("https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("redirect_uri", callbackUrl);
+    authUrl.searchParams.set("scope", "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read");
+    authUrl.searchParams.set("response_mode", "query");
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("prompt", "select_account");
+
+    logger.info("mail.outlook.connected", {
+      user_id: user.id,
+      workspace_id: workspaceId,
+      step: "auth_url_generated",
+    });
+
+    return new Response(JSON.stringify({ ok: true, authUrl: authUrl.toString() }), {
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    const errorId = crypto.randomUUID();
+    logger.error("mail.outlook.auth_error", { error_id: errorId, error: String(err) });
+    return new Response(JSON.stringify({ ok: false, error: "Internal error", error_id: errorId }), {
+      status: 500,
+      headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
+    });
+  }
+});
