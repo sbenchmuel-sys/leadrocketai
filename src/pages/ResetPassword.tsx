@@ -14,11 +14,15 @@ export default function ResetPassword() {
   const [isReady, setIsReady] = useState(false);
   const navigate = useNavigate();
 
-  // Supabase sends the recovery token in the URL hash; we need to wait
-  // for the session to be set from the recovery link before allowing the update.
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
+    // Check if a session already exists (token was processed before mount)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setIsReady(true);
+    });
+
+    // Also listen in case the event fires after mount
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
         setIsReady(true);
       }
     });
