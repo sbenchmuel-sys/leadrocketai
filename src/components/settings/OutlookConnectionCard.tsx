@@ -203,18 +203,24 @@ export function OutlookConnectionCard() {
       : undefined;
 
   const handleDisconnect = async (email: string) => {
+    if (!workspaceId) {
+      toast.error("Failed to disconnect", { description: "Workspace not found. Please refresh." });
+      return;
+    }
     try {
       const { error } = await supabase
         .from("mail_accounts")
         .update({ status: "disconnected" })
         .eq("email_address", email)
-        .eq("provider", "outlook");
+        .eq("provider", "outlook")
+        .eq("workspace_id", workspaceId);
 
       if (error) throw error;
       toast.success("Outlook disconnected");
-      if (workspaceId) await fetchHealth(workspaceId);
-    } catch {
-      toast.error("Failed to disconnect");
+      await fetchHealth(workspaceId);
+    } catch (err) {
+      console.error("[Outlook] Disconnect error:", err);
+      toast.error("Failed to disconnect", { description: "Please try again." });
     }
   };
 
@@ -393,19 +399,6 @@ export function OutlookConnectionCard() {
           </ConnectButton>
         )}
 
-        {/* Add another account if already have one */}
-        {connectedAccounts.length > 0 && (
-          <ConnectButton
-            variant="outline"
-            size="sm"
-            onClick={handleConnect}
-            disabled={connectDisabled}
-            tooltip={connectTooltip}
-            loading={isConnecting}
-          >
-            Connect another account
-          </ConnectButton>
-        )}
       </CardContent>
     </Card>
   );
