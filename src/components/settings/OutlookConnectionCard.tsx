@@ -195,11 +195,11 @@ export function OutlookConnectionCard() {
       if (data.not_configured) {
         throw new Error("Outlook integration not fully configured yet. Please contact your administrator.");
       }
-      if (!data.ok || !data.auth_url) {
+      if (!data.ok || !data.authUrl) {
         throw new Error(data.error || "Failed to get auth URL");
       }
 
-      window.location.href = data.auth_url;
+      window.location.href = data.authUrl;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to connect Outlook";
       toast.error("Connection failed", { description: message });
