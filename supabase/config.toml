@@ -1,5 +1,11 @@
 project_id = "ntzeiflqqluwgdfmatjh"
 
+[functions.outlook-auth]
+verify_jwt = false
+
+[functions.outlook-callback]
+verify_jwt = false
+
 [functions.whatsapp-webhook]
 verify_jwt = false
 

@@ -1332,7 +1332,7 @@ export type Database = {
           {
             foreignKeyName: "outlook_subscriptions_mail_account_id_fkey"
             columns: ["mail_account_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "mail_accounts"
             referencedColumns: ["id"]
           },
