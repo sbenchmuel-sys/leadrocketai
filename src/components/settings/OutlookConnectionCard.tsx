@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,12 +25,61 @@ interface OutlookHealthData {
   accounts: OutlookAccount[];
 }
 
+/** Small helper that wraps Button in an optional tooltip (used for the disabled-credentials state). */
+function ConnectButton({
+  onClick,
+  disabled,
+  tooltip,
+  loading,
+  variant,
+  size,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  tooltip?: string;
+  loading?: boolean;
+  variant?: "default" | "outline" | "ghost";
+  size?: "default" | "sm" | "lg";
+  children: React.ReactNode;
+}) {
+  const btn = (
+    <Button onClick={onClick} disabled={disabled} variant={variant} size={size}>
+      {loading ? (
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+      ) : (
+        <Mail className="h-4 w-4 mr-2" />
+      )}
+      {children}
+    </Button>
+  );
+
+  if (tooltip && disabled) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* span needed because disabled button doesn't fire events */}
+            <span className="inline-flex">{btn}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs max-w-[200px]">
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  return btn;
+}
+
 export function OutlookConnectionCard() {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [healthData, setHealthData] = useState<OutlookHealthData | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  // null = unknown, true = configured, false = missing
+  const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
 
   const fetchWorkspaceId = useCallback(async () => {
     if (!user) return null;
@@ -46,12 +95,6 @@ export function OutlookConnectionCard() {
   const fetchHealth = useCallback(async (wsId: string) => {
     try {
       setIsLoading(true);
-      const { data, error } = await supabase.functions.invoke("outlook-health", {
-        body: null,
-        headers: {},
-      });
-
-      // outlook-health uses query param; use fetch directly
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) return;
@@ -78,33 +121,59 @@ export function OutlookConnectionCard() {
     }
   }, []);
 
+  /** Probe outlook-auth with a dummy call (no workspaceId) just to see if credentials are present. */
+  const checkCredentials = useCallback(async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) { setCredentialsConfigured(false); return; }
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        // Intentionally omit workspaceId — we only care about the 503 not_configured signal
+        body: JSON.stringify({}),
+      });
+      const json = await resp.json().catch(() => ({}));
+      // 503 with not_configured = credentials missing
+      // 400 (workspaceId required) = credentials ARE present
+      if (json.not_configured) {
+        setCredentialsConfigured(false);
+      } else {
+        setCredentialsConfigured(true);
+      }
+    } catch {
+      setCredentialsConfigured(null);
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       const wsId = await fetchWorkspaceId();
       setWorkspaceId(wsId);
-      if (wsId) await fetchHealth(wsId);
-      else setIsLoading(false);
+      await Promise.all([
+        wsId ? fetchHealth(wsId) : Promise.resolve(),
+        checkCredentials(),
+      ]);
+      if (!wsId) setIsLoading(false);
     })();
-  }, [fetchWorkspaceId, fetchHealth]);
+  }, [fetchWorkspaceId, fetchHealth, checkCredentials]);
 
   const handleConnect = async () => {
+    if (credentialsConfigured === false) return;
     try {
       setIsConnecting(true);
 
       let wsId = workspaceId;
       if (!wsId) {
-        const { error: wsErr } = await supabase
-          .from("workspaces")
-          .insert({ name: "My Workspace", plan: "free" });
-        if (wsErr) throw new Error("Could not create workspace.");
-
+        await supabase.from("workspaces").insert({ name: "My Workspace", plan: "free" });
         const { data: newMembership } = await supabase
           .from("workspace_members")
           .select("workspace_id")
           .eq("user_id", user!.id)
           .limit(1)
           .maybeSingle();
-
         wsId = newMembership?.workspace_id ?? null;
         setWorkspaceId(wsId);
       }
@@ -118,14 +187,14 @@ export function OutlookConnectionCard() {
 
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: wsId }),
       });
 
       const data = await resp.json();
+      if (data.not_configured) {
+        throw new Error("Outlook integration not fully configured yet. Please contact your administrator.");
+      }
       if (!data.ok || !data.auth_url) {
         throw new Error(data.error || "Failed to get auth URL");
       }
@@ -137,6 +206,12 @@ export function OutlookConnectionCard() {
       setIsConnecting(false);
     }
   };
+
+  const connectDisabled = isConnecting || credentialsConfigured === false;
+  const connectTooltip =
+    credentialsConfigured === false
+      ? "Outlook integration not fully configured yet"
+      : undefined;
 
   const handleDisconnect = async (email: string) => {
     try {
@@ -164,7 +239,7 @@ export function OutlookConnectionCard() {
     if (account.status === "connected") {
       return (
         <div className="flex items-center gap-1.5">
-          <Badge variant="secondary" className="bg-green-500/10 text-green-600 border-0">
+          <Badge variant="secondary" className="text-[11px] border-0 text-primary/80 bg-primary/10">
             <CheckCircle2 className="h-3 w-3 mr-1" />
             Connected
           </Badge>
@@ -172,7 +247,7 @@ export function OutlookConnectionCard() {
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger>
-                  <Badge variant="outline" className="text-yellow-700 dark:text-yellow-400 border-yellow-500/50 bg-yellow-50 dark:bg-yellow-900/20 text-[10px]">
+                  <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
                     <AlertTriangle className="h-3 w-3 mr-0.5" />
                     Renewing soon
                   </Badge>
@@ -238,7 +313,7 @@ export function OutlookConnectionCard() {
                 <TooltipTrigger asChild>
                   <Badge
                     variant="outline"
-                    className="text-[10px] px-1.5 py-0 border-yellow-500/60 text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 cursor-help"
+                    className="text-[10px] px-1.5 py-0 border-border text-muted-foreground cursor-help"
                   >
                     <Info className="h-2.5 w-2.5 mr-0.5" />
                     Beta
@@ -319,26 +394,28 @@ export function OutlookConnectionCard() {
 
         {/* No accounts — show connect button */}
         {connectedAccounts.length === 0 && (
-          <Button onClick={handleConnect} disabled={isConnecting}>
-            {isConnecting ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <Mail className="h-4 w-4 mr-2" />
-            )}
+          <ConnectButton
+            onClick={handleConnect}
+            disabled={connectDisabled}
+            tooltip={connectTooltip}
+            loading={isConnecting}
+          >
             Connect Outlook
-          </Button>
+          </ConnectButton>
         )}
 
         {/* Add another account if already have one */}
         {connectedAccounts.length > 0 && (
-          <Button variant="outline" size="sm" onClick={handleConnect} disabled={isConnecting}>
-            {isConnecting ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <Mail className="h-4 w-4 mr-2" />
-            )}
+          <ConnectButton
+            variant="outline"
+            size="sm"
+            onClick={handleConnect}
+            disabled={connectDisabled}
+            tooltip={connectTooltip}
+            loading={isConnecting}
+          >
             Connect another account
-          </Button>
+          </ConnectButton>
         )}
       </CardContent>
     </Card>
