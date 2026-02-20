@@ -6,13 +6,16 @@ import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
 import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
+import { OutlookConnectionCard } from "@/components/settings/OutlookConnectionCard";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -75,6 +78,33 @@ export default function Settings() {
                 </AccordionTrigger>
                 <AccordionContent>
                   <GmailConnectionCard />
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="outlook" className="border rounded-lg px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Outlook</span>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 border-yellow-500/60 text-yellow-700 dark:text-yellow-400 cursor-help ml-1"
+                          >
+                            <Info className="h-2.5 w-2.5 mr-0.5" />
+                            Beta
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[220px] text-xs">
+                          Outlook integration is in beta. Multi-mailbox supported. Shared mailboxes not yet supported.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <OutlookConnectionCard />
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="whatsapp" className="border rounded-lg px-4">

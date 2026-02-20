@@ -258,10 +258,29 @@ export function EmailActionDialog({
   // Playbook recommendation state (logged in header)
   const [resolvedIntent, setResolvedIntent] = useState<string | null>(null);
   const [resolvedStep, setResolvedStep] = useState<string | null>(null);
+
+  // Outlook provider detection
+  const [activeMailProvider, setActiveMailProvider] = useState<"gmail" | "outlook" | null>(null);
   
   const { runTask } = useAITask();
   const { sendEmail, isSyncing } = useGmailSync();
   const { isConnected, connection } = useGmailConnection();
+
+  // Detect active mail provider for UI hints
+  useEffect(() => {
+    if (!open) return;
+    supabase
+      .from("mail_accounts")
+      .select("provider, is_default, status")
+      .eq("status", "connected")
+      .eq("is_default", true)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.provider === "outlook") setActiveMailProvider("outlook");
+        else if (isConnected) setActiveMailProvider("gmail");
+        else setActiveMailProvider(null);
+      });
+  }, [open, isConnected]);
 
   // Load signatures/docs in parallel, start generation independently
   useEffect(() => {
@@ -539,6 +558,18 @@ Calendar Link: ${repProfile.calendar_link || ''}
     return selectedMotion !== leadMotion ? selectedMotion : null;
   }
 
+  function isOutlookAuthError(error?: string): boolean {
+    if (!error) return false;
+    const lower = error.toLowerCase();
+    return (
+      lower.includes("expired") ||
+      lower.includes("unauthorized") ||
+      lower.includes("token") ||
+      lower.includes("re-auth") ||
+      lower.includes("outlook")
+    );
+  }
+
   async function handleSend() {
     if (!to.trim() || !subject.trim() || !body.trim()) {
       toast.error("Please fill in all fields");
@@ -547,14 +578,23 @@ Calendar Link: ${repProfile.calendar_link || ''}
 
     const fullBody = getFullEmailBody();
     const result = await sendEmail(
-      to.trim(), 
-      subject.trim(), 
-      fullBody, 
-      lead.id, 
+      to.trim(),
+      subject.trim(),
+      fullBody,
+      lead.id,
       undefined,
       replyThreadId || undefined,
       replyToMessageId || undefined
     );
+
+    if (!result.ok && activeMailProvider === "outlook" && isOutlookAuthError(result.error)) {
+      toast.error("Outlook connection requires re-authentication", {
+        description: "Go to Settings → Integrations → Outlook to reconnect your account.",
+        duration: 6000,
+      });
+      return;
+    }
+
     if (result.ok) {
       // Update sequence state after successful send (single atomic update including motion override)
       try {
@@ -1127,21 +1167,29 @@ Calendar Link: ${repProfile.calendar_link || ''}
           </div>
           
           <div className="flex items-center gap-2">
+            {activeMailProvider === "outlook" && (
+              <span className="text-[11px] text-muted-foreground flex items-center gap-1 hidden sm:flex">
+                <Mail className="h-3 w-3" />
+                Sending via Outlook
+              </span>
+            )}
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             
-            <Button 
-              onClick={handleOpenInGmail}
-              disabled={isGenerating || !body.trim()}
-              variant="outline"
-              className="gap-1"
-            >
-              <Mail className="h-4 w-4" />
-              <span className="hidden sm:inline">Open in Gmail</span>
-            </Button>
+            {activeMailProvider !== "outlook" && (
+              <Button 
+                onClick={handleOpenInGmail}
+                disabled={isGenerating || !body.trim()}
+                variant="outline"
+                className="gap-1"
+              >
+                <Mail className="h-4 w-4" />
+                <span className="hidden sm:inline">Open in Gmail</span>
+              </Button>
+            )}
             
-            {isConnected && (
+            {(isConnected || activeMailProvider === "outlook") && (
               <Button 
                 onClick={handleSend} 
                 disabled={isSyncing || isGenerating || !body.trim()}
