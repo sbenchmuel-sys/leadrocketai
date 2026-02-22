@@ -443,11 +443,13 @@ export type Database = {
       }
       integrations: {
         Row: {
+          app_secret_encrypted: string | null
           created_at: string
           credentials_encrypted: string | null
           id: string
           is_active: boolean
           last_sync_at: string | null
+          provider: string
           provider_account_id: string | null
           type: Database["public"]["Enums"]["integration_type"]
           updated_at: string
@@ -456,11 +458,13 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          app_secret_encrypted?: string | null
           created_at?: string
           credentials_encrypted?: string | null
           id?: string
           is_active?: boolean
           last_sync_at?: string | null
+          provider?: string
           provider_account_id?: string | null
           type: Database["public"]["Enums"]["integration_type"]
           updated_at?: string
@@ -469,11 +473,13 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          app_secret_encrypted?: string | null
           created_at?: string
           credentials_encrypted?: string | null
           id?: string
           is_active?: boolean
           last_sync_at?: string | null
+          provider?: string
           provider_account_id?: string | null
           type?: Database["public"]["Enums"]["integration_type"]
           updated_at?: string
@@ -1489,6 +1495,62 @@ export type Database = {
             columns: ["resolved_lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_event_queue: {
+        Row: {
+          attempts: number
+          created_at: string
+          error_message: string | null
+          event_type: string
+          id: string
+          idempotency_key: string
+          integration_id: string
+          max_attempts: number
+          processed_at: string | null
+          provider: string
+          raw_payload: Json
+          status: string
+          workspace_id: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          error_message?: string | null
+          event_type: string
+          id?: string
+          idempotency_key: string
+          integration_id: string
+          max_attempts?: number
+          processed_at?: string | null
+          provider?: string
+          raw_payload: Json
+          status?: string
+          workspace_id: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          error_message?: string | null
+          event_type?: string
+          id?: string
+          idempotency_key?: string
+          integration_id?: string
+          max_attempts?: number
+          processed_at?: string | null
+          provider?: string
+          raw_payload?: Json
+          status?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_event_queue_integration_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "integrations"
             referencedColumns: ["id"]
           },
         ]
