@@ -16,36 +16,77 @@ import type {
   WhatsAppHealthResult,
 } from "./types.ts";
 import { MetaWhatsAppProvider } from "./providers/meta.ts";
+import { TwilioWhatsAppProvider } from "./providers/twilio.ts";
 
-// ── Credential decryption helper ────────────────────────────
+// ── Credential decryption helpers ───────────────────────────
 
-interface DecryptedCreds {
+interface MetaCreds {
+  kind: "meta";
   accessToken: string;
   phoneNumberId: string;
 }
 
-async function decryptIntegrationCreds(
+interface TwilioCreds {
+  kind: "twilio";
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+}
+
+type DecryptedCreds = MetaCreds | TwilioCreds;
+
+async function decryptMetaCreds(
   credentialsEncrypted: string,
   providerAccountId: string | null,
-): Promise<DecryptedCreds> {
+): Promise<MetaCreds> {
   const credsJson = await safeDecryptToken(credentialsEncrypted);
   const creds = JSON.parse(credsJson);
   const accessToken = await safeDecryptToken(creds.access_token);
   const phoneNumberId = creds.phone_number_id ?? providerAccountId ?? "";
-  return { accessToken, phoneNumberId };
+  return { kind: "meta", accessToken, phoneNumberId };
+}
+
+async function decryptTwilioCreds(
+  credentialsEncrypted: string,
+  providerAccountId: string | null,
+): Promise<TwilioCreds> {
+  // Per-workspace creds contain twilio_phone_number etc.
+  // Global TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN come from env secrets.
+  const credsJson = await safeDecryptToken(credentialsEncrypted);
+  const creds = JSON.parse(credsJson);
+
+  const accountSid = creds.twilio_account_sid || Deno.env.get("TWILIO_ACCOUNT_SID") || "";
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN") || "";
+  const fromNumber = creds.twilio_phone_number ?? providerAccountId ?? "";
+
+  if (!accountSid) throw new Error("TWILIO_ACCOUNT_SID not configured");
+  if (!authToken) throw new Error("TWILIO_AUTH_TOKEN not configured");
+
+  return { kind: "twilio", accountSid, authToken, fromNumber };
 }
 
 // ── Factory: build IWhatsAppProvider from integration row ───
 
-function buildProvider(
+async function decryptAndBuild(
   providerType: string,
-  creds: DecryptedCreds,
-): IWhatsAppProvider {
+  credentialsEncrypted: string,
+  providerAccountId: string | null,
+): Promise<{ provider: IWhatsAppProvider; identifier: string }> {
   switch (providerType) {
-    case "meta":
-      return new MetaWhatsAppProvider(creds.accessToken, creds.phoneNumberId);
-    // case "twilio":
-    //   return new TwilioWhatsAppProvider(creds.accountSid, creds.authToken, creds.fromNumber);
+    case "meta": {
+      const creds = await decryptMetaCreds(credentialsEncrypted, providerAccountId);
+      return {
+        provider: new MetaWhatsAppProvider(creds.accessToken, creds.phoneNumberId),
+        identifier: creds.phoneNumberId,
+      };
+    }
+    case "twilio": {
+      const creds = await decryptTwilioCreds(credentialsEncrypted, providerAccountId);
+      return {
+        provider: new TwilioWhatsAppProvider(creds.accountSid, creds.authToken, creds.fromNumber),
+        identifier: creds.fromNumber.replace(/\D/g, ""),
+      };
+    }
     default:
       throw new Error(`Unsupported WhatsApp provider: ${providerType}`);
   }
@@ -81,14 +122,13 @@ export class WhatsAppService {
     if (!row.is_active) throw new Error(`Integration inactive: ${integrationId}`);
     if (!row.credentials_encrypted) throw new Error(`No credentials for integration: ${integrationId}`);
 
-    const creds = await decryptIntegrationCreds(
+    const { provider, identifier } = await decryptAndBuild(
+      row.provider ?? "meta",
       row.credentials_encrypted,
       row.provider_account_id,
     );
 
-    const provider = buildProvider(row.provider ?? "meta", creds);
-
-    return new WhatsAppService(provider, row.id, creds.phoneNumberId);
+    return new WhatsAppService(provider, row.id, identifier);
   }
 
   /**
@@ -112,14 +152,13 @@ export class WhatsAppService {
     if (!row) throw new Error(`No active WhatsApp integration for user in workspace`);
     if (!row.credentials_encrypted) throw new Error(`No credentials stored`);
 
-    const creds = await decryptIntegrationCreds(
+    const { provider, identifier } = await decryptAndBuild(
+      row.provider ?? "meta",
       row.credentials_encrypted,
       row.provider_account_id,
     );
 
-    const provider = buildProvider(row.provider ?? "meta", creds);
-
-    return new WhatsAppService(provider, row.id, creds.phoneNumberId);
+    return new WhatsAppService(provider, row.id, identifier);
   }
 
   /**
@@ -141,14 +180,13 @@ export class WhatsAppService {
     if (!row) throw new Error(`No active integration for phone_number_id=${phoneNumberId}`);
     if (!row.credentials_encrypted) throw new Error(`No credentials for phone_number_id=${phoneNumberId}`);
 
-    const creds = await decryptIntegrationCreds(
+    const { provider, identifier } = await decryptAndBuild(
+      row.provider ?? "meta",
       row.credentials_encrypted,
       row.provider_account_id,
     );
 
-    const provider = buildProvider(row.provider ?? "meta", creds);
-
-    return new WhatsAppService(provider, row.id, creds.phoneNumberId);
+    return new WhatsAppService(provider, row.id, identifier);
   }
 
   // ── Public methods (provider-agnostic) ────────────────────
