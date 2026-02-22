@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { RefreshCw, Loader2, CheckCircle2, Clock, AlertTriangle, ExternalLink } from "lucide-react";
-import { useGmailSync } from "@/hooks/useGmailSync";
+import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { formatDistanceToNow } from "date-fns";
 import { useState, useEffect } from "react";
@@ -33,8 +33,9 @@ export function GmailSyncButton({
   size = "sm",
   showLastSync = true
 }: GmailSyncButtonProps) {
-  const { connection, isConnected, isLoading: isLoadingConnection, connectGmail, refetch } = useGmailConnection();
-  const { syncLead, isSyncing } = useGmailSync();
+  const { connection, isConnected: isGmailConnected, isLoading: isLoadingConnection, connectGmail, refetch } = useGmailConnection();
+  const { syncLead, isSyncing, isConnected: isMailConnected, providerLabel } = useMailSync();
+  const isConnected = isMailConnected || isGmailConnected;
   const [justSynced, setJustSynced] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
@@ -140,7 +141,7 @@ export function GmailSyncButton({
                   ) : (
                     <>
                       <RefreshCw className="h-4 w-4 mr-2" />
-                      Sync Gmail
+                      Sync {providerLabel}
                     </>
                   )}
                 </Button>
