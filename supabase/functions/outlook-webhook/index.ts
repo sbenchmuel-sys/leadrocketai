@@ -19,6 +19,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt } from "../_shared/oooDetection.ts";
+import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 // Strip HTML tags for plain-text body_text
 function htmlToPlainText(html: string): string {
@@ -342,11 +343,7 @@ async function processNotification(
 
   if (!hasListUnsubscribeHeader && !lead.unsubscribed) {
     const bodyLower = bodyText.toLowerCase();
-    if (
-      /\bstop\s+emailing\b/.test(bodyLower) ||
-      /\bremove\s+me\b/.test(bodyLower) ||
-      /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)
-    ) {
+    if (isHumanUnsubscribeRequest(bodyLower)) {
       logger.info("mail.outlook.unsubscribe_detected", { lead_id: lead.id });
 
       await serviceClient.from("leads").update({
