@@ -206,6 +206,48 @@ serve(async (req) => {
 
     console.log(`[gmail-callback] Successfully connected Gmail for user ${stateData.user_id}: ${gmailEmail}`);
 
+    // ── Auto-upsert mail_accounts so MailProviderRouter resolves correctly ──
+    try {
+      // Find the user's workspace
+      const { data: membership } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", stateData.user_id)
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.workspace_id) {
+        const { error: maError } = await supabase
+          .from("mail_accounts")
+          .upsert({
+            workspace_id: membership.workspace_id,
+            provider: "gmail",
+            email_address: gmailEmail,
+            display_name: userInfo.name || gmailEmail,
+            external_user_id: stateData.user_id,
+            status: "connected",
+            is_default: true,
+          }, { onConflict: "workspace_id,email_address", ignoreDuplicates: false });
+
+        if (maError) {
+          // Non-fatal: log but don't block the OAuth flow
+          console.error("[gmail-callback] Failed to upsert mail_accounts:", maError);
+        } else {
+          // If this is set as default, clear other defaults in the workspace
+          await supabase
+            .from("mail_accounts")
+            .update({ is_default: false })
+            .eq("workspace_id", membership.workspace_id)
+            .neq("email_address", gmailEmail);
+          console.log(`[gmail-callback] mail_accounts upserted for ${gmailEmail} as default in workspace ${membership.workspace_id}`);
+        }
+      } else {
+        console.warn(`[gmail-callback] No workspace found for user ${stateData.user_id}, skipping mail_accounts upsert`);
+      }
+    } catch (maErr) {
+      console.error("[gmail-callback] mail_accounts upsert error (non-fatal):", maErr);
+    }
+
     // Redirect back to the app instead of showing a success page
     const redirectUrl = new URL(stateData.redirect_url);
     redirectUrl.searchParams.set("gmail_connected", "true");
