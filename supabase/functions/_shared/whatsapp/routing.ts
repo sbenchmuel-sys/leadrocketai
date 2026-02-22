@@ -1,5 +1,6 @@
 // ============================================================
-// routing.ts — resolve Meta webhook payload → workspace_id
+// routing.ts — resolve webhook payload → workspace_id
+// Supports both Meta and Twilio providers with provider filter
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -11,14 +12,15 @@ export interface RouteResult {
 }
 
 /**
- * Resolve workspace from a Meta phone_number_id.
+ * Resolve workspace from a provider_account_id + provider.
  * Returns null workspace if no matching active integration found.
  */
-export async function resolveWorkspaceByPhoneNumberId(
-  phoneNumberId: string,
+export async function resolveWorkspace(
+  providerAccountId: string,
+  provider: "meta" | "twilio",
 ): Promise<RouteResult> {
-  if (!phoneNumberId) {
-    console.warn("[routing] No phone_number_id provided");
+  if (!providerAccountId) {
+    console.warn("[routing] No providerAccountId provided");
     return { workspaceId: null, integrationId: null, ownerUserId: null };
   }
 
@@ -32,7 +34,8 @@ export async function resolveWorkspaceByPhoneNumberId(
     .select("id, workspace_id, user_id")
     .eq("type", "whatsapp")
     .eq("is_active", true)
-    .eq("provider_account_id", phoneNumberId)
+    .eq("provider", provider)
+    .eq("provider_account_id", providerAccountId)
     .maybeSingle();
 
   if (error) {
@@ -42,7 +45,7 @@ export async function resolveWorkspaceByPhoneNumberId(
 
   if (!integration) {
     console.warn(
-      `[routing] No active whatsapp integration for phone_number_id=${phoneNumberId}`,
+      `[routing] No active whatsapp integration for provider=${provider} account_id=${providerAccountId}`,
     );
     return { workspaceId: null, integrationId: null, ownerUserId: null };
   }
@@ -52,4 +55,13 @@ export async function resolveWorkspaceByPhoneNumberId(
     integrationId: integration.id,
     ownerUserId: integration.user_id,
   };
+}
+
+/**
+ * @deprecated Use resolveWorkspace(id, "meta") instead.
+ */
+export async function resolveWorkspaceByPhoneNumberId(
+  phoneNumberId: string,
+): Promise<RouteResult> {
+  return resolveWorkspace(phoneNumberId, "meta");
 }
