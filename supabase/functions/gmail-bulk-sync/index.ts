@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt } from "../_shared/oooDetection.ts";
+import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -723,12 +724,27 @@ async function syncLeadEmails(
     ? new Date(Math.max(...activityDates)).toISOString()
     : new Date().toISOString();
 
-  // Fetch current lead state to protect nurture, OOO, and automation-scheduled leads from action overwrites
+  // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
-    .select("motion, nurture_status, ooo_until, eligible_at, needs_action")
+    .select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed")
     .eq("id", leadId)
     .single();
+
+  // CRITICAL: If lead is unsubscribed, never re-arm actions
+  if (currentState?.unsubscribed) {
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: Unsubscribed — skipping action derivation`);
+    // Still update metrics but never touch action fields
+    const safePayload: Record<string, unknown> = {
+      stage: newStage,
+      first_outbound_at: metrics.first_outbound_at,
+      last_outbound_at: metrics.last_outbound_at,
+      meeting_summary_count: metrics.meeting_summary_count,
+      last_activity_at: lastActivityAt,
+    };
+    await serviceSupabase.from("leads").update(safePayload).eq("id", leadId);
+    return { synced, errors, stage: newStage };
+  }
 
   const isActiveNurture = currentState?.motion === "nurture"
     && currentState?.nurture_status === "active";
@@ -743,6 +759,19 @@ async function syncLeadEmails(
   const isAutomationScheduled = !!currentState?.eligible_at
     && new Date(currentState.eligible_at).getTime() > Date.now()
     && currentState?.needs_action === true;
+
+  // CRITICAL: Recently-sent guard — if automation-executor sent an email for this lead
+  // within the last 2 hours, do NOT re-arm needs_action. This prevents the loop where
+  // bulk-sync re-imports the sent email, derives a new action, and triggers another send.
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const { count: recentAutoSendCount } = await serviceSupabase
+    .from("automation_log")
+    .select("id", { count: "exact", head: true })
+    .eq("lead_id", leadId)
+    .eq("status", "sent")
+    .gte("created_at", twoHoursAgo);
+
+  const hasRecentAutoSend = (recentAutoSendCount || 0) > 0;
 
   // Build update payload -- always update metrics, but protect nurture/OOO/automation action fields
   const updatePayload: Record<string, unknown> = {
@@ -763,8 +792,10 @@ async function syncLeadEmails(
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Active OOO until ${currentState.ooo_until} -- suppressing action overwrite`);
   } else if (isAutomationScheduled) {
     // Preserve automation-scheduled state -- the executor has already queued a future send.
-    // Overwriting needs_action/next_action_key here would kill the scheduled follow-up.
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Automation scheduled until ${currentState.eligible_at} -- suppressing action overwrite`);
+  } else if (hasRecentAutoSend) {
+    // CRITICAL: Recently-sent guard -- executor sent an email recently, don't re-arm.
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: Recent automation send detected (${recentAutoSendCount} in last 2h) -- suppressing action overwrite`);
   } else {
     // Apply derived action for non-nurture, non-OOO, non-automation-scheduled leads
     updatePayload.needs_action = actionResult.needs_action;
