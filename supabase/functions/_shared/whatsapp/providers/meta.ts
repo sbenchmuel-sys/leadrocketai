@@ -1,5 +1,5 @@
 // ============================================================
-// MetaWhatsAppProvider — Phase 1: signature verification
+// MetaWhatsAppProvider — implements IWhatsAppProvider for Meta
 // ============================================================
 
 import type { IWhatsAppProvider } from "../provider.ts";
@@ -7,8 +7,9 @@ import type {
   SendWhatsAppParams,
   SendWhatsAppResult,
   WhatsAppHealthResult,
-  WebhookPayload,
 } from "../types.ts";
+
+const WA_API = "https://graph.facebook.com/v21.0";
 
 /**
  * Verify Meta X-Hub-Signature-256 header.
@@ -33,14 +34,12 @@ export async function verifyMetaSignature(
     .join("");
 
   const headerValue = _req.headers.get("x-hub-signature-256") ?? "";
-  // Header format: "sha256=<hex>"
   const providedHex = headerValue.startsWith("sha256=")
     ? headerValue.slice(7)
     : headerValue;
 
   if (!providedHex || providedHex.length !== expectedHex.length) return false;
 
-  // Constant-time comparison
   let mismatch = 0;
   for (let i = 0; i < expectedHex.length; i++) {
     mismatch |= expectedHex.charCodeAt(i) ^ providedHex.charCodeAt(i);
@@ -52,26 +51,78 @@ export class MetaWhatsAppProvider implements IWhatsAppProvider {
   readonly providerType = "meta" as const;
 
   constructor(
-    private readonly _accessToken: string,
-    private readonly _phoneNumberId: string,
+    private readonly accessToken: string,
+    private readonly phoneNumberId: string,
   ) {}
 
-  async send(_params: SendWhatsAppParams): Promise<SendWhatsAppResult> {
-    throw new Error("MetaWhatsAppProvider.send: not implemented yet (Phase 1)");
-  }
+  async send(params: SendWhatsAppParams): Promise<SendWhatsAppResult> {
+    const normalizedTo = params.to.replace(/\D/g, "");
 
-  async verifyWebhookSignature(request: Request, rawBody: string): Promise<void> {
-    const secret = Deno.env.get("META_APP_SECRET");
-    if (!secret) throw new Error("META_APP_SECRET not configured");
-    const valid = await verifyMetaSignature(request, rawBody, secret);
-    if (!valid) throw new Error("Invalid Meta webhook signature");
-  }
+    const waPayload: Record<string, unknown> = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizedTo,
+      type: "text",
+      text: { body: params.body },
+    };
 
-  async parseWebhook(_request: Request, _rawBody: string): Promise<WebhookPayload> {
-    throw new Error("MetaWhatsAppProvider.parseWebhook: not implemented yet (Phase 1)");
+    // Add reply context if provided
+    if (params.replyToMessageId) {
+      waPayload.context = { message_id: params.replyToMessageId };
+    }
+
+    const res = await fetch(`${WA_API}/${this.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(waPayload),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      const errMsg = data?.error?.message ?? JSON.stringify(data);
+      throw new Error(`Meta API error (${res.status}): ${errMsg}`);
+    }
+
+    return {
+      providerMessageId: data?.messages?.[0]?.id ?? "",
+    };
   }
 
   async checkHealth(): Promise<WhatsAppHealthResult> {
-    throw new Error("MetaWhatsAppProvider.checkHealth: not implemented yet (Phase 1)");
+    try {
+      const res = await fetch(
+        `${WA_API}/${this.phoneNumberId}`,
+        { headers: { Authorization: `Bearer ${this.accessToken}` } },
+      );
+
+      if (!res.ok) {
+        return {
+          healthy: false,
+          status: "token_invalid",
+          phoneNumberId: this.phoneNumberId,
+          errorMessage: `API returned ${res.status}`,
+        };
+      }
+
+      const data = await res.json();
+
+      return {
+        healthy: true,
+        status: "active",
+        phoneNumberId: this.phoneNumberId,
+        verifiedName: data.verified_name ?? undefined,
+      };
+    } catch (err: any) {
+      return {
+        healthy: false,
+        status: "error",
+        phoneNumberId: this.phoneNumberId,
+        errorMessage: err.message,
+      };
+    }
   }
 }

@@ -13,15 +13,14 @@
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { encryptToken, safeDecryptToken } from "../_shared/encryption.ts";
+import { encryptToken } from "../_shared/encryption.ts";
+import { WhatsAppService } from "../_shared/whatsapp/service.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
-
-const WA_API = "https://graph.facebook.com/v21.0";
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 5;
 
@@ -476,54 +475,20 @@ Context:
       return;
     }
 
-    // ── Auto-send reply ───────────────────────────────────
+    // ── Auto-send reply via provider abstraction ─────────
     if (!suggestedReply) {
       console.log("[processor] Auto-send approved but no suggested reply");
       return;
     }
 
-    // Get credentials for sending
-    const { data: sendIntegration } = await supabase
-      .from("integrations")
-      .select("credentials_encrypted, provider_account_id")
-      .eq("id", integrationId)
-      .single();
-
-    if (!sendIntegration?.credentials_encrypted) {
-      console.error("[processor] No credentials for auto-send");
+    if (!integrationId) {
+      console.error("[processor] No integration for auto-send");
       return;
     }
 
-    const credsJson = await safeDecryptToken(sendIntegration.credentials_encrypted);
-    const creds = JSON.parse(credsJson);
-    const accessToken = await safeDecryptToken(creds.access_token);
-    const sendPhoneNumberId = sendIntegration.provider_account_id;
-
-    const waPayload = {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: normalizedPhone,
-      type: "text",
-      text: { body: suggestedReply },
-    };
-
-    const waRes = await fetch(`${WA_API}/${sendPhoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(waPayload),
-    });
-
-    const waData = await waRes.json();
-
-    if (!waRes.ok) {
-      console.error("[processor] Auto-send failed:", waRes.status, waData?.error?.message);
-      return;
-    }
-
-    const replyMsgId = waData?.messages?.[0]?.id ?? null;
+    const svc = await WhatsAppService.forIntegration(supabase, integrationId);
+    const sendResult = await svc.sendMessage({ to: normalizedPhone, body: suggestedReply });
+    const replyMsgId = sendResult.providerMessageId;
 
     // Store outbound message
     const encryptedReply = await encryptToken(suggestedReply);
@@ -576,7 +541,7 @@ Context:
       next_action_label: null,
     } as any).eq("id", matchedLead.id);
 
-    console.log(`[processor] Auto-sent reply to ${normalizedPhone}: ${replyMsgId}`);
+    console.log(`[processor] Auto-sent reply via ${svc.providerType} to ${normalizedPhone}: ${replyMsgId}`);
 
   } catch (aiErr: any) {
     console.error("[processor] AI/automation error:", aiErr.message);
