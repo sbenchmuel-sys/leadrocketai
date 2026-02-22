@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "../_shared/encryption.ts";
+import { verifyMetaSignature } from "../_shared/whatsapp/providers/meta.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,7 +9,6 @@ const corsHeaders = {
 };
 
 const WA_API = "https://graph.facebook.com/v21.0";
-const VERIFY_TOKEN = "leadrocket-wa-verify-2026";
 
 // ── Utility: normalize to E.164 digits only ──────────────
 function normalizePhone(raw: string): string {
@@ -149,10 +149,11 @@ Deno.serve(async (req) => {
     const mode = url.searchParams.get("hub.mode");
     const token = url.searchParams.get("hub.verify_token");
     const challenge = url.searchParams.get("hub.challenge");
+    const expectedToken = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
 
-    console.log("[whatsapp-webhook] Verify check:", { mode, tokenMatch: token === VERIFY_TOKEN });
+    console.log("[whatsapp-webhook] Verify check:", { mode, tokenPresent: !!token });
 
-    if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    if (mode === "subscribe" && expectedToken && token === expectedToken) {
       console.log("[whatsapp-webhook] Verification successful");
       return new Response(challenge, { status: 200, headers: corsHeaders });
     }
@@ -163,6 +164,23 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
 
+  // ── Signature verification ────────────────────────────────
+  const rawBody = await req.text();
+  const metaAppSecret = Deno.env.get("META_APP_SECRET");
+
+  if (metaAppSecret) {
+    const sigValid = await verifyMetaSignature(req, rawBody, metaAppSecret);
+    if (!sigValid) {
+      console.warn("[whatsapp-webhook] Invalid signature — rejecting");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+  } else {
+    console.warn("[whatsapp-webhook] META_APP_SECRET not set — skipping signature verification");
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -170,7 +188,7 @@ Deno.serve(async (req) => {
 
   let body: any;
   try {
-    body = await req.json();
+    body = JSON.parse(rawBody);
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
       status: 400,
