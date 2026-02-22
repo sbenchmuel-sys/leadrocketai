@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.outlook-sync]
 verify_jwt = false
+
+[functions.whatsapp-webhook-twilio]
+verify_jwt = false
+
+[functions.whatsapp-connect-twilio]
+verify_jwt = false
