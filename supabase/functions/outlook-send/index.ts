@@ -1,9 +1,11 @@
 // ============================================================
 // POST /outlook-send
 //
-// Body: { mail_account_id, to, subject, bodyHtml, threadId? }
+// Body: { mail_account_id, to, subject, bodyHtml, threadId?,
+//         leadId?, draftId?, skipStateUpdate?, ownerUserId? }
 //
-// Uses token auto-refresh middleware before every Graph API call.
+// Mirrors gmail-send: post-send interaction recording, lead state
+// updates, AI analysis, 404 retry, and needsReconnect flag.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -22,6 +24,25 @@ function corsHeaders(origin: string): Record<string, string> {
     "Access-Control-Allow-Origin": allowed ? origin : "",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   };
+}
+
+// Strip HTML tags for plain-text body_text in interactions
+function htmlToPlainText(html: string): string {
+  let text = html;
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/p>/gi, "\n\n");
+  text = text.replace(/<\/div>/gi, "\n");
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<[^>]+>/g, "");
+  text = text.replace(/&nbsp;/gi, " ");
+  text = text.replace(/&amp;/gi, "&");
+  text = text.replace(/&lt;/gi, "<");
+  text = text.replace(/&gt;/gi, ">");
+  text = text.replace(/&quot;/gi, '"');
+  text = text.replace(/&#39;/gi, "'");
+  text = text.replace(/\s+/g, " ");
+  return text.trim();
 }
 
 serve(async (req) => {
@@ -45,20 +66,36 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
     const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await userClient.auth.getUser(token);
-    if (authError || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...cors, "Content-Type": "application/json" },
-      });
-    }
+    const isServiceRole = token === supabaseServiceKey;
 
+    // Parse body first (req.json() can only be called once)
     const body = await req.json();
-    const { mail_account_id, to, subject, bodyHtml, threadId } = body;
+    const { mail_account_id, to, subject, bodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+
+    // Auth check
+    let userId: string;
+    if (isServiceRole) {
+      if (!ownerUserId) {
+        return new Response(JSON.stringify({ ok: false, error: "Service role calls require ownerUserId" }), {
+          status: 400,
+          headers: { ...cors, "Content-Type": "application/json" },
+        });
+      }
+      userId = ownerUserId;
+    } else {
+      const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: { user }, error: authError } = await userClient.auth.getUser(token);
+      if (authError || !user) {
+        return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...cors, "Content-Type": "application/json" },
+        });
+      }
+      userId = user.id;
+    }
 
     if (!mail_account_id || !to || !subject || !bodyHtml) {
       return new Response(
@@ -69,11 +106,37 @@ serve(async (req) => {
 
     const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Get account email for interaction recording
+    const { data: accountData } = await serviceClient
+      .from("mail_accounts")
+      .select("email_address")
+      .eq("id", mail_account_id)
+      .single();
+
+    const accountEmail = accountData?.email_address || "";
+
     // Auto-refresh token (throws + marks expired if refresh fails)
-    const accessToken = await getFreshOutlookToken(mail_account_id, serviceClient);
+    let accessToken: string;
+    try {
+      accessToken = await getFreshOutlookToken(mail_account_id, serviceClient);
+    } catch (tokenErr) {
+      const errMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
+      const needsReconnect = errMsg.includes("expired") || errMsg.includes("reauthorize") || errMsg.includes("refresh failed");
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: needsReconnect
+            ? "Outlook permissions need updating - please reauthorize Outlook in Settings"
+            : errMsg,
+          needsReconnect,
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
 
     // Build Graph sendMail payload
-    const mailPayload: Record<string, unknown> = {
+    let sendUrl = "https://graph.microsoft.com/v1.0/me/sendMail";
+    let sendPayload: Record<string, unknown> = {
       message: {
         subject,
         body: { contentType: "HTML", content: bodyHtml },
@@ -81,11 +144,6 @@ serve(async (req) => {
       },
       saveToSentItems: true,
     };
-
-    // If replying in thread, attach conversationId via internetMessageHeaders not available in sendMail
-    // Instead use reply endpoint if threadId looks like a Graph messageId
-    let sendUrl = "https://graph.microsoft.com/v1.0/me/sendMail";
-    let sendPayload = mailPayload;
 
     if (threadId) {
       // threadId in Outlook context = Graph message ID to reply to
@@ -98,7 +156,7 @@ serve(async (req) => {
       };
     }
 
-    const sendResp = await fetch(sendUrl, {
+    let sendResp = await fetch(sendUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -107,6 +165,30 @@ serve(async (req) => {
       body: JSON.stringify(sendPayload),
     });
 
+    // 404 retry: if thread/message was deleted, retry as fresh email
+    if (!sendResp.ok && sendResp.status === 404 && threadId) {
+      logger.info("mail.outlook.thread_not_found_retry", {
+        mail_account_id,
+        thread_id: threadId,
+      });
+      const retryPayload = {
+        message: {
+          subject,
+          body: { contentType: "HTML", content: bodyHtml },
+          toRecipients: [{ emailAddress: { address: to } }],
+        },
+        saveToSentItems: true,
+      };
+      sendResp = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(retryPayload),
+      });
+    }
+
     if (!sendResp.ok) {
       const errText = await sendResp.text();
       logger.error("mail.outlook.send_failed", {
@@ -114,25 +196,158 @@ serve(async (req) => {
         status: sendResp.status,
         error: errText,
       });
+
+      const needsReconnect =
+        sendResp.status === 401 ||
+        sendResp.status === 403 ||
+        errText.includes("InvalidAuthenticationToken") ||
+        errText.includes("CompactToken") ||
+        errText.includes("TokenExpired");
+
       return new Response(
-        JSON.stringify({ ok: false, error: `Graph sendMail failed (${sendResp.status})`, detail: errText }),
+        JSON.stringify({
+          ok: false,
+          error: needsReconnect
+            ? "Outlook permissions need updating - please reauthorize Outlook in Settings"
+            : `Graph sendMail failed (${sendResp.status})`,
+          detail: errText,
+          needsReconnect,
+        }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // 202 Accepted from Graph = success (no body)
+    // 202 Accepted = success (no body from Graph sendMail)
     logger.info("mail.outlook.email_sent", {
       mail_account_id,
       to,
       subject,
       has_thread: !!threadId,
+      has_lead: !!leadId,
     });
 
-    // Update last_sync_at as a lightweight activity marker
+    // Update last_sync_at
     await serviceClient
       .from("mail_accounts")
       .update({ last_sync_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", mail_account_id);
+
+    // --- Post-send logic (mirrors gmail-send) ---
+    const backgroundTasks = async () => {
+      try {
+        if (leadId) {
+          const bodyPlainText = htmlToPlainText(bodyHtml);
+
+          // Create interaction record
+          await serviceClient
+            .from("interactions")
+            .insert({
+              lead_id: leadId,
+              type: "email_outbound",
+              source: "outlook",
+              occurred_at: new Date().toISOString(),
+              subject,
+              from_email: accountEmail,
+              to_email: to,
+              body_text: bodyPlainText.substring(0, 10000),
+              direction: "outbound",
+            });
+
+          // Get current lead data
+          const { data: leadData, error: leadError } = await serviceClient
+            .from("leads")
+            .select("stage, next_action_key, next_action_label, company, name")
+            .eq("id", leadId)
+            .single();
+
+          if (leadData && !leadError) {
+            if (skipStateUpdate) {
+              logger.info("mail.outlook.skip_state_update", { lead_id: leadId });
+              await serviceClient
+                .from("leads")
+                .update({
+                  last_activity_at: new Date().toISOString(),
+                  last_outbound_at: new Date().toISOString(),
+                })
+                .eq("id", leadId);
+            } else {
+              // Manual send: call AI to analyze and update lead state
+              try {
+                const analysisResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": authHeader,
+                  },
+                  body: JSON.stringify({
+                    task: "analyze_outgoing_email",
+                    payload: {
+                      lead_context: `Name: ${leadData.name}, Company: ${leadData.company}`,
+                      current_stage: leadData.stage,
+                      current_next_action: leadData.next_action_key || "none",
+                      sent_email_subject: subject,
+                      sent_email_body: htmlToPlainText(bodyHtml),
+                    },
+                  }),
+                });
+
+                if (analysisResponse.ok) {
+                  const analysisData = await analysisResponse.json();
+                  if (analysisData.ok && analysisData.content) {
+                    try {
+                      const analysis = JSON.parse(analysisData.content);
+                      logger.info("mail.outlook.ai_analysis", { lead_id: leadId, analysis });
+
+                      await serviceClient
+                        .from("leads")
+                        .update({
+                          stage: analysis.suggested_stage || leadData.stage,
+                          next_action_key: analysis.next_action_key,
+                          next_action_label: analysis.next_action_label,
+                          needs_action: analysis.needs_action ?? false,
+                          last_outbound_at: new Date().toISOString(),
+                          last_activity_at: new Date().toISOString(),
+                          action_instructions: null,
+                        })
+                        .eq("id", leadId);
+                    } catch (parseErr) {
+                      logger.error("mail.outlook.ai_parse_failed", { error: String(parseErr) });
+                    }
+                  }
+                }
+              } catch (aiError) {
+                logger.error("mail.outlook.ai_error", { error: String(aiError) });
+                // Fallback: update basic timestamp fields
+                await serviceClient
+                  .from("leads")
+                  .update({
+                    last_activity_at: new Date().toISOString(),
+                    last_outbound_at: new Date().toISOString(),
+                  })
+                  .eq("id", leadId);
+              }
+            }
+          }
+        }
+
+        // Update draft status if draftId provided
+        if (draftId) {
+          await serviceClient
+            .from("drafts")
+            .update({ status: "sent" })
+            .eq("id", draftId);
+        }
+      } catch (bgError) {
+        logger.error("mail.outlook.background_error", { error: String(bgError) });
+      }
+    };
+
+    const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime;
+    if (runtime?.waitUntil) {
+      runtime.waitUntil(backgroundTasks());
+    } else {
+      backgroundTasks().catch(e => logger.error("mail.outlook.bg_fire_forget", { error: String(e) }));
+    }
 
     return new Response(
       JSON.stringify({ ok: true, messageId: null }), // Graph sendMail doesn't return message ID
@@ -140,9 +355,16 @@ serve(async (req) => {
     );
   } catch (err) {
     const errorId = crypto.randomUUID();
-    logger.error("mail.outlook.send_error", { error_id: errorId, error: String(err) });
+    const errorMessage = err instanceof Error ? err.message : "An error occurred";
+    logger.error("mail.outlook.send_error", { error_id: errorId, error: errorMessage });
+
+    const needsReconnect =
+      errorMessage.includes("expired") ||
+      errorMessage.includes("reauthorize") ||
+      errorMessage.includes("revoked");
+
     return new Response(
-      JSON.stringify({ ok: false, error: "Internal error", error_id: errorId }),
+      JSON.stringify({ ok: false, error: errorMessage, error_id: errorId, needsReconnect }),
       { status: 200, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
     );
   }
