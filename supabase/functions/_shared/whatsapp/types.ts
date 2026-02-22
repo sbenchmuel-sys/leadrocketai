@@ -5,42 +5,81 @@
 /** Supported WhatsApp providers */
 export type WhatsAppProviderType = "meta" | "twilio";
 
+// ============================================================
+// Normalized Event Types (Phase 3)
+// ============================================================
+
+export interface Attachment {
+  url: string | null;
+  mime_type: string | null;
+  filename: string | null;
+}
+
 /** Normalized inbound message from any provider */
-export interface NormalizedInboundMessage {
-  providerMessageId: string;
-  from: string;            // E.164 phone number
-  to: string;              // E.164 phone number
+export interface InboundMessageEvent {
+  provider: WhatsAppProviderType;
+  external_message_id: string;
+  provider_event_id: string;
+  from: string;            // E.164 digits only
+  to: string;              // E.164 digits only (receiving phone number id for Meta)
+  text: string | null;
+  message_type: string;    // text, image, document, audio, video, etc.
   timestamp: string;       // ISO-8601
-  type: "text" | "image" | "document" | "audio" | "video" | "reaction" | "unknown";
-  body?: string;
-  mediaUrl?: string;
-  mediaMimeType?: string;
-  replyToMessageId?: string;
+  attachments: Attachment[];
+  context_message_id: string | null; // reply-to
+  raw: Record<string, unknown>;
 }
 
 /** Normalized status update from any provider */
-export interface NormalizedStatusUpdate {
-  providerMessageId: string;
+export interface MessageStatusEvent {
+  provider: WhatsAppProviderType;
+  external_message_id: string;
+  provider_event_id: string;
   status: "sent" | "delivered" | "read" | "failed";
-  timestamp: string;
-  errorCode?: string;
-  errorMessage?: string;
+  recipient_id: string;
+  timestamp: string;       // ISO-8601
+  error_code: string | null;
+  error_message: string | null;
+  raw: Record<string, unknown>;
 }
 
-/** Params for sending a message through any provider */
+/** Combined result from normalization */
+export interface NormalizedWebhookResult {
+  inboundEvents: InboundMessageEvent[];
+  statusEvents: MessageStatusEvent[];
+  /** Phone number ID extracted from metadata, used for routing */
+  phoneNumberId: string | null;
+}
+
+// ============================================================
+// Channel Events row shape (matches channel_events table)
+// ============================================================
+
+export interface ChannelEventRow {
+  workspace_id: string | null;
+  channel: "whatsapp";
+  provider: WhatsAppProviderType;
+  event_type: "inbound_message" | "status_update";
+  provider_event_id: string;
+  payload_normalized: Record<string, unknown>;
+  payload_raw: Record<string, unknown>;
+}
+
+// ============================================================
+// Provider Interface — implemented by MetaProvider, TwilioProvider
+// ============================================================
+
 export interface SendWhatsAppParams {
-  to: string;              // E.164 phone number
+  to: string;
   body: string;
   mediaUrl?: string;
   replyToMessageId?: string;
 }
 
-/** Result after sending */
 export interface SendWhatsAppResult {
   providerMessageId: string;
 }
 
-/** Health check result */
 export interface WhatsAppHealthResult {
   healthy: boolean;
   status: "active" | "token_invalid" | "error" | "inactive";
@@ -49,9 +88,8 @@ export interface WhatsAppHealthResult {
   errorMessage?: string;
 }
 
-/** Webhook parse result — discriminated union */
 export type WebhookPayload =
   | { kind: "verification"; challenge: string }
-  | { kind: "message"; messages: NormalizedInboundMessage[] }
-  | { kind: "status"; statuses: NormalizedStatusUpdate[] }
+  | { kind: "message"; messages: InboundMessageEvent[] }
+  | { kind: "status"; statuses: MessageStatusEvent[] }
   | { kind: "ignored" };
