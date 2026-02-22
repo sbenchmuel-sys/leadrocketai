@@ -44,7 +44,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAITask, AITaskType } from "@/hooks/useAITask";
-import { useGmailSync } from "@/hooks/useGmailSync";
+import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { supabase } from "@/integrations/supabase/client";
 import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem } from "@/lib/supabaseQueries";
@@ -263,24 +263,20 @@ export function EmailActionDialog({
   const [activeMailProvider, setActiveMailProvider] = useState<"gmail" | "outlook" | null>(null);
   
   const { runTask } = useAITask();
-  const { sendEmail, isSyncing } = useGmailSync();
+  const { sendEmail, isSyncing, provider: activeProvider } = useMailSync();
   const { isConnected, connection } = useGmailConnection();
 
-  // Detect active mail provider for UI hints
+  // Use the unified hook's provider detection, fallback to legacy check
   useEffect(() => {
     if (!open) return;
-    supabase
-      .from("mail_accounts")
-      .select("provider, is_default, status")
-      .eq("status", "connected")
-      .eq("is_default", true)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.provider === "outlook") setActiveMailProvider("outlook");
-        else if (isConnected) setActiveMailProvider("gmail");
-        else setActiveMailProvider(null);
-      });
-  }, [open, isConnected]);
+    if (activeProvider) {
+      setActiveMailProvider(activeProvider);
+    } else if (isConnected) {
+      setActiveMailProvider("gmail");
+    } else {
+      setActiveMailProvider(null);
+    }
+  }, [open, activeProvider, isConnected]);
 
   // Load signatures/docs in parallel, start generation independently
   useEffect(() => {

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Loader2 } from "lucide-react";
-import { useGmailSync } from "@/hooks/useGmailSync";
+import { useMailSync } from "@/hooks/useMailSync";
 import { toast } from "sonner";
-import { useGmailConnection } from "@/hooks/useGmailConnection";
 import {
   Dialog,
   DialogContent,
@@ -39,8 +38,7 @@ export function SendEmailButton({
   size = "sm",
   showDialog = true,
 }: SendEmailButtonProps) {
-  const { isConnected, isLoading: isLoadingConnection } = useGmailConnection();
-  const { sendEmail, isSyncing } = useGmailSync();
+  const { isConnected, isLoading: isLoadingConnection, sendEmail, isSyncing, providerLabel } = useMailSync();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editedTo, setEditedTo] = useState(to);
   const [editedSubject, setEditedSubject] = useState(subject);
@@ -127,7 +125,7 @@ export function SendEmailButton({
         ) : (
           <Send className="h-4 w-4 mr-2" />
         )}
-        Send via Gmail
+        Send via {providerLabel}
       </Button>
     );
   }
@@ -136,13 +134,13 @@ export function SendEmailButton({
     <>
       <Button variant={variant} size={size} onClick={handleOpenDialog}>
         <Send className="h-4 w-4 mr-2" />
-        Send via Gmail
+        Send via {providerLabel}
       </Button>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Send Email via Gmail</DialogTitle>
+            <DialogTitle>Send Email via {providerLabel}</DialogTitle>
             <DialogDescription>
               Review and edit the email before sending
             </DialogDescription>
