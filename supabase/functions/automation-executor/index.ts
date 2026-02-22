@@ -389,10 +389,12 @@ serve(async (req) => {
         }
 
         // Fall back to legacy gmail_connections if no mail_account found
+        let resolvedSenderEmail: string | null = null;
+
         if (!mailAccountId) {
           const { data: gmailConn } = await supabase
             .from("gmail_connections")
-            .select("user_id")
+            .select("user_id, gmail_email")
             .eq("user_id", lead.owner_user_id)
             .maybeSingle();
 
@@ -405,6 +407,50 @@ serve(async (req) => {
             continue;
           }
           mailProvider = "gmail";
+          resolvedSenderEmail = gmailConn.gmail_email;
+
+          // ── SENDER MISMATCH GUARD ──────────────────────────────────
+          // No mail_accounts entry found — sending would use the legacy
+          // gmail_connections fallback. This is the exact scenario that
+          // caused emails from the wrong address. Block the send.
+          console.warn(
+            `[automation-executor] SENDER MISMATCH: lead ${lead.id} — ` +
+            `no mail_accounts entry, fallback would send from ${resolvedSenderEmail}. ` +
+            `Blocking send. Configure a mail_accounts row for this workspace.`
+          );
+          logEntry.status = "skipped";
+          logEntry.error_message = `Sender mismatch: no mail_accounts configured, would fallback to ${resolvedSenderEmail}`;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        } else {
+          // Verify the resolved mail_account email matches expectations
+          const { data: resolvedAcct } = await supabase
+            .from("mail_accounts")
+            .select("email_address")
+            .eq("id", mailAccountId)
+            .single();
+
+          resolvedSenderEmail = resolvedAcct?.email_address ?? null;
+
+          // Cross-check: if the workspace has a gmail_connection with a
+          // different email than the mail_account, warn but allow the
+          // mail_account (authoritative) to proceed.
+          const { data: gmailCheck } = await supabase
+            .from("gmail_connections")
+            .select("gmail_email")
+            .eq("user_id", lead.owner_user_id)
+            .maybeSingle();
+
+          if (gmailCheck?.gmail_email && resolvedSenderEmail
+              && gmailCheck.gmail_email !== resolvedSenderEmail) {
+            console.warn(
+              `[automation-executor] SENDER INFO: lead ${lead.id} — ` +
+              `gmail_connections has ${gmailCheck.gmail_email} but mail_accounts ` +
+              `will send from ${resolvedSenderEmail} (authoritative). OK to proceed.`
+            );
+          }
         }
 
         logEntry.mail_account_id = mailAccountId;
