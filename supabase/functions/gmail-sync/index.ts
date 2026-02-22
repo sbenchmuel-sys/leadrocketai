@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt } from "../_shared/oooDetection.ts";
+import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 // ============================================
 // CADENCE SETTINGS TYPES (mirrored from frontend)
@@ -1154,7 +1155,7 @@ serve(async (req) => {
         const hasListUnsubscribeHeader = !!getHeader(headers, "List-Unsubscribe");
         if (direction === "inbound" && !hasListUnsubscribeHeader) {
           const bodyLower = bodyText.toLowerCase();
-          if (/\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower) || /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)) {
+          if (isHumanUnsubscribeRequest(bodyLower)) {
             console.log(`[gmail-sync] Lead ${leadId}: Unsubscribe keyword detected in inbound email`);
             await serviceSupabase.from("leads").update({
               unsubscribed: true,

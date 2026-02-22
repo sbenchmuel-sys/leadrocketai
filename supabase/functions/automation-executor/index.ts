@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -289,7 +290,7 @@ serve(async (req) => {
 
           if (lastInbound?.body_text) {
             const bodyLower = lastInbound.body_text.toLowerCase();
-            if (/\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower) || /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)) {
+            if (isHumanUnsubscribeRequest(bodyLower)) {
               console.log(`[automation-executor] Lead ${lead.id} requested unsubscribe`);
               await supabase.from("leads").update({
                 unsubscribed: true,
@@ -437,12 +438,27 @@ serve(async (req) => {
 
         logEntry.ai_task = aiTask;
 
+        // GUARD 0: Short-window dedup — prevent concurrent executor runs
+        // from spamming the same lead within a 1-hour window.
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const { count: recentSentCount } = await supabase
+          .from("automation_log")
+          .select("id", { count: "exact", head: true })
+          .eq("lead_id", lead.id)
+          .in("status", ["sent", "pending"])
+          .gte("created_at", oneHourAgo);
+
+        if ((recentSentCount || 0) >= 1) {
+          console.log(`[automation-executor] Lead ${lead.id}: Recent send detected within 1h (${recentSentCount}) — skipping`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "Duplicate send guard: email sent/pending within last hour";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
         // GUARD 1: Daily per-lead cap — enforced atomically at DB level via unique index.
-        // We no longer do a pre-flight SELECT count (racy under concurrent runs).
-        // Instead, we attempt the INSERT after send and let the DB reject the duplicate.
-        // See: automation_log_one_per_day_unique index (WHERE status = 'sent').
-        // Pre-flight check for TODAY is still done as a fast-path skip to avoid
-        // wasting an AI call + send on a lead that already got an email today.
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
 
