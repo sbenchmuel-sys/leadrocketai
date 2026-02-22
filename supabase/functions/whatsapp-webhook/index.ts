@@ -121,6 +121,23 @@ Deno.serve(async (req) => {
     `[whatsapp-webhook] Ingested: ${stored} stored, ${duplicates} duplicates, ${totalEvents} total`,
   );
 
+  // ── Fire-and-forget: trigger async processor ────────────
+  if (stored > 0) {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+    fetch(`${supabaseUrl}/functions/v1/whatsapp-events-processor`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({ trigger: "webhook", stored }),
+    }).catch((err) => {
+      console.warn("[whatsapp-webhook] Failed to trigger processor (non-blocking):", err.message);
+    });
+  }
+
   return new Response(
     JSON.stringify({ ok: true, stored, duplicates }),
     { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
