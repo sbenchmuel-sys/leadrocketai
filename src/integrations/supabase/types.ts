@@ -104,6 +104,51 @@ export type Database = {
         }
         Relationships: []
       }
+      channel_events: {
+        Row: {
+          attempts: number
+          channel: string
+          created_at: string
+          event_type: string
+          id: string
+          last_error: string | null
+          payload_normalized: Json
+          payload_raw: Json
+          processed_at: string | null
+          provider: string
+          provider_event_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          channel?: string
+          created_at?: string
+          event_type: string
+          id?: string
+          last_error?: string | null
+          payload_normalized?: Json
+          payload_raw?: Json
+          processed_at?: string | null
+          provider?: string
+          provider_event_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          channel?: string
+          created_at?: string
+          event_type?: string
+          id?: string
+          last_error?: string | null
+          payload_normalized?: Json
+          payload_raw?: Json
+          processed_at?: string | null
+          provider?: string
+          provider_event_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
       contact_identities: {
         Row: {
           contact_id: string
