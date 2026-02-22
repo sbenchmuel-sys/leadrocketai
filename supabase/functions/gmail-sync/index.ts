@@ -1015,6 +1015,10 @@ serve(async (req) => {
           continue;
         }
 
+        // Extract headers needed for direction filter and subsequent processing
+        const from = getHeader(headers, "From") || "";
+        const to = getHeader(headers, "To") || "";
+
         // STRICT DIRECTION FILTER: Only sync emails that are directly between the rep and the lead.
         // Skip 3rd-party emails (newsletters, notifications, etc.) that happen to be addressed to the lead.
         const repEmail = connection.gmail_email?.toLowerCase().trim() || "";
@@ -1045,8 +1049,6 @@ serve(async (req) => {
           continue;
         }
 
-        const from = getHeader(headers, "From") || "";
-        const to = getHeader(headers, "To") || "";
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();

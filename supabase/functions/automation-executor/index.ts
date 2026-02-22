@@ -289,7 +289,7 @@ serve(async (req) => {
 
           if (lastInbound?.body_text) {
             const bodyLower = lastInbound.body_text.toLowerCase();
-            if (/\bunsubscribe\b/.test(bodyLower) || /\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower)) {
+            if (/\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower) || /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)) {
               console.log(`[automation-executor] Lead ${lead.id} requested unsubscribe`);
               await supabase.from("leads").update({
                 unsubscribed: true,
@@ -359,21 +359,54 @@ serve(async (req) => {
           continue;
         }
 
-        // Get Gmail connection
-        const { data: gmailConn } = await supabase
-          .from("gmail_connections")
-          .select("user_id")
-          .eq("user_id", lead.owner_user_id)
-          .single();
+        // Get connected mail account (Gmail or Outlook)
+        let mailProvider: "gmail" | "outlook" = "gmail";
+        let mailAccountId: string | null = null;
 
-        if (!gmailConn) {
-          logEntry.status = "skipped";
-          logEntry.error_message = "No Gmail connection";
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          skipped++;
-          continue;
+        // Check mail_accounts table first (unified multi-mailbox)
+        const { data: wsMember } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", lead.owner_user_id)
+          .limit(1)
+          .maybeSingle();
+
+        if (wsMember?.workspace_id) {
+          const { data: mailAcct } = await supabase
+            .from("mail_accounts")
+            .select("id, provider, email_address")
+            .eq("workspace_id", wsMember.workspace_id)
+            .eq("status", "connected")
+            .order("is_default", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (mailAcct) {
+            mailProvider = mailAcct.provider as "gmail" | "outlook";
+            mailAccountId = mailAcct.id;
+          }
         }
+
+        // Fall back to legacy gmail_connections if no mail_account found
+        if (!mailAccountId) {
+          const { data: gmailConn } = await supabase
+            .from("gmail_connections")
+            .select("user_id")
+            .eq("user_id", lead.owner_user_id)
+            .maybeSingle();
+
+          if (!gmailConn) {
+            logEntry.status = "skipped";
+            logEntry.error_message = "No mail connection (Gmail or Outlook)";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            skipped++;
+            continue;
+          }
+          mailProvider = "gmail";
+        }
+
+        logEntry.mail_account_id = mailAccountId;
 
         const actionKey = lead.next_action_key;
 
@@ -582,22 +615,43 @@ serve(async (req) => {
           created_by: lead.owner_user_id,
         });
 
-        // Send via gmail-send
-        const sendResponse = await fetch(`${supabaseUrl}/functions/v1/gmail-send`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseServiceKey}`,
-          },
-          body: JSON.stringify({
-            to: lead.email,
-            subject,
-            body: draftBody,
-            leadId: lead.id,
-            ownerUserId: lead.owner_user_id,
-            skipStateUpdate: true, // automation-executor handles post-send state; don't let gmail-send overwrite it
-          }),
-        });
+        // Send via appropriate mail provider
+        let sendResponse: Response;
+        if (mailProvider === "outlook" && mailAccountId) {
+          const bodyHtml = draftBody.replace(/\n/g, "<br>");
+          sendResponse = await fetch(`${supabaseUrl}/functions/v1/outlook-send`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              mail_account_id: mailAccountId,
+              to: lead.email,
+              subject,
+              bodyHtml,
+              leadId: lead.id,
+              ownerUserId: lead.owner_user_id,
+              skipStateUpdate: true,
+            }),
+          });
+        } else {
+          sendResponse = await fetch(`${supabaseUrl}/functions/v1/gmail-send`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              to: lead.email,
+              subject,
+              body: draftBody,
+              leadId: lead.id,
+              ownerUserId: lead.owner_user_id,
+              skipStateUpdate: true,
+            }),
+          });
+        }
 
         // gmail-send always returns HTTP 200 (even on error) so the JSON body is readable.
         // We must check sendResult.ok (the JSON field) — NOT sendResponse.ok (the HTTP status).
@@ -608,7 +662,7 @@ serve(async (req) => {
           console.error(`[automation-executor] Send failed for lead ${lead.id}:`, sendErr);
 
           if (sendResult.needsReconnect) {
-            console.warn(`[automation-executor] Gmail needs reconnect for user ${lead.owner_user_id}`);
+            console.warn(`[automation-executor] ${mailProvider} needs reconnect for user ${lead.owner_user_id}`);
             await supabase.from("leads").update({
               needs_action: false,
               eligible_at: null,
@@ -622,7 +676,7 @@ serve(async (req) => {
           }
 
           logEntry.status = "failed";
-          logEntry.error_message = `Gmail send failed: ${String(sendErr).substring(0, 200)}`;
+          logEntry.error_message = `${mailProvider} send failed: ${String(sendErr).substring(0, 200)}`;
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           // Retry: push eligible_at forward 15 min
