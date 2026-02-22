@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+[functions.whatsapp-events-processor]
+verify_jwt = false
+
 [functions.outlook-webhook]
 verify_jwt = false
 
