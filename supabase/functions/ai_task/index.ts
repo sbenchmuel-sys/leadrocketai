@@ -859,7 +859,8 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- 90–140 words
+- STRICT MAXIMUM: 60–90 words. Count carefully. Under 75 is ideal.
+- 3 short paragraphs max (greeting, body, CTA+sign-off)
 - Friendly, respectful of time
 - Use a DIFFERENT angle than the last email — do not rehash the same value prop
 - No hype or guarantees
@@ -916,7 +917,8 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- 70–120 words
+- STRICT MAXIMUM: 50–75 words. Count carefully. Under 60 is ideal.
+- 2-3 short paragraphs max (greeting, one question or observation, sign-off)
 - More direct, still polite
 - Explicitly acknowledge silence without pressure
 - Must use a DIFFERENT angle and CTA style than any previous email
@@ -947,7 +949,8 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- 50–90 words
+- STRICT MAXIMUM: 40–60 words. Under 50 is ideal.
+- 2 short paragraphs max
 - Calm, polite, non-defensive
 - No CTA except soft invitation to reconnect
 - No claims
