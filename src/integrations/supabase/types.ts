@@ -452,34 +452,34 @@ export type Database = {
       }
       gmail_connections: {
         Row: {
-          access_token: string
+          access_token_encrypted: string | null
           created_at: string
           gmail_email: string
           id: string
           last_sync_at: string | null
-          refresh_token: string
+          refresh_token_encrypted: string | null
           token_expires_at: string
           updated_at: string
           user_id: string
         }
         Insert: {
-          access_token: string
+          access_token_encrypted?: string | null
           created_at?: string
           gmail_email: string
           id?: string
           last_sync_at?: string | null
-          refresh_token: string
+          refresh_token_encrypted?: string | null
           token_expires_at: string
           updated_at?: string
           user_id: string
         }
         Update: {
-          access_token?: string
+          access_token_encrypted?: string | null
           created_at?: string
           gmail_email?: string
           id?: string
           last_sync_at?: string | null
-          refresh_token?: string
+          refresh_token_encrypted?: string | null
           token_expires_at?: string
           updated_at?: string
           user_id?: string
@@ -1803,6 +1803,10 @@ export type Database = {
       }
     }
     Functions: {
+      decrypt_gmail_token: {
+        Args: { encrypted_token: string; encryption_key: string }
+        Returns: string
+      }
       expire_old_messages: { Args: never; Returns: undefined }
       get_workspace_role: {
         Args: { _user_id: string; _workspace_id: string }
