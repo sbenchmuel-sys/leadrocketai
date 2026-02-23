@@ -166,6 +166,7 @@ async function processInboundMessage(
     .from("integrations")
     .select("id, workspace_id, user_id")
     .eq("type", "whatsapp")
+    .eq("provider", norm.provider)
     .eq("is_active", true)
     .eq("provider_account_id", phoneNumberId)
     .maybeSingle();
