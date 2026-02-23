@@ -190,8 +190,8 @@ serve(async (req) => {
       .upsert({
         user_id: stateData.user_id,
         gmail_email: gmailEmail,
-        access_token: encryptedAccessToken,
-        refresh_token: encryptedRefreshToken,
+        access_token_encrypted: encryptedAccessToken,
+        refresh_token_encrypted: encryptedRefreshToken,
         token_expires_at: tokenExpiresAt,
       }, { onConflict: "user_id" });
 
