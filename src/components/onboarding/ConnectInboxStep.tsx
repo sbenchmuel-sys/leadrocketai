@@ -127,7 +127,15 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
         </div>
         </div>
 
-      {/* Outlook connected banner */}
+      {/* Connected banners */}
+      {isGmailConnected && (
+        <div className="w-full max-w-lg rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center gap-3">
+          <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
+          <div className="text-left">
+            <p className="text-sm font-medium text-foreground">Gmail connected</p>
+          </div>
+        </div>
+      )}
       {isOutlookConnected && (
         <div className="w-full max-w-lg rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center gap-3">
           <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
@@ -143,12 +151,14 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
         {/* Gmail card */}
         <button
           type="button"
-          onClick={() => setSelectedProvider(selectedProvider === "gmail" ? null : "gmail")}
+          onClick={() => !isGmailConnected && setSelectedProvider(selectedProvider === "gmail" ? null : "gmail")}
           className={cn(
             "flex flex-col items-start gap-3 rounded-2xl border p-5 text-left transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            selectedProvider === "gmail"
-              ? "border-primary bg-primary/5 shadow-sm"
-              : "border-border bg-card hover:border-muted-foreground/40 hover:bg-muted/30"
+            isGmailConnected
+              ? "border-primary/40 bg-primary/5 cursor-default"
+              : selectedProvider === "gmail"
+                ? "border-primary bg-primary/5 shadow-sm"
+                : "border-border bg-card hover:border-muted-foreground/40 hover:bg-muted/30"
           )}
         >
           <div className="flex items-center gap-2">
@@ -156,9 +166,15 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
               <Mail className="h-4 w-4 text-red-500" />
             </div>
             <span className="font-semibold text-foreground">Gmail</span>
+            {isGmailConnected && (
+              <Badge variant="secondary" className="bg-green-500/10 text-green-600 text-[10px] px-1.5 py-0">
+                <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                Connected
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Connect your Google Workspace or personal Gmail account.
+            {isGmailConnected ? "Your Gmail account is linked." : "Connect your Google Workspace or personal Gmail account."}
           </p>
         </button>
 
