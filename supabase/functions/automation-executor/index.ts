@@ -176,21 +176,38 @@ serve(async (req) => {
 
     console.log(`[automation-executor] Found ${eligibleLeads.length} eligible leads`);
 
-    // --- STRATEGY 6: Rep Profile/Signature Preloading ---
-    // Fetch once before the loop and reuse for all leads (same owner in batch)
-    const firstOwnerId = eligibleLeads[0]?.owner_user_id;
-    const { data: repProfileCache } = await supabase
-      .from("rep_profiles")
-      .select("full_name, company_name, job_title, calendar_link, phone, email, linkedin_url")
-      .eq("user_id", firstOwnerId)
-      .single();
+    // --- STRATEGY 6: Rep Profile/Signature Preloading (per-owner cache) ---
+    type RepContext = {
+      profile: { full_name: string | null; company_name: string | null; job_title: string | null; calendar_link: string | null; phone: string | null; email: string | null; linkedin_url: string | null } | null;
+      signature: { signature_text: string } | null;
+    };
+    const repContextCache = new Map<string, RepContext>();
 
-    const { data: repSignatureCache } = await supabase
-      .from("rep_signatures")
-      .select("signature_text")
-      .eq("user_id", firstOwnerId)
-      .eq("is_default", true)
-      .single();
+    async function getRepContext(ownerId: string): Promise<RepContext> {
+      const cached = repContextCache.get(ownerId);
+      if (cached) return cached;
+
+      const [profileRes, sigRes] = await Promise.all([
+        supabase
+          .from("rep_profiles")
+          .select("full_name, company_name, job_title, calendar_link, phone, email, linkedin_url")
+          .eq("user_id", ownerId)
+          .single(),
+        supabase
+          .from("rep_signatures")
+          .select("signature_text")
+          .eq("user_id", ownerId)
+          .eq("is_default", true)
+          .single(),
+      ]);
+
+      const ctx: RepContext = {
+        profile: profileRes.data ?? null,
+        signature: sigRes.data ?? null,
+      };
+      repContextCache.set(ownerId, ctx);
+      return ctx;
+    }
 
     let processed = 0;
     let skipped = 0;
@@ -564,8 +581,7 @@ serve(async (req) => {
 
         let draftBody: string;
         let subject: string;
-        const repProfile = repProfileCache;
-        const repSignature = repSignatureCache;
+        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
           console.log(`[automation-executor] ♻️ Reusing cached draft for lead ${lead.id}, step ${actionKey}`);
