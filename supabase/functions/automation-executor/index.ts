@@ -154,6 +154,10 @@ serve(async (req) => {
       .neq("motion", "nurture") // SAFETY: nurture leads must never enter the prospecting email pipeline
       .limit(20);
 
+    // ── MAX_SENDS_PER_RUN cap ───────────────────────────────
+    const maxSendsEnv = Deno.env.get("MAX_SENDS_PER_RUN");
+    const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : Infinity;
+
     if (ownerFilter) {
       query = query.eq("owner_user_id", ownerFilter);
     }
@@ -215,6 +219,12 @@ serve(async (req) => {
     const sentLeads: { leadId: string; leadName: string; subject: string }[] = [];
 
     for (const lead of eligibleLeads) {
+      // Enforce MAX_SENDS_PER_RUN cap
+      if (processed >= maxSendsPerRun) {
+        console.log(`[automation-executor] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping`);
+        break;
+      }
+
       const logEntry: Record<string, unknown> = {
         lead_id: lead.id,
         owner_user_id: lead.owner_user_id,
