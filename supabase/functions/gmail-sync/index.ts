@@ -89,12 +89,12 @@ function getMessageBody(message: GmailMessage): string {
 // deno-lint-ignore no-explicit-any
 async function refreshTokenIfNeeded(
   supabase: any,
-  connection: { user_id: string; access_token: string; refresh_token: string; token_expires_at: string }
+  connection: { user_id: string; access_token_encrypted: string | null; refresh_token_encrypted: string | null; token_expires_at: string }
 ): Promise<string> {
   const expiresAt = new Date(connection.token_expires_at);
   const now = new Date();
-  const decryptedAccessToken = await safeDecryptToken(connection.access_token);
-  const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token);
+  const decryptedAccessToken = await safeDecryptToken(connection.access_token_encrypted ?? "");
+  const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token_encrypted ?? "");
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-sync] Refreshing expired token");
     const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
@@ -138,7 +138,7 @@ async function refreshTokenIfNeeded(
     }
     await supabase
       .from("gmail_connections")
-      .update({ access_token: encryptedNewAccessToken, token_expires_at: newExpiresAt })
+      .update({ access_token_encrypted: encryptedNewAccessToken, token_expires_at: newExpiresAt })
       .eq("user_id", connection.user_id);
     return tokens.access_token;
   }

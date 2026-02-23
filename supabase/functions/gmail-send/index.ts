@@ -28,14 +28,16 @@ function encodeBase64Url(str: string): string {
 // deno-lint-ignore no-explicit-any
 async function refreshTokenIfNeeded(
   supabase: any,
-  connection: { user_id: string; access_token: string; refresh_token: string; token_expires_at: string }
+  connection: { user_id: string; access_token_encrypted: string | null; refresh_token_encrypted: string | null; token_expires_at: string }
 ): Promise<string> {
   const expiresAt = new Date(connection.token_expires_at);
   const now = new Date();
   
-  // Decrypt the stored tokens
-  const decryptedAccessToken = await safeDecryptToken(connection.access_token);
-  const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token);
+  // Decrypt the stored tokens (use encrypted columns)
+  const rawAccessToken = connection.access_token_encrypted ?? "";
+  const rawRefreshToken = connection.refresh_token_encrypted ?? "";
+  const decryptedAccessToken = await safeDecryptToken(rawAccessToken);
+  const decryptedRefreshToken = await safeDecryptToken(rawRefreshToken);
   
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
     console.log("[gmail-send] Refreshing expired token");
@@ -82,7 +84,7 @@ async function refreshTokenIfNeeded(
     await supabase
       .from("gmail_connections")
       .update({
-        access_token: encryptedNewAccessToken,
+        access_token_encrypted: encryptedNewAccessToken,
         token_expires_at: newExpiresAt,
       })
       .eq("user_id", connection.user_id);
