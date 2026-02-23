@@ -39,13 +39,24 @@ Deno.serve(async (req) => {
       // Check if latest message is inbound (needs reply)
       const { data: latestMsg } = await supabase
         .from("messages")
-        .select("id, direction, created_at")
+        .select("id, direction, created_at, body_ciphertext")
         .eq("conversation_id", convo.id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (!latestMsg || latestMsg.direction !== "inbound") continue;
+
+      // Decrypt the latest inbound message body for context
+      let latestMessageText = "";
+      if (latestMsg.body_ciphertext) {
+        try {
+          const { safeDecryptToken } = await import("../_shared/encryption.ts");
+          latestMessageText = await safeDecryptToken(latestMsg.body_ciphertext);
+        } catch (e) {
+          console.warn("[generate-reply-suggestions] Could not decrypt latest message:", e);
+        }
+      }
 
       // Get the latest analysis for context
       const { data: analysis } = await supabase
@@ -71,6 +82,10 @@ Deno.serve(async (req) => {
         ? `Channel: WhatsApp\nFORMAT RULES:\n- Conversational, friendly tone\n- Keep messages SHORT (2-4 sentences max)\n- No subject line\n- Use natural language, avoid corporate jargon\n- OK to use line breaks for readability`
         : `Channel: Email\nFORMAT RULES:\n- Include a subject line (prefix with "Subject: ")\n- Professional, structured formatting\n- Use paragraphs and proper greeting/sign-off\n- Clear call-to-action`;
 
+      const latestMsgContext = latestMessageText
+        ? `\n- Latest inbound message: "${latestMessageText}"`
+        : "";
+
       const prompt = `You are a B2B sales assistant. Generate exactly 3 reply drafts for a sales conversation. These are DRAFTS ONLY — they will NOT be sent automatically. The rep will review and edit before sending.
 
 Context:
@@ -78,13 +93,18 @@ Context:
 - Summary: ${analysis.summary_short}
 - Sentiment: ${analysis.sentiment ?? "neutral"}
 - Urgency: ${analysis.urgency ?? "medium"}
-- Topics: ${(analysis.topics ?? []).join(", ")}
+- Topics: ${(analysis.topics ?? []).join(", ")}${latestMsgContext}
 - ${channelGuidance}
 
-Generate 3 drafts with these EXACT styles:
-1. "direct" — Short & direct. Get to the point fast. Minimal fluff.
-2. "consultative" — Warm & consultative. Ask questions, show empathy, position as advisor.
-3. "assertive" — Assertive but professional. Confident, creates urgency without being pushy.
+CRITICAL RULES:
+- Do NOT re-explain the product or company value proposition. The lead already expressed interest.
+- Match the lead's tone and brevity. Short inbound = short reply.
+- If the lead is ready to meet, go straight to scheduling. No filler.
+
+Generate 3 drafts with these EXACT styles and word limits:
+1. "direct" — 30-50 words max. Get to the point. One sentence of acknowledgment, one CTA.
+2. "consultative" — 50-80 words max. Warm, ask one clarifying question, suggest next step.
+3. "assertive" — 40-70 words max. Confident, lock down a time, mild urgency.
 
 Return a JSON object with this exact structure:
 {

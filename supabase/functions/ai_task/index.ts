@@ -299,12 +299,16 @@ Objective:
 Convert interest into a scheduled conversation.
 
 Structure:
-- Acknowledge context directly.
-- Provide one helpful detail.
-- Offer a clear next step.
+- Mirror the lead's energy and brevity.
+- Acknowledge their interest in ONE short sentence.
+- Provide the next step (meeting link, calendar, or specific question).
+- Do NOT re-pitch or explain the product — the lead already showed interest.
+- Do NOT describe your company's technology or value proposition.
 
 Length:
-- Up to 150 words allowed.`;
+- If the lead's message is under 30 words: reply in 40-60 words max.
+- Otherwise: up to 100 words max.
+- NEVER exceed 100 words for inbound responses unless the lead is asking detailed questions that require KB context.`;
   }
 
   if (motion === "nurture") {
