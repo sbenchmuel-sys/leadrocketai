@@ -1803,6 +1803,7 @@ export type Database = {
       }
     }
     Functions: {
+      expire_old_messages: { Args: never; Returns: undefined }
       get_workspace_role: {
         Args: { _user_id: string; _workspace_id: string }
         Returns: Database["public"]["Enums"]["workspace_role"]
