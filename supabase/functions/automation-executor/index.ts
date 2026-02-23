@@ -784,17 +784,20 @@ serve(async (req) => {
 
         // ATOMIC LOG INSERT: The unique index (automation_log_one_per_day_unique) enforces
         // at most one 'sent' record per (lead_id, action_key, day). If a concurrent executor
-        // run already committed a 'sent' record for this lead+action today, this upsert is
-        // silently ignored — blocking the duplicate at the DB level.
+        // run already committed a 'sent' record for this lead+action today, the plain insert
+        // will fail with a unique violation (23505) — blocking the duplicate at the DB level.
         logEntry.status = "sent";
         logEntry.gmail_message_id = gmailMessageId;
         logEntry.completed_at = new Date().toISOString();
-        const { error: logInsertError } = await (supabase.from("automation_log") as any)
-          .upsert(logEntry, { onConflict: "lead_id,action_key,date_trunc('day', created_at AT TIME ZONE 'UTC')", ignoreDuplicates: true });
+        const { error: logInsertError } = await supabase.from("automation_log").insert(logEntry);
 
         if (logInsertError) {
-          // Conflict means a concurrent run already sent this email today — skip post-send state update
-          console.warn(`[automation-executor] Duplicate blocked by DB for lead ${lead.id}, action ${actionKey}: ${logInsertError.message}`);
+          const isDuplicate = logInsertError.code === "23505";
+          if (isDuplicate) {
+            console.warn(`[automation-executor] Duplicate blocked by DB for lead ${lead.id}, action ${actionKey}: ${logInsertError.message}`);
+          } else {
+            console.error(`[automation-executor] Log insert failed for lead ${lead.id}: ${logInsertError.message}`);
+          }
           skipped++;
           continue;
         }
