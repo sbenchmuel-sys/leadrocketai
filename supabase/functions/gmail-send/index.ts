@@ -155,6 +155,32 @@ serve(async (req) => {
       });
     }
 
+    // Verify lead ownership before proceeding
+    if (leadId) {
+      const serviceCheckClient = createClient(supabaseUrl, supabaseServiceKey);
+      const { data: leadOwner, error: leadOwnerErr } = await serviceCheckClient
+        .from("leads")
+        .select("owner_user_id")
+        .eq("id", leadId)
+        .single();
+
+      if (leadOwnerErr || !leadOwner) {
+        console.error(`[gmail-send] Lead not found for ownership check: leadId=${leadId}, userId=${userId}`);
+        return new Response(JSON.stringify({ ok: false, error: "Lead not found" }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (leadOwner.owner_user_id !== userId) {
+        console.error(`[gmail-send] Lead ownership mismatch: leadId=${leadId}, requestUserId=${userId}, actualOwnerId=${leadOwner.owner_user_id}`);
+        return new Response(JSON.stringify({ ok: false, error: "Lead ownership mismatch" }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Create service role client first - needed to access encrypted tokens
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
