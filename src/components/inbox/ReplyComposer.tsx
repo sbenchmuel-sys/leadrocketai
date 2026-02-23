@@ -88,16 +88,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         setBody("");
         setAttachments([]);
       } else {
-        // Email send via gmail-send
-        const { data, error } = await supabase.functions.invoke("gmail-send", {
-          body: {
-            to: conversation.contact_name, // Will be resolved below
-            subject: `Re: ${conversation.contact_name}`,
-            body: body.trim(),
-          },
-        });
-
-        // We need the contact's email identity
+        // Resolve the contact's email identity first
         const { data: emailIdentity, error: emailIdErr } = await supabase
           .from("contact_identities")
           .select("value")
