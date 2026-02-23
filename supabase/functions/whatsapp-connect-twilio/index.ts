@@ -104,13 +104,14 @@ Deno.serve(async (req) => {
   const providerAccountId = twilio_phone_number.replace(/\D/g, "");
 
   // ── Upsert integration ───────────────────────────
+  // Unique constraint is on (workspace_id, user_id, type) — not provider.
+  // So we must match without provider filter to find any existing whatsapp integration.
   const { data: existing } = await supabase
     .from("integrations")
-    .select("id")
+    .select("id, provider")
     .eq("workspace_id", workspace_id)
     .eq("user_id", userId)
     .eq("type", "whatsapp")
-    .eq("provider", "twilio")
     .maybeSingle();
 
   let integrationId: string;
@@ -119,6 +120,7 @@ Deno.serve(async (req) => {
     const { error } = await supabase
       .from("integrations")
       .update({
+        provider: "twilio",
         credentials_encrypted: encryptedCredentials,
         provider_account_id: providerAccountId,
         is_active: true,
