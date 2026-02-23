@@ -106,14 +106,70 @@ serve(async (req) => {
 
     const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get account email for interaction recording
-    const { data: accountData } = await serviceClient
+    // --- Validate mailbox access ---
+    const { data: accountData, error: accountErr } = await serviceClient
       .from("mail_accounts")
-      .select("email_address")
+      .select("email_address, workspace_id")
       .eq("id", mail_account_id)
       .single();
 
-    const accountEmail = accountData?.email_address || "";
+    if (accountErr || !accountData) {
+      logger.error("mail.outlook.account_not_found", { mail_account_id, userId });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Mail account not found" }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { data: membership } = await serviceClient
+      .from("workspace_members")
+      .select("id")
+      .eq("workspace_id", accountData.workspace_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!membership) {
+      logger.error("mail.outlook.unauthorized_mail_account", {
+        mail_account_id,
+        workspace_id: accountData.workspace_id,
+        userId,
+      });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Unauthorized mail account" }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // --- Validate lead ownership ---
+    if (leadId) {
+      const { data: leadOwner, error: leadOwnerErr } = await serviceClient
+        .from("leads")
+        .select("owner_user_id")
+        .eq("id", leadId)
+        .single();
+
+      if (leadOwnerErr || !leadOwner) {
+        logger.error("mail.outlook.lead_not_found", { leadId, userId });
+        return new Response(
+          JSON.stringify({ ok: false, error: "Lead not found" }),
+          { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (leadOwner.owner_user_id !== userId) {
+        logger.error("mail.outlook.lead_ownership_mismatch", {
+          leadId,
+          requestUserId: userId,
+          actualOwnerId: leadOwner.owner_user_id,
+        });
+        return new Response(
+          JSON.stringify({ ok: false, error: "Lead ownership mismatch" }),
+          { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    const accountEmail = accountData.email_address || "";
 
     // Auto-refresh token (throws + marks expired if refresh fails)
     let accessToken: string;
