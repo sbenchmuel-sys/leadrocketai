@@ -41,6 +41,27 @@ function getEffectiveMode(lead: any, workspaceSettings: any): string {
   return workspaceSettings?.default_mode ?? "suggest_only";
 }
 
+function isWeekend(date: Date, tz: string): boolean {
+  try {
+    const dayStr = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(date);
+    return dayStr === "Sat" || dayStr === "Sun";
+  } catch {
+    const utcDay = date.getUTCDay();
+    return utcDay === 0 || utcDay === 6;
+  }
+}
+
+function isAfterHours(date: Date, tz: string): boolean {
+  try {
+    const hourStr = new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz }).format(date);
+    const hour = parseInt(hourStr, 10);
+    return hour < 8 || hour >= 20; // before 8am or after 8pm
+  } catch {
+    const utcHour = date.getUTCHours();
+    return utcHour < 8 || utcHour >= 20;
+  }
+}
+
 function shouldAutoSend(opts: {
   effective_mode: string;
   intent: string;
@@ -48,8 +69,9 @@ function shouldAutoSend(opts: {
   workspaceSettings: any;
   lead: any;
   message_text: string;
+  timezone?: string;
 }): { allowed: boolean; reason: string } {
-  const { effective_mode, intent, confidence, workspaceSettings, lead, message_text } = opts;
+  const { effective_mode, intent, confidence, workspaceSettings, lead, message_text, timezone } = opts;
 
   if (message_text.trim().length < 3) return { allowed: false, reason: "message_too_short" };
   if (confidence < 0.70) return { allowed: false, reason: "low_confidence" };
@@ -61,6 +83,22 @@ function shouldAutoSend(opts: {
   const lowerText = message_text.toLowerCase();
   const matchedKeyword = blockedKeywords.find((kw: string) => lowerText.includes(kw.toLowerCase()));
   if (matchedKeyword) return { allowed: false, reason: `blocked_keyword:${matchedKeyword}` };
+
+  // ── Time-based restrictions ───────────────────────────────
+  // Only enforce when the mode would actually auto-send
+  const wouldAutoSend = !["manual", "suggest_only"].includes(effective_mode);
+  if (wouldAutoSend) {
+    const tz = timezone || "UTC";
+    const now = new Date();
+
+    if (!workspaceSettings?.weekend_auto && isWeekend(now, tz)) {
+      return { allowed: false, reason: "weekend_blocked" };
+    }
+
+    if (!workspaceSettings?.after_hours_auto && isAfterHours(now, tz)) {
+      return { allowed: false, reason: "after_hours_blocked" };
+    }
+  }
 
   switch (effective_mode) {
     case "manual":
@@ -383,7 +421,7 @@ async function processInboundMessage(
 
     const { data: workspaceProfile } = await supabase
       .from("workspace_profiles")
-      .select("product_name, product_description, primary_value_props, disallowed_topics, pricing_policy")
+      .select("product_name, product_description, primary_value_props, disallowed_topics, pricing_policy, meeting_timezone")
       .eq("user_id", ownerUserId)
       .maybeSingle();
 
@@ -448,6 +486,7 @@ Context:
       workspaceSettings,
       lead: matchedLead,
       message_text: bodyText,
+      timezone: workspaceProfile?.meeting_timezone ?? undefined,
     });
 
     // Log the decision
