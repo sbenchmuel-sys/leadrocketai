@@ -4,9 +4,96 @@ import { Badge } from "@/components/ui/badge";
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ArrowRight, SkipForward, ShieldCheck, Lock, Eye, Mail, Info, CheckCircle2 } from "lucide-react";
+import { ArrowRight, SkipForward, ShieldCheck, Lock, Eye, Mail, Info, CheckCircle2, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+
+/** Inline Outlook connect button that auto-provisions workspace if needed */
+function OutlookConnectButton({ onConnected }: { onConnected: (email: string) => void }) {
+  const { user } = useAuth();
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  const ensureWorkspace = async (): Promise<string> => {
+    if (!user) throw new Error("Not authenticated");
+    const { data: membership } = await supabase
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membership?.workspace_id) return membership.workspace_id;
+
+    // Auto-provision
+    const { error: wsErr } = await supabase
+      .from("workspaces")
+      .insert({ name: "My Workspace", plan: "free" } as any);
+    if (wsErr) throw new Error("Could not create workspace.");
+
+    const { data: newMembership } = await supabase
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+    if (!newMembership) throw new Error("Could not set up workspace membership.");
+    return newMembership.workspace_id;
+  };
+
+  const handleConnect = async () => {
+    try {
+      setIsConnecting(true);
+      const workspaceId = await ensureWorkspace();
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated");
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, redirectUrl: window.location.href }),
+      });
+
+      const data = await resp.json().catch(() => ({ ok: false }));
+      if (data.not_configured) throw new Error("Outlook integration not fully configured.");
+      if (!resp.ok || !data.authUrl) throw new Error(data.error || "Failed to get auth URL");
+
+      const popup = window.open(data.authUrl, "outlook_oauth", "width=520,height=650,left=200,top=100");
+      if (!popup) { window.location.href = data.authUrl; return; }
+
+      const poll = setInterval(async () => {
+        if (popup.closed) {
+          clearInterval(poll);
+          setIsConnecting(false);
+          // Check if connected
+          const healthResp = await fetch(
+            `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${workspaceId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (healthResp.ok) {
+            const json = await healthResp.json();
+            const connected = json?.accounts?.find((a: any) => a.status === "connected");
+            if (connected?.email_address) onConnected(connected.email_address);
+          }
+        }
+      }, 800);
+    } catch (err) {
+      toast.error("Connection failed", { description: err instanceof Error ? err.message : "Please try again." });
+      setIsConnecting(false);
+    }
+  };
+
+  return (
+    <Button onClick={handleConnect} disabled={isConnecting} className="w-full">
+      {isConnecting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+      Connect Outlook
+    </Button>
+  );
+}
 
 interface ConnectInboxStepProps {
   onNext: () => void;
@@ -251,10 +338,15 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
 
       {selectedProvider === "outlook" && outlookConfigured !== false && (
         <div className="w-full max-w-sm">
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-lg text-left">
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-lg text-center space-y-4">
             <p className="text-sm text-muted-foreground">
-              You can connect your Outlook account after completing onboarding in <span className="font-medium text-foreground">Settings → Integrations</span>.
+              Connect your Microsoft Outlook account via secure OAuth.
             </p>
+            <OutlookConnectButton
+              onConnected={(email) => {
+                setOutlookConnectedEmail(email);
+              }}
+            />
           </div>
         </div>
       )}
