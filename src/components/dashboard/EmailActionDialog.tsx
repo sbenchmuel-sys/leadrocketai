@@ -377,12 +377,22 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ''}
   }
 
   function buildRepContext(): string {
-    if (!repProfile) return '';
+    // Always provide a sender name — fall back to auth user metadata
+    let fallbackName = 'Sales Rep';
+    try {
+      const key = Object.keys(localStorage).find(k => k.includes("supabase") && k.includes("auth"));
+      if (key) {
+        const parsed = JSON.parse(localStorage.getItem(key) || "{}");
+        const meta = parsed?.user?.user_metadata || parsed?.currentSession?.user?.user_metadata;
+        if (meta?.full_name || meta?.name) fallbackName = meta.full_name || meta.name;
+      }
+    } catch { /* ignore */ }
+    const senderName = repProfile?.full_name || fallbackName;
     return `
-Sender Name: ${repProfile.full_name || 'Sales Rep'}
-Sender Title: ${repProfile.job_title || ''}
-Sender Company: ${repProfile.company_name || workspaceProfile?.company_name || ''}
-Calendar Link: ${repProfile.calendar_link || ''}
+Sender Name: ${senderName}
+${repProfile?.job_title ? `Sender Title: ${repProfile.job_title}` : ''}
+${repProfile?.company_name || workspaceProfile?.company_name ? `Sender Company: ${repProfile?.company_name || workspaceProfile?.company_name || ''}` : ''}
+${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
 `.trim();
   }
 
