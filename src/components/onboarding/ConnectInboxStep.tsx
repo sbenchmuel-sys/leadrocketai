@@ -55,7 +55,7 @@ function OutlookConnectButton({ onConnected }: { onConnected: (email: string) =>
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId, redirectUrl: window.location.href }),
+        body: JSON.stringify({ workspaceId }),
       });
 
       const data = await resp.json().catch(() => ({ ok: false }));
