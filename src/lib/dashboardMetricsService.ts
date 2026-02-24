@@ -302,6 +302,9 @@ export async function getDashboardMetrics(
     revenueStateCounts[state]++;
   }
 
+  // "active" count = all open leads (not a specific state)
+  revenueStateCounts.active = openLeads.length;
+
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,
     active_count: openLeads.length,

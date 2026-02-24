@@ -39,12 +39,16 @@ export default function Dashboard() {
       const m = await getDashboardMetrics();
       setMetrics(m);
       setLastRefreshedAt(new Date());
+      // Default to "active" if no action_required leads and user hasn't manually changed filter
+      if (getDashboardState().revenueStateFilter === "active" && m.revenueStateCounts.action_required > 0) {
+        handleFilterChange("action_required");
+      }
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [handleFilterChange]);
 
   useEffect(() => {
     loadData();
