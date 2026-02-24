@@ -1,78 +1,77 @@
-## Problem
 
-The AI-generated reply to Dor Guzman is too long and salesy. Dor sent a short, enthusiastic "Would like to see what you offer" — a hot buying signal. The correct reply should be 2-3 sentences: acknowledge excitement, drop the calendar link, done. Instead, the system generated a 150-word pitch explaining Binah.ai's technology.
 
-**Root causes:**
+# Fix Automation Sequence Advancement + Clean Up Raw JSON in Timeline
 
-1. The `inbound_response` motion block in `ai_task` allows up to 150 words with vague structure guidance ("Provide one helpful detail"). For high-urgency, positive-sentiment inbound replies, this is way too loose.
-2. The `generate-reply-suggestions` function has no word-count constraints at all — the "direct" style says "Short & direct" but doesn't enforce a ceiling.
-3. Neither pipeline explicitly instructs the AI to **match the lead's energy/length** — a 12-word inbound should get a proportionally short reply.
+## Problems Identified
 
-## Plan
-
-### 1. Tighten `inbound_response` motion block in `ai_task/index.ts`
-
-Update the motion block (around line 296-308) to add urgency-aware length rules:
-
-```text
-=== MOTION: INBOUND RESPONSE ===
-Objective:
-Convert interest into a scheduled conversation.
-
-Structure:
-- Mirror the lead's energy and brevity.
-- Acknowledge their interest in ONE short sentence.
-- Provide the next step (meeting link, calendar, or specific question).
-- Do NOT re-pitch or explain the product — the lead already showed interest.
-
-Length:
-- If the lead's message is under 30 words: reply in 40-60 words max.
-- Otherwise: up to 100 words max.
-- NEVER exceed 100 words for inbound responses unless the lead is asking questions from KB.
+### 1. Raw JSON gibberish in timeline
+The override event logger in `sequenceUpdater.ts` (line 317-328) stores raw `JSON.stringify({...})` as `body_text` in the `interactions` table. The timeline renders this directly, showing ugly JSON like:
+```
+{"event":"intent_override","suggested_intent":"pre_email_1_intro","chosen_intent":"pre_email_2_followup","previo...
 ```
 
-### 2. Add word-count caps to `generate-reply-suggestions/index.ts`
+### 2. Automation sequence not advancing after manual send
+When a user manually sends an email for an automated lead, the sequence should advance past the sent step. Two bugs prevent this:
 
-Update the prompt (around line 84-87) to enforce per-style limits:
+**Bug A — `wasAutomationActive` check is too narrow:** The guard at line 131 requires both `eligible_at` AND `needs_action` to be true. But if the automation poller already executed the step (setting `needs_action = false`), or if there's any timing edge case, the entire re-scheduling block (Step 2b) is skipped. The sequence stays stuck.
 
-```text
-1. "direct" — 30-50 words max. Get to the point. One sentence of acknowledgment, one CTA.
-2. "consultative" — 50-80 words max. Warm, ask one clarifying question, suggest next step.
-3. "assertive" — 40-70 words max. Confident, lock down a time, mild urgency.
-```
+**Bug B — Field updates always clear `next_action_key`:** `getFieldUpdatesForIntent()` returns `next_action_key: null` for every intent. This means the main update (Step 2) always clears the automation schedule. Only Step 2b re-applies it, but only if `wasAutomationActive` was true. If that condition fails, the lead loses its automation state entirely.
 
-Also add this global instruction to the prompt:
+## Solution
 
-```text
-CRITICAL RULES:
-- Do NOT re-explain the product or company value proposition. The lead already expressed interest.
-- Match the lead's tone and brevity. Short inbound = short reply.
-- If the lead is ready to meet, go straight to scheduling. No filler.
-```
+### Fix 1: Human-readable override notes
+Change the override interaction logger to store a human-readable string instead of raw JSON:
+- Before: `JSON.stringify({event: "intent_override", ...})`
+- After: `"Sequence override: AI suggested Intro Email, rep chose Follow-up 1 (step 1 of 4)"`
 
-### 3. Include the actual inbound message text in the reply-suggestions prompt
+### Fix 2: Always advance automation if lead has active automation
+Replace the fragile `wasAutomationActive` pre-check with a more robust approach:
+- Check `eligible_at` OR `automation_mode` OR `next_action_key` to determine if automation is active (not just `eligible_at && needs_action`)
+- When an outbound email is manually sent on an automated lead, always advance `next_action_key` to the next step and recalculate `eligible_at`
+- Preserve the safety checks (pause on reply, meeting, motion change, closed)
 
-Currently the prompt only passes `analysis.summary_short` as context. The AI never sees Dor's actual words. Add the latest inbound message body to the prompt context so the AI can match tone and length.
+### Fix 3: `getFieldUpdatesForIntent` should not clear automation fields
+When automation is active, the function should NOT set `next_action_key: null`. Instead, Step 2b should be responsible for ALL automation field management. The default field updates should skip `next_action_key`/`next_action_label` when the lead has active automation.
 
-In `generate-reply-suggestions/index.ts`, after fetching `latestMsg`, also fetch its decrypted body (or plain body_text) and include it in the prompt as:
+## Technical Changes
 
-```text
-- Latest inbound message: "{{message_text}}"
-```
+### File: `src/lib/sequenceUpdater.ts`
 
-This requires fetching the message body. Since messages may be encrypted, fetch from `messages.body_text` (which contains the plaintext for non-encrypted channels) or call the decrypt utility for encrypted ones.
+1. **Override log format** (lines 316-328): Replace `JSON.stringify(...)` body with a human-readable message like:
+   ```
+   Sequence override: suggested "${recommendedIntent}" -> chose "${overrideIntent}"
+   ```
 
-### Technical details
+2. **Broaden `wasAutomationActive` check** (line 131): Change from:
+   ```typescript
+   wasAutomationActive = !!(preLead?.eligible_at) && !!(preLead?.needs_action);
+   ```
+   To:
+   ```typescript
+   wasAutomationActive = !!(preLead?.eligible_at) || !!(preLead?.needs_action);
+   ```
+   This ensures that if either flag is set, we attempt to schedule the next step.
 
-**Files to modify:**
+3. **Preserve automation fields in getFieldUpdatesForIntent** (lines 30-85): Remove `next_action_key: null` and `next_action_label: null` from outbound sequence intents. Let Step 2b handle these fields exclusively for automated leads.
 
+4. **Add human-readable intent labels** for the override log:
+   ```typescript
+   const INTENT_DISPLAY_NAMES: Record<string, string> = {
+     pre_email_1_intro: "Intro Email",
+     pre_email_2_followup: "Follow-up 1",
+     pre_email_3_followup: "Follow-up 2",
+     pre_email_4_breakup: "Breakup Email",
+     // ...
+   };
+   ```
 
-| File                                                     | Change                                                                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `supabase/functions/ai_task/index.ts`                    | Rewrite `inbound_response` motion block (~lines 296-308) with tighter word limits and anti-pitch rules |
-| `supabase/functions/generate-reply-suggestions/index.ts` | Add word-count caps per style, add anti-pitch rules, include latest inbound message text in prompt     |
+### File: `src/components/lead/TimelineTab.tsx`
 
+5. **Filter out system_note entries with raw JSON from the visible timeline** or render them with a friendlier format. Add a check: if `item.type === "system_note"` and `body_text` starts with `{`, parse and render it as a formatted event badge instead of raw text.
 
-**No database changes needed.**
+## Expected Behavior After Fix
 
-Both edge functions will be redeployed after changes.
+- When a lead has automation active and the user manually sends an email (e.g., overriding intro to follow-up), the automation advances to the correct next step (e.g., from send_pre_1 to send_pre_3)
+- Override events appear as clean, human-readable notes in the timeline (e.g., "Sequence override: AI suggested Intro Email, rep chose Follow-up 1")
+- Automation safety checks (reply, meeting, closed) still pause the sequence as expected
+
