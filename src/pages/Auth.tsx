@@ -239,7 +239,7 @@ export default function Auth() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
-                      minLength={6}
+                      minLength={10}
                     />
                   </div>
                   <Button type="submit" className="w-full" disabled={isSubmitting}>

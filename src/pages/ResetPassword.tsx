@@ -35,8 +35,8 @@ export default function ResetPassword() {
       toast.error("Passwords do not match");
       return;
     }
-    if (password.length < 6) {
-      toast.error("Password must be at least 6 characters");
+    if (password.length < 10) {
+      toast.error("Password must be at least 10 characters");
       return;
     }
     setIsSubmitting(true);
@@ -73,7 +73,7 @@ export default function ResetPassword() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={10}
                 />
               </div>
               <div className="space-y-2">
@@ -85,7 +85,7 @@ export default function ResetPassword() {
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={10}
                 />
               </div>
               <Button type="submit" className="w-full" disabled={isSubmitting}>
