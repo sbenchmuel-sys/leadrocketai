@@ -79,6 +79,7 @@ export default function Dashboard() {
 
   // --- Centralized Revenue State filtering ---
   const filteredLeads = useMemo(() => {
+    if (revenueStateFilter === "active") return leads;
     return leads.filter((l) => l.revenueState === revenueStateFilter);
   }, [leads, revenueStateFilter]);
 
