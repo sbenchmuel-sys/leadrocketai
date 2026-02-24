@@ -55,13 +55,8 @@ serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const workspaceId: string | undefined = body.workspaceId ?? body.workspace_id;
     const redirectUrl: string | undefined = body.redirectUrl ?? body.redirect_url;
-    if (!workspaceId) {
-      return new Response(JSON.stringify({ ok: false, error: "workspaceId required" }), {
-        status: 400,
-        headers: { ...cors, "Content-Type": "application/json" },
-      });
-    }
 
+    // Check credentials first (before requiring workspaceId) so probe requests work
     const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
     const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET");
     if (!clientId || !clientSecret) {
@@ -70,6 +65,14 @@ serve(async (req) => {
         JSON.stringify({ ok: false, error: "Microsoft credentials not configured", not_configured: true }),
         { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
       );
+    }
+
+    // If no workspaceId, this is a probe-only request to check credentials
+    if (!workspaceId) {
+      return new Response(JSON.stringify({ ok: true, configured: true }), {
+        status: 200,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
     }
 
     // Generate CSRF token and store in oauth_states (reuse existing table)
