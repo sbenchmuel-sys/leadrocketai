@@ -12,6 +12,7 @@ const corsHeaders = {
 interface GmailMessage {
   id: string;
   threadId: string;
+  labelIds?: string[];
   snippet: string;
   payload: {
     headers: Array<{ name: string; value: string }>;
@@ -399,6 +400,12 @@ async function syncLeadEmails(
       const message: GmailMessage = await msgResponse.json();
       const headers = message.payload.headers;
       const threadId = message.threadId;
+      
+      // Skip draft messages — only sync sent and received emails
+      if (message.labelIds?.includes("DRAFT")) {
+        console.log(`[gmail-bulk-sync] Skipping draft message ${gmailMessageId}`);
+        continue;
+      }
       
       lockedThreadIds.add(threadId);
       

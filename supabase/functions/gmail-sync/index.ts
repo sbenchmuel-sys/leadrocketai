@@ -24,6 +24,7 @@ import {
 interface GmailMessage {
   id: string;
   threadId: string;
+  labelIds?: string[];
   snippet: string;
   payload: {
     headers: Array<{ name: string; value: string }>;
@@ -302,6 +303,12 @@ serve(async (req) => {
         const message: GmailMessage = await msgResponse.json();
         const headers = message.payload.headers;
         const threadId = message.threadId;
+        
+        // Skip draft messages — only sync sent and received emails
+        if (message.labelIds?.includes("DRAFT")) {
+          console.log(`[gmail-sync] Skipping draft message ${gmailMessageId}`);
+          continue;
+        }
         
         // Safety check: never attach a message to a lead unless the headers actually include the lead email
         if (!messageInvolvesLead(headers, leadEmailNorm)) {
