@@ -28,33 +28,24 @@ interface FieldUpdate {
 }
 
 function getFieldUpdatesForIntent(intent: AITaskType): FieldUpdate {
-  // Phase 6: Automation OFF by default — never auto-queue next steps.
-  // Sequence progression is recorded but no future emails are scheduled
-  // unless automation is explicitly enabled (future phase).
+  // Field updates for intent — automation fields (next_action_key, next_action_label)
+  // are managed exclusively by Step 2b for automated leads.
   switch (intent) {
     case "pre_email_1_intro":
       return {
         stage: "contacted",
-        next_action_key: null,
-        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_2_followup":
       return {
-        next_action_key: null,
-        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_3_followup":
       return {
-        next_action_key: null,
-        next_action_label: null,
         needs_action: false,
       };
     case "pre_email_4_breakup":
       return {
-        next_action_key: null,
-        next_action_label: null,
         needs_action: false,
       };
     case "post_meeting_followup_email":
@@ -125,10 +116,10 @@ export async function updateSequenceState(
     try {
       const { data: preLead } = await supabase
         .from("leads")
-        .select("eligible_at, needs_action, last_inbound_at, has_future_meeting, motion, stage")
+        .select("eligible_at, needs_action, last_inbound_at, has_future_meeting, motion, stage, automation_mode")
         .eq("id", leadId)
         .single();
-      wasAutomationActive = !!(preLead?.eligible_at) && !!(preLead?.needs_action);
+      wasAutomationActive = !!(preLead?.eligible_at) || !!(preLead?.needs_action) || !!(preLead?.automation_mode);
     } catch (err) {
       console.warn("[updateSequenceState] Pre-check failed:", err);
     }
@@ -149,6 +140,11 @@ export async function updateSequenceState(
     updatePayload.needs_action = false;
   } else {
     Object.assign(updatePayload, fieldUpdates);
+    // For non-automated leads, clear automation scheduling fields
+    if (!wasAutomationActive && isOutboundSequenceIntent(intentUsed)) {
+      updatePayload.next_action_key = null;
+      updatePayload.next_action_label = null;
+    }
   }
 
   // Apply motion override if provided (from composer dropdown)
@@ -312,18 +308,28 @@ export async function updateSequenceState(
       previous_sequence_step: previousSequenceStep || "unknown",
     });
 
+    const INTENT_DISPLAY_NAMES: Record<string, string> = {
+      pre_email_1_intro: "Intro Email",
+      pre_email_2_followup: "Follow-up 1",
+      pre_email_3_followup: "Follow-up 2",
+      pre_email_4_breakup: "Breakup Email",
+      post_meeting_followup_email: "Post-Meeting Follow-up",
+      post_meeting_followup_personalized: "Personalized Follow-up",
+      reply_to_thread: "Thread Reply",
+      nurture_email_single: "Nurture Email",
+    };
+
+    const suggestedLabel = INTENT_DISPLAY_NAMES[recommendedIntent] || recommendedIntent;
+    const chosenLabel = INTENT_DISPLAY_NAMES[overrideIntent] || overrideIntent;
+    const humanMessage = `Sequence override: suggested "${suggestedLabel}" → chose "${chosenLabel}"`;
+
     // Record as an interaction for audit trail
     try {
       await supabase.from("interactions").insert({
         lead_id: leadId,
         type: "system_note",
         source: "pipeline",
-        body_text: JSON.stringify({
-          event: "intent_override",
-          suggested_intent: recommendedIntent,
-          chosen_intent: overrideIntent,
-          previous_sequence_step: previousSequenceStep || null,
-        }),
+        body_text: humanMessage,
         occurred_at: new Date().toISOString(),
       });
       overrideLogged = true;

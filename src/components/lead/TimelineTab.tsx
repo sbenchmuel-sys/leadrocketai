@@ -113,6 +113,30 @@ function getSignalTags(item: InteractionItem): string[] {
   return [...new Set(tags)];
 }
 
+/* ── Format system_note body (convert legacy JSON to human-readable) ── */
+function formatSystemNoteBody(item: InteractionItem): string {
+  if (item.type !== "system_note" || !item.body_text) return item.body_text || "";
+  const text = item.body_text.trim();
+  if (!text.startsWith("{")) return text;
+  try {
+    const data = JSON.parse(text);
+    if (data.event === "intent_override") {
+      const NAMES: Record<string, string> = {
+        pre_email_1_intro: "Intro Email",
+        pre_email_2_followup: "Follow-up 1",
+        pre_email_3_followup: "Follow-up 2",
+        pre_email_4_breakup: "Breakup Email",
+      };
+      const suggested = NAMES[data.suggested_intent] || data.suggested_intent;
+      const chosen = NAMES[data.chosen_intent] || data.chosen_intent;
+      return `Sequence override: suggested "${suggested}" → chose "${chosen}"`;
+    }
+    return text;
+  } catch {
+    return text;
+  }
+}
+
 /* ── Auto-collapse ── */
 function getAutoExpandIds(entries: (InteractionItem | ThreadGroup)[]): Set<string> {
   const ids = new Set<string>();
@@ -144,6 +168,7 @@ function ChannelBadge({ type }: { type: string }) {
     whatsapp_outbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     whatsapp_inbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     note: { icon: <StickyNote className="h-3 w-3" />, label: "Note", className: "text-muted-foreground bg-muted border-border" },
+    system_note: { icon: <Settings2 className="h-3 w-3" />, label: "System", className: "text-muted-foreground bg-muted border-border" },
   };
   const c = config[type] || config.note;
   return (
@@ -221,7 +246,7 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
                 )}
                 {!open && item.body_text && (
                   <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-                    {item.body_text}
+                    {formatSystemNoteBody(item)}
                   </p>
                 )}
               </div>
@@ -244,7 +269,7 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
               </div>
             )}
             <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
-              {item.body_text}
+              {formatSystemNoteBody(item)}
             </p>
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
