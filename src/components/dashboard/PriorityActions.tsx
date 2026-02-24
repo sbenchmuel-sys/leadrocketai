@@ -42,25 +42,28 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
   const [dismissingId, setDismissingId] = useState<string | null>(null);
 
   const actionLeads = useMemo(() => {
+    const isActionable = (l: EnrichedLead) =>
+      l.needs_action || l.revenueState === "action_required";
+
     const sortByUrgency = (list: EnrichedLead[]) =>
       [...list].sort((a, b) => {
-        const ap = URGENCY_PRIORITY[a.next_action_key || ""] || 10;
-        const bp = URGENCY_PRIORITY[b.next_action_key || ""] || 10;
+        const ap = URGENCY_PRIORITY[a.next_action_key || "reply_now"] || 10;
+        const bp = URGENCY_PRIORITY[b.next_action_key || "reply_now"] || 10;
         return ap - bp;
       });
 
     if (revenueStateFilter === "action_required") {
-      return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 5);
+      return sortByUrgency(leads.filter(isActionable)).slice(0, 5);
     }
 
     if (revenueStateFilter === "active") {
       const actionPool = (allLeads ?? leads).filter(
-        (l) => l.revenueState === "action_required" && l.needs_action
+        (l) => l.revenueState === "action_required"
       );
       return sortByUrgency(actionPool).slice(0, 3);
     }
 
-    return sortByUrgency(leads.filter((l) => l.needs_action)).slice(0, 3);
+    return sortByUrgency(leads.filter(isActionable)).slice(0, 3);
   }, [leads, allLeads, revenueStateFilter]);
 
   const handleDismiss = async (lead: EnrichedLead, reasonCode: string) => {
@@ -82,7 +85,10 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
   };
 
   const getActionButton = (lead: EnrichedLead) => {
-    const actionType = getActionType(lead.next_action_key);
+    // If no explicit action key but lead is action_required (unreplied inbound), default to reply
+    const effectiveActionKey = lead.next_action_key ||
+      (lead.revenueState === "action_required" && lead.last_inbound_at ? "reply_now" : null);
+    const actionType = getActionType(effectiveActionKey);
     const actionReasonCode = (lead as any).action_reason_code;
 
     if (actionReasonCode === "NURTURE_SWITCH_RECOMMENDED") {
