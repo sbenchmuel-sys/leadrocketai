@@ -57,7 +57,9 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
   };
 
   const getActionButton = (lead: EnrichedLead) => {
-    const actionType = getActionType(lead.next_action_key);
+    const effectiveActionKey = lead.next_action_key ||
+      (lead.revenueState === "action_required" && (lead as any).last_inbound_at ? "reply_now" : null);
+    const actionType = getActionType(effectiveActionKey);
     const actionReasonCode = (lead as any).action_reason_code;
 
     if (actionReasonCode === "NURTURE_SWITCH_RECOMMENDED") {
