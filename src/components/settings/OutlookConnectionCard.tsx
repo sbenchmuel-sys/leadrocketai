@@ -131,18 +131,33 @@ export function OutlookConnectionCard() {
     })();
   }, [fetchWorkspaceId, fetchHealth]);
 
+  const ensureWorkspace = async (): Promise<string> => {
+    if (!user) throw new Error("Not authenticated");
+    let wsId = workspaceId ?? await fetchWorkspaceId();
+    if (wsId) return wsId;
+
+    // Auto-provision workspace
+    const { error: wsErr } = await supabase
+      .from("workspaces")
+      .insert({ name: "My Workspace", plan: "free" } as any);
+    if (wsErr) throw new Error("Could not create workspace. Please contact support.");
+
+    const { data: newMembership } = await supabase
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+    if (!newMembership) throw new Error("Could not set up workspace membership.");
+    return newMembership.workspace_id;
+  };
+
   const handleConnect = async () => {
     if (credentialsConfigured === false) return;
     try {
       setIsConnecting(true);
 
-      // Always re-fetch workspace_id to avoid stale state race conditions
-      let wsId = workspaceId ?? await fetchWorkspaceId();
-      if (!wsId) {
-        toast.error("No workspace found", { description: "Please refresh the page and try again." });
-        setIsConnecting(false);
-        return;
-      }
+      const wsId = await ensureWorkspace();
       setWorkspaceId(wsId);
 
       const { data: sessionData } = await supabase.auth.getSession();
