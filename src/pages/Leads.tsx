@@ -154,7 +154,10 @@ export default function Leads() {
       if (error) throw error;
 
       if (data?.ok) {
-        toast.success(`Synced ${data.totalSynced} emails for ${data.leadsProcessed} lead(s)`);
+        const msg = data.totalSynced > 0
+          ? `Synced ${data.totalSynced} new email${data.totalSynced > 1 ? "s" : ""} for ${data.leadsProcessed} lead(s)`
+          : `Inbox is up to date for ${data.leadsProcessed} lead(s)`;
+        toast.success(msg);
         setSelectedIds(new Set());
         loadLeads();
       } else {

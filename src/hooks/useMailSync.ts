@@ -232,7 +232,7 @@ export function useMailSync() {
           console.error("Milestone matching failed:", matchErr);
         }
       } else {
-        toast.info("No new emails found");
+        toast.success("Inbox is up to date — no new emails to sync");
       }
 
       return data as SyncResult;

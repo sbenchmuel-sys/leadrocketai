@@ -120,7 +120,7 @@ export function useGmailSync() {
           // Don't fail the sync if matching fails
         }
       } else {
-        toast.info("No new emails found");
+        toast.success("Inbox is up to date — no new emails to sync");
       }
 
       return data as SyncResult;
