@@ -80,13 +80,32 @@ function buildLeadContext(ctx: ResolvedContext): string {
 
 function buildRepContext(ctx: ResolvedContext): string {
   const rep = ctx.rep_profile;
-  if (!rep) return "";
+  // Always provide a sender name — fall back to auth user metadata if rep profile is missing
+  const senderName = rep?.full_name || getAuthUserName() || "Sales Rep";
   return [
-    `Sender Name: ${rep.full_name || "Sales Rep"}`,
-    `Sender Title: ${rep.job_title || ""}`,
-    `Sender Company: ${rep.company_name || ctx.workspace_profile?.company_name || ""}`,
-    `Calendar Link: ${rep.calendar_link || ""}`,
+    `Sender Name: ${senderName}`,
+    rep?.job_title ? `Sender Title: ${rep.job_title}` : "",
+    rep?.company_name || (ctx.workspace_profile as any)?.company_name
+      ? `Sender Company: ${rep?.company_name || (ctx.workspace_profile as any)?.company_name || ""}`
+      : "",
+    rep?.calendar_link ? `Calendar Link: ${rep.calendar_link}` : "",
   ].filter(Boolean).join("\n");
+}
+
+/** Extract user display name from Supabase auth session (cached in memory) */
+function getAuthUserName(): string | null {
+  try {
+    // supabase.auth stores session in memory after login — this is synchronous-safe
+    const sessionStr = localStorage.getItem(
+      Object.keys(localStorage).find(k => k.includes("supabase") && k.includes("auth")) || ""
+    );
+    if (!sessionStr) return null;
+    const parsed = JSON.parse(sessionStr);
+    const meta = parsed?.user?.user_metadata || parsed?.currentSession?.user?.user_metadata;
+    return meta?.full_name || meta?.name || null;
+  } catch {
+    return null;
+  }
 }
 
 // ============================================
