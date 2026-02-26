@@ -56,3 +56,18 @@ verify_jwt = false
 
 [functions.whatsapp-connect-twilio]
 verify_jwt = false
+
+[functions.twilio-voice-webhook]
+verify_jwt = false
+
+[functions.call-ingest-recording]
+verify_jwt = false
+
+[functions.call-transcribe]
+verify_jwt = false
+
+[functions.call-analyze]
+verify_jwt = false
+
+[functions.call-api]
+verify_jwt = false
