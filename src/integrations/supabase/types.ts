@@ -151,7 +151,7 @@ export type Database = {
           {
             foreignKeyName: "call_analyses_call_session_id_fkey"
             columns: ["call_session_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "call_sessions"
             referencedColumns: ["id"]
           },
@@ -354,36 +354,45 @@ export type Database = {
       call_transcripts: {
         Row: {
           call_session_id: string
+          clean_full_text: string | null
           confidence: number | null
           created_at: string
           full_text: string | null
           id: string
           language: string
+          llm_formatted_text: string | null
           provider: string
+          raw_full_text: string | null
           segments_json: Json | null
           status: string
           updated_at: string
         }
         Insert: {
           call_session_id: string
+          clean_full_text?: string | null
           confidence?: number | null
           created_at?: string
           full_text?: string | null
           id?: string
           language?: string
+          llm_formatted_text?: string | null
           provider?: string
+          raw_full_text?: string | null
           segments_json?: Json | null
           status?: string
           updated_at?: string
         }
         Update: {
           call_session_id?: string
+          clean_full_text?: string | null
           confidence?: number | null
           created_at?: string
           full_text?: string | null
           id?: string
           language?: string
+          llm_formatted_text?: string | null
           provider?: string
+          raw_full_text?: string | null
           segments_json?: Json | null
           status?: string
           updated_at?: string
@@ -392,7 +401,7 @@ export type Database = {
           {
             foreignKeyName: "call_transcripts_call_session_id_fkey"
             columns: ["call_session_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "call_sessions"
             referencedColumns: ["id"]
           },
