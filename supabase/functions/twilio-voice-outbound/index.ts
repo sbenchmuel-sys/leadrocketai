@@ -103,11 +103,6 @@ Deno.serve(async (req) => {
       StatusCallback: statusCallbackUrl,
       StatusCallbackMethod: "POST",
       StatusCallbackEvent: "initiated ringing answered completed",
-      Record: "true",
-      RecordingChannels: "2",
-      RecordingStatusCallback: recordingCallbackUrl,
-      RecordingStatusCallbackMethod: "POST",
-      RecordingStatusCallbackEvent: "completed",
     });
 
     const twilioResp = await fetch(twilioApiUrl, {
