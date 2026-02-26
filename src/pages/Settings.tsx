@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
 import { WhatsAppConnectionCard } from "@/components/settings/WhatsAppConnectionCard";
@@ -19,6 +21,20 @@ import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
 import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone } from "lucide-react";
 
 export default function Settings() {
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      const { data } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", user.id)
+        .limit(1)
+        .maybeSingle();
+      if (data) setWorkspaceId(data.workspace_id);
+    });
+  }, []);
   return (
     <div className="space-y-4">
       <div>
@@ -161,7 +177,7 @@ export default function Settings() {
             </div>
           </AccordionTrigger>
           <AccordionContent>
-            <CallSettingsCard />
+            <CallSettingsCard workspaceId={workspaceId} />
           </AccordionContent>
         </AccordionItem>
 
