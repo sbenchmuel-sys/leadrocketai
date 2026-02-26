@@ -492,6 +492,7 @@ function WhatsAppEntry({ item, onToggleHide }: { item: InteractionItem; onToggle
 /* ── Main Component ── */
 export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProps) {
   const [interactions, setInteractions] = useState<InteractionItem[]>([]);
+  const [callSessions, setCallSessions] = useState<CallSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showReplyForm, setShowReplyForm] = useState(false);
   const [replyText, setReplyText] = useState("");
@@ -500,8 +501,14 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
   const [showHidden, setShowHidden] = useState(false);
 
   const loadInteractions = () => {
-    getLeadInteractions(leadId, showHidden)
-      .then((items) => setInteractions(dedupeTimelineItems(items)))
+    Promise.all([
+      getLeadInteractions(leadId, showHidden),
+      fetchCallsByLeadId(leadId).catch(() => [] as CallSession[]),
+    ])
+      .then(([items, calls]) => {
+        setInteractions(dedupeTimelineItems(items));
+        setCallSessions(calls);
+      })
       .catch(console.error)
       .finally(() => setIsLoading(false));
   };
