@@ -1,7 +1,7 @@
 // ============================================================
-// Call Transcribe — Phase 3 hardened
-// Language routing · ASR abstraction · Diarization · Cleanup
-// Idempotency · Analysis gate · LLM-ready formatting
+// Call Transcribe — Phase 3 hardened (v2)
+// Safe base64 · Insert-first idempotency · Audio size guard
+// Language auto-detect always on · Raw transcript preserved
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
@@ -11,7 +11,6 @@ import {
   normalizeSpeakerRoles,
   cleanSegments,
   formatLlmTranscript,
-  type AsrSegment,
 } from "../_shared/asrProvider.ts";
 
 const corsHeaders = {
@@ -25,6 +24,20 @@ function respond(body: Record<string, unknown>, status = 200) {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
+
+// §1 — Safe chunked base64 conversion (prevents stack overflow on large buffers)
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000; // 32KB chunks
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+const MAX_AUDIO_BYTES = 12 * 1024 * 1024; // 12MB safe limit
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -54,19 +67,6 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "Session not found" }, 404);
     }
 
-    // ---- Idempotency guard (§6) ----
-    const { data: existingTranscript } = await supabase
-      .from("call_transcripts")
-      .select("id, status")
-      .eq("call_session_id", callSessionId)
-      .eq("status", "completed")
-      .maybeSingle();
-
-    if (existingTranscript) {
-      logger.info("transcribe_already_completed", { callSessionId, transcriptId: existingTranscript.id });
-      return respond({ ok: true, transcriptId: existingTranscript.id, status: "already_completed" });
-    }
-
     // ---- Load workspace settings ----
     const { data: settings } = await supabase
       .from("call_settings")
@@ -81,39 +81,20 @@ Deno.serve(async (req) => {
 
     // ---- Duration gate for transcription ----
     if (session.duration_sec != null && session.duration_sec < minDuration) {
-      await supabase.from("call_transcripts").insert({
+      // Use upsert-style insert to avoid duplicate on short calls
+      await supabase.from("call_transcripts").upsert({
         call_session_id: callSessionId,
         status: "skipped_short",
         language: workspaceLang,
         provider: "none",
-      });
+      }, { onConflict: "call_session_id", ignoreDuplicates: true });
       logger.info("transcribe_skipped_short", { callSessionId, durationSec: session.duration_sec });
       return respond({ ok: true, status: "skipped_short" });
     }
 
-    // ---- Language resolution (§1) ----
-    // Priority: contact preference → workspace default → auto-detect
-    let resolvedLanguage: string | undefined;
-    let useAutoDetect = false;
+    // ---- §2 Insert-first idempotency (race-safe via UNIQUE constraint) ----
+    const resolvedLanguage = workspaceLang;
 
-    if (session.customer_contact_id) {
-      // Check contact preferred_language via contact_identities metadata
-      // For now we fall through; contacts table doesn't have preferred_language yet
-    }
-
-    if (!resolvedLanguage) {
-      resolvedLanguage = workspaceLang;
-    }
-
-    // If workspace lang is set but we want to verify, could enable auto-detect
-    // For deterministic routing we use workspace lang by default
-    // Auto-detect only if explicitly no language could be resolved
-    if (!resolvedLanguage) {
-      useAutoDetect = true;
-      resolvedLanguage = CALL_DEFAULTS.DEFAULT_LANGUAGE;
-    }
-
-    // ---- Create transcript record as processing ----
     const { data: transcript, error: insertErr } = await supabase
       .from("call_transcripts")
       .insert({
@@ -125,14 +106,18 @@ Deno.serve(async (req) => {
       .select("id")
       .single();
 
-    if (insertErr || !transcript) {
-      // Possible duplicate from race condition
-      if (insertErr?.code === "23505") {
-        logger.info("transcribe_duplicate_insert", { callSessionId });
-        return respond({ ok: true, status: "duplicate" });
+    if (insertErr) {
+      if (insertErr.code === "23505") {
+        logger.info("transcribe_already_started_or_completed", { callSessionId });
+        return respond({ ok: true, status: "already_started_or_completed" });
       }
-      logger.error("transcribe_insert_error", { error: insertErr?.message });
+      logger.error("transcribe_insert_error", { error: insertErr.message });
       return respond({ ok: false, error: "Failed to create transcript" }, 500);
+    }
+
+    if (!transcript) {
+      logger.info("transcribe_already_started_or_completed", { callSessionId });
+      return respond({ ok: true, status: "already_started_or_completed" });
     }
 
     // ---- Get recording audio ----
@@ -169,23 +154,31 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "Failed to download audio" }, 500);
     }
 
-    // ---- ASR via provider abstraction (§2) ----
+    // ---- §6 Audio size guard ----
     const audioBuffer = await audioData.arrayBuffer();
-    const base64Audio = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
 
+    if (audioBuffer.byteLength > MAX_AUDIO_BYTES) {
+      logger.warn("audio_too_large", { size: audioBuffer.byteLength, callSessionId });
+      await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
+      return respond({ ok: false, error: "Audio too large" }, 400);
+    }
+
+    // ---- §1 Safe base64 conversion ----
+    const base64Audio = arrayBufferToBase64(audioBuffer);
+
+    // ---- §5 ASR with auto-detect always enabled ----
     const asr = new GeminiAsrProvider(lovableApiKey);
 
     let asrResult;
     try {
       asrResult = await asr.transcribe(base64Audio, {
         language: resolvedLanguage,
-        autoDetect: useAutoDetect,
+        autoDetect: true, // Always on — bias toward workspace lang but detect actual
         allowedLanguages: supportedLangs as string[],
         diarization: true,
         timestamps: true,
       });
     } catch (err) {
-      // §8 — ASR failure handling
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       logger.error("transcribe_asr_failed", {
         callSessionId,
@@ -194,26 +187,25 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "ASR transcription failed" }, 500);
     }
 
-    // ---- Diarization normalization (§3) ----
-    const normalizedSegments = normalizeSpeakerRoles(
-      asrResult.segments,
-      session.direction,
-    );
+    // ---- Diarization normalization ----
+    const normalizedSegments = normalizeSpeakerRoles(asrResult.segments, session.direction);
 
-    // ---- Transcript cleanup (§4) ----
+    // ---- Transcript cleanup ----
     const cleanedSegments = cleanSegments(normalizedSegments);
 
-    // ---- Build LLM-ready transcript (§7) ----
-    const llmTranscript = formatLlmTranscript(cleanedSegments);
-
-    // Build clean fullText from cleaned segments
+    // ---- §7 Build all transcript versions ----
+    const rawFullText = asrResult.fullText;
     const cleanFullText = cleanedSegments.map((s) => s.text).join(" ");
+    const llmFormattedText = formatLlmTranscript(cleanedSegments);
 
     // ---- Persist completed transcript ----
     await supabase.from("call_transcripts").update({
       status: "completed",
       segments_json: cleanedSegments,
-      full_text: llmTranscript, // LLM-ready formatted version
+      full_text: llmFormattedText, // backward compat
+      raw_full_text: rawFullText,
+      clean_full_text: cleanFullText,
+      llm_formatted_text: llmFormattedText,
       language: asrResult.language,
       confidence: asrResult.confidence ?? null,
     }).eq("id", transcript.id);
@@ -226,20 +218,18 @@ Deno.serve(async (req) => {
       segmentCount: cleanedSegments.length,
     });
 
-    // ---- Analysis gate (§5) ----
+    // ---- §4 Analysis gate (idempotent via UNIQUE constraint) ----
     if (session.duration_sec != null && session.duration_sec < analyzeMin) {
-      // Create skipped analysis record
-      await supabase.from("call_analyses").insert({
+      await supabase.from("call_analyses").upsert({
         call_session_id: callSessionId,
         status: "skipped_short",
-      });
+      }, { onConflict: "call_session_id", ignoreDuplicates: true });
       logger.info("analyze_skipped_short", {
         callSessionId,
         durationSec: session.duration_sec,
         minRequired: analyzeMin,
       });
     } else {
-      // Enqueue analysis
       await enqueueCallJob({
         type: "analyze_call",
         callSessionId,
