@@ -2,6 +2,8 @@
 // Call Analyze — Phase 4: Intelligence Layer
 // Structured signal extraction with evidence linking,
 // confidence scoring, sentiment timeline, retry logic
+// Phase 4 hardening: evidence verification, timestamp
+// validation, confidence clamping, re-run support
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
@@ -19,7 +21,7 @@ function respond(body: Record<string, unknown>, status = 200) {
   });
 }
 
-// ---- Phase 4: Deterministic analysis prompt ----
+// ---- Phase 4: Deterministic analysis prompt (DO NOT CHANGE) ----
 function buildAnalysisPrompt(
   transcript: string,
   direction: string,
@@ -112,21 +114,14 @@ ${transcript}`;
 
 // ---- JSON extraction with repair ----
 function extractJson(raw: string): Record<string, unknown> | null {
-  // Strip markdown fences
   let cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
-
-  // Find outermost JSON object
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-
   cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-
-  // Basic repairs
   cleaned = cleaned
-    .replace(/[\x00-\x1F\x7F]/g, " ") // control chars
-    .replace(/,\s*([}\]])/g, "$1");     // trailing commas
-
+    .replace(/[\x00-\x1F\x7F]/g, " ")
+    .replace(/,\s*([}\]])/g, "$1");
   try {
     return JSON.parse(cleaned);
   } catch {
@@ -144,6 +139,13 @@ function validateAnalysisOutput(parsed: Record<string, unknown>): boolean {
   return REQUIRED_KEYS.every((k) => k in parsed);
 }
 
+// ---- Confidence clamping ----
+function clampConfidence(n: unknown): number {
+  const v = Number(n);
+  if (isNaN(v)) return 0;
+  return Math.max(0, Math.min(1, v));
+}
+
 // ---- Default empty output for missing fields ----
 function normalizeOutput(parsed: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -152,12 +154,144 @@ function normalizeOutput(parsed: Record<string, unknown>): Record<string, unknow
     outcome: parsed.outcome ?? { label: "no_outcome", confidence: 0 },
     intent: parsed.intent ?? { type: "other", confidence: 0, evidence: [] },
     sentiment: parsed.sentiment ?? { overall: "neutral", confidence: 0, timeline: [] },
-    objections: parsed.objections ?? [],
-    commitments: parsed.commitments ?? [],
-    risks: parsed.risks ?? [],
-    actionItems: parsed.actionItems ?? [],
-    recommendedNextSteps: parsed.recommendedNextSteps ?? [],
+    objections: Array.isArray(parsed.objections) ? parsed.objections : [],
+    commitments: Array.isArray(parsed.commitments) ? parsed.commitments : [],
+    risks: Array.isArray(parsed.risks) ? parsed.risks : [],
+    actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
+    recommendedNextSteps: Array.isArray(parsed.recommendedNextSteps) ? parsed.recommendedNextSteps : [],
   };
+}
+
+// ---- Evidence types ----
+interface EvidenceEntry {
+  timestamp?: string;
+  speaker?: string;
+  quote?: string;
+}
+
+interface WithEvidence {
+  evidence?: EvidenceEntry[];
+  confidence?: number;
+}
+
+// ---- Timestamp validation ----
+const TS_REGEX = /^\d{2}:\d{2}$/;
+
+function isValidTimestamp(ts: string, maxMinute: number | null): boolean {
+  if (!TS_REGEX.test(ts)) return false;
+  if (maxMinute !== null) {
+    const minute = parseInt(ts.split(":")[0], 10);
+    if (minute > maxMinute) return false;
+  }
+  return true;
+}
+
+// ---- Evidence verification & pruning ----
+function pruneEvidence(
+  items: WithEvidence[],
+  transcriptText: string,
+  maxMinute: number | null,
+): { prunedCount: number } {
+  let prunedCount = 0;
+
+  for (const item of items) {
+    if (!Array.isArray(item.evidence)) {
+      item.evidence = [];
+      continue;
+    }
+
+    const before = item.evidence.length;
+    item.evidence = (item.evidence as EvidenceEntry[]).filter((ev) => {
+      // Validate timestamp format & range
+      if (!ev.timestamp || !isValidTimestamp(ev.timestamp, maxMinute)) return false;
+      // Validate quote exists in transcript
+      if (!ev.quote || !transcriptText.includes(ev.quote)) return false;
+      return true;
+    });
+    prunedCount += before - item.evidence.length;
+
+    // If all evidence removed, halve confidence
+    if (item.evidence.length === 0 && typeof item.confidence === "number") {
+      item.confidence = clampConfidence(item.confidence * 0.5);
+    }
+  }
+
+  return { prunedCount };
+}
+
+// ---- Post-processing pipeline ----
+function postProcess(
+  normalized: Record<string, unknown>,
+  transcriptText: string,
+  durationSec: number | null,
+): { prunedCount: number; clampedCount: number } {
+  const maxMinute = durationSec != null ? Math.floor(durationSec / 60) : null;
+  let totalPruned = 0;
+  let clampedCount = 0;
+
+  // 1) Evidence verification on all evidence-bearing arrays + intent
+  const intent = normalized.intent as WithEvidence;
+  if (intent) {
+    const r = pruneEvidence([intent], transcriptText, maxMinute);
+    totalPruned += r.prunedCount;
+  }
+
+  const evidenceArrayKeys = ["objections", "commitments", "risks", "actionItems", "recommendedNextSteps"] as const;
+  for (const key of evidenceArrayKeys) {
+    const arr = normalized[key];
+    if (Array.isArray(arr)) {
+      const r = pruneEvidence(arr as WithEvidence[], transcriptText, maxMinute);
+      totalPruned += r.prunedCount;
+    }
+  }
+
+  // 2) Confidence clamping
+  const outcome = normalized.outcome as { confidence?: unknown } | undefined;
+  if (outcome) {
+    const before = outcome.confidence;
+    outcome.confidence = clampConfidence(outcome.confidence);
+    if (before !== outcome.confidence) clampedCount++;
+  }
+
+  if (intent) {
+    const before = intent.confidence;
+    intent.confidence = clampConfidence(intent.confidence);
+    if (before !== intent.confidence) clampedCount++;
+  }
+
+  const sentiment = normalized.sentiment as { confidence?: unknown; timeline?: unknown[] } | undefined;
+  if (sentiment) {
+    const before = sentiment.confidence;
+    sentiment.confidence = clampConfidence(sentiment.confidence);
+    if (before !== sentiment.confidence) clampedCount++;
+  }
+
+  const steps = normalized.recommendedNextSteps as Array<{ confidence?: unknown; rank?: number }>;
+  if (Array.isArray(steps)) {
+    for (const s of steps) {
+      const before = s.confidence;
+      s.confidence = clampConfidence(s.confidence);
+      if (before !== s.confidence) clampedCount++;
+    }
+  }
+
+  // 3) Cap recommendedNextSteps to 3 and re-rank
+  if (Array.isArray(normalized.recommendedNextSteps)) {
+    normalized.recommendedNextSteps = (normalized.recommendedNextSteps as Array<{ rank?: number }>)
+      .slice(0, 3)
+      .map((step, i) => ({ ...step, rank: i + 1 }));
+  }
+
+  // 4) Cap sentiment timeline
+  if (sentiment && Array.isArray(sentiment.timeline)) {
+    if (durationSec != null && durationSec < 60) {
+      sentiment.timeline = sentiment.timeline.slice(0, 1);
+    } else if (sentiment.timeline.length > 60) {
+      sentiment.timeline = sentiment.timeline.slice(0, 60);
+    }
+  }
+
+  return { prunedCount: totalPruned, clampedCount };
 }
 
 // ---- Main handler ----
@@ -215,7 +349,7 @@ Deno.serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    const transcriptText = transcript?.llm_formatted_text || transcript?.full_text;
+    const transcriptText = (transcript?.llm_formatted_text || transcript?.full_text) as string | null;
 
     if (!transcriptText) {
       await supabase.from("call_analyses").insert({
@@ -225,29 +359,53 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "No completed transcript" }, 404);
     }
 
-    // Idempotent insert (unique constraint on call_session_id)
-    const { data: analysis, error: insertErr } = await supabase
+    // ---- Fix #6: Re-run support for failed analyses ----
+    let analysisId: string;
+
+    const { data: existing } = await supabase
       .from("call_analyses")
-      .insert({
-        call_session_id: callSessionId,
+      .select("id, status")
+      .eq("call_session_id", callSessionId)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.status === "completed") {
+        logger.info("analyze_already_completed", { callSessionId });
+        return respond({ ok: true, status: "already_completed", analysisId: existing.id });
+      }
+      // Re-run: update failed/skipped to processing
+      await supabase.from("call_analyses").update({
         status: "processing",
         model: "google/gemini-2.5-flash",
         version: "phase4",
-      })
-      .select("id")
-      .single();
+      }).eq("id", existing.id);
+      analysisId = existing.id;
+      logger.info("analyze_rerun", { callSessionId, previousStatus: existing.status });
+    } else {
+      const { data: newAnalysis, error: insertErr } = await supabase
+        .from("call_analyses")
+        .insert({
+          call_session_id: callSessionId,
+          status: "processing",
+          model: "google/gemini-2.5-flash",
+          version: "phase4",
+        })
+        .select("id")
+        .single();
 
-    if (insertErr) {
-      if (insertErr.code === "23505") {
-        logger.info("analyze_already_exists", { callSessionId });
-        return respond({ ok: true, status: "already_exists" });
+      if (insertErr) {
+        if (insertErr.code === "23505") {
+          logger.info("analyze_already_exists", { callSessionId });
+          return respond({ ok: true, status: "already_exists" });
+        }
+        logger.error("analyze_insert_error", { error: insertErr.message });
+        return respond({ ok: false, error: "Failed to create analysis" }, 500);
       }
-      logger.error("analyze_insert_error", { error: insertErr.message });
-      return respond({ ok: false, error: "Failed to create analysis" }, 500);
+      analysisId = newAnalysis.id;
     }
 
     if (!lovableApiKey) {
-      await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysis.id);
+      await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysisId);
       return respond({ ok: false, error: "LOVABLE_API_KEY not configured" }, 500);
     }
 
@@ -262,6 +420,8 @@ Deno.serve(async (req) => {
     const MAX_ATTEMPTS = 2;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      logger.info("analyze_retry_attempt", { callSessionId, attempt });
+
       const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -279,7 +439,8 @@ Deno.serve(async (req) => {
         const errText = await aiResponse.text();
         logger.error("analyze_ai_error", { attempt, status: aiResponse.status, error: errText });
         if (attempt === MAX_ATTEMPTS) {
-          await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysis.id);
+          await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysisId);
+          logger.error("analyze_failed_final", { callSessionId, reason: "ai_request_failed" });
           return respond({ ok: false, error: "AI analysis failed" }, 500);
         }
         continue;
@@ -298,29 +459,41 @@ Deno.serve(async (req) => {
       parsed = null;
 
       if (attempt === MAX_ATTEMPTS) {
-        await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysis.id);
+        await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysisId);
+        logger.error("analyze_failed_final", { callSessionId, reason: "json_parse_failed" });
         return respond({ ok: false, error: "Failed to parse analysis JSON after retries" }, 500);
       }
     }
 
     if (!parsed) {
-      await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysis.id);
+      await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysisId);
+      logger.error("analyze_failed_final", { callSessionId, reason: "no_valid_output" });
       return respond({ ok: false, error: "No valid analysis output" }, 500);
     }
 
     const normalized = normalizeOutput(parsed);
 
-    // Update analysis record — store full structured output in signals_json
+    // ---- Post-processing: evidence verification, clamping, caps ----
+    const { prunedCount, clampedCount } = postProcess(normalized, transcriptText, session.duration_sec);
+
+    if (prunedCount > 0) {
+      logger.info("analyze_evidence_pruned_count", { callSessionId, prunedCount });
+    }
+    if (clampedCount > 0) {
+      logger.info("analyze_confidence_clamped", { callSessionId, clampedCount });
+    }
+
+    // Update analysis record
     await supabase.from("call_analyses").update({
       status: "completed",
       summary_short: (normalized.summaryShort as string) || null,
       summary_long: (normalized.summaryLong as string) || null,
       action_items_json: normalized.actionItems,
-      signals_json: normalized, // Full Phase 4 output for cross-channel queries
+      signals_json: normalized,
       recommended_next_steps_json: normalized.recommendedNextSteps,
-    }).eq("id", analysis.id);
+    }).eq("id", analysisId);
 
-    logger.info("analyze_complete", { callSessionId, analysisId: analysis.id, version: "phase4" });
+    logger.info("analyze_complete", { callSessionId, analysisId, version: "phase4" });
 
     // Bridge to interactions table if lead is linked
     if (session.lead_id) {
@@ -337,7 +510,7 @@ Deno.serve(async (req) => {
       logger.info("analyze_bridged_to_interactions", { leadId: session.lead_id });
     }
 
-    return respond({ ok: true, analysisId: analysis.id });
+    return respond({ ok: true, analysisId });
   } catch (err) {
     logger.error("analyze_error", { error: err instanceof Error ? err.message : String(err) });
     return respond({ ok: false, error: "Internal error" }, 500);
