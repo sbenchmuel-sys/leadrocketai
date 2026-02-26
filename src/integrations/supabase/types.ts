@@ -169,6 +169,7 @@ export type Database = {
           recording_sid: string
           sha256: string | null
           status: string
+          storage_path: string | null
           storage_provider: string | null
           storage_url: string | null
           twilio_recording_url: string | null
@@ -185,6 +186,7 @@ export type Database = {
           recording_sid: string
           sha256?: string | null
           status?: string
+          storage_path?: string | null
           storage_provider?: string | null
           storage_url?: string | null
           twilio_recording_url?: string | null
@@ -201,6 +203,7 @@ export type Database = {
           recording_sid?: string
           sha256?: string | null
           status?: string
+          storage_path?: string | null
           storage_provider?: string | null
           storage_url?: string | null
           twilio_recording_url?: string | null
