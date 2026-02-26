@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { getLeadInteractions, hideInteraction, unhideInteraction, InteractionItem } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchCallsByLeadId } from "@/lib/callQueries";
+import type { CallSession } from "@/lib/callTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +11,7 @@ import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, Ch
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import CallTimelineCard from "@/components/call/CallTimelineCard";
 
 interface TimelineTabProps {
   leadId: string;
