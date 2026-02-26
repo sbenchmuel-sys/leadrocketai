@@ -1,15 +1,30 @@
 // ============================================================
-// Call Transcribe — Uses Lovable AI to transcribe audio
-// Then enqueues analysis if duration meets threshold
+// Call Transcribe — Phase 3 hardened
+// Language routing · ASR abstraction · Diarization · Cleanup
+// Idempotency · Analysis gate · LLM-ready formatting
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { CALL_DEFAULTS, enqueueCallJob } from "../_shared/callConfig.ts";
+import {
+  GeminiAsrProvider,
+  normalizeSpeakerRoles,
+  cleanSegments,
+  formatLlmTranscript,
+  type AsrSegment,
+} from "../_shared/asrProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+function respond(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -22,30 +37,37 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
-    const { callSessionId, recordingId } = await req.json();
+    const { callSessionId } = await req.json();
 
     if (!callSessionId) {
-      return new Response(JSON.stringify({ ok: false, error: "Missing callSessionId" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "Missing callSessionId" }, 400);
     }
 
-    // Fetch recording + session
+    // ---- Fetch session ----
     const { data: session } = await supabase
       .from("call_sessions")
-      .select("id, workspace_id, duration_sec")
+      .select("id, workspace_id, duration_sec, direction, customer_contact_id")
       .eq("id", callSessionId)
       .single();
 
     if (!session) {
-      return new Response(JSON.stringify({ ok: false, error: "Session not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "Session not found" }, 404);
     }
 
-    // Get call settings for workspace
+    // ---- Idempotency guard (§6) ----
+    const { data: existingTranscript } = await supabase
+      .from("call_transcripts")
+      .select("id, status")
+      .eq("call_session_id", callSessionId)
+      .eq("status", "completed")
+      .maybeSingle();
+
+    if (existingTranscript) {
+      logger.info("transcribe_already_completed", { callSessionId, transcriptId: existingTranscript.id });
+      return respond({ ok: true, transcriptId: existingTranscript.id, status: "already_completed" });
+    }
+
+    // ---- Load workspace settings ----
     const { data: settings } = await supabase
       .from("call_settings")
       .select("*")
@@ -53,44 +75,67 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const minDuration = settings?.transcribe_min_duration_sec ?? CALL_DEFAULTS.TRANSCRIBE_MIN_DURATION_SEC;
-    const language = settings?.default_language ?? CALL_DEFAULTS.DEFAULT_LANGUAGE;
+    const analyzeMin = settings?.analyze_min_duration_sec ?? CALL_DEFAULTS.ANALYZE_MIN_DURATION_SEC;
+    const workspaceLang = settings?.default_language ?? CALL_DEFAULTS.DEFAULT_LANGUAGE;
+    const supportedLangs = settings?.supported_languages ?? CALL_DEFAULTS.SUPPORTED_LANGUAGES;
 
-    // Check duration threshold
+    // ---- Duration gate for transcription ----
     if (session.duration_sec != null && session.duration_sec < minDuration) {
       await supabase.from("call_transcripts").insert({
         call_session_id: callSessionId,
         status: "skipped_short",
-        language,
+        language: workspaceLang,
         provider: "none",
       });
-
       logger.info("transcribe_skipped_short", { callSessionId, durationSec: session.duration_sec });
-      return new Response(JSON.stringify({ ok: true, status: "skipped_short" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: true, status: "skipped_short" });
     }
 
-    // Create transcript record as processing
+    // ---- Language resolution (§1) ----
+    // Priority: contact preference → workspace default → auto-detect
+    let resolvedLanguage: string | undefined;
+    let useAutoDetect = false;
+
+    if (session.customer_contact_id) {
+      // Check contact preferred_language via contact_identities metadata
+      // For now we fall through; contacts table doesn't have preferred_language yet
+    }
+
+    if (!resolvedLanguage) {
+      resolvedLanguage = workspaceLang;
+    }
+
+    // If workspace lang is set but we want to verify, could enable auto-detect
+    // For deterministic routing we use workspace lang by default
+    // Auto-detect only if explicitly no language could be resolved
+    if (!resolvedLanguage) {
+      useAutoDetect = true;
+      resolvedLanguage = CALL_DEFAULTS.DEFAULT_LANGUAGE;
+    }
+
+    // ---- Create transcript record as processing ----
     const { data: transcript, error: insertErr } = await supabase
       .from("call_transcripts")
       .insert({
         call_session_id: callSessionId,
         status: "processing",
-        language,
+        language: resolvedLanguage,
         provider: "lovable-ai",
       })
       .select("id")
       .single();
 
     if (insertErr || !transcript) {
+      // Possible duplicate from race condition
+      if (insertErr?.code === "23505") {
+        logger.info("transcribe_duplicate_insert", { callSessionId });
+        return respond({ ok: true, status: "duplicate" });
+      }
       logger.error("transcribe_insert_error", { error: insertErr?.message });
-      return new Response(JSON.stringify({ ok: false, error: "Failed to create transcript" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "Failed to create transcript" }, 500);
     }
 
-    // Get the recording audio from storage
+    // ---- Get recording audio ----
     const { data: recording } = await supabase
       .from("call_recordings")
       .select("storage_url, recording_sid")
@@ -103,23 +148,16 @@ Deno.serve(async (req) => {
     if (!recording?.storage_url) {
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       logger.error("transcribe_no_recording", { callSessionId });
-      return new Response(JSON.stringify({ ok: false, error: "No downloaded recording" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "No downloaded recording" }, 404);
     }
 
-    // Use Lovable AI (Gemini) for transcription via audio understanding
     if (!lovableApiKey) {
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       logger.error("transcribe_no_api_key", { callSessionId });
-      return new Response(JSON.stringify({ ok: false, error: "LOVABLE_API_KEY not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "LOVABLE_API_KEY not configured" }, 500);
     }
 
-    // Download audio from storage for sending to AI
+    // ---- Download audio from storage ----
     const storagePath = recording.storage_url.split("/storage/v1/object/")[1];
     const { data: audioData, error: dlErr } = await supabase.storage
       .from("call-recordings")
@@ -128,109 +166,89 @@ Deno.serve(async (req) => {
     if (dlErr || !audioData) {
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       logger.error("transcribe_download_error", { error: dlErr?.message });
-      return new Response(JSON.stringify({ ok: false, error: "Failed to download audio" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ ok: false, error: "Failed to download audio" }, 500);
     }
 
-    // Convert audio to base64 for Gemini multimodal
+    // ---- ASR via provider abstraction (§2) ----
     const audioBuffer = await audioData.arrayBuffer();
     const base64Audio = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
 
-    const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_audio",
-                input_audio: {
-                  data: base64Audio,
-                  format: "wav",
-                },
-              },
-              {
-                type: "text",
-                text: `Transcribe this phone call audio in ${language}. Return JSON ONLY with this structure:
-{
-  "segments": [
-    {"startMs": 0, "endMs": 5000, "speaker": "Speaker 1", "text": "..."},
-    {"startMs": 5000, "endMs": 10000, "speaker": "Speaker 2", "text": "..."}
-  ],
-  "fullText": "complete transcript as single string",
-  "confidence": 0.95,
-  "language": "${language}"
-}
-Identify different speakers. Be accurate with timestamps. Return valid JSON only.`,
-              },
-            ],
-          },
-        ],
-        temperature: 0.1,
-      }),
-    });
+    const asr = new GeminiAsrProvider(lovableApiKey);
 
-    if (!aiResponse.ok) {
-      const errText = await aiResponse.text();
-      await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
-      logger.error("transcribe_ai_error", { status: aiResponse.status, error: errText });
-      return new Response(JSON.stringify({ ok: false, error: "AI transcription failed" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const aiResult = await aiResponse.json();
-    const content = aiResult.choices?.[0]?.message?.content ?? "";
-
-    // Parse AI response
-    let parsed: { segments?: unknown[]; fullText?: string; confidence?: number };
+    let asrResult;
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    } catch {
-      parsed = { fullText: content, segments: [], confidence: null };
+      asrResult = await asr.transcribe(base64Audio, {
+        language: resolvedLanguage,
+        autoDetect: useAutoDetect,
+        allowedLanguages: supportedLangs as string[],
+        diarization: true,
+        timestamps: true,
+      });
+    } catch (err) {
+      // §8 — ASR failure handling
+      await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
+      logger.error("transcribe_asr_failed", {
+        callSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return respond({ ok: false, error: "ASR transcription failed" }, 500);
     }
 
-    // Update transcript
+    // ---- Diarization normalization (§3) ----
+    const normalizedSegments = normalizeSpeakerRoles(
+      asrResult.segments,
+      session.direction,
+    );
+
+    // ---- Transcript cleanup (§4) ----
+    const cleanedSegments = cleanSegments(normalizedSegments);
+
+    // ---- Build LLM-ready transcript (§7) ----
+    const llmTranscript = formatLlmTranscript(cleanedSegments);
+
+    // Build clean fullText from cleaned segments
+    const cleanFullText = cleanedSegments.map((s) => s.text).join(" ");
+
+    // ---- Persist completed transcript ----
     await supabase.from("call_transcripts").update({
       status: "completed",
-      segments_json: parsed.segments ?? [],
-      full_text: parsed.fullText ?? content,
-      confidence: parsed.confidence ?? null,
+      segments_json: cleanedSegments,
+      full_text: llmTranscript, // LLM-ready formatted version
+      language: asrResult.language,
+      confidence: asrResult.confidence ?? null,
     }).eq("id", transcript.id);
 
     logger.info("transcribe_complete", {
       callSessionId,
       transcriptId: transcript.id,
-      segmentCount: (parsed.segments ?? []).length,
+      detectedLanguage: asrResult.language,
+      confidence: asrResult.confidence,
+      segmentCount: cleanedSegments.length,
     });
 
-    // Enqueue analysis if duration meets threshold
-    const analyzeMin = settings?.analyze_min_duration_sec ?? CALL_DEFAULTS.ANALYZE_MIN_DURATION_SEC;
-    if (session.duration_sec == null || session.duration_sec >= analyzeMin) {
+    // ---- Analysis gate (§5) ----
+    if (session.duration_sec != null && session.duration_sec < analyzeMin) {
+      // Create skipped analysis record
+      await supabase.from("call_analyses").insert({
+        call_session_id: callSessionId,
+        status: "skipped_short",
+      });
+      logger.info("analyze_skipped_short", {
+        callSessionId,
+        durationSec: session.duration_sec,
+        minRequired: analyzeMin,
+      });
+    } else {
+      // Enqueue analysis
       await enqueueCallJob({
         type: "analyze_call",
         callSessionId,
       });
     }
 
-    return new Response(JSON.stringify({ ok: true, transcriptId: transcript.id }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond({ ok: true, transcriptId: transcript.id });
   } catch (err) {
     logger.error("transcribe_error", { error: err instanceof Error ? err.message : String(err) });
-    return new Response(JSON.stringify({ ok: false, error: "Internal error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond({ ok: false, error: "Internal error" }, 500);
   }
 });
