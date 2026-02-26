@@ -104,6 +104,330 @@ export type Database = {
         }
         Relationships: []
       }
+      call_analyses: {
+        Row: {
+          action_items_json: Json | null
+          call_session_id: string
+          created_at: string
+          id: string
+          model: string | null
+          recommended_next_steps_json: Json | null
+          signals_json: Json | null
+          status: string
+          summary_long: string | null
+          summary_short: string | null
+          updated_at: string
+          version: string | null
+        }
+        Insert: {
+          action_items_json?: Json | null
+          call_session_id: string
+          created_at?: string
+          id?: string
+          model?: string | null
+          recommended_next_steps_json?: Json | null
+          signals_json?: Json | null
+          status?: string
+          summary_long?: string | null
+          summary_short?: string | null
+          updated_at?: string
+          version?: string | null
+        }
+        Update: {
+          action_items_json?: Json | null
+          call_session_id?: string
+          created_at?: string
+          id?: string
+          model?: string | null
+          recommended_next_steps_json?: Json | null
+          signals_json?: Json | null
+          status?: string
+          summary_long?: string | null
+          summary_short?: string | null
+          updated_at?: string
+          version?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_analyses_call_session_id_fkey"
+            columns: ["call_session_id"]
+            isOneToOne: false
+            referencedRelation: "call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_recordings: {
+        Row: {
+          call_session_id: string
+          channels: number | null
+          created_at: string
+          downloaded_at: string | null
+          duration_sec: number | null
+          format: string | null
+          id: string
+          recording_sid: string
+          sha256: string | null
+          status: string
+          storage_provider: string | null
+          storage_url: string | null
+          twilio_recording_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          call_session_id: string
+          channels?: number | null
+          created_at?: string
+          downloaded_at?: string | null
+          duration_sec?: number | null
+          format?: string | null
+          id?: string
+          recording_sid: string
+          sha256?: string | null
+          status?: string
+          storage_provider?: string | null
+          storage_url?: string | null
+          twilio_recording_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          call_session_id?: string
+          channels?: number | null
+          created_at?: string
+          downloaded_at?: string | null
+          duration_sec?: number | null
+          format?: string | null
+          id?: string
+          recording_sid?: string
+          sha256?: string | null
+          status?: string
+          storage_provider?: string | null
+          storage_url?: string | null
+          twilio_recording_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_recordings_call_session_id_fkey"
+            columns: ["call_session_id"]
+            isOneToOne: false
+            referencedRelation: "call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_sessions: {
+        Row: {
+          agent_user_id: string | null
+          answered_at: string | null
+          call_sid: string
+          created_at: string
+          customer_contact_id: string | null
+          direction: string
+          duration_sec: number | null
+          ended_at: string | null
+          from_number: string
+          id: string
+          lead_id: string | null
+          recording_consent_mode: string
+          started_at: string | null
+          status: string
+          to_number: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          agent_user_id?: string | null
+          answered_at?: string | null
+          call_sid: string
+          created_at?: string
+          customer_contact_id?: string | null
+          direction: string
+          duration_sec?: number | null
+          ended_at?: string | null
+          from_number: string
+          id?: string
+          lead_id?: string | null
+          recording_consent_mode?: string
+          started_at?: string | null
+          status?: string
+          to_number: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          agent_user_id?: string | null
+          answered_at?: string | null
+          call_sid?: string
+          created_at?: string
+          customer_contact_id?: string | null
+          direction?: string
+          duration_sec?: number | null
+          ended_at?: string | null
+          from_number?: string
+          id?: string
+          lead_id?: string | null
+          recording_consent_mode?: string
+          started_at?: string | null
+          status?: string
+          to_number?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_sessions_customer_contact_id_fkey"
+            columns: ["customer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_sessions_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_sessions_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_settings: {
+        Row: {
+          analyze_min_duration_sec: number
+          audio_retention_days: number
+          created_at: string
+          default_language: string
+          id: string
+          recording_notice_enabled: boolean
+          recording_require_dtmf_consent: boolean
+          supported_languages: string[]
+          transcribe_min_duration_sec: number
+          updated_at: string
+          webhook_base_url: string | null
+          workspace_id: string
+        }
+        Insert: {
+          analyze_min_duration_sec?: number
+          audio_retention_days?: number
+          created_at?: string
+          default_language?: string
+          id?: string
+          recording_notice_enabled?: boolean
+          recording_require_dtmf_consent?: boolean
+          supported_languages?: string[]
+          transcribe_min_duration_sec?: number
+          updated_at?: string
+          webhook_base_url?: string | null
+          workspace_id: string
+        }
+        Update: {
+          analyze_min_duration_sec?: number
+          audio_retention_days?: number
+          created_at?: string
+          default_language?: string
+          id?: string
+          recording_notice_enabled?: boolean
+          recording_require_dtmf_consent?: boolean
+          supported_languages?: string[]
+          transcribe_min_duration_sec?: number
+          updated_at?: string
+          webhook_base_url?: string | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_settings_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: true
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_transcripts: {
+        Row: {
+          call_session_id: string
+          confidence: number | null
+          created_at: string
+          full_text: string | null
+          id: string
+          language: string
+          provider: string
+          segments_json: Json | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          call_session_id: string
+          confidence?: number | null
+          created_at?: string
+          full_text?: string | null
+          id?: string
+          language?: string
+          provider?: string
+          segments_json?: Json | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          call_session_id?: string
+          confidence?: number | null
+          created_at?: string
+          full_text?: string | null
+          id?: string
+          language?: string
+          provider?: string
+          segments_json?: Json | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_transcripts_call_session_id_fkey"
+            columns: ["call_session_id"]
+            isOneToOne: false
+            referencedRelation: "call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_webhook_log: {
+        Row: {
+          call_sid: string | null
+          created_at: string
+          error_message: string | null
+          event_type: string
+          id: string
+          payload: Json
+          processed_at: string | null
+        }
+        Insert: {
+          call_sid?: string | null
+          created_at?: string
+          error_message?: string | null
+          event_type: string
+          id?: string
+          payload?: Json
+          processed_at?: string | null
+        }
+        Update: {
+          call_sid?: string | null
+          created_at?: string
+          error_message?: string | null
+          event_type?: string
+          id?: string
+          payload?: Json
+          processed_at?: string | null
+        }
+        Relationships: []
+      }
       channel_events: {
         Row: {
           attempts: number
