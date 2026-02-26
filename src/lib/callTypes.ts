@@ -137,6 +137,7 @@ export interface CallRecording {
   format: string;
   downloaded_at: string | null;
   storage_url: string | null;
+  storage_path: string | null;
   storage_provider: string;
   sha256: string | null;
   status: string;

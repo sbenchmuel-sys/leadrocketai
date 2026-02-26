@@ -34,6 +34,25 @@ function tsToSeconds(ts: string): number {
   return (m || 0) * 60 + (s || 0);
 }
 
+/** Mask phone numbers: show only last 4 digits */
+function maskPhone(phone: string): string {
+  if (!phone || phone.length < 5) return phone;
+  return "•••" + phone.slice(-4);
+}
+
+/** Truncate & mask JSON payload for safe display */
+function sanitizePayload(payload: unknown): string {
+  const raw = JSON.stringify(payload, null, 2);
+  // Mask phone numbers in payload (E.164 pattern)
+  const masked = raw.replace(/"\+?\d{7,15}"/g, (m) => {
+    const digits = m.replace(/["+]/g, "");
+    return `"•••${digits.slice(-4)}"`;
+  });
+  const MAX_DISPLAY = 2048;
+  if (masked.length > MAX_DISPLAY) return masked.slice(0, MAX_DISPLAY) + "\n... (truncated)";
+  return masked;
+}
+
 /* ── Evidence Chip ── */
 function EvidenceChip({ ev, onJump }: { ev: EvidencePointer; onJump: (seconds: number) => void }) {
   return (
@@ -76,28 +95,38 @@ export default function CallDetail() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [webhookLog, setWebhookLog] = useState<unknown[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     if (!callSessionId) return;
     try {
       const result = await fetchCallBySessionId(callSessionId);
       setData(result);
+      return result;
     } catch {
       toast.error("Failed to load call");
     } finally {
       setIsLoading(false);
     }
+    return null;
   }, [callSessionId]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Load audio signed URL
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  // Load audio signed URL using storage_path (no URL parsing)
   useEffect(() => {
     if (!data?.recordings?.length) return;
-    const rec = data.recordings.find(r => r.storage_url);
-    if (!rec?.storage_url) return;
+    const rec = data.recordings.find(r => r.storage_path || r.storage_url);
+    if (!rec) return;
 
-    const path = rec.storage_url.replace(/^.*call-recordings\//, "");
+    const path = rec.storage_path || rec.storage_url?.replace(/^.*call-recordings\//, "") || "";
+    if (!path) return;
+
     supabase.storage
       .from("call-recordings")
       .createSignedUrl(path, 3600)
@@ -144,6 +173,35 @@ export default function CallDetail() {
     setIsPlaying(!isPlaying);
   };
 
+  /** Start polling after retry — stop when status changes or 20s timeout */
+  const startPolling = (action: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    const startTime = Date.now();
+    const prevTranscriptStatus = data?.transcripts?.[0]?.status;
+    const prevAnalysisStatus = data?.analyses?.[0]?.status;
+    const prevRecordingStatus = data?.recordings?.[0]?.status;
+
+    pollRef.current = setInterval(async () => {
+      if (Date.now() - startTime > 20_000) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        return;
+      }
+      const fresh = await load();
+      if (!fresh) return;
+
+      const changed =
+        (action === "ingest" && fresh.recordings?.[0]?.status !== prevRecordingStatus) ||
+        (action === "transcribe" && fresh.transcripts?.[0]?.status !== prevTranscriptStatus) ||
+        (action === "analyze" && fresh.analyses?.[0]?.status !== prevAnalysisStatus);
+
+      if (changed) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }, 2000);
+  };
+
   const handleRetry = async (action: "ingest" | "transcribe" | "analyze") => {
     if (!data) return;
     setIsRetrying(action);
@@ -157,7 +215,7 @@ export default function CallDetail() {
       if (action === "ingest") {
         fnName = "call-ingest-recording";
         const rec = data.recordings?.[0];
-        body = { recordingSid: rec?.recording_sid || "", callSid: data.session.call_sid };
+        body = { callSessionId: data.session.id, recordingId: rec?.id || "" };
       } else if (action === "transcribe") {
         fnName = "call-transcribe";
         body = { callSessionId: data.session.id };
@@ -177,12 +235,12 @@ export default function CallDetail() {
 
       if (resp.ok) {
         toast.success(`Retry ${action} triggered`);
-        setTimeout(load, 3000);
+        startPolling(action);
       } else {
         const err = await resp.text();
         toast.error(`Retry failed: ${err}`);
       }
-    } catch (err) {
+    } catch {
       toast.error("Retry failed");
     } finally {
       setIsRetrying(null);
@@ -235,7 +293,7 @@ export default function CallDetail() {
             <Badge variant="outline" className="text-xs capitalize">{session.status}</Badge>
           </h1>
           <p className="text-sm text-muted-foreground">
-            {session.from_number} → {session.to_number}
+            {maskPhone(session.from_number)} → {maskPhone(session.to_number)}
             {session.duration_sec != null && ` · ${formatDuration(session.duration_sec)}`}
             {session.started_at && ` · ${format(new Date(session.started_at), "MMM d, yyyy h:mm a")}`}
           </p>
@@ -285,8 +343,8 @@ export default function CallDetail() {
                 <div className="flex justify-between"><span className="text-muted-foreground">Direction</span><span className="capitalize">{session.direction}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span className="capitalize">{session.status}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Duration</span><span>{formatDuration(session.duration_sec)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">From</span><span>{session.from_number}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">To</span><span>{session.to_number}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">From</span><span>{maskPhone(session.from_number)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">To</span><span>{maskPhone(session.to_number)}</span></div>
                 {session.started_at && <div className="flex justify-between"><span className="text-muted-foreground">Started</span><span>{format(new Date(session.started_at), "PPpp")}</span></div>}
                 {session.ended_at && <div className="flex justify-between"><span className="text-muted-foreground">Ended</span><span>{format(new Date(session.ended_at), "PPpp")}</span></div>}
               </CardContent>
@@ -594,7 +652,7 @@ function WebhookLogEntry({ entry }: { entry: any }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className="text-xs bg-muted/50 rounded p-3 overflow-auto max-h-48 ml-8">
-          {JSON.stringify(entry.payload, null, 2)}
+          {sanitizePayload(entry.payload)}
         </pre>
       </CollapsibleContent>
     </Collapsible>

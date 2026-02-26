@@ -114,11 +114,12 @@ Deno.serve(async (req) => {
     }
 
     // Update recording record
-    const storageUrl = `${supabaseUrl}/storage/v1/object/call-recordings/${storagePath}`;
+    const storageFullUrl = `${supabaseUrl}/storage/v1/object/call-recordings/${storagePath}`;
     await supabase.from("call_recordings").update({
       status: "downloaded",
       downloaded_at: new Date().toISOString(),
-      storage_url: storageUrl,
+      storage_url: storageFullUrl,
+      storage_path: storagePath,
       storage_provider: "supabase",
       sha256,
       format: "wav",

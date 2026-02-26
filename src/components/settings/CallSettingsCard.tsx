@@ -29,43 +29,34 @@ const DEFAULTS: Omit<CallSettings, "id"> = {
   audio_retention_days: 90,
 };
 
-export function CallSettingsCard() {
+interface CallSettingsCardProps {
+  workspaceId?: string;
+}
+
+export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
   const [settings, setSettings] = useState<CallSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [langInput, setLangInput] = useState("");
 
   useEffect(() => {
-    loadSettings();
-  }, []);
+    if (workspaceId) loadSettings(workspaceId);
+  }, [workspaceId]);
 
-  const loadSettings = async () => {
+  const loadSettings = async (wsId: string) => {
     try {
-      // Get workspace via workspace_members
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data: member } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle();
-
-      if (!member) return;
-
       const { data: existing } = await supabase
         .from("call_settings")
         .select("*")
-        .eq("workspace_id", member.workspace_id)
+        .eq("workspace_id", wsId)
         .maybeSingle();
 
       if (existing) {
         setSettings(existing as unknown as CallSettings);
       } else {
-        // Create default row
         const { data: created } = await supabase
           .from("call_settings")
-          .insert({ workspace_id: member.workspace_id, ...DEFAULTS })
+          .insert({ workspace_id: wsId, ...DEFAULTS })
           .select("*")
           .single();
         if (created) setSettings(created as unknown as CallSettings);
@@ -96,7 +87,7 @@ export function CallSettingsCard() {
 
       if (error) throw error;
       toast.success("Call settings saved");
-    } catch (err) {
+    } catch {
       toast.error("Failed to save settings");
     } finally {
       setIsSaving(false);
@@ -124,6 +115,7 @@ export function CallSettingsCard() {
     });
   };
 
+  if (!workspaceId) return <p className="text-sm text-muted-foreground py-4">No workspace selected</p>;
   if (isLoading) return <p className="text-sm text-muted-foreground py-4">Loading...</p>;
   if (!settings) return <p className="text-sm text-muted-foreground py-4">Unable to load settings</p>;
 

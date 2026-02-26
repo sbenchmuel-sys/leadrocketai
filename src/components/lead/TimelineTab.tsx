@@ -570,10 +570,12 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
     }
   };
 
-  // Apply type filter
+  // Apply type filter — exclude phone_call interactions (call_sessions is source of truth)
   const filteredInteractions = useMemo(() => {
-    if (activeFilter === "all") return interactions;
-    return interactions.filter(i => matchesFilter(i.type, i.source || "", activeFilter));
+    const base = interactions.filter(i => i.type !== "phone_call");
+    if (activeFilter === "all") return base;
+    if (activeFilter === "calls") return []; // calls rendered separately from callSessions
+    return base.filter(i => matchesFilter(i.type, i.source || "", activeFilter));
   }, [interactions, activeFilter]);
 
   const entries = useMemo(() => groupIntoThreads(filteredInteractions), [filteredInteractions]);
@@ -665,41 +667,76 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
         </div>
       )}
 
-      {/* Render call sessions that aren't already bridged into interactions */}
-      {(activeFilter === "all" || activeFilter === "calls") && callSessions
-        .filter(cs => !interactions.some(i => i.type === "phone_call" && i.body_text?.includes(cs.call_sid)))
-        .map((cs, idx) => (
-          <div key={`call-${cs.id}`}>
-            {(entries.length > 0 || idx > 0) && <div className="border-t border-border/50 mx-0" />}
-            <CallTimelineCard session={cs} />
-          </div>
-        ))
-      }
+      {/* Merge call sessions into timeline sorted by started_at/created_at */}
+      {(() => {
+        // Build unified timeline: entries (interactions) + callSessions
+        const showCalls = activeFilter === "all" || activeFilter === "calls";
+        const sortedCalls = showCalls
+          ? [...callSessions].sort((a, b) => {
+              const tsA = new Date(a.started_at || a.created_at).getTime();
+              const tsB = new Date(b.started_at || b.created_at).getTime();
+              return tsB - tsA;
+            })
+          : [];
 
-      {entries.length === 0 && callSessions.length === 0 && (
-        <p className="text-sm text-muted-foreground py-8 text-center">No matching interactions.</p>
-      )}
+        type MergedItem = { kind: "entry"; data: typeof entries[0]; key: string } | { kind: "call"; data: CallSession };
+        const merged: MergedItem[] = [];
 
-      {entries.map((entry, idx) => {
-        const key = isThread(entry) ? entry.key : entry.id;
-        const isExpanded = autoExpand.has(key);
-        const isWhatsApp = !isThread(entry) && (entry.type === "whatsapp_inbound" || entry.type === "whatsapp_outbound");
+        // Add interaction entries
+        for (const entry of entries) {
+          const key = isThread(entry) ? entry.key : entry.id;
+          merged.push({ kind: "entry", data: entry, key });
+        }
 
-        return (
-          <div key={key}>
-            {idx > 0 && <div className="border-t border-border/50 mx-0" />}
-            {isThread(entry) ? (
-              <ThreadEntry thread={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
-            ) : entry.type === "meeting" ? (
-              <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
-            ) : isWhatsApp ? (
-              <WhatsAppEntry item={entry} onToggleHide={handleToggleHide} />
-            ) : (
-              <TimelineEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} showHidden={showHidden} />
-            )}
-          </div>
-        );
-      })}
+        // Add call sessions
+        for (const cs of sortedCalls) {
+          merged.push({ kind: "call", data: cs });
+        }
+
+        // Sort all by timestamp DESC
+        merged.sort((a, b) => {
+          const tsA = a.kind === "call"
+            ? new Date(a.data.started_at || a.data.created_at).getTime()
+            : ('latest' in a.data ? new Date((a.data as ThreadGroup).latest.occurred_at).getTime() : new Date((a.data as InteractionItem).occurred_at).getTime());
+          const tsB = b.kind === "call"
+            ? new Date(b.data.started_at || b.data.created_at).getTime()
+            : ('latest' in b.data ? new Date((b.data as ThreadGroup).latest.occurred_at).getTime() : new Date((b.data as InteractionItem).occurred_at).getTime());
+          return tsB - tsA;
+        });
+
+        if (merged.length === 0) {
+          return <p className="text-sm text-muted-foreground py-8 text-center">No matching interactions.</p>;
+        }
+
+        return merged.map((item, idx) => {
+          if (item.kind === "call") {
+            return (
+              <div key={`call-${item.data.id}`}>
+                {idx > 0 && <div className="border-t border-border/50 mx-0" />}
+                <CallTimelineCard session={item.data} />
+              </div>
+            );
+          }
+          const entry = item.data;
+          const key = item.key;
+          const isExpanded = autoExpand.has(key);
+          const isWhatsApp = !isThread(entry) && (entry.type === "whatsapp_inbound" || entry.type === "whatsapp_outbound");
+          return (
+            <div key={key}>
+              {idx > 0 && <div className="border-t border-border/50 mx-0" />}
+              {isThread(entry) ? (
+                <ThreadEntry thread={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
+              ) : entry.type === "meeting" ? (
+                <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
+              ) : isWhatsApp ? (
+                <WhatsAppEntry item={entry} onToggleHide={handleToggleHide} />
+              ) : (
+                <TimelineEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} showHidden={showHidden} />
+              )}
+            </div>
+          );
+        });
+      })()}
     </div>
   );
 }
