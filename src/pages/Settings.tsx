@@ -15,7 +15,8 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info } from "lucide-react";
+import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone } from "lucide-react";
 
 export default function Settings() {
   return (
@@ -146,6 +147,21 @@ export default function Settings() {
           </AccordionTrigger>
           <AccordionContent>
             <WhatsAppAutomationCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="calls" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Phone className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Calls / Voice</div>
+                <div className="text-sm text-muted-foreground font-normal">Configure call recording, transcription, and analysis settings</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <CallSettingsCard />
           </AccordionContent>
         </AccordionItem>
 

@@ -16,12 +16,13 @@ interface TimelineTabProps {
 }
 
 /* ── Filter types ── */
-type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "notes" | "automation";
+type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "calls" | "notes" | "automation";
 
 const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "emails", label: "Emails" },
   { value: "whatsapp", label: "WhatsApp" },
+  { value: "calls", label: "Calls" },
   { value: "meetings", label: "Meetings" },
   { value: "notes", label: "Notes" },
   { value: "automation", label: "Automation" },
@@ -31,6 +32,7 @@ function matchesFilter(type: string, source: string, filter: TimelineFilter): bo
   if (filter === "all") return true;
   if (filter === "emails") return type === "email_inbound" || type === "email_outbound";
   if (filter === "whatsapp") return type === "whatsapp_inbound" || type === "whatsapp_outbound";
+  if (filter === "calls") return type === "phone_call";
   if (filter === "meetings") return type === "meeting";
   if (filter === "notes") return type === "note" || type === "system_note";
   if (filter === "automation") return source === "automation";
@@ -165,6 +167,7 @@ function ChannelBadge({ type }: { type: string }) {
     email_outbound: { icon: <Mail className="h-3 w-3" />, label: "Outbound", className: "text-blue-600 bg-blue-500/10 border-blue-500/20" },
     meeting: { icon: <Calendar className="h-3 w-3" />, label: "Meeting", className: "text-purple-600 bg-purple-500/10 border-purple-500/20" },
     call: { icon: <Phone className="h-3 w-3" />, label: "Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
+    phone_call: { icon: <Phone className="h-3 w-3" />, label: "Phone Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
     whatsapp_outbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     whatsapp_inbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     note: { icon: <StickyNote className="h-3 w-3" />, label: "Note", className: "text-muted-foreground bg-muted border-border" },

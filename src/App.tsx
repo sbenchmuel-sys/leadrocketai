@@ -18,6 +18,7 @@ import Knowledge from "./pages/Knowledge";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import ManagerAnalytics from "./pages/ManagerAnalytics";
+import CallDetail from "./pages/CallDetail";
 import NotFound from "./pages/NotFound";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
@@ -59,6 +60,7 @@ const App = () => (
               <Route path="knowledge" element={<Knowledge />} />
               <Route path="settings" element={<Settings />} />
               <Route path="analytics" element={<ManagerAnalytics />} />
+              <Route path="calls/:callSessionId" element={<CallDetail />} />
             </Route>
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/terms" element={<Terms />} />
