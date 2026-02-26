@@ -200,7 +200,8 @@ export function classifyRevenueState(
   if (!isOOO) {
     if (lead.needs_action) return "action_required";
     // Unreplied inbound (has inbound but last outbound is before last inbound)
-    if (lead.last_inbound_at) {
+    // BUT suppress if a future meeting is already set — the meeting IS the response
+    if (lead.last_inbound_at && !lead.has_future_meeting) {
       const inboundTs = new Date(lead.last_inbound_at).getTime();
       const outboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
       if (inboundTs > outboundTs) return "action_required";
