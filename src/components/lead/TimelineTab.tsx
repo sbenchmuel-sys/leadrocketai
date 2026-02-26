@@ -665,7 +665,18 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
         </div>
       )}
 
-      {entries.length === 0 && (
+      {/* Render call sessions that aren't already bridged into interactions */}
+      {(activeFilter === "all" || activeFilter === "calls") && callSessions
+        .filter(cs => !interactions.some(i => i.type === "phone_call" && i.body_text?.includes(cs.call_sid)))
+        .map((cs, idx) => (
+          <div key={`call-${cs.id}`}>
+            {(entries.length > 0 || idx > 0) && <div className="border-t border-border/50 mx-0" />}
+            <CallTimelineCard session={cs} />
+          </div>
+        ))
+      }
+
+      {entries.length === 0 && callSessions.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">No matching interactions.</p>
       )}
 
