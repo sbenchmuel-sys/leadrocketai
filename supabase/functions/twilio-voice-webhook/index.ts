@@ -36,10 +36,11 @@ Deno.serve(async (req) => {
     // ---- Validate Twilio signature ----
     const signature = req.headers.get("X-Twilio-Signature");
     if (twilioAuthToken && signature) {
+      const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL") ?? req.url;
       const isValid = await validateTwilioSignature(
         twilioAuthToken,
         signature,
-        req.url,
+        baseUrl,
         params,
       );
       if (!isValid) {
@@ -221,6 +222,11 @@ async function handleRecordingStatus(
   const durationSec = params.RecordingDuration ? parseInt(params.RecordingDuration, 10) : null;
   const channels = params.RecordingChannels ? parseInt(params.RecordingChannels, 10) : 1;
   const recordingUrl = params.RecordingUrl ?? null;
+
+  if (!recordingUrl) {
+    logger.warn("recording_missing_url", { recordingSid });
+    return;
+  }
 
   // Fetch workspace-specific settings or use defaults
   const { data: settings } = await supabase

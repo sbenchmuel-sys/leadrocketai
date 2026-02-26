@@ -34,7 +34,10 @@ Deno.serve(async (req) => {
     // Validate Twilio signature
     const signature = req.headers.get("X-Twilio-Signature");
     if (twilioAuthToken && signature) {
-      const isValid = await validateTwilioSignature(twilioAuthToken, signature, req.url, params);
+    const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL")
+        ? `${Deno.env.get("TWILIO_WEBHOOK_BASE_URL").replace(/\/$/, "")}/twilio-voice-inbound`
+        : req.url;
+      const isValid = await validateTwilioSignature(twilioAuthToken, signature, baseUrl, params);
       if (!isValid) {
         logger.warn("inbound_signature_invalid");
         return new Response("<Response><Say>Unauthorized</Say></Response>", {
@@ -75,31 +78,44 @@ Deno.serve(async (req) => {
       return respondWithDial(toNumber, statusCallbackUrl, recordingCallbackUrl);
     }
 
-    // ---- Initial call flow ----
-    let twiml = "<Response>";
-
-    // Recording notice
-    if (recordingNotice) {
-      twiml += `<Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>`;
-    }
-
-    // DTMF consent gate
+    // DTMF consent gate — return early with Gather
     if (requireDtmf) {
       const gatherUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
-      twiml += `<Gather numDigits="1" action="${escapeXml(gatherUrl)}" method="POST">`;
-      twiml += `<Say voice="Polly.Joanna">Press 1 to continue, or hang up to decline.</Say>`;
-      twiml += `</Gather>`;
-      // If no input, hang up
-      twiml += `<Say>No input received. Goodbye.</Say><Hangup/>`;
-      twiml += "</Response>";
+      const twiml = `<Response>
+  ${recordingNotice ? `<Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>` : ""}
+  <Gather numDigits="1" action="${escapeXml(gatherUrl)}" method="POST">
+    <Say voice="Polly.Joanna">Press 1 to continue, or hang up to decline.</Say>
+  </Gather>
+  <Say>No input received. Goodbye.</Say>
+</Response>`;
 
-      return new Response(twiml, {
+      return new Response(twiml.trim(), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "text/xml" },
       });
     }
 
-    // No DTMF required — go straight to dial
+    // No DTMF — build inline TwiML with notice + dial
+    if (recordingNotice) {
+      const twiml = `<Response>
+  <Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>
+  <Dial
+    record="record-from-answer-dual"
+    recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
+    recordingStatusCallbackEvent="completed"
+    recordingChannels="2"
+    statusCallback="${escapeXml(statusCallbackUrl)}"
+    statusCallbackEvent="initiated ringing answered completed">
+    ${escapeXml(toNumber)}
+  </Dial>
+</Response>`;
+      return new Response(twiml.trim(), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      });
+    }
+
+    // No notice, no DTMF — straight dial
     return respondWithDial(toNumber, statusCallbackUrl, recordingCallbackUrl);
   } catch (err) {
     logger.error("twilio_voice_inbound_error", {
@@ -120,28 +136,21 @@ function respondWithDial(
   statusCallbackUrl: string,
   recordingCallbackUrl: string,
 ): Response {
-  // Dual-channel recording: record="record-from-answer-dual"
-  // statusCallbackEvent covers full lifecycle
   const twiml = `<Response>
   <Dial
     record="record-from-answer-dual"
     recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
     recordingStatusCallbackEvent="completed"
     recordingChannels="2"
-  >
-    <Number
-      statusCallback="${escapeXml(statusCallbackUrl)}"
-      statusCallbackEvent="initiated ringing answered completed"
-    >${escapeXml(toNumber)}</Number>
+    statusCallback="${escapeXml(statusCallbackUrl)}"
+    statusCallbackEvent="initiated ringing answered completed">
+    ${escapeXml(toNumber)}
   </Dial>
 </Response>`;
 
-  return new Response(twiml, {
+  return new Response(twiml.trim(), {
     status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Content-Type": "text/xml",
-    },
+    headers: { ...corsHeaders, "Content-Type": "text/xml" },
   });
 }
 
