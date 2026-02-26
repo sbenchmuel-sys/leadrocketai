@@ -12,11 +12,10 @@ export const CALL_DEFAULTS = {
   AUDIO_RETENTION_DAYS: 90,
 } as const;
 
-// ---- Evidence pointer ----
+// ---- Evidence pointer (Phase 4: timestamp + speaker based) ----
 export interface EvidencePointer {
-  segmentIndex?: number;
-  timestampRangeMs?: [number, number];
-  speakerLabel?: string;
+  timestamp: string; // "MM:SS"
+  speaker: "Agent" | "Customer" | string;
   quote: string;
 }
 
@@ -29,24 +28,81 @@ export interface TranscriptSegment {
   text: string;
 }
 
-// ---- Analysis structures ----
-export interface ActionItem {
-  text: string;
-  owner?: string;
-  dueDate?: string;
+// ---- Phase 4: Structured signal types ----
+export interface CallOutcome {
+  label: "positive" | "neutral" | "negative" | "no_outcome";
+  confidence: number;
+}
+
+export interface CallIntent {
+  type: "buying" | "support" | "complaint" | "renewal" | "churn_risk" | "other";
+  confidence: number;
   evidence: EvidencePointer[];
 }
 
-export interface Signal {
-  type: string;
-  value: string;
+export interface SentimentTimelineEntry {
+  minute: number;
+  sentiment: "positive" | "neutral" | "negative";
+}
+
+export interface CallSentiment {
+  overall: "positive" | "neutral" | "negative";
+  confidence: number;
+  timeline: SentimentTimelineEntry[];
+}
+
+export interface CallObjection {
+  type: "price" | "timing" | "security" | "feature_gap" | "trust" | "other";
+  severity: "low" | "medium" | "high";
+  evidence: EvidencePointer[];
+}
+
+export interface CallCommitment {
+  who: "Agent" | "Customer";
+  text: string;
+  dueDate: string | null;
+  evidence: EvidencePointer[];
+}
+
+export interface CallRisk {
+  type: "churn" | "legal" | "escalation" | "no_next_step" | "other";
+  severity: "low" | "medium" | "high";
+  evidence: EvidencePointer[];
+}
+
+export interface ActionItem {
+  text: string;
+  owner: "Agent" | "Internal" | "Customer";
+  priority: "low" | "medium" | "high";
   evidence: EvidencePointer[];
 }
 
 export interface RecommendedNextStep {
-  title: string;
+  rank: number;
+  text: string;
   rationale: string;
-  priority: number;
+  confidence: number;
+  evidence: EvidencePointer[];
+}
+
+// ---- Full structured analysis output ----
+export interface CallAnalysisOutput {
+  summaryShort: string;
+  summaryLong: string;
+  outcome: CallOutcome;
+  intent: CallIntent;
+  sentiment: CallSentiment;
+  objections: CallObjection[];
+  commitments: CallCommitment[];
+  risks: CallRisk[];
+  actionItems: ActionItem[];
+  recommendedNextSteps: RecommendedNextStep[];
+}
+
+// ---- Legacy compat: Signal type (used in older code paths) ----
+export interface Signal {
+  type: string;
+  value: string;
   evidence: EvidencePointer[];
 }
 
@@ -95,6 +151,9 @@ export interface CallTranscript {
   confidence: number | null;
   segments_json: TranscriptSegment[];
   full_text: string | null;
+  raw_full_text: string | null;
+  clean_full_text: string | null;
+  llm_formatted_text: string | null;
   status: string;
   created_at: string;
 }
@@ -108,7 +167,7 @@ export interface CallAnalysis {
   summary_short: string | null;
   summary_long: string | null;
   action_items_json: ActionItem[];
-  signals_json: Record<string, unknown>;
+  signals_json: CallAnalysisOutput | Record<string, unknown>;
   recommended_next_steps_json: RecommendedNextStep[];
   created_at: string;
 }
