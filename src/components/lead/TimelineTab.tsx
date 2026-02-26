@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { getLeadInteractions, hideInteraction, unhideInteraction, InteractionItem } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchCallsByLeadId } from "@/lib/callQueries";
+import type { CallSession } from "@/lib/callTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +11,7 @@ import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, Ch
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import CallTimelineCard from "@/components/call/CallTimelineCard";
 
 interface TimelineTabProps {
   leadId: string;
@@ -16,12 +19,13 @@ interface TimelineTabProps {
 }
 
 /* ── Filter types ── */
-type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "notes" | "automation";
+type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "calls" | "notes" | "automation";
 
 const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "emails", label: "Emails" },
   { value: "whatsapp", label: "WhatsApp" },
+  { value: "calls", label: "Calls" },
   { value: "meetings", label: "Meetings" },
   { value: "notes", label: "Notes" },
   { value: "automation", label: "Automation" },
@@ -31,6 +35,7 @@ function matchesFilter(type: string, source: string, filter: TimelineFilter): bo
   if (filter === "all") return true;
   if (filter === "emails") return type === "email_inbound" || type === "email_outbound";
   if (filter === "whatsapp") return type === "whatsapp_inbound" || type === "whatsapp_outbound";
+  if (filter === "calls") return type === "phone_call";
   if (filter === "meetings") return type === "meeting";
   if (filter === "notes") return type === "note" || type === "system_note";
   if (filter === "automation") return source === "automation";
@@ -165,6 +170,7 @@ function ChannelBadge({ type }: { type: string }) {
     email_outbound: { icon: <Mail className="h-3 w-3" />, label: "Outbound", className: "text-blue-600 bg-blue-500/10 border-blue-500/20" },
     meeting: { icon: <Calendar className="h-3 w-3" />, label: "Meeting", className: "text-purple-600 bg-purple-500/10 border-purple-500/20" },
     call: { icon: <Phone className="h-3 w-3" />, label: "Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
+    phone_call: { icon: <Phone className="h-3 w-3" />, label: "Phone Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
     whatsapp_outbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     whatsapp_inbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     note: { icon: <StickyNote className="h-3 w-3" />, label: "Note", className: "text-muted-foreground bg-muted border-border" },
@@ -486,6 +492,7 @@ function WhatsAppEntry({ item, onToggleHide }: { item: InteractionItem; onToggle
 /* ── Main Component ── */
 export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProps) {
   const [interactions, setInteractions] = useState<InteractionItem[]>([]);
+  const [callSessions, setCallSessions] = useState<CallSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showReplyForm, setShowReplyForm] = useState(false);
   const [replyText, setReplyText] = useState("");
@@ -494,8 +501,14 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
   const [showHidden, setShowHidden] = useState(false);
 
   const loadInteractions = () => {
-    getLeadInteractions(leadId, showHidden)
-      .then((items) => setInteractions(dedupeTimelineItems(items)))
+    Promise.all([
+      getLeadInteractions(leadId, showHidden),
+      fetchCallsByLeadId(leadId).catch(() => [] as CallSession[]),
+    ])
+      .then(([items, calls]) => {
+        setInteractions(dedupeTimelineItems(items));
+        setCallSessions(calls);
+      })
       .catch(console.error)
       .finally(() => setIsLoading(false));
   };
@@ -652,7 +665,18 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
         </div>
       )}
 
-      {entries.length === 0 && (
+      {/* Render call sessions that aren't already bridged into interactions */}
+      {(activeFilter === "all" || activeFilter === "calls") && callSessions
+        .filter(cs => !interactions.some(i => i.type === "phone_call" && i.body_text?.includes(cs.call_sid)))
+        .map((cs, idx) => (
+          <div key={`call-${cs.id}`}>
+            {(entries.length > 0 || idx > 0) && <div className="border-t border-border/50 mx-0" />}
+            <CallTimelineCard session={cs} />
+          </div>
+        ))
+      }
+
+      {entries.length === 0 && callSessions.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">No matching interactions.</p>
       )}
 
