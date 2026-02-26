@@ -89,7 +89,6 @@ Deno.serve(async (req) => {
     // Build TwiML URL for the call — the inbound handler will play notice + dial
     const twimlUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
     const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
-    const recordingCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
 
     // Create call via Twilio REST API
     const twilioApiUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Calls.json`;
