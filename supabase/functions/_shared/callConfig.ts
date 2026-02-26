@@ -38,11 +38,10 @@ export function mapTwilioStatus(twStatus: string): string {
   return map[twStatus] ?? twStatus;
 }
 
-// ---- Evidence pointer (used in analysis outputs) ----
+// ---- Evidence pointer (Phase 4: timestamp + speaker) ----
 export interface EvidencePointer {
-  segmentIndex?: number;
-  timestampRangeMs?: [number, number];
-  speakerLabel?: string;
+  timestamp: string; // "MM:SS"
+  speaker: "Agent" | "Customer" | string;
   quote: string;
 }
 
@@ -55,25 +54,74 @@ export interface TranscriptSegment {
   text: string;
 }
 
-// ---- Analysis structures ----
-export interface ActionItem {
-  text: string;
-  owner?: string;
-  dueDate?: string;
+// ---- Phase 4: Structured analysis output ----
+export interface CallOutcome {
+  label: "positive" | "neutral" | "negative" | "no_outcome";
+  confidence: number;
+}
+
+export interface CallIntent {
+  type: "buying" | "support" | "complaint" | "renewal" | "churn_risk" | "other";
+  confidence: number;
   evidence: EvidencePointer[];
 }
 
-export interface Signal {
-  type: string; // intent | sentiment | objection | risk | commitment | entity
-  value: string;
+export interface SentimentTimelineEntry {
+  minute: number;
+  sentiment: "positive" | "neutral" | "negative";
+}
+
+export interface CallSentiment {
+  overall: "positive" | "neutral" | "negative";
+  confidence: number;
+  timeline: SentimentTimelineEntry[];
+}
+
+export interface CallObjection {
+  type: "price" | "timing" | "security" | "feature_gap" | "trust" | "other";
+  severity: "low" | "medium" | "high";
+  evidence: EvidencePointer[];
+}
+
+export interface CallCommitment {
+  who: "Agent" | "Customer";
+  text: string;
+  dueDate: string | null;
+  evidence: EvidencePointer[];
+}
+
+export interface CallRisk {
+  type: "churn" | "legal" | "escalation" | "no_next_step" | "other";
+  severity: "low" | "medium" | "high";
+  evidence: EvidencePointer[];
+}
+
+export interface ActionItem {
+  text: string;
+  owner: "Agent" | "Internal" | "Customer";
+  priority: "low" | "medium" | "high";
   evidence: EvidencePointer[];
 }
 
 export interface RecommendedNextStep {
-  title: string;
+  rank: number;
+  text: string;
   rationale: string;
-  priority: number;
+  confidence: number;
   evidence: EvidencePointer[];
+}
+
+export interface CallAnalysisOutput {
+  summaryShort: string;
+  summaryLong: string;
+  outcome: CallOutcome;
+  intent: CallIntent;
+  sentiment: CallSentiment;
+  objections: CallObjection[];
+  commitments: CallCommitment[];
+  risks: CallRisk[];
+  actionItems: ActionItem[];
+  recommendedNextSteps: RecommendedNextStep[];
 }
 
 // ---- Job interface ----
@@ -84,7 +132,6 @@ export interface CallJob {
 }
 
 export async function enqueueCallJob(job: CallJob): Promise<void> {
-  // Synchronous fallback: directly invoke the relevant edge function
   const fnMap: Record<CallJob["type"], string> = {
     ingest_recording: "call-ingest-recording",
     transcribe_call: "call-transcribe",
