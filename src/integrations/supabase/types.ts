@@ -307,6 +307,7 @@ export type Database = {
           audio_retention_days: number
           created_at: string
           default_language: string
+          default_twilio_number: string | null
           id: string
           recording_notice_enabled: boolean
           recording_require_dtmf_consent: boolean
@@ -321,6 +322,7 @@ export type Database = {
           audio_retention_days?: number
           created_at?: string
           default_language?: string
+          default_twilio_number?: string | null
           id?: string
           recording_notice_enabled?: boolean
           recording_require_dtmf_consent?: boolean
@@ -335,6 +337,7 @@ export type Database = {
           audio_retention_days?: number
           created_at?: string
           default_language?: string
+          default_twilio_number?: string | null
           id?: string
           recording_notice_enabled?: boolean
           recording_require_dtmf_consent?: boolean
