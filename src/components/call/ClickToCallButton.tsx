@@ -33,10 +33,31 @@ export function ClickToCallButton({ leadId, leadName, leadPhone }: ClickToCallBu
       .limit(1)
       .maybeSingle();
 
-    const repNumber = (repProfile as any)?.twilio_phone_number;
+    let repNumber = (repProfile as any)?.twilio_phone_number;
+
+    // Fallback to workspace default if rep hasn't set one
+    if (!repNumber) {
+      const { data: membership } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.workspace_id) {
+        const { data: callSettings } = await supabase
+          .from("call_settings")
+          .select("default_twilio_number")
+          .eq("workspace_id", membership.workspace_id)
+          .maybeSingle();
+
+        repNumber = (callSettings as any)?.default_twilio_number;
+      }
+    }
+
     if (!repNumber) {
       toast.error("No Twilio caller ID configured", {
-        description: "Go to Settings → Your Profile to set your Twilio phone number.",
+        description: "Set a default in Settings → Calls/Voice, or your own in Settings → Your Profile.",
       });
       return;
     }
