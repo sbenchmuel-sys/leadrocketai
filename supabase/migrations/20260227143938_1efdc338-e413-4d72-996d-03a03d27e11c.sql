@@ -1,0 +1,1 @@
+ALTER TABLE public.rep_profiles ADD COLUMN IF NOT EXISTS twilio_phone_number text;
