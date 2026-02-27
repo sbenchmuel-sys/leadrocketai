@@ -2,13 +2,23 @@ import { createContext, useContext, useEffect, useState, ReactNode, useCallback 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
+export interface WorkspaceMembership {
+  workspace_id: string;
+  role: string;
+  workspace_name: string;
+}
+
 interface WorkspaceContextType {
   workspaceId: string | null;
   workspaceRole: string | null;
   workspaceName: string | null;
+  workspaces: WorkspaceMembership[];
   isLoading: boolean;
+  switchWorkspace: (workspaceId: string) => void;
   refreshWorkspace: () => Promise<void>;
 }
+
+const STORAGE_KEY = "active_workspace_id";
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
 
@@ -17,13 +27,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceRole, setWorkspaceRole] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceMembership[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  const switchWorkspace = useCallback((wsId: string) => {
+    const ws = workspaces.find(w => w.workspace_id === wsId);
+    if (!ws) return;
+    setWorkspaceId(ws.workspace_id);
+    setWorkspaceRole(ws.role);
+    setWorkspaceName(ws.workspace_name);
+    localStorage.setItem(STORAGE_KEY, wsId);
+  }, [workspaces]);
 
   const resolveWorkspace = useCallback(async () => {
     if (!user) {
       setWorkspaceId(null);
       setWorkspaceRole(null);
       setWorkspaceName(null);
+      setWorkspaces([]);
       setIsLoading(false);
       return;
     }
@@ -31,24 +52,34 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
 
-      // 1. Check existing membership
-      const { data: membership } = await supabase
+      // 1. Fetch ALL memberships for this user
+      const { data: memberships } = await supabase
         .from("workspace_members")
         .select("workspace_id, role")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle();
+        .eq("user_id", user.id);
 
-      if (membership) {
-        setWorkspaceId(membership.workspace_id);
-        setWorkspaceRole(membership.role);
-        // Fetch workspace name
-        const { data: ws } = await supabase
+      if (memberships && memberships.length > 0) {
+        // Fetch workspace names
+        const wsIds = memberships.map(m => m.workspace_id);
+        const { data: wsData } = await supabase
           .from("workspaces")
-          .select("name")
-          .eq("id", membership.workspace_id)
-          .maybeSingle();
-        setWorkspaceName(ws?.name ?? null);
+          .select("id, name")
+          .in("id", wsIds);
+
+        const nameMap = new Map((wsData ?? []).map(w => [w.id, w.name]));
+        const allWs: WorkspaceMembership[] = memberships.map(m => ({
+          workspace_id: m.workspace_id,
+          role: m.role,
+          workspace_name: nameMap.get(m.workspace_id) ?? "Workspace",
+        }));
+        setWorkspaces(allWs);
+
+        // Pick active: saved preference → first
+        const savedId = localStorage.getItem(STORAGE_KEY);
+        const active = allWs.find(w => w.workspace_id === savedId) ?? allWs[0];
+        setWorkspaceId(active.workspace_id);
+        setWorkspaceRole(active.role);
+        setWorkspaceName(active.workspace_name);
         setIsLoading(false);
         return;
       }
@@ -65,7 +96,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           .maybeSingle();
 
         if (invitation) {
-          // Auto-accept: insert membership and update invitation
           const { error: memberErr } = await supabase
             .from("workspace_members")
             .insert({
@@ -80,14 +110,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               .update({ status: "accepted", accepted_at: new Date().toISOString() })
               .eq("id", invitation.id);
 
-            setWorkspaceId(invitation.workspace_id);
-            setWorkspaceRole(invitation.role);
             const { data: ws } = await supabase
               .from("workspaces")
               .select("name")
               .eq("id", invitation.workspace_id)
               .maybeSingle();
-            setWorkspaceName(ws?.name ?? null);
+
+            const name = ws?.name ?? "Workspace";
+            const membership: WorkspaceMembership = {
+              workspace_id: invitation.workspace_id,
+              role: invitation.role,
+              workspace_name: name,
+            };
+            setWorkspaces([membership]);
+            setWorkspaceId(invitation.workspace_id);
+            setWorkspaceRole(invitation.role);
+            setWorkspaceName(name);
             setIsLoading(false);
             return;
           }
@@ -100,7 +138,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         .insert({ name: "My Workspace", plan: "free" } as any);
 
       if (!wsErr) {
-        // Trigger auto_add_workspace_creator adds admin membership
         const { data: newMembership } = await supabase
           .from("workspace_members")
           .select("workspace_id, role")
@@ -109,6 +146,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           .maybeSingle();
 
         if (newMembership) {
+          const membership: WorkspaceMembership = {
+            workspace_id: newMembership.workspace_id,
+            role: newMembership.role,
+            workspace_name: "My Workspace",
+          };
+          setWorkspaces([membership]);
           setWorkspaceId(newMembership.workspace_id);
           setWorkspaceRole(newMembership.role);
           setWorkspaceName("My Workspace");
@@ -133,7 +176,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         workspaceId,
         workspaceRole,
         workspaceName,
+        workspaces,
         isLoading,
+        switchWorkspace,
         refreshWorkspace: resolveWorkspace,
       }}
     >
