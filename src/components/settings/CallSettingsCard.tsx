@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Save, Info } from "lucide-react";
+import { Save, Info, Phone } from "lucide-react";
 
 interface CallSettings {
   id: string;
@@ -17,6 +17,7 @@ interface CallSettings {
   recording_notice_enabled: boolean;
   recording_require_dtmf_consent: boolean;
   audio_retention_days: number;
+  default_twilio_number: string | null;
 }
 
 const DEFAULTS: Omit<CallSettings, "id"> = {
@@ -27,6 +28,7 @@ const DEFAULTS: Omit<CallSettings, "id"> = {
   recording_notice_enabled: true,
   recording_require_dtmf_consent: false,
   audio_retention_days: 90,
+  default_twilio_number: null,
 };
 
 interface CallSettingsCardProps {
@@ -82,6 +84,7 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
           recording_notice_enabled: settings.recording_notice_enabled,
           recording_require_dtmf_consent: settings.recording_require_dtmf_consent,
           audio_retention_days: Math.max(1, settings.audio_retention_days),
+          default_twilio_number: settings.default_twilio_number?.trim() || null,
         })
         .eq("id", settings.id);
 
@@ -121,6 +124,23 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
 
   return (
     <div className="space-y-6">
+      {/* Workspace Default Twilio Number */}
+      <div className="space-y-2">
+        <Label htmlFor="defaultTwilioNumber" className="flex items-center gap-1.5">
+          <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+          Default Twilio Caller ID
+        </Label>
+        <Input
+          id="defaultTwilioNumber"
+          value={settings.default_twilio_number || ""}
+          onChange={e => setSettings({ ...settings, default_twilio_number: e.target.value })}
+          placeholder="+15551234567 (E.164 format)"
+        />
+        <p className="text-[11px] text-muted-foreground">
+          Workspace-wide default Twilio number. Individual reps can override this in their profile.
+        </p>
+      </div>
+
       {/* Cost Controls Info */}
       <div className="flex items-start gap-2 bg-accent/50 rounded-lg p-3">
         <Info className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
