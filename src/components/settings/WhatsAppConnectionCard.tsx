@@ -314,6 +314,7 @@ function TwilioConnectForm({ onConnected }: { onConnected: () => Promise<void> }
 // ================================================================
 function MetaConnectForm({ onConnected }: { onConnected: () => Promise<void> }) {
   const { user } = useAuth();
+  const { workspaceId } = useWorkspace();
   const [isConnecting, setIsConnecting] = useState(false);
   const [accessToken, setAccessToken] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -328,32 +329,14 @@ function MetaConnectForm({ onConnected }: { onConnected: () => Promise<void> }) 
     try {
       setIsConnecting(true);
 
-      let { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user!.id)
-        .limit(1)
-        .maybeSingle();
-
-      if (!membership) {
-        const { error: wsErr } = await supabase
-          .from("workspaces")
-          .insert({ name: "My Workspace", plan: "free" });
-        if (wsErr) throw new Error("Could not create workspace. Please contact support.");
-
-        const { data: newMembership } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .maybeSingle();
-        if (!newMembership) throw new Error("Could not set up workspace membership.");
-        membership = { workspace_id: newMembership.workspace_id };
+      if (!workspaceId) {
+        toast.error("No workspace available. Please refresh the page.");
+        return;
       }
 
       const { data, error } = await supabase.functions.invoke("whatsapp-connect", {
         body: {
-          workspace_id: membership.workspace_id,
+          workspace_id: workspaceId,
           access_token: accessToken.trim(),
           phone_number_id: phoneNumberId.trim(),
           waba_id: wabaId.trim() || undefined,
