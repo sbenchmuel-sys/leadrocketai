@@ -192,6 +192,21 @@ export function RepProfileCard() {
               placeholder="123 Main St, Suite 100, City, ST 12345"
             />
           </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="twilioPhone" className="flex items-center gap-1.5">
+              <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+              Twilio Caller ID
+            </Label>
+            <Input
+              id="twilioPhone"
+              value={twilioPhoneNumber}
+              onChange={(e) => setTwilioPhoneNumber(e.target.value)}
+              placeholder="+15551234567 (E.164 format)"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Your Twilio phone number for click-to-call. Must be in E.164 format (e.g. +15551234567).
+            </p>
+          </div>
         </div>
 
         <div className="flex justify-end">
