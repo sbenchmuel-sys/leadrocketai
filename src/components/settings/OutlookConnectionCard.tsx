@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { toast } from "sonner";
 import { Loader2, Mail, AlertCircle, CheckCircle2, Unplug, RefreshCw, AlertTriangle, Info } from "lucide-react";
 import { format, formatDistanceToNow, isPast, addHours } from "date-fns";
@@ -70,23 +71,13 @@ ConnectButton.displayName = "ConnectButton";
 
 export function OutlookConnectionCard() {
   const { user } = useAuth();
+  const { workspaceId: ctxWorkspaceId } = useWorkspace();
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [healthData, setHealthData] = useState<OutlookHealthData | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(ctxWorkspaceId);
   // null = unknown, true = configured, false = missing
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
-
-  const fetchWorkspaceId = useCallback(async () => {
-    if (!user) return null;
-    const { data } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    return data?.workspace_id ?? null;
-  }, [user]);
 
   const fetchHealth = useCallback(async (wsId: string) => {
     try {
@@ -118,38 +109,20 @@ export function OutlookConnectionCard() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      const wsId = await fetchWorkspaceId();
-      setWorkspaceId(wsId);
-      if (wsId) {
-        await fetchHealth(wsId);
-      } else {
-        setIsLoading(false);
-      }
-      // Assume credentials configured until proven otherwise at connect time
-      setCredentialsConfigured(true);
-    })();
-  }, [fetchWorkspaceId, fetchHealth]);
+    const wsId = ctxWorkspaceId;
+    setWorkspaceId(wsId);
+    if (wsId) {
+      fetchHealth(wsId);
+    } else {
+      setIsLoading(false);
+    }
+    setCredentialsConfigured(true);
+  }, [ctxWorkspaceId, fetchHealth]);
 
   const ensureWorkspace = async (): Promise<string> => {
-    if (!user) throw new Error("Not authenticated");
-    let wsId = workspaceId ?? await fetchWorkspaceId();
-    if (wsId) return wsId;
-
-    // Auto-provision workspace
-    const { error: wsErr } = await supabase
-      .from("workspaces")
-      .insert({ name: "My Workspace", plan: "free" } as any);
-    if (wsErr) throw new Error("Could not create workspace. Please contact support.");
-
-    const { data: newMembership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    if (!newMembership) throw new Error("Could not set up workspace membership.");
-    return newMembership.workspace_id;
+    if (workspaceId) return workspaceId;
+    if (ctxWorkspaceId) return ctxWorkspaceId;
+    throw new Error("No workspace available. Please refresh the page.");
   };
 
   const handleConnect = async () => {
