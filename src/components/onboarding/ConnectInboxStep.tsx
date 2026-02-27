@@ -9,38 +9,22 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 /** Inline Outlook connect button that auto-provisions workspace if needed */
 function OutlookConnectButton({ onConnected }: { onConnected: (email: string) => void }) {
   const { user } = useAuth();
+  const { workspaceId } = useWorkspace();
   const [isConnecting, setIsConnecting] = useState(false);
 
-  const ensureWorkspace = async (): Promise<string> => {
-    if (!user) throw new Error("Not authenticated");
-    const { data: membership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+  const handleConnect = async () => {
+    try {
+      setIsConnecting(true);
 
-    if (membership?.workspace_id) return membership.workspace_id;
-
-    // Auto-provision
-    const { error: wsErr } = await supabase
-      .from("workspaces")
-      .insert({ name: "My Workspace", plan: "free" } as any);
-    if (wsErr) throw new Error("Could not create workspace.");
-
-    const { data: newMembership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    if (!newMembership) throw new Error("Could not set up workspace membership.");
-    return newMembership.workspace_id;
-  };
+      if (!workspaceId) {
+        toast.error("No workspace available. Please refresh the page.");
+        return;
+      }
 
   const handleConnect = async () => {
     try {
@@ -53,6 +37,10 @@ function OutlookConnectButton({ onConnected }: { onConnected: (email: string) =>
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),
