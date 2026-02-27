@@ -142,7 +142,7 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
     } catch {
       // silently ignore
     }
-  }, []);
+  }, [ctxWorkspaceId]);
 
   useEffect(() => {
     checkOutlookCredentials();
