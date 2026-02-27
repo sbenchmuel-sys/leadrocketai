@@ -26,21 +26,12 @@ function OutlookConnectButton({ onConnected }: { onConnected: (email: string) =>
         return;
       }
 
-  const handleConnect = async () => {
-    try {
-      setIsConnecting(true);
-      const workspaceId = await ensureWorkspace();
-
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) throw new Error("Not authenticated");
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId }),
-      });
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),
