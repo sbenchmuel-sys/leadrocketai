@@ -84,6 +84,7 @@ type Provider = "gmail" | "outlook" | null;
 
 export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: ConnectInboxStepProps) {
   const { isConnected: isGmailConnected } = useGmailConnection();
+  const { workspaceId: ctxWorkspaceId } = useWorkspace();
   const [selectedProvider, setSelectedProvider] = useState<Provider>(null);
   const [outlookConfigured, setOutlookConfigured] = useState<boolean | null>(null);
   const [outlookConnectedEmail, setOutlookConnectedEmail] = useState<string | null>(null);
@@ -122,18 +123,11 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
       const token = sessionData?.session?.access_token;
       if (!token) return;
 
-      // Get workspace id first
-      const { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .limit(1)
-        .maybeSingle();
-
-      if (!membership?.workspace_id) return;
+      if (!ctxWorkspaceId) return;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const resp = await fetch(
-        `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${membership.workspace_id}`,
+        `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${ctxWorkspaceId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
