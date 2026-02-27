@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -205,28 +206,14 @@ function TwilioConnectForm({ onConnected }: { onConnected: () => Promise<void> }
     try {
       setIsConnecting(true);
 
-      // Resolve workspace
-      let { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user!.id)
-        .limit(1)
-        .maybeSingle();
+      // Resolve workspace from context
+      const { workspaceId } = useWorkspace();
 
-      if (!membership) {
-        const { error: wsErr } = await supabase
-          .from("workspaces")
-          .insert({ name: "My Workspace", plan: "free" });
-        if (wsErr) throw new Error("Could not create workspace. Please contact support.");
-
-        const { data: newMembership } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .maybeSingle();
-        if (!newMembership) throw new Error("Could not set up workspace membership.");
-        membership = { workspace_id: newMembership.workspace_id };
+      // Use workspace from context — it's guaranteed by WorkspaceProvider
+      let wsId = workspaceId;
+      if (!wsId) {
+        toast.error("No workspace available. Please refresh the page.");
+        return;
       }
 
       const { data, error } = await supabase.functions.invoke("whatsapp-connect-twilio", {
