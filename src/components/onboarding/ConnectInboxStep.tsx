@@ -9,43 +9,22 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 /** Inline Outlook connect button that auto-provisions workspace if needed */
 function OutlookConnectButton({ onConnected }: { onConnected: (email: string) => void }) {
   const { user } = useAuth();
+  const { workspaceId } = useWorkspace();
   const [isConnecting, setIsConnecting] = useState(false);
-
-  const ensureWorkspace = async (): Promise<string> => {
-    if (!user) throw new Error("Not authenticated");
-    const { data: membership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-
-    if (membership?.workspace_id) return membership.workspace_id;
-
-    // Auto-provision
-    const { error: wsErr } = await supabase
-      .from("workspaces")
-      .insert({ name: "My Workspace", plan: "free" } as any);
-    if (wsErr) throw new Error("Could not create workspace.");
-
-    const { data: newMembership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    if (!newMembership) throw new Error("Could not set up workspace membership.");
-    return newMembership.workspace_id;
-  };
 
   const handleConnect = async () => {
     try {
       setIsConnecting(true);
-      const workspaceId = await ensureWorkspace();
+
+      if (!workspaceId) {
+        toast.error("No workspace available. Please refresh the page.");
+        return;
+      }
 
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
@@ -105,6 +84,7 @@ type Provider = "gmail" | "outlook" | null;
 
 export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: ConnectInboxStepProps) {
   const { isConnected: isGmailConnected } = useGmailConnection();
+  const { workspaceId: ctxWorkspaceId } = useWorkspace();
   const [selectedProvider, setSelectedProvider] = useState<Provider>(null);
   const [outlookConfigured, setOutlookConfigured] = useState<boolean | null>(null);
   const [outlookConnectedEmail, setOutlookConnectedEmail] = useState<string | null>(null);
@@ -143,18 +123,11 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
       const token = sessionData?.session?.access_token;
       if (!token) return;
 
-      // Get workspace id first
-      const { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .limit(1)
-        .maybeSingle();
-
-      if (!membership?.workspace_id) return;
+      if (!ctxWorkspaceId) return;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const resp = await fetch(
-        `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${membership.workspace_id}`,
+        `${supabaseUrl}/functions/v1/outlook-health?workspace_id=${ctxWorkspaceId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -169,7 +142,7 @@ export default function ConnectInboxStep({ onNext, onBack, allowSkip = true }: C
     } catch {
       // silently ignore
     }
-  }, []);
+  }, [ctxWorkspaceId]);
 
   useEffect(() => {
     checkOutlookCredentials();

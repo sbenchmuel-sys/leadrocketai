@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { GmailConnectionCard } from "@/components/gmail/GmailConnectionCard";
 import { ZoomMeetingSyncCard } from "@/components/settings/ZoomMeetingSyncCard";
 import { WhatsAppConnectionCard } from "@/components/settings/WhatsAppConnectionCard";
@@ -9,6 +7,8 @@ import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
 import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
 import { OutlookConnectionCard } from "@/components/settings/OutlookConnectionCard";
+import { WorkspaceMembersCard } from "@/components/settings/WorkspaceMembersCard";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   Accordion,
   AccordionContent,
@@ -18,23 +18,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone } from "lucide-react";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users } from "lucide-react";
 
 export default function Settings() {
-  const [workspaceId, setWorkspaceId] = useState<string | undefined>();
+  const { workspaceId } = useWorkspace();
 
-  useEffect(() => {
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return;
-      const { data } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle();
-      if (data) setWorkspaceId(data.workspace_id);
-    });
-  }, []);
   return (
     <div className="space-y-4">
       <div>
@@ -43,6 +31,21 @@ export default function Settings() {
       </div>
 
       <Accordion type="multiple" defaultValue={[]} className="max-w-2xl space-y-2">
+        <AccordionItem value="team" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Users className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Workspace & Team</div>
+                <div className="text-sm text-muted-foreground font-normal">Manage members, roles, and invitations</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <WorkspaceMembersCard />
+          </AccordionContent>
+        </AccordionItem>
+
         <AccordionItem value="workspace" className="border rounded-lg px-4">
           <AccordionTrigger className="hover:no-underline">
             <div className="flex items-center gap-3">
@@ -150,7 +153,6 @@ export default function Settings() {
           </AccordionContent>
         </AccordionItem>
 
-
         <AccordionItem value="wa-automation" className="border rounded-lg px-4">
           <AccordionTrigger className="hover:no-underline">
             <div className="flex items-center gap-3">
@@ -177,7 +179,7 @@ export default function Settings() {
             </div>
           </AccordionTrigger>
           <AccordionContent>
-            <CallSettingsCard workspaceId={workspaceId} />
+            <CallSettingsCard workspaceId={workspaceId ?? undefined} />
           </AccordionContent>
         </AccordionItem>
 
