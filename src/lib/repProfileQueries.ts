@@ -16,6 +16,7 @@ export interface RepProfile {
   linkedin_url: string | null;
   calendar_link: string | null;
   office_address: string | null;
+  twilio_phone_number: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -29,6 +30,7 @@ export interface RepProfileInput {
   linkedin_url?: string | null;
   calendar_link?: string | null;
   office_address?: string | null;
+  twilio_phone_number?: string | null;
 }
 
 export async function getRepProfile(): Promise<RepProfile | null> {

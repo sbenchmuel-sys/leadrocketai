@@ -5,6 +5,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane } from "lucide-react";
+import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import { cn } from "@/lib/utils";
 import {
   MOTION_LABELS, MOTION_COLORS,
