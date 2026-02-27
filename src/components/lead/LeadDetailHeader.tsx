@@ -116,6 +116,7 @@ export default function LeadDetailHeader({
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex gap-1.5">
+          <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
           {isConnected ? (
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />

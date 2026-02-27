@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Save, User, RefreshCw } from "lucide-react";
+import { Loader2, Save, User, RefreshCw, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { getRepProfile, upsertRepProfile, RepProfile } from "@/lib/repProfileQueries";
 import { useProfileSync, getHighConfidenceValue } from "@/hooks/useProfileSync";
