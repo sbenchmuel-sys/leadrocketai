@@ -23,6 +23,7 @@ export function RepProfileCard() {
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [calendarLink, setCalendarLink] = useState("");
   const [officeAddress, setOfficeAddress] = useState("");
+  const [twilioPhoneNumber, setTwilioPhoneNumber] = useState("");
 
   useEffect(() => {
     loadProfile();
@@ -41,6 +42,7 @@ export function RepProfileCard() {
         setLinkedinUrl(data.linkedin_url || "");
         setCalendarLink(data.calendar_link || "");
         setOfficeAddress(data.office_address || "");
+        setTwilioPhoneNumber((data as any).twilio_phone_number || "");
       }
     } catch (err) {
       console.error("Failed to load rep profile:", err);
@@ -61,6 +63,7 @@ export function RepProfileCard() {
         linkedin_url: linkedinUrl.trim() || null,
         calendar_link: calendarLink.trim() || null,
         office_address: officeAddress.trim() || null,
+        twilio_phone_number: twilioPhoneNumber.trim() || null,
       });
       toast.success("Profile saved successfully");
       loadProfile();
