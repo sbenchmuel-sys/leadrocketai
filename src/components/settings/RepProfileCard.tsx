@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Save, User, RefreshCw } from "lucide-react";
+import { Loader2, Save, User, RefreshCw, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { getRepProfile, upsertRepProfile, RepProfile } from "@/lib/repProfileQueries";
 import { useProfileSync, getHighConfidenceValue } from "@/hooks/useProfileSync";
@@ -23,6 +23,7 @@ export function RepProfileCard() {
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [calendarLink, setCalendarLink] = useState("");
   const [officeAddress, setOfficeAddress] = useState("");
+  const [twilioPhoneNumber, setTwilioPhoneNumber] = useState("");
 
   useEffect(() => {
     loadProfile();
@@ -41,6 +42,7 @@ export function RepProfileCard() {
         setLinkedinUrl(data.linkedin_url || "");
         setCalendarLink(data.calendar_link || "");
         setOfficeAddress(data.office_address || "");
+        setTwilioPhoneNumber((data as any).twilio_phone_number || "");
       }
     } catch (err) {
       console.error("Failed to load rep profile:", err);
@@ -61,6 +63,7 @@ export function RepProfileCard() {
         linkedin_url: linkedinUrl.trim() || null,
         calendar_link: calendarLink.trim() || null,
         office_address: officeAddress.trim() || null,
+        twilio_phone_number: twilioPhoneNumber.trim() || null,
       });
       toast.success("Profile saved successfully");
       loadProfile();
@@ -188,6 +191,21 @@ export function RepProfileCard() {
               onChange={(e) => setOfficeAddress(e.target.value)}
               placeholder="123 Main St, Suite 100, City, ST 12345"
             />
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="twilioPhone" className="flex items-center gap-1.5">
+              <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+              Twilio Caller ID
+            </Label>
+            <Input
+              id="twilioPhone"
+              value={twilioPhoneNumber}
+              onChange={(e) => setTwilioPhoneNumber(e.target.value)}
+              placeholder="+15551234567 (E.164 format)"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Your Twilio phone number for click-to-call. Must be in E.164 format (e.g. +15551234567).
+            </p>
           </div>
         </div>
 

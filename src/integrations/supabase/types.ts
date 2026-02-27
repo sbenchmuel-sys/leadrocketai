@@ -1767,6 +1767,7 @@ export type Database = {
           linkedin_url: string | null
           office_address: string | null
           phone: string | null
+          twilio_phone_number: string | null
           updated_at: string
           user_id: string
         }
@@ -1781,6 +1782,7 @@ export type Database = {
           linkedin_url?: string | null
           office_address?: string | null
           phone?: string | null
+          twilio_phone_number?: string | null
           updated_at?: string
           user_id: string
         }
@@ -1795,6 +1797,7 @@ export type Database = {
           linkedin_url?: string | null
           office_address?: string | null
           phone?: string | null
+          twilio_phone_number?: string | null
           updated_at?: string
           user_id?: string
         }

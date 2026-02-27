@@ -5,6 +5,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane } from "lucide-react";
+import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import { cn } from "@/lib/utils";
 import {
   MOTION_LABELS, MOTION_COLORS,
@@ -115,6 +116,7 @@ export default function LeadDetailHeader({
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex gap-1.5">
+          <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
           {isConnected ? (
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
