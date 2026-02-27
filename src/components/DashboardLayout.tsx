@@ -7,6 +7,7 @@ import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
+import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,8 +85,8 @@ export default function DashboardLayout() {
     <div className="min-h-screen flex bg-background">
       {/* Sidebar */}
       <aside className="w-64 border-r border-border bg-card hidden md:flex flex-col">
-        <div className="p-4 border-b border-border">
-          <h1 className="text-xl font-bold text-foreground">DrivePilot</h1>
+        <div className="p-3 border-b border-border">
+          <WorkspaceSwitcher />
         </div>
         <nav className="flex-1 p-4 space-y-1">
           {visibleNavItems.map((item) => {
