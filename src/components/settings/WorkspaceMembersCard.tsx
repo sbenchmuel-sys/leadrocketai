@@ -158,7 +158,7 @@ export function WorkspaceMembersCard() {
     try {
       const { error } = await supabase
         .from("workspace_members")
-        .update({ role: newRole })
+        .update({ role: newRole as "admin" | "manager" | "rep" })
         .eq("workspace_id", workspaceId)
         .eq("user_id", userId);
       if (error) throw error;
