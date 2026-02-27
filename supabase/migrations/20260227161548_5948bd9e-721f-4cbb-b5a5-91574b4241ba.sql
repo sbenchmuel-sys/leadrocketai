@@ -1,0 +1,1 @@
+ALTER TABLE public.call_settings ADD COLUMN default_twilio_number text;
