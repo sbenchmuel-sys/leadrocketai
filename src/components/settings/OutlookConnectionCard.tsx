@@ -173,7 +173,7 @@ export function OutlookConnectionCard() {
         if (popup.closed) {
           clearInterval(poll);
           setIsConnecting(false);
-          const wsId = await fetchWorkspaceId();
+          const wsId = workspaceId ?? ctxWorkspaceId;
           if (wsId) await fetchHealth(wsId);
         }
       }, 800);
