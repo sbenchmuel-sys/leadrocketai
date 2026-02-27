@@ -189,6 +189,7 @@ export function WhatsAppConnectionCard() {
 // ================================================================
 function TwilioConnectForm({ onConnected }: { onConnected: () => Promise<void> }) {
   const { user } = useAuth();
+  const { workspaceId } = useWorkspace();
   const [isConnecting, setIsConnecting] = useState(false);
   const [phone, setPhone] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -206,19 +207,14 @@ function TwilioConnectForm({ onConnected }: { onConnected: () => Promise<void> }
     try {
       setIsConnecting(true);
 
-      // Resolve workspace from context
-      const { workspaceId } = useWorkspace();
-
-      // Use workspace from context — it's guaranteed by WorkspaceProvider
-      let wsId = workspaceId;
-      if (!wsId) {
+      if (!workspaceId) {
         toast.error("No workspace available. Please refresh the page.");
         return;
       }
 
       const { data, error } = await supabase.functions.invoke("whatsapp-connect-twilio", {
         body: {
-          workspace_id: membership.workspace_id,
+          workspace_id: workspaceId,
           twilio_phone_number: phone.trim(),
           messaging_service_sid: messagingServiceSid.trim() || undefined,
           twilio_sender_sid: senderSid.trim() || undefined,
@@ -231,7 +227,7 @@ function TwilioConnectForm({ onConnected }: { onConnected: () => Promise<void> }
       // Health check
       try {
         const { data: healthData } = await supabase.functions.invoke("whatsapp-health", {
-          body: { workspace_id: membership.workspace_id },
+          body: { workspace_id: workspaceId },
         });
         if (healthData && !healthData.healthy) {
           toast.warning("Connection saved, but WhatsApp provider not reachable.", { duration: 5000 });
