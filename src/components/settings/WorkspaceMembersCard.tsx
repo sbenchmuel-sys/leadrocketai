@@ -61,27 +61,21 @@ export function WorkspaceMembersCard() {
     try {
       setIsLoading(true);
 
-      // Fetch members
+      // Fetch members with role
       const { data: memberRows } = await supabase
         .from("workspace_members")
         .select("user_id, role")
         .eq("workspace_id", workspaceId);
 
-      // Fetch profiles to get emails
+      // We can't query auth.users from client. Use the current user's email
+      // for self, and show user_id prefix for others.
       const memberList: Member[] = [];
       if (memberRows) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("user_id, email")
-          .in("user_id", memberRows.map(m => m.user_id));
-
-        const emailMap = new Map(profiles?.map(p => [p.user_id, p.email]) ?? []);
-
         for (const m of memberRows) {
           memberList.push({
             user_id: m.user_id,
             role: m.role,
-            email: emailMap.get(m.user_id) ?? "Unknown",
+            email: m.user_id === user?.id ? (user.email ?? "You") : m.user_id.slice(0, 8) + "…",
           });
         }
       }
@@ -138,7 +132,7 @@ export function WorkspaceMembersCard() {
         .insert({
           workspace_id: workspaceId,
           email: inviteEmail.trim().toLowerCase(),
-          role: inviteRole,
+          role: inviteRole as "admin" | "manager" | "rep",
           invited_by: user.id,
         });
       if (error) {
@@ -347,7 +341,7 @@ export function WorkspaceMembersCard() {
               type="email"
               className="flex-1"
             />
-            <Select value={inviteRole} onValueChange={setInviteRole}>
+            <Select value={inviteRole} onValueChange={(v: string) => setInviteRole(v)}>
               <SelectTrigger className="w-[100px]">
                 <SelectValue />
               </SelectTrigger>
