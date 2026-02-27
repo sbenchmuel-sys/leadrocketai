@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
@@ -33,41 +34,43 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
-          <AuthProvider>
-          <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/auth" element={<Auth />} />
-            <Route
-              path="/onboarding"
-              element={
-                <ProtectedOnboardingRoute>
-                  <Onboarding />
-                </ProtectedOnboardingRoute>
-              }
-            />
-            <Route
-              path="/app"
-              element={
-                <ProtectedRoute>
-                  <DashboardLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="inbox" element={<Inbox />} />
-              <Route path="leads" element={<Leads />} />
-              <Route path="leads/:id" element={<LeadDetail />} />
-              <Route path="knowledge" element={<Knowledge />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="analytics" element={<ManagerAnalytics />} />
-              <Route path="calls/:callSessionId" element={<CallDetail />} />
-            </Route>
-            <Route path="/privacy" element={<Privacy />} />
-            <Route path="/terms" element={<Terms />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-          </AuthProvider>
+            <AuthProvider>
+            <WorkspaceProvider>
+            <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/auth" element={<Auth />} />
+              <Route
+                path="/onboarding"
+                element={
+                  <ProtectedOnboardingRoute>
+                    <Onboarding />
+                  </ProtectedOnboardingRoute>
+                }
+              />
+              <Route
+                path="/app"
+                element={
+                  <ProtectedRoute>
+                    <DashboardLayout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="inbox" element={<Inbox />} />
+                <Route path="leads" element={<Leads />} />
+                <Route path="leads/:id" element={<LeadDetail />} />
+                <Route path="knowledge" element={<Knowledge />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="analytics" element={<ManagerAnalytics />} />
+                <Route path="calls/:callSessionId" element={<CallDetail />} />
+              </Route>
+              <Route path="/privacy" element={<Privacy />} />
+              <Route path="/terms" element={<Terms />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+            </WorkspaceProvider>
+            </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
