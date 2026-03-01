@@ -37,34 +37,14 @@ Deno.serve(async (req) => {
 
     logger.info("twilio_inbound_params", { To: params.To, From: params.From, Caller: params.Caller, Direction: params.Direction });
 
-    // Validate Twilio signature
-    const signature = req.headers.get("X-Twilio-Signature");
-    if (twilioAuthToken && signature) {
-    const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL")
-        ? `${Deno.env.get("TWILIO_WEBHOOK_BASE_URL").replace(/\/$/, "")}/twilio-voice-inbound`
-        : req.url;
-      const isValid = await validateTwilioSignature(twilioAuthToken, signature, baseUrl, params);
-      if (!isValid) {
-        logger.warn("inbound_signature_invalid");
-        return new Response("<Response><Say>Unauthorized</Say></Response>", {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "text/xml" },
-        });
-      }
-    }
-
     // ---------------------------------------------------------------
     // Browser-originated outbound call (Twilio Client SDK)
-    // When the browser SDK calls .connect(), Twilio hits this URL with
-    // custom parameters. We detect this via the presence of a custom
-    // "To" param set by the client SDK and the Direction being
-    // "inbound" from the TwiML App perspective.
+    // Detected BEFORE signature validation — browser SDK calls are
+    // already authenticated via the TwiML App SID. Twilio's signature
+    // URL may not match the edge function URL, causing false rejections.
     // ---------------------------------------------------------------
     const clientToNumber = params.To ?? "";
-    const direction = params.Direction ?? "";
     const callerIdentity = params.Caller ?? "";
-
-    // Browser SDK calls include Caller starting with "client:" 
     const isBrowserCall = callerIdentity.startsWith("client:");
 
     if (isBrowserCall && clientToNumber) {
@@ -114,6 +94,22 @@ Deno.serve(async (req) => {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "text/xml" },
       });
+    }
+
+    // Validate Twilio signature (only for non-browser inbound calls)
+    const signature = req.headers.get("X-Twilio-Signature");
+    if (twilioAuthToken && signature) {
+      const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL")
+        ? `${Deno.env.get("TWILIO_WEBHOOK_BASE_URL")!.replace(/\/$/, "")}/twilio-voice-inbound`
+        : req.url;
+      const isValid = await validateTwilioSignature(twilioAuthToken, signature, baseUrl, params);
+      if (!isValid) {
+        logger.warn("inbound_signature_invalid");
+        return new Response("<Response><Say>Unauthorized</Say></Response>", {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        });
+      }
     }
 
     // ---------------------------------------------------------------
