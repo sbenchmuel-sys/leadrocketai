@@ -126,6 +126,25 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
   }, [initDevice]);
 
   const makeCall = useCallback(async (opts: { toNumber: string; fromNumber: string; leadId: string; leadName: string }) => {
+    // Normalize to E.164 before dialing
+    function normalizeToE164(number: string): string {
+      const cleaned = number.replace(/[^\d+]/g, "");
+      if (!cleaned.startsWith("+")) {
+        throw new Error("Phone number must be in E.164 format (start with +)");
+      }
+      return cleaned;
+    }
+
+    let toNormalized: string;
+    let fromNormalized: string;
+    try {
+      toNormalized = normalizeToE164(opts.toNumber);
+      fromNormalized = normalizeToE164(opts.fromNumber);
+    } catch (err: any) {
+      toast.error("Invalid phone number", { description: err.message });
+      return;
+    }
+
     if (!deviceRef.current) {
       await initDevice();
     }
@@ -139,8 +158,8 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       status: "connecting",
       leadId: opts.leadId,
       leadName: opts.leadName,
-      fromNumber: opts.fromNumber,
-      toNumber: opts.toNumber,
+      fromNumber: fromNormalized,
+      toNumber: toNormalized,
       isMuted: false,
       startedAt: null,
     }));
@@ -148,8 +167,8 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     try {
       const call = await deviceRef.current.connect({
         params: {
-          To: opts.toNumber,
-          FromNumber: opts.fromNumber,
+          To: toNormalized,
+          FromNumber: fromNormalized,
           LeadId: opts.leadId,
         },
       });

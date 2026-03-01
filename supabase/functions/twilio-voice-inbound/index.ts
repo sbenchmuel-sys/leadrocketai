@@ -61,18 +61,19 @@ Deno.serve(async (req) => {
     const isBrowserCall = callerIdentity.startsWith("client:");
 
     if (isBrowserCall && clientToNumber) {
-      logger.info("browser_outbound_call", {
-        caller: callerIdentity,
-        to: clientToNumber,
-      });
+      // Validate E.164 destination
+      const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
+      if (!toNormalized.startsWith("+")) {
+        logger.error("browser_outbound_invalid_to", { to: clientToNumber });
+        return new Response(
+          "<Response><Say>Invalid destination number.</Say><Hangup/></Response>",
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
+        );
+      }
 
-      const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
-      const recordingCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
-
-      // Look up a from number — use the lead's fromNumber param if provided,
-      // otherwise fall back to workspace default
-      let fromNumber = params.FromNumber ?? "";
-      if (!fromNumber) {
+      // Resolve caller ID: param → call_settings → env fallback
+      let fromNumber = (params.FromNumber ?? "").replace(/[^\d+]/g, "");
+      if (!fromNumber || !fromNumber.startsWith("+")) {
         const { data: settings } = await supabase
           .from("call_settings")
           .select("default_twilio_number")
@@ -80,19 +81,25 @@ Deno.serve(async (req) => {
           .maybeSingle();
         fromNumber = settings?.default_twilio_number ?? "";
       }
+      if (!fromNumber || !fromNumber.startsWith("+")) {
+        fromNumber = Deno.env.get("TWILIO_PHONE_NUMBER") ?? "";
+      }
+      if (!fromNumber || !fromNumber.startsWith("+")) {
+        logger.error("browser_outbound_no_caller_id");
+        return new Response(
+          "<Response><Say>No valid caller ID configured.</Say><Hangup/></Response>",
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
+        );
+      }
 
-      const callerIdAttr = fromNumber ? `callerId="${escapeXml(fromNumber)}"` : "";
+      // If Twilio account is trial, destination number must be verified.
+      logger.info("browser_outbound_call", { to: toNormalized, callerId: fromNumber });
+
+      const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
 
       const twiml = `<Response>
-  <Dial
-    ${callerIdAttr}
-    record="record-from-answer-dual"
-    recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
-    recordingStatusCallbackEvent="completed"
-    recordingChannels="2"
-    statusCallback="${escapeXml(statusCallbackUrl)}"
-    statusCallbackEvent="initiated ringing answered completed">
-    ${escapeXml(clientToNumber)}
+  <Dial callerId="${escapeXml(fromNumber)}" record="record-from-answer-dual" recordingStatusCallback="${escapeXml(statusCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2" statusCallback="${escapeXml(statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed">
+    <Number>${escapeXml(toNormalized)}</Number>
   </Dial>
 </Response>`;
 
