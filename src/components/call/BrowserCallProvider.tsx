@@ -32,6 +32,7 @@ export function useBrowserCall() {
 
 export function BrowserCallProvider({ children }: { children: ReactNode }) {
   const deviceRef = useRef<Device | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [state, setState] = useState<BrowserCallState>({
     status: "idle",
     activeCall: null,
@@ -71,10 +72,29 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
 
     setState((s) => ({ ...s, status: "registering" }));
 
+    // Pre-create audio element for remote audio playback
+    // This prevents "_onAddTrack" errors in iframe/embedded contexts
+    if (!audioRef.current) {
+      const audio = document.createElement("audio");
+      audio.id = "twilio-remote-audio";
+      audio.autoplay = true;
+      // Required for autoplay policy in some browsers
+      audio.setAttribute("playsinline", "");
+      document.body.appendChild(audio);
+      audioRef.current = audio;
+    }
+
     const device = new Device(token, {
       edge: "ashburn",
       closeProtection: true,
     });
+
+    // Attach audio output to our pre-created element
+    try {
+      await device.audio?.speakerDevices.set("default");
+    } catch {
+      // setSinkId may not be supported — safe to ignore
+    }
 
     device.on("registered", () => {
       setState((s) => ({ ...s, status: "ready" }));
@@ -122,6 +142,10 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
       deviceRef.current?.destroy();
       deviceRef.current = null;
+      if (audioRef.current) {
+        audioRef.current.remove();
+        audioRef.current = null;
+      }
     };
   }, [initDevice]);
 
