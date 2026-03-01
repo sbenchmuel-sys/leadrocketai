@@ -162,14 +162,8 @@ Deno.serve(async (req) => {
     if (recordingNotice) {
       const twiml = `<Response>
   <Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>
-  <Dial
-    record="record-from-answer-dual"
-    recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
-    recordingStatusCallbackEvent="completed"
-    recordingChannels="2"
-    statusCallback="${escapeXml(statusCallbackUrl)}"
-    statusCallbackEvent="initiated ringing answered completed">
-    ${escapeXml(toNumber)}
+  <Dial record="record-from-answer-dual" recordingStatusCallback="${escapeXml(recordingCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2" statusCallback="${escapeXml(statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed">
+    <Number>${escapeXml(toNumber)}</Number>
   </Dial>
 </Response>`;
       return new Response(twiml.trim(), {
@@ -197,14 +191,8 @@ function respondWithDial(
   recordingCallbackUrl: string,
 ): Response {
   const twiml = `<Response>
-  <Dial
-    record="record-from-answer-dual"
-    recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
-    recordingStatusCallbackEvent="completed"
-    recordingChannels="2"
-    statusCallback="${escapeXml(statusCallbackUrl)}"
-    statusCallbackEvent="initiated ringing answered completed">
-    ${escapeXml(toNumber)}
+  <Dial record="record-from-answer-dual" recordingStatusCallback="${escapeXml(recordingCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2" statusCallback="${escapeXml(statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed">
+    <Number>${escapeXml(toNumber)}</Number>
   </Dial>
 </Response>`;
 
