@@ -6,6 +6,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { BrowserCallProvider } from "@/components/call/BrowserCallProvider";
+import { ActiveCallBar } from "@/components/call/ActiveCallBar";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -36,6 +38,8 @@ const App = () => (
         <BrowserRouter>
             <AuthProvider>
             <WorkspaceProvider>
+            <BrowserCallProvider>
+            <ActiveCallBar />
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Auth />} />
@@ -69,6 +73,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </BrowserCallProvider>
             </WorkspaceProvider>
             </AuthProvider>
         </BrowserRouter>

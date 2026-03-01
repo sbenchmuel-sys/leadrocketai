@@ -1,7 +1,6 @@
 // ============================================================
 // Twilio Voice Inbound — TwiML endpoint for incoming calls
-// Plays recording notice, optional DTMF consent, then dials
-// with dual-channel recording enabled
+// AND browser-originated outbound calls via Twilio Client SDK
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
@@ -47,6 +46,65 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---------------------------------------------------------------
+    // Browser-originated outbound call (Twilio Client SDK)
+    // When the browser SDK calls .connect(), Twilio hits this URL with
+    // custom parameters. We detect this via the presence of a custom
+    // "To" param set by the client SDK and the Direction being
+    // "inbound" from the TwiML App perspective.
+    // ---------------------------------------------------------------
+    const clientToNumber = params.To ?? "";
+    const direction = params.Direction ?? "";
+    const callerIdentity = params.Caller ?? "";
+
+    // Browser SDK calls include Caller starting with "client:" 
+    const isBrowserCall = callerIdentity.startsWith("client:");
+
+    if (isBrowserCall && clientToNumber) {
+      logger.info("browser_outbound_call", {
+        caller: callerIdentity,
+        to: clientToNumber,
+      });
+
+      const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
+      const recordingCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
+
+      // Look up a from number — use the lead's fromNumber param if provided,
+      // otherwise fall back to workspace default
+      let fromNumber = params.FromNumber ?? "";
+      if (!fromNumber) {
+        const { data: settings } = await supabase
+          .from("call_settings")
+          .select("default_twilio_number")
+          .limit(1)
+          .maybeSingle();
+        fromNumber = settings?.default_twilio_number ?? "";
+      }
+
+      const callerIdAttr = fromNumber ? `callerId="${escapeXml(fromNumber)}"` : "";
+
+      const twiml = `<Response>
+  <Dial
+    ${callerIdAttr}
+    record="record-from-answer-dual"
+    recordingStatusCallback="${escapeXml(recordingCallbackUrl)}"
+    recordingStatusCallbackEvent="completed"
+    recordingChannels="2"
+    statusCallback="${escapeXml(statusCallbackUrl)}"
+    statusCallbackEvent="initiated ringing answered completed">
+    ${escapeXml(clientToNumber)}
+  </Dial>
+</Response>`;
+
+      return new Response(twiml.trim(), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Standard inbound call flow (phone → Twilio → rep)
+    // ---------------------------------------------------------------
     const toNumber = params.To ?? "";
 
     // Load workspace settings
@@ -67,18 +125,16 @@ Deno.serve(async (req) => {
     const digits = params.Digits;
     if (requireDtmf && digits !== undefined) {
       if (digits !== "1") {
-        // User declined recording consent
         logger.info("inbound_dtmf_declined", { from: params.From });
         return new Response(
           `<Response><Say>Thank you. Goodbye.</Say><Hangup/></Response>`,
           { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
         );
       }
-      // User consented — proceed to dial
       return respondWithDial(toNumber, statusCallbackUrl, recordingCallbackUrl);
     }
 
-    // DTMF consent gate — return early with Gather
+    // DTMF consent gate
     if (requireDtmf) {
       const gatherUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
       const twiml = `<Response>
@@ -128,9 +184,6 @@ Deno.serve(async (req) => {
   }
 });
 
-/**
- * Build TwiML response with Dial + dual-channel recording
- */
 function respondWithDial(
   toNumber: string,
   statusCallbackUrl: string,
@@ -150,7 +203,11 @@ function respondWithDial(
 
   return new Response(twiml.trim(), {
     status: 200,
-    headers: { ...corsHeaders, "Content-Type": "text/xml" },
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+      "Content-Type": "text/xml",
+    },
   });
 }
 
