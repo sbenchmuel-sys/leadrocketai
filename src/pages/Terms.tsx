@@ -104,7 +104,7 @@ export default function Terms() {
           <section className="space-y-2">
             <h2 className="text-xl font-semibold">10. Contact</h2>
             <p className="text-muted-foreground">
-              DrivePilot
+              DrivePilot · Shai Benchmuel
               <br />
               Email:{" "}
               <a href="mailto:support@drivepilot.app" className="underline hover:text-foreground">
