@@ -23,12 +23,19 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
-    // Parse form data
-    const formData = await req.formData();
-    const params: Record<string, string> = {};
-    formData.forEach((value, key) => {
-      params[key] = value.toString();
-    });
+    // Parse request body — Twilio sends application/x-www-form-urlencoded
+    const contentType = req.headers.get("content-type") || "";
+    let params: Record<string, string>;
+
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      const formData = await req.formData();
+      params = Object.fromEntries(formData) as Record<string, string>;
+    } else {
+      // Fallback for JSON (e.g. testing)
+      params = await req.json();
+    }
+
+    logger.info("twilio_inbound_params", { To: params.To, From: params.From, Caller: params.Caller, Direction: params.Direction });
 
     // Validate Twilio signature
     const signature = req.headers.get("X-Twilio-Signature");
