@@ -142,6 +142,10 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
       deviceRef.current?.destroy();
       deviceRef.current = null;
+      if (audioRef.current) {
+        audioRef.current.remove();
+        audioRef.current = null;
+      }
     };
   }, [initDevice]);
 
