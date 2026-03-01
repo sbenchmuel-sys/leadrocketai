@@ -99,9 +99,53 @@ Deno.serve(async (req) => {
         // Continue with fallback
       }
 
+      // Build callback URLs for status tracking & recording
+      const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
+      const recordingCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
+
+      // Also pre-create the call_session row so it exists immediately
+      // (the webhook will update it as status changes come in)
+      const callSid = params.CallSid ?? "";
+      const userIdMatch2 = callerIdentity.match(/^client:user_(.+)$/);
+      const agentUserId = userIdMatch2 ? userIdMatch2[1] : null;
+
+      // Resolve lead_id from the FromNumber param if provided
+      const browserLeadId = params.LeadId ?? null;
+
+      // Find workspace for session creation
+      let wsId: string | null = null;
+      if (agentUserId) {
+        const { data: mem } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", agentUserId)
+          .limit(1)
+          .maybeSingle();
+        wsId = mem?.workspace_id ?? null;
+      }
+
+      if (wsId && callSid) {
+        const { error: sessionErr } = await supabase.from("call_sessions").insert({
+          call_sid: callSid,
+          workspace_id: wsId,
+          direction: "outbound",
+          from_number: callerId,
+          to_number: toNormalized,
+          status: "initiated",
+          started_at: new Date().toISOString(),
+          agent_user_id: agentUserId,
+          lead_id: browserLeadId,
+        });
+        if (sessionErr && sessionErr.code !== "23505") {
+          logger.error("browser_call_session_insert_error", { error: sessionErr.message });
+        } else {
+          logger.info("browser_call_session_created", { callSid, wsId, leadId: browserLeadId });
+        }
+      }
+
       const twiml = `
 <Response>
-  <Dial callerId="${callerId}">
+  <Dial callerId="${callerId}" record="record-from-answer-dual" recordingStatusCallback="${escapeXml(recordingCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2" statusCallback="${escapeXml(statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed">
     <Number>${toNormalized}</Number>
   </Dial>
 </Response>`.trim();
