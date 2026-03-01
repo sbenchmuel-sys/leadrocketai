@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Phone, Loader2, PhoneOff } from "lucide-react";
+import { Phone, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -7,9 +7,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { Link } from "react-router-dom";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+import { useBrowserCall } from "./BrowserCallProvider";
 
 interface ClickToCallButtonProps {
   leadId: string;
@@ -18,92 +16,71 @@ interface ClickToCallButtonProps {
 }
 
 export function ClickToCallButton({ leadId, leadName, leadPhone }: ClickToCallButtonProps) {
-  const [isDialing, setIsDialing] = useState(false);
+  const { makeCall, status } = useBrowserCall();
   const [showConfirm, setShowConfirm] = useState(false);
-  const [callResult, setCallResult] = useState<{ callSid: string; callSessionId?: string } | null>(null);
   const [fromNumber, setFromNumber] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   if (!leadPhone) return null;
 
+  const isBusy = status === "connecting" || status === "on-call";
+
   async function handleCallClick() {
-    // Fetch rep's Twilio number
-    const { data: repProfile } = await supabase
-      .from("rep_profiles")
-      .select("twilio_phone_number")
-      .limit(1)
-      .maybeSingle();
-
-    let repNumber = (repProfile as any)?.twilio_phone_number;
-
-    // Fallback to workspace default if rep hasn't set one
-    if (!repNumber) {
-      const { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    setIsLoading(true);
+    try {
+      // Fetch rep's Twilio number
+      const { data: repProfile } = await supabase
+        .from("rep_profiles")
+        .select("twilio_phone_number")
         .limit(1)
         .maybeSingle();
 
-      if (membership?.workspace_id) {
-        const { data: callSettings } = await supabase
-          .from("call_settings")
-          .select("default_twilio_number")
-          .eq("workspace_id", membership.workspace_id)
+      let repNumber = (repProfile as any)?.twilio_phone_number;
+
+      // Fallback to workspace default
+      if (!repNumber) {
+        const { data: membership } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
+          .limit(1)
           .maybeSingle();
 
-        repNumber = (callSettings as any)?.default_twilio_number;
+        if (membership?.workspace_id) {
+          const { data: callSettings } = await supabase
+            .from("call_settings")
+            .select("default_twilio_number")
+            .eq("workspace_id", membership.workspace_id)
+            .maybeSingle();
+
+          repNumber = (callSettings as any)?.default_twilio_number;
+        }
       }
-    }
 
-    if (!repNumber) {
-      toast.error("No Twilio caller ID configured", {
-        description: "Set a default in Settings → Calls/Voice, or your own in Settings → Your Profile.",
-      });
-      return;
-    }
+      if (!repNumber) {
+        toast.error("No Twilio caller ID configured", {
+          description: "Set a default in Settings → Calls/Voice, or your own in Settings → Your Profile.",
+        });
+        return;
+      }
 
-    setFromNumber(repNumber);
-    setShowConfirm(true);
+      setFromNumber(repNumber);
+      setShowConfirm(true);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   async function initiateCall() {
     if (!fromNumber || !leadPhone) return;
     setShowConfirm(false);
-    setIsDialing(true);
-    setCallResult(null);
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/twilio-voice-outbound`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          toNumber: leadPhone,
-          fromNumber,
-          leadId,
-        }),
-      });
-
-      const body = await resp.json();
-
-      if (!resp.ok || !body.ok) {
-        throw new Error(body.error || body.details || "Call failed");
-      }
-
-      setCallResult({ callSid: body.callSid });
-      toast.success(`Calling ${leadName}...`, {
-        description: `Call SID: ${body.callSid.slice(0, 12)}…`,
-      });
-    } catch (err: any) {
-      toast.error("Failed to initiate call", { description: err.message });
-    } finally {
-      setIsDialing(false);
-    }
+    await makeCall({
+      toNumber: leadPhone,
+      fromNumber,
+      leadId,
+      leadName,
+    });
   }
 
   return (
@@ -113,14 +90,14 @@ export function ClickToCallButton({ leadId, leadName, leadPhone }: ClickToCallBu
         size="sm"
         className="h-8 text-xs gap-1.5"
         onClick={handleCallClick}
-        disabled={isDialing}
+        disabled={isBusy || isLoading}
       >
-        {isDialing ? (
+        {isLoading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <Phone className="h-3.5 w-3.5" />
         )}
-        {isDialing ? "Dialing…" : "Call"}
+        {isBusy ? "In Call" : isLoading ? "Loading…" : "Call"}
       </Button>
 
       <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
@@ -128,9 +105,9 @@ export function ClickToCallButton({ leadId, leadName, leadPhone }: ClickToCallBu
           <AlertDialogHeader>
             <AlertDialogTitle>Call {leadName}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Twilio will connect <strong>{fromNumber}</strong> → <strong>{leadPhone}</strong>.
+              Your browser will connect to <strong>{leadPhone}</strong> using caller ID <strong>{fromNumber}</strong>.
               <br />
-              Your phone will ring first, then the lead will be connected.
+              Make sure your microphone is enabled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
