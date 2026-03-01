@@ -32,6 +32,7 @@ export function useBrowserCall() {
 
 export function BrowserCallProvider({ children }: { children: ReactNode }) {
   const deviceRef = useRef<Device | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [state, setState] = useState<BrowserCallState>({
     status: "idle",
     activeCall: null,
