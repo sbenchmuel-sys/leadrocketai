@@ -186,7 +186,20 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
 
       call.on("error", (err: any) => {
         console.error("Call error:", err);
-        toast.error("Call failed", { description: err.message });
+        const code = err?.originalError?.code ?? err?.code;
+        let title = "Call failed";
+        let desc = err.message;
+        if (code === 31603) {
+          title = "Call declined";
+          desc = "The recipient declined or didn't answer the call.";
+        } else if (code === 31005) {
+          title = "Connection error";
+          desc = "Could not connect the call. The recipient may have declined.";
+        } else if (code === 31009) {
+          title = "Network error";
+          desc = "Check your internet connection and try again.";
+        }
+        toast.error(title, { description: desc });
         setState((s) => ({ ...s, status: "ready", activeCall: null }));
       });
 
