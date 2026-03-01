@@ -35,7 +35,15 @@ Deno.serve(async (req) => {
       params = await req.json();
     }
 
-    logger.info("twilio_inbound_params", { To: params.To, From: params.From, Caller: params.Caller, Direction: params.Direction });
+    logger.info("twilio_inbound_params", {
+      To: params.To,
+      From: params.From,
+      Caller: params.Caller,
+      Direction: params.Direction,
+      CallSid: params.CallSid,
+      AccountSid: params.AccountSid,
+      ApiVersion: params.ApiVersion,
+    });
 
     // ---------------------------------------------------------------
     // Browser-originated outbound call (Twilio Client SDK)
@@ -48,6 +56,23 @@ Deno.serve(async (req) => {
     const isBrowserCall = callerIdentity.startsWith("client:");
 
     if (isBrowserCall && clientToNumber) {
+      // ============================================================
+      // DIAGNOSTIC: If To === "self-test", hardcode a self-dial to
+      // +14504004322 to isolate account vs formatting issues.
+      // ============================================================
+      if (clientToNumber === "self-test") {
+        logger.info("browser_outbound_SELF_TEST");
+        const selfTestTwiml = `<Response>
+  <Dial callerId="+14504004322">
+    <Number>+14504004322</Number>
+  </Dial>
+</Response>`;
+        return new Response(selfTestTwiml.trim(), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        });
+      }
+
       // Validate E.164 destination
       const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
       if (!toNormalized.startsWith("+")) {
@@ -79,8 +104,12 @@ Deno.serve(async (req) => {
         );
       }
 
-      // If Twilio account is trial, destination number must be verified.
-      logger.info("browser_outbound_call", { to: toNormalized, callerId: fromNumber });
+      logger.info("browser_outbound_call", {
+        to: toNormalized,
+        callerId: fromNumber,
+        callerIdentity,
+        accountSid: params.AccountSid ?? "not_in_params",
+      });
 
       const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
 
