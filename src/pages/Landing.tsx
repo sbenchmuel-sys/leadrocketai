@@ -120,7 +120,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="border-t border-border">
         <div className="max-w-5xl mx-auto px-6 py-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
-          <span>© {new Date().getFullYear()} DrivePilot</span>
+          <span>© {new Date().getFullYear()} DrivePilot · Shai Benchmuel</span>
           <div className="flex items-center gap-4">
             <a href="mailto:support@drivepilot.app" className="hover:text-foreground transition-colors">
               support@drivepilot.app
