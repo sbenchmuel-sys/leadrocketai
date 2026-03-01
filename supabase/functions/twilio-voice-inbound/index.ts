@@ -56,58 +56,28 @@ Deno.serve(async (req) => {
     const isBrowserCall = callerIdentity.startsWith("client:");
 
     if (isBrowserCall && clientToNumber) {
-      // ============================================================
-      // DIAGNOSTIC: If To === "self-test", hardcode a self-dial
-      // ============================================================
-      if (clientToNumber === "self-test") {
-        logger.info("browser_outbound_SELF_TEST");
-        return new Response(
-          `<Response>\n  <Dial callerId="+14504004322">\n    <Number>+14504004322</Number>\n  </Dial>\n</Response>`,
-          { status: 200, headers: { "Content-Type": "text/xml" } },
-        );
-      }
-
-      // Build proper TwiML for outbound browser call
       const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
 
-      // Resolve caller ID: param → call_settings → env fallback
-      let fromNumber = (params.FromNumber ?? "").replace(/[^\d+]/g, "");
-      if (!fromNumber || !fromNumber.startsWith("+")) {
-        const { data: settings } = await supabase
-          .from("call_settings")
-          .select("default_twilio_number")
-          .limit(1)
-          .maybeSingle();
-        fromNumber = settings?.default_twilio_number ?? "";
-      }
-      if (!fromNumber || !fromNumber.startsWith("+")) {
-        fromNumber = Deno.env.get("TWILIO_PHONE_NUMBER") ?? "";
-      }
+      // HARD LOCK callerId to Twilio-owned number in THIS subaccount
+      const TWILIO_CALLER_ID = "+14504004322";
 
-      const fromNormalized = fromNumber.replace(/[^\d+]/g, "");
-
-      if (!toNormalized.startsWith("+") || !fromNormalized.startsWith("+")) {
-        logger.error("browser_outbound_invalid_numbers", { to: toNormalized, from: fromNormalized });
+      if (!toNormalized.startsWith("+")) {
         return new Response(
-          `<Response><Say>Invalid phone number format.</Say></Response>`,
+          `<Response><Say>Invalid destination number.</Say></Response>`,
           { status: 200, headers: { "Content-Type": "text/xml" } },
         );
       }
 
-      logger.info("browser_outbound_call", {
-        to: toNormalized,
-        callerId: fromNormalized,
-        callerIdentity,
-        accountSid: params.AccountSid ?? "not_in_params",
-      });
-
-      const twiml = `<Response>
-  <Dial callerId="${fromNormalized}">
+      const twiml = `
+<Response>
+  <Dial callerId="${TWILIO_CALLER_ID}">
     <Number>${toNormalized}</Number>
   </Dial>
-</Response>`;
+</Response>`.trim();
 
-      return new Response(twiml.trim(), {
+      logger.info("browser_outbound_call", { to: toNormalized, callerId: TWILIO_CALLER_ID, twiml });
+
+      return new Response(twiml, {
         status: 200,
         headers: { "Content-Type": "text/xml" },
       });
