@@ -58,9 +58,6 @@ Deno.serve(async (req) => {
     if (isBrowserCall && clientToNumber) {
       const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
 
-      // HARD LOCK callerId to Twilio-owned number in THIS subaccount
-      const TWILIO_CALLER_ID = "+14504004322";
-
       if (!toNormalized.startsWith("+")) {
         return new Response(
           `<Response><Say>Invalid destination number.</Say></Response>`,
@@ -68,14 +65,48 @@ Deno.serve(async (req) => {
         );
       }
 
+      // Resolve caller ID from workspace call_settings, fallback to hard-coded Twilio number
+      const FALLBACK_CALLER_ID = "+14504004322";
+      let callerId = FALLBACK_CALLER_ID;
+
+      try {
+        // Extract user ID from client identity (format: "client:user_<uuid>")
+        const userIdMatch = callerIdentity.match(/^client:user_(.+)$/);
+        if (userIdMatch) {
+          const userId = userIdMatch[1];
+          // Find user's workspace
+          const { data: membership } = await supabase
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", userId)
+            .limit(1)
+            .maybeSingle();
+
+          if (membership?.workspace_id) {
+            const { data: callSettings } = await supabase
+              .from("call_settings")
+              .select("default_twilio_number")
+              .eq("workspace_id", membership.workspace_id)
+              .maybeSingle();
+
+            if (callSettings?.default_twilio_number) {
+              callerId = callSettings.default_twilio_number;
+            }
+          }
+        }
+      } catch (lookupErr) {
+        logger.warn("caller_id_lookup_failed", { error: String(lookupErr) });
+        // Continue with fallback
+      }
+
       const twiml = `
 <Response>
-  <Dial callerId="${TWILIO_CALLER_ID}">
+  <Dial callerId="${callerId}">
     <Number>${toNormalized}</Number>
   </Dial>
 </Response>`.trim();
 
-      logger.info("browser_outbound_call", { to: toNormalized, callerId: TWILIO_CALLER_ID, twiml });
+      logger.info("browser_outbound_call", { to: toNormalized, callerId, twiml });
 
       return new Response(twiml, {
         status: 200,
