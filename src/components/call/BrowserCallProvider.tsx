@@ -85,7 +85,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     }
 
     const device = new Device(token, {
-      edge: "ashburn",
+      // edge removed for diagnostic — use default routing
       closeProtection: true,
     });
 
@@ -189,6 +189,15 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     }));
 
     try {
+      // === DIAGNOSTIC: Log pre-connect state ===
+      console.log("[BrowserCall] PRE-CONNECT", {
+        deviceState: deviceRef.current.state,
+        to: toNormalized,
+        fromNumber: fromNormalized,
+        leadId: opts.leadId,
+        identity: deviceRef.current.identity,
+      });
+
       const call = await deviceRef.current.connect({
         params: {
           To: toNormalized,

@@ -35,7 +35,15 @@ Deno.serve(async (req) => {
       params = await req.json();
     }
 
-    logger.info("twilio_inbound_params", { To: params.To, From: params.From, Caller: params.Caller, Direction: params.Direction });
+    logger.info("twilio_inbound_params", {
+      To: params.To,
+      From: params.From,
+      Caller: params.Caller,
+      Direction: params.Direction,
+      CallSid: params.CallSid,
+      AccountSid: params.AccountSid,
+      ApiVersion: params.ApiVersion,
+    });
 
     // ---------------------------------------------------------------
     // Browser-originated outbound call (Twilio Client SDK)
@@ -80,7 +88,12 @@ Deno.serve(async (req) => {
       }
 
       // If Twilio account is trial, destination number must be verified.
-      logger.info("browser_outbound_call", { to: toNormalized, callerId: fromNumber });
+      logger.info("browser_outbound_call", {
+        to: toNormalized,
+        callerId: fromNumber,
+        callerIdentity,
+        accountSid: params.AccountSid ?? "not_in_params",
+      });
 
       const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
 

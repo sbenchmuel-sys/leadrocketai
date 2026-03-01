@@ -87,6 +87,14 @@ Deno.serve(async (req) => {
   const twilioApiSecret = Deno.env.get("TWILIO_API_SECRET");
   const twimlAppSid = Deno.env.get("TWILIO_TWIML_APP_SID");
 
+  // === DIAGNOSTIC: Log exact values (redacted secrets) ===
+  logger.info("twilio_voice_token_config", {
+    accountSid: twilioAccountSid ?? "MISSING",
+    apiKey: twilioApiKey ?? "MISSING",
+    apiSecretSet: !!twilioApiSecret,
+    twimlAppSid: twimlAppSid ?? "MISSING",
+  });
+
   // ---- Authenticate user ----
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -129,7 +137,13 @@ Deno.serve(async (req) => {
       ttl: 600,
     });
 
-    logger.info("twilio_voice_token_issued", { userId });
+    logger.info("twilio_voice_token_issued", {
+      userId,
+      identity,
+      accountSid: twilioAccountSid,
+      apiKey: twilioApiKey,
+      twimlAppSid,
+    });
 
     return new Response(JSON.stringify({ token: accessToken, identity }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
