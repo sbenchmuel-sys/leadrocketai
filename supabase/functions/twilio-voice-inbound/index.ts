@@ -57,31 +57,18 @@ Deno.serve(async (req) => {
 
     if (isBrowserCall && clientToNumber) {
       // ============================================================
-      // DIAGNOSTIC: If To === "self-test", hardcode a self-dial to
-      // +14504004322 to isolate account vs formatting issues.
+      // DIAGNOSTIC: If To === "self-test", hardcode a self-dial
       // ============================================================
       if (clientToNumber === "self-test") {
         logger.info("browser_outbound_SELF_TEST");
-        const selfTestTwiml = `<Response>
-  <Dial callerId="+14504004322">
-    <Number>+14504004322</Number>
-  </Dial>
-</Response>`;
-        return new Response(selfTestTwiml.trim(), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "text/xml" },
-        });
-      }
-
-      // Validate E.164 destination
-      const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
-      if (!toNormalized.startsWith("+")) {
-        logger.error("browser_outbound_invalid_to", { to: clientToNumber });
         return new Response(
-          "<Response><Say>Invalid destination number.</Say><Hangup/></Response>",
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
+          `<Response>\n  <Dial callerId="+14504004322">\n    <Number>+14504004322</Number>\n  </Dial>\n</Response>`,
+          { status: 200, headers: { "Content-Type": "text/xml" } },
         );
       }
+
+      // Build proper TwiML for outbound browser call
+      const toNormalized = clientToNumber.replace(/[^\d+]/g, "");
 
       // Resolve caller ID: param → call_settings → env fallback
       let fromNumber = (params.FromNumber ?? "").replace(/[^\d+]/g, "");
@@ -96,32 +83,33 @@ Deno.serve(async (req) => {
       if (!fromNumber || !fromNumber.startsWith("+")) {
         fromNumber = Deno.env.get("TWILIO_PHONE_NUMBER") ?? "";
       }
-      if (!fromNumber || !fromNumber.startsWith("+")) {
-        logger.error("browser_outbound_no_caller_id");
+
+      const fromNormalized = fromNumber.replace(/[^\d+]/g, "");
+
+      if (!toNormalized.startsWith("+") || !fromNormalized.startsWith("+")) {
+        logger.error("browser_outbound_invalid_numbers", { to: toNormalized, from: fromNormalized });
         return new Response(
-          "<Response><Say>No valid caller ID configured.</Say><Hangup/></Response>",
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
+          `<Response><Say>Invalid phone number format.</Say></Response>`,
+          { status: 200, headers: { "Content-Type": "text/xml" } },
         );
       }
 
       logger.info("browser_outbound_call", {
         to: toNormalized,
-        callerId: fromNumber,
+        callerId: fromNormalized,
         callerIdentity,
         accountSid: params.AccountSid ?? "not_in_params",
       });
 
-      const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
-
       const twiml = `<Response>
-  <Dial callerId="${escapeXml(fromNumber)}" record="record-from-answer-dual" recordingStatusCallback="${escapeXml(statusCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2" statusCallback="${escapeXml(statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed">
-    <Number>${escapeXml(toNormalized)}</Number>
+  <Dial callerId="${fromNormalized}">
+    <Number>${toNormalized}</Number>
   </Dial>
 </Response>`;
 
       return new Response(twiml.trim(), {
         status: 200,
-        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        headers: { "Content-Type": "text/xml" },
       });
     }
 
