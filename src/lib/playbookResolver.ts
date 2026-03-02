@@ -71,10 +71,14 @@ export function playbookResolver(ctx: ResolvedContext, channel: "email" | "linke
   }
 
   // Rule 5: Map directly from next_action_key
+  // Guard: skip stale post-meeting recap keys when recap was already sent
   const actionKey = ctx.lead.next_action_key;
   if (actionKey) {
-    const mapped = mapActionKeyToIntent(actionKey, ctx.thread_emails.length > 0);
-    if (mapped) return mapped;
+    const isStaleRecapKey = (actionKey === "generate_post_meeting_recap" || actionKey === "post_meeting_followup") && !ctx.has_unsent_recap;
+    if (!isStaleRecapKey) {
+      const mapped = mapActionKeyToIntent(actionKey, ctx.thread_emails.length > 0);
+      if (mapped) return mapped;
+    }
   }
 
   // Rule 6: Default — derive from motion + source_type
