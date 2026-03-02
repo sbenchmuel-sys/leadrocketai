@@ -541,6 +541,7 @@ export type Database = {
           display_name: string | null
           id: string
           last_activity_at: string
+          lead_id: string | null
           notes: string | null
           status: Database["public"]["Enums"]["contact_status"]
           updated_at: string
@@ -553,6 +554,7 @@ export type Database = {
           display_name?: string | null
           id?: string
           last_activity_at?: string
+          lead_id?: string | null
           notes?: string | null
           status?: Database["public"]["Enums"]["contact_status"]
           updated_at?: string
@@ -565,12 +567,20 @@ export type Database = {
           display_name?: string | null
           id?: string
           last_activity_at?: string
+          lead_id?: string | null
           notes?: string | null
           status?: Database["public"]["Enums"]["contact_status"]
           updated_at?: string
           workspace_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "contacts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "contacts_workspace_id_fkey"
             columns: ["workspace_id"]
@@ -2162,12 +2172,20 @@ export type Database = {
           latest_sentiment: string | null
           latest_summary: string | null
           latest_topics: string[] | null
+          lead_id: string | null
           message_count: number | null
           owner_user_id: string | null
           status: string | null
           workspace_id: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "contacts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "conversations_contact_id_fkey"
             columns: ["contact_id"]
