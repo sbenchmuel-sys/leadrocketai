@@ -121,7 +121,7 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
             className="h-6 text-[11px] px-2.5 shrink-0"
             onClick={primaryAction.onClick}
           >
-            {primaryAction.label}
+            {primaryAction.label || primaryButtonLabel(routed.priority)}
           </Button>
         )}
       </div>
