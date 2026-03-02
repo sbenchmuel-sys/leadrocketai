@@ -888,8 +888,12 @@ export async function getLeadEmailThread(
 // LEAD ACTION MANAGEMENT
 // ============================================
 
-export async function dismissLeadAction(leadId: string, reasonCode?: string): Promise<void> {
+export async function dismissLeadAction(leadId: string, snoozeDays: number = 1): Promise<void> {
   if (!leadId) throw new Error('Missing leadId');
+
+  // Repurpose action_dismissed_at as "snoozed until" timestamp
+  const snoozeUntil = new Date();
+  snoozeUntil.setDate(snoozeUntil.getDate() + snoozeDays);
 
   const { error } = await supabase
     .from('leads')
@@ -897,8 +901,8 @@ export async function dismissLeadAction(leadId: string, reasonCode?: string): Pr
       needs_action: false,
       next_action_key: null,
       next_action_label: null,
-      action_reason_code: reasonCode || null,
-      action_dismissed_at: new Date().toISOString(), // Track dismissal timestamp
+      action_reason_code: null,
+      action_dismissed_at: snoozeUntil.toISOString(),
       last_activity_at: new Date().toISOString(),
     })
     .eq('id', leadId);

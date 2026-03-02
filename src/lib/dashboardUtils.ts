@@ -195,9 +195,13 @@ export function classifyRevenueState(
   const hasNurtureAutomation = lead.nurture_mode === "auto" && lead.nurture_status === "active";
   if (hasSequenceAutomation || hasNurtureAutomation) return "automation";
 
+  // --- SNOOZE GATE: if action_dismissed_at is in the future, suppress action_required ---
+  const dismissedAt = (lead as any).action_dismissed_at as string | null;
+  const isSnoozed = !!dismissedAt && new Date(dismissedAt).getTime() > Date.now();
+
   // --- 1. ACTION REQUIRED ---
-  // Skip action_required escalation for OOO leads — they are paused, not pending
-  if (!isOOO) {
+  // Skip action_required escalation for OOO or snoozed leads
+  if (!isOOO && !isSnoozed) {
     if (lead.needs_action) return "action_required";
     // Unreplied inbound (has inbound but last outbound is before last inbound)
     // BUT suppress if a future meeting is already set — the meeting IS the response
