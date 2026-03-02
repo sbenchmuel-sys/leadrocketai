@@ -335,6 +335,36 @@ async function processInboundMessage(
     });
   }
 
+  // ── Persist contact→lead link safely ──────────────────────
+  if (matchedLead && contactId) {
+    try {
+      const { data: currentContact } = await supabase
+        .from("contacts")
+        .select("lead_id")
+        .eq("id", contactId)
+        .single();
+
+      if (!currentContact?.lead_id) {
+        // Safe to set — no existing link
+        await supabase.from("contacts")
+          .update({ lead_id: matchedLead.id })
+          .eq("id", contactId);
+        console.log(`[processor] Linked contact ${contactId} → lead ${matchedLead.id}`);
+      } else if (currentContact.lead_id !== matchedLead.id) {
+        // Conflict — log but do NOT overwrite
+        console.warn(`[processor] Contact ${contactId} already linked to lead ${currentContact.lead_id}, matched ${matchedLead.id}`);
+        await supabase.from("automation_logs").insert({
+          workspace_id: workspaceId,
+          lead_id: matchedLead.id,
+          decision: "lead_contact_conflict",
+          reason: `contact=${contactId} existing_lead=${currentContact.lead_id} matched_lead=${matchedLead.id}`,
+        } as any).then(() => {}).catch(() => {});
+      }
+    } catch (linkErr: any) {
+      console.warn("[processor] Non-blocking contact→lead link failed:", linkErr.message);
+    }
+  }
+
   // ── Conversation provisioning ─────────────────────────────
   let conversationId: string;
 
