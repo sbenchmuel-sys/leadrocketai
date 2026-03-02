@@ -1,12 +1,17 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, LayoutGrid, Table2 } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
-import { formatDistanceToNow } from "date-fns";
 import { isDemoMode } from "@/lib/demoMode";
-import { getDashboardState, setDashboardFilter, setDashboardScroll } from "@/lib/dashboardStateCache";
-import type { RevenueState } from "@/lib/dashboardUtils";
+import {
+  getDashboardState,
+  setDashboardFilter,
+  setDashboardScroll,
+  setDashboardViewMode,
+  type ViewMode,
+} from "@/lib/dashboardStateCache";
+import type { RevenueState, EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
   onDashboardRefresh,
@@ -17,6 +22,21 @@ import { PriorityActions } from "@/components/dashboard/PriorityActions";
 import { TopMovers } from "@/components/dashboard/TopMovers";
 import { AIInsightPanel } from "@/components/dashboard/AIInsightPanel";
 import { LeadTable } from "@/components/dashboard/LeadTable";
+import { LeadCard, LeadCardSkeleton } from "@/components/leads/LeadCard";
+
+const QUEUE_LIMIT = 15;
+
+function sortForQueue(leads: EnrichedLead[]): EnrichedLead[] {
+  return [...leads].sort((a, b) => {
+    // needs_action first
+    if (a.needs_action && !b.needs_action) return -1;
+    if (!a.needs_action && b.needs_action) return 1;
+    // then by last_activity_at desc
+    const aT = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0;
+    const bT = b.last_activity_at ? new Date(b.last_activity_at).getTime() : 0;
+    return bT - aT;
+  });
+}
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -24,14 +44,21 @@ export default function Dashboard() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [, setTick] = useState(0);
   const location = useLocation();
+  const navigate = useNavigate();
 
   if (!isDemoMode()) useAutomationPoller();
 
   const [revenueStateFilter, setRevenueStateFilterLocal] = useState<RevenueState>(getDashboardState().revenueStateFilter);
+  const [viewMode, setViewModeLocal] = useState<ViewMode>(getDashboardState().viewMode);
 
   const handleFilterChange = useCallback((filter: RevenueState) => {
     setRevenueStateFilterLocal(filter);
     setDashboardFilter(filter);
+  }, []);
+
+  const handleViewMode = useCallback((mode: ViewMode) => {
+    setViewModeLocal(mode);
+    setDashboardViewMode(mode);
   }, []);
 
   const loadData = useCallback(async () => {
@@ -39,7 +66,6 @@ export default function Dashboard() {
       const m = await getDashboardMetrics();
       setMetrics(m);
       setLastRefreshedAt(new Date());
-      // Default to "active" if no action_required leads and user hasn't manually changed filter
       if (getDashboardState().revenueStateFilter === "active" && m.revenueStateCounts.action_required > 0) {
         handleFilterChange("action_required");
       }
@@ -52,18 +78,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-    // Restore scroll position
     const { scrollY } = getDashboardState();
     if (scrollY > 0) {
       requestAnimationFrame(() => window.scrollTo(0, scrollY));
     }
   }, [loadData, location.key]);
 
-  // Persist scroll position on unmount
   useEffect(() => {
-    return () => {
-      setDashboardScroll(window.scrollY);
-    };
+    return () => { setDashboardScroll(window.scrollY); };
   }, []);
 
   useEffect(() => {
@@ -81,13 +103,13 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  // --- Centralized Revenue State filtering ---
   const filteredLeads = useMemo(() => {
     if (revenueStateFilter === "active") return leads;
     return leads.filter((l) => l.revenueState === revenueStateFilter);
   }, [leads, revenueStateFilter]);
 
-  // --- Command strip counts from centralized metrics ---
+  const queueLeads = useMemo(() => sortForQueue(filteredLeads).slice(0, QUEUE_LIMIT), [filteredLeads]);
+
   const commandCounts = useMemo<Record<DashboardFilter, number>>(() => {
     return metrics?.revenueStateCounts ?? {
       active: 0,
@@ -112,14 +134,37 @@ export default function Dashboard() {
             {commandCounts.action_required} Pending Intervention
           </p>
         </div>
-        {!isDemoMode() && (
-          <Button asChild size="sm">
-            <Link to="/app/leads">
-              <Plus className="h-4 w-4 mr-1" />
-              Add Lead
-            </Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex items-center border border-border rounded-md overflow-hidden">
+            <Button
+              variant={viewMode === "queue" ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8 rounded-none"
+              onClick={() => handleViewMode("queue")}
+              title="Queue view"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant={viewMode === "table" ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8 rounded-none"
+              onClick={() => handleViewMode("table")}
+              title="Table view"
+            >
+              <Table2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {!isDemoMode() && (
+            <Button asChild size="sm">
+              <Link to="/app/leads">
+                <Plus className="h-4 w-4 mr-1" />
+                Add Lead
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Command Strip */}
@@ -132,13 +177,14 @@ export default function Dashboard() {
       {/* Action Required + Top Movers */}
       {revenueStateFilter === "heating_up" ? (
         <>
-          {/* Heating Up: hide Action Required, show Top Movers full-width */}
           <TopMovers leads={filteredLeads} />
-          {/* Revenue Signal */}
           <AIInsightPanel leads={filteredLeads} />
-          {/* Lead Table — give it more vertical weight */}
           <div className="min-h-[60vh]">
-            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+            {viewMode === "queue" ? (
+              <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
+            ) : (
+              <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+            )}
           </div>
         </>
       ) : (
@@ -151,12 +197,58 @@ export default function Dashboard() {
               <TopMovers leads={filteredLeads} />
             </div>
           </div>
-          {/* Revenue Signal */}
           <AIInsightPanel leads={filteredLeads} />
-          {/* Lead Table */}
-          <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+          {viewMode === "queue" ? (
+            <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
+          ) : (
+            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+// ── Queue sub-component ────────────────────────────────────────────────
+
+function QueueView({
+  leads,
+  isLoading,
+  navigate,
+}: {
+  leads: EnrichedLead[];
+  isLoading: boolean;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  if (isLoading) {
+    return (
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <LeadCardSkeleton key={i} />
+        ))}
+      </div>
+    );
+  }
+
+  if (!leads.length) {
+    return (
+      <p className="text-sm text-muted-foreground py-8 text-center">No leads match this filter.</p>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {leads.map((lead) => (
+        <LeadCard
+          key={lead.id}
+          lead={lead}
+          context="dashboard"
+          primaryAction={{
+            label: lead.needs_action ? "Handle now" : "Open",
+            onClick: () => navigate(`/app/lead/${lead.id}`),
+          }}
+        />
+      ))}
     </div>
   );
 }
