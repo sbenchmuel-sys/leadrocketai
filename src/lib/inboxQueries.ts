@@ -1,4 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
+import { providerToCanonical, type CanonicalChannel } from "@/lib/channels";
+import type { QuickChip, InboxSort, WaitingOn } from "@/lib/inboxStateCache";
 
 export type ConversationListItem = {
   id: string;
@@ -42,27 +44,74 @@ export type ReplySuggestion = {
   text: string;
 };
 
+// ── Filters ────────────────────────────────────────────────────────────
+
+export interface InboxFilters {
+  tab: "active" | "new" | "archived";
+  search?: string;
+  channelFilter?: CanonicalChannel[];
+  quickChip?: QuickChip;
+  sortBy?: InboxSort;
+  revenueState?: string | null;
+  waitingOn?: WaitingOn;
+}
+
 export async function fetchConversations(
-  filter: "active" | "new" | "archived"
+  filterOrTab: InboxFilters | "active" | "new" | "archived"
 ): Promise<ConversationListItem[]> {
+  // Support legacy simple string argument
+  const filters: InboxFilters = typeof filterOrTab === "string"
+    ? { tab: filterOrTab }
+    : filterOrTab;
+
+  const { tab, search, channelFilter, sortBy = "recent" } = filters;
+
   // Use the manager view for enriched data
   let query = supabase
     .from("manager_conversation_metrics")
-    .select("*")
-    .order("last_message_at", { ascending: false });
+    .select("*");
 
-  if (filter === "new") {
+  // Sort server-side
+  if (sortBy === "stale") {
+    query = query.order("last_message_at", { ascending: true });
+  } else {
+    // recent, urgent, new_inbound all use desc last_message_at as base sort
+    query = query.order("last_message_at", { ascending: false });
+  }
+
+  // Tab filter
+  if (tab === "new") {
     query = query.eq("contact_status", "unclassified");
-  } else if (filter === "archived") {
+  } else if (tab === "archived") {
     query = query.eq("status", "closed");
   } else {
     query = query.neq("status", "closed").neq("contact_status", "unclassified");
   }
 
+  // Server-side search (ilike on contact name/company)
+  if (search && search.trim().length >= 2) {
+    const term = `%${search.trim()}%`;
+    query = query.or(`contact_name.ilike.${term},contact_company.ilike.${term}`);
+  }
+
+  // Server-side channel filter
+  if (channelFilter && channelFilter.length > 0) {
+    // Map canonical channels back to provider channels stored in DB
+    const providerChannels: string[] = [];
+    for (const ch of channelFilter) {
+      if (ch === "email") { providerChannels.push("gmail", "outlook"); }
+      else { providerChannels.push(ch); }
+    }
+    query = query.in("channel", providerChannels);
+  }
+
+  // Limit for performance
+  query = query.limit(200);
+
   const { data, error } = await query;
   if (error) throw error;
 
-  return (data ?? []).map((row) => ({
+  let items: ConversationListItem[] = (data ?? []).map((row) => ({
     id: row.conversation_id!,
     contact_id: row.contact_id!,
     contact_name: row.contact_name ?? "Unknown",
@@ -77,6 +126,57 @@ export async function fetchConversations(
     unread: false, // TODO: compute from last seen
     lead_id: (row as any).lead_id ?? null,
   }));
+
+  // Client-side quick chip filters (data not always available server-side)
+  if (filters.quickChip) {
+    items = applyQuickChipFilter(items, filters.quickChip);
+  }
+
+  // Client-side sentiment filter for "hot" sort
+  if (sortBy === "urgent") {
+    // Negative/urgent sentiment first
+    items.sort((a, b) => {
+      const urgencyScore = (s: string | null) => {
+        if (!s) return 0;
+        const sl = s.toLowerCase();
+        if (sl === "negative" || sl === "frustrated") return 3;
+        if (sl === "neutral") return 1;
+        return 0;
+      };
+      return urgencyScore(b.latest_sentiment) - urgencyScore(a.latest_sentiment);
+    });
+  }
+
+  return items;
+}
+
+function applyQuickChipFilter(items: ConversationListItem[], chip: QuickChip): ConversationListItem[] {
+  switch (chip) {
+    case "needs_action":
+      // Conversations with unread inbound (approximation: unread flag or contact_status indicators)
+      // TODO: extend server view to include lead.needs_action
+      return items.filter((c) => c.unread || c.contact_status === "unclassified");
+    case "new_inbound":
+      return items.filter((c) => c.contact_status === "unclassified");
+    case "unreplied":
+      // Conversations where latest message was inbound (no outbound reply yet)
+      // Best-effort: low message count + unread
+      return items.filter((c) => c.unread);
+    case "hot":
+      return items.filter((c) => {
+        const s = c.latest_sentiment?.toLowerCase();
+        return s === "positive" || s === "interested" || s === "excited";
+      });
+    case "overdue":
+      // Conversations with no activity in 48h+
+      return items.filter((c) => {
+        if (!c.last_message_at) return false;
+        const diffMs = Date.now() - new Date(c.last_message_at).getTime();
+        return diffMs > 48 * 60 * 60 * 1000;
+      });
+    default:
+      return items;
+  }
 }
 
 export async function fetchDecryptedMessages(
