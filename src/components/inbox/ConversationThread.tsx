@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, Clock, Check, CheckCheck } from "lucide-react";
+import { ArrowLeft, Clock, Check, CheckCheck, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -17,34 +17,45 @@ type Props = {
   conversation: ConversationListItem;
   onBack: () => void;
   onAnalysisLoaded: (a: ConversationAnalysis | null) => void;
+  reloadKey?: number;
 };
 
-export function ConversationThread({ conversation, onBack, onAnalysisLoaded }: Props) {
+export function ConversationThread({ conversation, onBack, onAnalysisLoaded, reloadKey = 0 }: Props) {
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-
-    Promise.all([
-      fetchDecryptedMessages(conversation.id),
-      fetchContactAnalysis(conversation.contact_id),
-    ])
-      .then(([msgData, contactAnalysis]) => {
-        if (cancelled) return;
-        setMessages(msgData.messages);
-        // Prefer contact-level rollup, fall back to conversation analysis
-        onAnalysisLoaded(contactAnalysis ?? msgData.analysis);
-      })
-      .catch(console.error)
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => { cancelled = true; };
+  const loadMessages = useCallback(async (showFullLoader: boolean) => {
+    if (showFullLoader) setIsLoading(true);
+    else setIsRefreshing(true);
+    try {
+      const [msgData, contactAnalysis] = await Promise.all([
+        fetchDecryptedMessages(conversation.id),
+        fetchContactAnalysis(conversation.contact_id),
+      ]);
+      setMessages(msgData.messages);
+      onAnalysisLoaded(contactAnalysis ?? msgData.analysis);
+    } catch (err) {
+      console.error("[ConversationThread] Load error:", err);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
   }, [conversation.id, conversation.contact_id, onAnalysisLoaded]);
+
+  // Initial load
+  useEffect(() => {
+    loadMessages(true);
+  }, [loadMessages]);
+
+  // Reload on reloadKey bump (after send)
+  useEffect(() => {
+    if (reloadKey > 0) {
+      loadMessages(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

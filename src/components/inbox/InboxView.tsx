@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ConversationList } from "./ConversationList";
 import { ConversationThread } from "./ConversationThread";
@@ -22,6 +22,11 @@ export function InboxView() {
   const [recommendedChannel, setRecommendedChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [leadSnapshot, setLeadSnapshot] = useState<LeadSnapshot | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("next");
+  const [threadReloadKey, setThreadReloadKey] = useState(0);
+
+  const handleSent = useCallback(() => {
+    setThreadReloadKey((k) => k + 1);
+  }, []);
 
   const handleConvoSelect = useCallback((convo: ConversationListItem) => {
     setSelectedConvo(convo);
@@ -87,12 +92,14 @@ export function InboxView() {
                       conversation={selectedConvo}
                       onBack={() => setSelectedConvo(null)}
                       onAnalysisLoaded={handleAnalysisLoaded}
+                      reloadKey={threadReloadKey}
                     />
                     <ReplyComposer
                       conversation={selectedConvo}
                       recommendedChannel={recommendedChannel}
                       suggestions={replySuggestions}
                       leadId={selectedConvo.lead_id}
+                      onSent={handleSent}
                     />
                   </>
                 ) : (
