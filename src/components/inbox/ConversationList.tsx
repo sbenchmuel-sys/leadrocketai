@@ -1,24 +1,44 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { fetchConversations, type ConversationListItem } from "@/lib/inboxQueries";
+import { fetchConversations, type ConversationListItem, type InboxFilters } from "@/lib/inboxQueries";
 import { providerToCanonical, canonicalIcon, canonicalLabel, channelColors } from "@/lib/channels";
+import type { QuickChip, InboxSort, WaitingOn, InboxState } from "@/lib/inboxStateCache";
 
 type Props = {
   filter: "active" | "new" | "archived";
   selectedId: string | null;
   onSelect: (convo: ConversationListItem) => void;
+  inboxState: InboxState;
 };
 
-export function ConversationList({ filter, selectedId, onSelect }: Props) {
+export function ConversationList({ filter, selectedId, onSelect, inboxState }: Props) {
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Build filter object from inbox state
+  const filtersKey = JSON.stringify({
+    tab: filter,
+    search: inboxState.searchQuery,
+    channelFilter: inboxState.channelFilter,
+    quickChip: inboxState.quickChip,
+    sortBy: inboxState.sortBy,
+  });
 
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    fetchConversations(filter)
+
+    const filters: InboxFilters = {
+      tab: filter,
+      search: inboxState.searchQuery || undefined,
+      channelFilter: inboxState.channelFilter.length ? inboxState.channelFilter : undefined,
+      quickChip: inboxState.quickChip,
+      sortBy: inboxState.sortBy,
+    };
+
+    fetchConversations(filters)
       .then((data) => {
         if (!cancelled) setConversations(data);
       })
@@ -27,7 +47,7 @@ export function ConversationList({ filter, selectedId, onSelect }: Props) {
         if (!cancelled) setIsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [filter]);
+  }, [filtersKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading) {
     return (
@@ -45,7 +65,7 @@ export function ConversationList({ filter, selectedId, onSelect }: Props) {
   if (!conversations.length) {
     return (
       <div className="p-6 text-center text-sm text-muted-foreground">
-        No conversations
+        {inboxState.searchQuery || inboxState.quickChip ? "No matches" : "No conversations"}
       </div>
     );
   }
