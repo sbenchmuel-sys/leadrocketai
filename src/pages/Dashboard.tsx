@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, LayoutGrid, Table2 } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
 import { isDemoMode } from "@/lib/demoMode";
+import { flags } from "@/lib/featureFlags";
 import {
   getDashboardState,
   setDashboardFilter,
@@ -135,27 +136,28 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* View toggle */}
-          <div className="flex items-center border border-border rounded-md overflow-hidden">
-            <Button
-              variant={viewMode === "queue" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleViewMode("queue")}
-              title="Queue view"
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleViewMode("table")}
-              title="Table view"
-            >
-              <Table2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          {flags.ui_v2 && (
+            <div className="flex items-center border border-border rounded-md overflow-hidden">
+              <Button
+                variant={viewMode === "queue" ? "secondary" : "ghost"}
+                size="icon"
+                className="h-8 w-8 rounded-none"
+                onClick={() => handleViewMode("queue")}
+                title="Queue view"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant={viewMode === "table" ? "secondary" : "ghost"}
+                size="icon"
+                className="h-8 w-8 rounded-none"
+                onClick={() => handleViewMode("table")}
+                title="Table view"
+              >
+                <Table2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
           {!isDemoMode() && (
             <Button asChild size="sm">
               <Link to="/app/leads">

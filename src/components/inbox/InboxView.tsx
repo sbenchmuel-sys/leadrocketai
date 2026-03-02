@@ -11,6 +11,7 @@ import { fetchAllContactAnalysis } from "@/lib/inboxQueries";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Lightbulb, BarChart3, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { flags } from "@/lib/featureFlags";
 
 type RightTab = "next" | "insights" | "lead";
 
@@ -109,8 +110,8 @@ export function InboxView() {
                 )}
               </div>
 
-              {/* Right: Tabbed panel (desktop only) */}
-              {selectedConvo && (
+              {/* Right: Tabbed panel (desktop only, v2 only) */}
+              {flags.ui_v2 && selectedConvo && (
                 <div className="hidden lg:flex lg:flex-col w-80 border-l border-border">
                   {/* Tab bar */}
                   <div className="shrink-0 flex items-center border-b border-border px-2">
@@ -132,12 +133,14 @@ export function InboxView() {
                       icon={<User className="h-3 w-3" />}
                       label="Lead"
                     />
-                    <div className="ml-auto">
-                      <EvidenceDrawer
-                        conversationId={selectedConvo.id}
-                        leadId={selectedConvo.lead_id}
-                      />
-                    </div>
+                    {flags.evidence_debug && (
+                      <div className="ml-auto">
+                        <EvidenceDrawer
+                          conversationId={selectedConvo.id}
+                          leadId={selectedConvo.lead_id}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Tab content */}
