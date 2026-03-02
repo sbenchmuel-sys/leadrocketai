@@ -32,6 +32,7 @@ interface Risk {
 interface EnrichmentSignal {
   signal: string;
   source: string;
+  snippet?: string;
 }
 
 interface EnrichmentRow {
@@ -133,7 +134,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
   const showEnrichButton = enrichment === null || enrichmentExpired;
 
   // ── Enrich handler ──
-  const handleEnrich = async () => {
+  const handleEnrich = async (force = false) => {
     setIsEnriching(true);
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -150,7 +151,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           "Content-Type": "application/json",
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
-        body: JSON.stringify({ lead_id: lead.id, company: lead.company }),
+        body: JSON.stringify({ lead_id: lead.id, company: lead.company, force }),
       });
 
       if (!res.ok) {
