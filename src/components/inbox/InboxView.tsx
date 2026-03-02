@@ -11,6 +11,7 @@ import { fetchAllContactAnalysis } from "@/lib/inboxQueries";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Lightbulb, BarChart3, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { flags } from "@/lib/featureFlags";
 
 type RightTab = "next" | "insights" | "lead";
 
