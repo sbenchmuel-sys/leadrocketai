@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ConversationList } from "./ConversationList";
 import { ConversationThread } from "./ConversationThread";
@@ -9,11 +9,73 @@ import { EvidenceDrawer } from "./EvidenceDrawer";
 import type { ConversationListItem, ConversationAnalysis, ReplySuggestion } from "@/lib/inboxQueries";
 import { fetchAllContactAnalysis } from "@/lib/inboxQueries";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Lightbulb, BarChart3, User } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  ArrowRight, Lightbulb, BarChart3, User, Search, SlidersHorizontal,
+  ArrowUpDown, Bookmark, X, Flame, Clock, AlertTriangle, Inbox, MessageSquare,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { flags } from "@/lib/featureFlags";
+import {
+  getInboxState,
+  setInboxSearch,
+  setInboxQuickChip,
+  setInboxSort,
+  setInboxChannelFilter,
+  setInboxRevenueState,
+  setInboxWaitingOn,
+  clearInboxFilters,
+  applyInboxSnapshot,
+  hasActiveFilters,
+  type QuickChip,
+  type InboxSort,
+  type InboxState,
+} from "@/lib/inboxStateCache";
+import type { CanonicalChannel } from "@/lib/channels";
 
 type RightTab = "next" | "insights" | "lead";
+
+// ── Quick chip config ──────────────────────────────────────────────────
+
+const QUICK_CHIPS: { key: QuickChip; label: string; icon: React.ReactNode }[] = [
+  { key: "needs_action", label: "Needs action", icon: <AlertTriangle className="h-3 w-3" /> },
+  { key: "new_inbound", label: "New inbound", icon: <Inbox className="h-3 w-3" /> },
+  { key: "unreplied", label: "Unreplied", icon: <MessageSquare className="h-3 w-3" /> },
+  { key: "hot", label: "Hot", icon: <Flame className="h-3 w-3" /> },
+  { key: "overdue", label: "Overdue", icon: <Clock className="h-3 w-3" /> },
+];
+
+const SORT_OPTIONS: { key: InboxSort; label: string }[] = [
+  { key: "recent", label: "Most Recent" },
+  { key: "urgent", label: "Most Urgent" },
+  { key: "stale", label: "Oldest First" },
+  { key: "new_inbound", label: "New Inbound" },
+];
+
+const CHANNEL_OPTIONS: { key: CanonicalChannel; label: string }[] = [
+  { key: "email", label: "Email" },
+  { key: "whatsapp", label: "WhatsApp" },
+  { key: "sms", label: "SMS" },
+  { key: "voice", label: "Voice" },
+];
+
+// ── Main component ─────────────────────────────────────────────────────
 
 export function InboxView() {
   const [selectedConvo, setSelectedConvo] = useState<ConversationListItem | null>(null);
@@ -24,6 +86,25 @@ export function InboxView() {
   const [leadSnapshot, setLeadSnapshot] = useState<LeadSnapshot | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("next");
   const [threadReloadKey, setThreadReloadKey] = useState(0);
+
+  // Filter state — re-render on change
+  const [inboxState, setInboxState] = useState<InboxState>(getInboxState);
+  const [searchInput, setSearchInput] = useState(inboxState.searchQuery);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const updateState = useCallback((updater: () => void) => {
+    updater();
+    setInboxState({ ...getInboxState() });
+  }, []);
+
+  // Debounced search
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      updateState(() => setInboxSearch(value));
+    }, 300);
+  }, [updateState]);
 
   const handleSent = useCallback(() => {
     setThreadReloadKey((k) => k + 1);
@@ -64,6 +145,8 @@ export function InboxView() {
     fetchAllContactAnalysis(selectedConvo.contact_id).then(setAllAnalysis).catch(console.error);
   }, [selectedConvo?.contact_id]);
 
+  const filtersActive = hasActiveFilters(inboxState);
+
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)]">
       <Tabs defaultValue="active" className="flex flex-col h-full">
@@ -77,12 +160,116 @@ export function InboxView() {
           <TabsContent key={tab} value={tab} className="flex-1 mt-3 overflow-hidden">
             <div className="flex h-full gap-0 border border-border rounded-lg overflow-hidden bg-card">
               {/* Left: Conversation List */}
-              <div className={`w-full md:w-80 lg:w-72 shrink-0 border-r border-border overflow-y-auto ${selectedConvo ? "hidden md:block" : ""}`}>
-                <ConversationList
-                  filter={tab}
-                  selectedId={selectedConvo?.id ?? null}
-                  onSelect={handleConvoSelect}
-                />
+              <div className={`w-full md:w-80 lg:w-72 shrink-0 border-r border-border flex flex-col ${selectedConvo ? "hidden md:flex" : ""}`}>
+                {/* Search + Saved views */}
+                <div className="p-2 space-y-1.5 border-b border-border shrink-0">
+                  <div className="flex gap-1.5">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        value={searchInput}
+                        onChange={(e) => handleSearchChange(e.target.value)}
+                        placeholder="Search…"
+                        className="h-8 pl-7 text-xs"
+                      />
+                      {searchInput && (
+                        <button
+                          className="absolute right-2 top-1/2 -translate-y-1/2"
+                          onClick={() => { setSearchInput(""); updateState(() => setInboxSearch("")); }}
+                        >
+                          <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Saved views */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" title="Saved views">
+                          <Bookmark className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[140px]">
+                        {inboxState.savedViews.map((sv) => (
+                          <DropdownMenuItem
+                            key={sv.id}
+                            className="text-xs"
+                            onClick={() => {
+                              updateState(() => applyInboxSnapshot(sv.stateSnapshot));
+                              setSearchInput(sv.stateSnapshot.searchQuery);
+                            }}
+                          >
+                            {sv.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Sort */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" title="Sort">
+                          <ArrowUpDown className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[140px]">
+                        {SORT_OPTIONS.map((opt) => (
+                          <DropdownMenuItem
+                            key={opt.key}
+                            className={cn("text-xs", inboxState.sortBy === opt.key && "font-semibold")}
+                            onClick={() => updateState(() => setInboxSort(opt.key))}
+                          >
+                            {opt.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Filter drawer */}
+                    <FilterDrawer
+                      inboxState={inboxState}
+                      onChange={updateState}
+                    />
+                  </div>
+
+                  {/* Quick chips */}
+                  <div className="flex gap-1 overflow-x-auto pb-0.5">
+                    {QUICK_CHIPS.map((chip) => (
+                      <button
+                        key={chip.key}
+                        onClick={() => updateState(() => setInboxQuickChip(inboxState.quickChip === chip.key ? null : chip.key))}
+                        className={cn(
+                          "flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium transition-colors shrink-0 border",
+                          inboxState.quickChip === chip.key
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                        )}
+                      >
+                        {chip.icon}
+                        {chip.label}
+                      </button>
+                    ))}
+                    {filtersActive && (
+                      <button
+                        onClick={() => { updateState(() => clearInboxFilters()); setSearchInput(""); }}
+                        className="flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                      >
+                        <X className="h-3 w-3" />
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* List */}
+                <div className="flex-1 overflow-y-auto">
+                  <ConversationList
+                    filter={tab}
+                    selectedId={selectedConvo?.id ?? null}
+                    onSelect={handleConvoSelect}
+                    inboxState={inboxState}
+                  />
+                </div>
               </div>
 
               {/* Center: Thread + Composer */}
@@ -166,6 +353,114 @@ export function InboxView() {
         ))}
       </Tabs>
     </div>
+  );
+}
+
+// ── Filter Drawer ──────────────────────────────────────────────────────
+
+function FilterDrawer({
+  inboxState,
+  onChange,
+}: {
+  inboxState: InboxState;
+  onChange: (updater: () => void) => void;
+}) {
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 relative" title="Filters">
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          {(inboxState.channelFilter.length > 0 || inboxState.revenueState || inboxState.waitingOn) && (
+            <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary" />
+          )}
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-72">
+        <SheetHeader>
+          <SheetTitle className="text-sm">Filters</SheetTitle>
+        </SheetHeader>
+
+        <div className="mt-4 space-y-5">
+          {/* Channels */}
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Channels</span>
+            <div className="space-y-2">
+              {CHANNEL_OPTIONS.map((ch) => (
+                <label key={ch.key} className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={inboxState.channelFilter.includes(ch.key)}
+                    onCheckedChange={(checked) => {
+                      onChange(() => {
+                        const current = inboxState.channelFilter;
+                        if (checked) {
+                          setInboxChannelFilter([...current, ch.key]);
+                        } else {
+                          setInboxChannelFilter(current.filter((c) => c !== ch.key));
+                        }
+                      });
+                    }}
+                  />
+                  <span className="text-sm">{ch.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Revenue State */}
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Revenue State</span>
+            <div className="flex flex-wrap gap-1.5">
+              {["action_required", "heating_up", "long_cycle", "automation"].map((rs) => (
+                <button
+                  key={rs}
+                  onClick={() => onChange(() => setInboxRevenueState(inboxState.revenueState === rs ? null : rs))}
+                  className={cn(
+                    "px-2 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                    inboxState.revenueState === rs
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {rs.replace(/_/g, " ")}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Waiting On */}
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Waiting On</span>
+            <div className="flex gap-1.5">
+              {([["me", "Me"], ["lead", "Lead"], ["automation", "Automation"]] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => onChange(() => setInboxWaitingOn(inboxState.waitingOn === key ? null : key))}
+                  className={cn(
+                    "px-2 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                    inboxState.waitingOn === key
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Clear all */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full text-xs"
+            onClick={() => onChange(() => clearInboxFilters())}
+          >
+            <X className="h-3 w-3 mr-1" />
+            Clear all filters
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

@@ -102,7 +102,7 @@ export async function fetchConversations(
       if (ch === "email") { providerChannels.push("gmail", "outlook"); }
       else { providerChannels.push(ch); }
     }
-    query = query.in("channel", providerChannels);
+    query = query.in("channel", providerChannels as any);
   }
 
   // Limit for performance
