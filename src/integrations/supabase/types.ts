@@ -799,6 +799,56 @@ export type Database = {
           },
         ]
       }
+      entity_enrichment: {
+        Row: {
+          company: string
+          created_at: string
+          expires_at: string
+          id: string
+          lead_id: string | null
+          provider: string
+          query: string
+          requested_by_user_id: string | null
+          results: Json
+          signals: Json
+          workspace_id: string
+        }
+        Insert: {
+          company: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          lead_id?: string | null
+          provider?: string
+          query: string
+          requested_by_user_id?: string | null
+          results?: Json
+          signals?: Json
+          workspace_id: string
+        }
+        Update: {
+          company?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          lead_id?: string | null
+          provider?: string
+          query?: string
+          requested_by_user_id?: string | null
+          results?: Json
+          signals?: Json
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "entity_enrichment_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       gmail_connections: {
         Row: {
           access_token_encrypted: string | null
