@@ -32,6 +32,7 @@ interface Risk {
 interface EnrichmentSignal {
   signal: string;
   source: string;
+  snippet?: string;
 }
 
 interface EnrichmentRow {
@@ -133,7 +134,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
   const showEnrichButton = enrichment === null || enrichmentExpired;
 
   // ── Enrich handler ──
-  const handleEnrich = async () => {
+  const handleEnrich = async (force = false) => {
     setIsEnriching(true);
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -150,7 +151,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           "Content-Type": "application/json",
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
-        body: JSON.stringify({ lead_id: lead.id, company: lead.company }),
+        body: JSON.stringify({ lead_id: lead.id, company: lead.company, force }),
       });
 
       if (!res.ok) {
@@ -360,9 +361,18 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
                 <Zap className="h-3 w-3" /> Company Signals
               </span>
-              <p className="text-xs text-muted-foreground mt-1">
-                {signals.map((s) => SIGNAL_LABELS[s.signal] ?? s.signal).join(", ")}
-              </p>
+              <div className="space-y-1.5 mt-1">
+                {signals.slice(0, isCompact ? 3 : 5).map((s, i) => (
+                  <div key={i}>
+                    <span className="text-xs font-medium text-foreground">
+                      {SIGNAL_LABELS[s.signal] ?? s.signal}
+                    </span>
+                    {s.snippet && (
+                      <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{s.snippet}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
               <div className="flex items-center justify-between mt-2">
                 <span className="text-[10px] text-muted-foreground">
                   {enrichment ? `Updated ${formatDistanceToNow(new Date(enrichment.created_at), { addSuffix: true })}` : ""}
@@ -371,7 +381,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                   size="sm"
                   variant="ghost"
                   className="h-6 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
-                  onClick={handleEnrich}
+                  onClick={() => handleEnrich(true)}
                   disabled={isEnriching}
                 >
                   {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
@@ -394,7 +404,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                 size="sm"
                 variant="outline"
                 className="h-7 text-xs gap-1"
-                onClick={handleEnrich}
+                onClick={() => handleEnrich(false)}
                 disabled={isEnriching}
               >
                 {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
