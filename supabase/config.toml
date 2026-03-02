@@ -83,3 +83,6 @@ verify_jwt = false
 
 [functions.enrich-company-search]
 verify_jwt = false
+
+[functions.generate-personalized-suggestions]
+verify_jwt = false

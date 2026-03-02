@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Json } from "@/integrations/supabase/types";
 import { getLeadInteractions } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield } from "lucide-react";
+import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 
@@ -27,6 +27,18 @@ interface Risk {
   issue: string;
   level: "low" | "medium" | "high";
   evidence: string;
+}
+
+interface EnrichmentSignal {
+  signal: string;
+  source: string;
+}
+
+interface EnrichmentRow {
+  id: string;
+  signals: EnrichmentSignal[];
+  expires_at: string;
+  created_at: string;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────
@@ -68,10 +80,22 @@ const RISK_COLORS: Record<string, string> = {
   low: "bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]",
 };
 
+const SIGNAL_LABELS: Record<string, string> = {
+  funding: "Funding Activity",
+  hiring: "Hiring Signal",
+  expansion: "Expansion",
+  product_launch: "Product Launch",
+  leadership_change: "Leadership Change",
+  partnership: "Partnership",
+  news: "In the News",
+};
+
 // ── Component ──────────────────────────────────────────────────────────
 
 export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: UnifiedIntelligenceCardProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined); // undefined = not loaded
   const { runTask } = useAITask();
 
   const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
@@ -82,6 +106,69 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
   const isCompact = mode === "compact";
   const maxItems = isCompact ? 3 : 10;
 
+  // ── Load enrichment signals (once per lead) ──
+  const loadEnrichment = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from("entity_enrichment")
+        .select("id, signals, expires_at, created_at")
+        .eq("lead_id", lead.id)
+        .gt("expires_at", new Date().toISOString())
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      setEnrichment(data as unknown as EnrichmentRow | null);
+    } catch {
+      setEnrichment(null);
+    }
+  }, [lead.id]);
+
+  useEffect(() => {
+    loadEnrichment();
+  }, [loadEnrichment]);
+
+  const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
+  const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
+  const showEnrichButton = enrichment === null || enrichmentExpired;
+
+  // ── Enrich handler ──
+  const handleEnrich = async () => {
+    setIsEnriching(true);
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast.error("Please log in to enrich.");
+        return;
+      }
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/enrich-company-search`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ lead_id: lead.id, company: lead.company }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Enrichment failed (${res.status})`);
+      }
+
+      toast.success("Company signals updated");
+      await loadEnrichment();
+    } catch (err: any) {
+      console.error("[UnifiedIntelligenceCard] Enrich error:", err);
+      toast.error(err.message || "Enrichment failed");
+    } finally {
+      setIsEnriching(false);
+    }
+  };
+
+  // ── Analyze handler ──
   const analyzeDeal = async () => {
     setIsAnalyzing(true);
     try {
@@ -261,6 +348,67 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                   </p>
                 ))}
               </div>
+            </div>
+          </>
+        )}
+
+        {/* Signals — only if enrichment exists with signals */}
+        {signals.length > 0 && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                <Zap className="h-3 w-3" /> Signals ({signals.length})
+              </span>
+              <div className="space-y-1.5 mt-1">
+                {signals.slice(0, isCompact ? 3 : 10).map((s, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="font-medium text-foreground">
+                      {SIGNAL_LABELS[s.signal] ?? s.signal}
+                    </span>
+                    {s.source && (
+                      <a
+                        href={s.source}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-muted-foreground hover:text-primary shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+                {signals.length > (isCompact ? 3 : 10) && (
+                  <p className="text-[10px] text-muted-foreground">+{signals.length - (isCompact ? 3 : 10)} more</p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Enrich button — only when no valid enrichment */}
+        {showEnrichButton && enrichment !== undefined && (
+          <>
+            <Separator />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] text-muted-foreground">
+                {enrichmentExpired && enrichment ? "Enrichment expired" : "No company signals"}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                onClick={handleEnrich}
+                disabled={isEnriching}
+              >
+                {isEnriching ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Zap className="h-3 w-3" />
+                )}
+                {isEnriching ? "Enriching…" : "Enrich"}
+              </Button>
             </div>
           </>
         )}
