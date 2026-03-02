@@ -138,41 +138,70 @@ Deno.serve(async (req) => {
   }).eq("id", conversation_id);
 
   // ── Bridge to interactions table for lead timeline ──
-  const { data: matchedLeads } = await supabase
-    .from("leads")
-    .select("id, phone")
-    .filter("phone", "neq", "")
-    .not("phone", "is", null)
-    .limit(100);
+  try {
+    let bridgeLeadId: string | null = null;
 
-  if (matchedLeads?.length) {
-    const lead = matchedLeads.find((l: any) => {
-      const lp = (l.phone || "").replace(/\D/g, "");
-      return lp.length >= 4 && normalizedTo.endsWith(lp);
-    });
+    // Strategy 1: Use contact→lead link
+    const { data: contactRow } = await supabase
+      .from("contacts")
+      .select("lead_id")
+      .eq("id", convo.contact_id)
+      .single();
 
-    if (lead) {
-      try {
-        await supabase.from("interactions").insert({
-          lead_id: lead.id,
-          type: "whatsapp_outbound",
-          source: "whatsapp",
-          body_text: message_text,
-          occurred_at: now,
-          direction: "outbound",
-          from_email: `+${normalizedTo}`,
+    if (contactRow?.lead_id) {
+      bridgeLeadId = contactRow.lead_id;
+    } else {
+      // Strategy 2: Workspace-scoped suffix match (only if unique)
+      const { data: wsMembers } = await supabase
+        .from("workspace_members")
+        .select("user_id")
+        .eq("workspace_id", convo.workspace_id);
+      const memberIds = (wsMembers ?? []).map((m: any) => m.user_id);
+
+      if (memberIds.length > 0) {
+        const { data: candidates } = await supabase
+          .from("leads")
+          .select("id, phone, whatsapp_number")
+          .in("owner_user_id", memberIds)
+          .or("phone.neq.,whatsapp_number.neq.")
+          .limit(200);
+
+        const matches = (candidates ?? []).filter((l: any) => {
+          const lp = ((l.whatsapp_number || l.phone || "").replace(/\D/g, ""));
+          return lp.length >= 4 && normalizedTo.endsWith(lp);
         });
-      } catch (interactionErr: any) {
-        console.warn("[whatsapp-send] Non-blocking interaction insert failed:", interactionErr.message);
-        // Log to automation_logs but don't fail the send
-        await supabase.from("automation_logs").insert({
-          workspace_id: convo.workspace_id,
-          lead_id: lead.id,
-          decision: "non_blocking_error",
-          reason: `Interaction insert failed: ${interactionErr.message}`,
-        }).then(() => {}).catch(() => {});
+
+        if (matches.length === 1) {
+          bridgeLeadId = matches[0].id;
+          // Persist the link for future lookups
+          await supabase.from("contacts")
+            .update({ lead_id: bridgeLeadId })
+            .eq("id", convo.contact_id)
+            .is("lead_id", null);
+        } else if (matches.length > 1) {
+          console.warn(`[whatsapp-send] Ambiguous lead match (${matches.length}), skipping interaction bridge`);
+        }
       }
     }
+
+    if (bridgeLeadId) {
+      await supabase.from("interactions").insert({
+        lead_id: bridgeLeadId,
+        type: "whatsapp_outbound",
+        source: "whatsapp",
+        body_text: message_text,
+        occurred_at: now,
+        direction: "outbound",
+        from_email: `+${normalizedTo}`,
+      });
+    }
+  } catch (bridgeErr: any) {
+    console.warn("[whatsapp-send] Non-blocking interaction bridge failed:", bridgeErr.message);
+    await supabase.from("automation_logs").insert({
+      workspace_id: convo.workspace_id,
+      decision: "non_blocking_error",
+      reason: `Interaction bridge failed: ${bridgeErr.message}`,
+    }).then(() => {}).catch(() => {});
   }
 
   console.log("[whatsapp-send] Sent via", svc.providerType, ":", providerMessageId);
