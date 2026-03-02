@@ -133,12 +133,14 @@ export function InboxView() {
                       icon={<User className="h-3 w-3" />}
                       label="Lead"
                     />
-                    <div className="ml-auto">
-                      <EvidenceDrawer
-                        conversationId={selectedConvo.id}
-                        leadId={selectedConvo.lead_id}
-                      />
-                    </div>
+                    {flags.evidence_debug && (
+                      <div className="ml-auto">
+                        <EvidenceDrawer
+                          conversationId={selectedConvo.id}
+                          leadId={selectedConvo.lead_id}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Tab content */}
