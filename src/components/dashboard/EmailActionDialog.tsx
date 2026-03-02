@@ -52,7 +52,7 @@ import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowl
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
-import { generateDraft, streamDraft, resolveEmailPlaceholders } from "@/lib/generateDraft";
+import { generateDraft, streamDraft, resolveEmailPlaceholders, clearDraftCache } from "@/lib/generateDraft";
 import type { DraftPipelineResult } from "@/lib/generateDraft";
 import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
@@ -216,6 +216,7 @@ export function EmailActionDialog({
   const [body, setBody] = useState(prefilledBody || "");
   const [instructions, setInstructions] = useState(initialInstructions);
   const [isGenerating, setIsGenerating] = useState(false);
+  const regenCountRef = useRef(0);
   const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   
   // Thread state - now stores full email objects
@@ -397,6 +398,14 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
   }
 
   async function generateEmail() {
+    // Track regeneration presses — on 3rd consecutive press, bust the cache
+    regenCountRef.current += 1;
+    if (regenCountRef.current >= 3) {
+      clearDraftCache(lead.id);
+      regenCountRef.current = 0;
+      console.log("[EmailActionDialog] Cache busted after 3 regenerations");
+    }
+
     setIsGenerating(true);
     setBody("");
     setSubject("");
