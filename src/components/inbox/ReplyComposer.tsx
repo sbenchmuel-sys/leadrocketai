@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect } from "react";
-import { Send, Paperclip, X, Pencil, Check, Loader2 } from "lucide-react";
+import { Send, Paperclip, X, Pencil, Check, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,11 @@ import {
   type AvailableChannel,
 } from "@/lib/channels";
 import { refreshDashboard } from "@/lib/dashboardMetricsService";
+
+type PersonalizedSuggestion =
+  | { subject: string; body: string }   // email
+  | { text: string }                     // sms/whatsapp
+  | { bullets: string[] };               // voice
 
 type Props = {
   conversation: ConversationListItem;
@@ -61,7 +66,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
     const convoCanonical = providerToCanonical(conversation.channel);
 
     if (!leadFields) {
-      // No lead linked: offer current conversation channel + email as safe fallback
       const channels: AvailableChannel[] = [{ channel: convoCanonical }];
       if (convoCanonical !== "email") {
         channels.push({ channel: "email" });
@@ -69,17 +73,15 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
       return channels;
     }
 
-    // Use deterministic availability guard
     const available = getAvailableChannelsForLead({
       lead: leadFields,
       workspace: {
-        whatsapp_enabled: true, // safe default; workspace settings can be fetched later
+        whatsapp_enabled: true,
         voice_enabled: true,
       },
       lastInboundCanonical: convoCanonical,
     });
 
-    // Filter to sendable channels only (no voice/meeting in composer)
     return available.filter((a) => a.channel === "email" || a.channel === "whatsapp" || a.channel === "sms");
   }, [leadFields, conversation.channel]);
 
@@ -97,6 +99,10 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
   const [editedSuggestions, setEditedSuggestions] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
+
+  // Personalized suggestions state
+  const [isPersonalizing, setIsPersonalizing] = useState(false);
+  const [personalizedSuggestions, setPersonalizedSuggestions] = useState<PersonalizedSuggestion[]>([]);
 
   // Sync default channel when recommendation changes but preserve draft body
   useEffect(() => {
@@ -124,6 +130,70 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
   const removeAttachment = (index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ── Personalize handler ──
+  const handlePersonalize = async () => {
+    if (!leadId) {
+      toast({ title: "No lead linked", description: "Cannot personalize without a lead.", variant: "destructive" });
+      return;
+    }
+    setIsPersonalizing(true);
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast({ title: "Not logged in", variant: "destructive" });
+        return;
+      }
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/generate-personalized-suggestions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({
+          lead_id: leadId,
+          channel,
+          user_draft: body.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Request failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      const sug = data.suggestions ?? [];
+      if (sug.length === 0) {
+        toast({ title: "No suggestions", description: "AI couldn't generate suggestions for this lead." });
+      }
+      setPersonalizedSuggestions(sug);
+    } catch (err: any) {
+      console.error("[ReplyComposer] Personalize error:", err);
+      toast({ title: "Personalization failed", description: err.message || "Could not generate suggestions.", variant: "destructive" });
+    } finally {
+      setIsPersonalizing(false);
+    }
+  };
+
+  const applyPersonalizedSuggestion = (s: PersonalizedSuggestion) => {
+    if ("body" in s) {
+      setBody(s.body);
+    } else if ("text" in s) {
+      setBody(s.text);
+    } else if ("bullets" in s) {
+      setBody(s.bullets.map((b) => `• ${b}`).join("\n"));
+    }
+  };
+
+  const getPersonalizedLabel = (s: PersonalizedSuggestion, i: number) => {
+    const tones = ["⚡ Direct", "🤝 Consultative", "💪 Assertive"];
+    if ("subject" in s) return `${tones[i] ?? tones[0]}: ${s.subject.slice(0, 30)}…`;
+    if ("text" in s) return `${tones[i] ?? tones[0]}: ${s.text.slice(0, 30)}…`;
+    return tones[i] ?? `Option ${i + 1}`;
   };
 
   const handleSend = async () => {
@@ -195,7 +265,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
         toast({ title: "Email sent", description: "Email delivered successfully." });
       } else {
-        // SMS placeholder
         toast({ title: "Not yet supported", description: `${canonicalLabel(channel)} sending is coming soon.` });
         return;
       }
@@ -203,6 +272,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
       // Clear after successful send
       setBody("");
       setAttachments([]);
+      setPersonalizedSuggestions([]);
 
       // Best-effort post-send hooks
       try { onSent?.(); } catch (_) { /* non-blocking */ }
@@ -306,6 +376,21 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
         </div>
       )}
 
+      {/* Personalized suggestion chips */}
+      {personalizedSuggestions.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {personalizedSuggestions.map((s, i) => (
+            <button
+              key={`p-${i}`}
+              onClick={() => applyPersonalizedSuggestion(s)}
+              className="shrink-0 text-xs px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 transition-colors text-foreground hover:bg-primary/10"
+            >
+              {getPersonalizedLabel(s, i)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Attachments */}
       {attachments.length > 0 && (
         <div className="flex gap-2 flex-wrap">
@@ -341,7 +426,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
           </SelectContent>
         </Select>
 
-        {/* Text input — draft preserved across channel switches */}
+        {/* Text input */}
         <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -355,6 +440,24 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
             }
           }}
         />
+
+        {/* Personalize button */}
+        {leadId && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={handlePersonalize}
+            disabled={isPersonalizing}
+            title="Personalize with AI"
+          >
+            {isPersonalizing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+          </Button>
+        )}
 
         {/* Attachment */}
         <input
