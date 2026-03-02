@@ -118,7 +118,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
         .limit(1)
         .maybeSingle();
 
-      setEnrichment(data as EnrichmentRow | null);
+      setEnrichment(data as unknown as EnrichmentRow | null);
     } catch {
       setEnrichment(null);
     }
