@@ -35,32 +35,35 @@ export function EvidenceDrawer({ conversationId, leadId }: Props) {
     if (!open || !leadId) return;
     setIsLoading(true);
 
-    // Fetch call transcripts for this lead via call_sessions
-    supabase
-      .from("call_sessions")
-      .select("id")
-      .eq("lead_id", leadId)
-      .order("created_at", { ascending: false })
-      .limit(10)
-      .then(({ data: sessions }) => {
+    (async () => {
+      try {
+        const { data: sessions } = await supabase
+          .from("call_sessions")
+          .select("id")
+          .eq("lead_id", leadId)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
         if (!sessions?.length) {
           setTranscripts([]);
-          setIsLoading(false);
           return;
         }
+
         const sessionIds = sessions.map((s) => s.id);
-        return supabase
+        const { data: txData } = await supabase
           .from("call_transcripts")
           .select("id, call_session_id, full_text, language, status, created_at")
           .in("call_session_id", sessionIds)
           .order("created_at", { ascending: false })
           .limit(10);
-      })
-      .then((result) => {
-        if (result?.data) setTranscripts(result.data as TranscriptSnippet[]);
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+
+        setTranscripts((txData ?? []) as TranscriptSnippet[]);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }, [open, leadId]);
 
   return (
