@@ -1186,6 +1186,17 @@ GOAL
 If this is the FIRST follow-up after a meeting: Thank them, summarize key points, propose next steps.
 If a follow-up was ALREADY sent (check PREVIOUS_EMAILS and LAST_OUTBOUND): Write a brief check-in referencing what was previously shared.
 
+CRITICAL TEMPORAL AWARENESS:
+- The current date is provided in the system prompt. Use it to judge recency.
+- Emails or meeting references from weeks/months ago are STALE — do NOT treat them as recent context.
+- If a date mentioned in the thread (e.g., "February 3rd") is in the PAST relative to today, do NOT reference it as upcoming.
+
+CRITICAL STALENESS RULE:
+{{STALE_INBOUND_INSTRUCTION}}
+Examine PREVIOUS_EMAILS carefully. Determine which email is the MOST RECENT by date:
+- If YOUR last outbound (LAST_OUTBOUND) is MORE RECENT than the prospect's last inbound: you are FOLLOWING UP on your own email. Do NOT reply to or reference the old inbound. Write a check-in on YOUR last outbound.
+- If the prospect's last inbound is MORE RECENT than your outbound: respond to their inbound.
+
 CRITICAL CONTEXT CHECK:
 Review PREVIOUS_EMAILS and LAST_OUTBOUND before writing. If you already sent a follow-up email with:
 - Materials, resources, or demo access shared
@@ -1760,7 +1771,7 @@ serve(async (req) => {
     const aiRequestBody: Record<string, unknown> = {
       model,
       messages: [
-        { role: "system", content: SYSTEM_GLOBAL_PROMPT },
+        { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
         { role: "user", content: userPrompt },
       ],
     };
