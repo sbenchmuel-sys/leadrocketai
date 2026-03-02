@@ -13,6 +13,7 @@ import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EnrichedLead, DealStage, Motion } from "@/lib/dashboardUtils";
 import { STAGE_LABELS, MOTION_LABELS } from "@/lib/dashboardUtils";
+import { routeLeadAction, primaryButtonLabel } from "@/lib/actionRouter";
 
 // ── Props ──────────────────────────────────────────────────────────────
 
