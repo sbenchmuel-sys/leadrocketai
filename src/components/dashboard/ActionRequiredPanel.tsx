@@ -34,7 +34,7 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
   const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [currentInstructions] = useState("");
 
-  const actionLeads = leads.filter((l) => l.needs_action && l.revenueState !== "automation").slice(0, 3);
+  const actionLeads = leads.filter((l) => l.revenueState === "action_required").slice(0, 3);
 
   const handleDismiss = async (lead: EnrichedLead, snoozeDays: number) => {
     setDismissingId(lead.id);
