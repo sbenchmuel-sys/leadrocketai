@@ -92,6 +92,7 @@ export function InboxView() {
                       conversation={selectedConvo}
                       recommendedChannel={recommendedChannel}
                       suggestions={replySuggestions}
+                      leadId={selectedConvo.lead_id}
                     />
                   </>
                 ) : (
