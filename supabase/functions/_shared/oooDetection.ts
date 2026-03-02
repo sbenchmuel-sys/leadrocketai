@@ -191,3 +191,126 @@ export function getOOOEligibleAt(returnDate: Date | null): string {
   }
   return target.toISOString();
 }
+
+// ── Defer / "reconnect later" detection ──
+// These are NOT auto-replies. They are human emails saying "let's talk later".
+
+const DEFER_PATTERNS = [
+  // Explicit reconnect requests
+  /(?:reconnect|reach out|follow[- ]?up|circle back|touch base|get (?:back )?in touch|be in touch|connect again|revisit|re-?engage|pick (?:this )?up)\s+(?:after|in|around|post|following|next)\s+(.{3,40})/i,
+  // "Let's speak/talk in..."
+  /(?:let'?s|we (?:can|should|could)|happy to|would (?:like|love) to)\s+(?:speak|talk|chat|discuss|reconnect|revisit|resume|meet)\s+(?:again\s+)?(?:after|in|around|post|next)\s+(.{3,40})/i,
+  // "defer to next..."
+  /(?:defer(?:red)?|postpone[d]?|push(?:ed)?|move[d]?|delay(?:ed)?|shelve[d]?|table[d]?)\s+(?:to|until|for|till)\s+(.{3,40})/i,
+  // "after March / after Q2 / next financial year"
+  /(?:we'?(?:d|ll)|I'?(?:d|ll)|let'?s)\s+(?:like to|love to|plan to|want to)?\s*(?:reconnect|revisit|resume|pick (?:this )?up|follow[- ]?up|get back|circle back)\s+(.{3,40})/i,
+  // "budget next year / next FY / next quarter"
+  /(?:budget|funding|resources?|bandwidth)\s+(?:(?:is |are )?(?:not |un)?available|allocated|approved)\s+(?:in|for|after|next|until)\s+(.{3,40})/i,
+];
+
+const QUARTER_MAP: Record<string, number> = { q1: 0, q2: 3, q3: 6, q4: 9 };
+
+export interface DeferResult {
+  isDefer: boolean;
+  reconnectDate: Date | null;
+  rawMatch: string | null;
+  reason: string | null;
+}
+
+/**
+ * Detect "reconnect later" / "defer" signals in human inbound emails.
+ * Returns a parsed reconnect date when possible.
+ */
+export function detectDeferSignal(bodyText: string, emailDate: Date): DeferResult {
+  for (const pattern of DEFER_PATTERNS) {
+    const match = pattern.exec(bodyText);
+    if (match && match[1]) {
+      const rawMatch = match[1].trim().replace(/[.,;:!]+$/, "");
+      const reconnectDate = parseDeferDate(rawMatch, emailDate);
+      // Build a human-readable reason from surrounding context
+      const sentenceStart = Math.max(0, (match.index ?? 0) - 60);
+      const sentenceEnd = Math.min(bodyText.length, (match.index ?? 0) + match[0].length + 60);
+      const reason = bodyText.slice(sentenceStart, sentenceEnd).replace(/\s+/g, " ").trim();
+      return { isDefer: true, reconnectDate, rawMatch, reason };
+    }
+  }
+  return { isDefer: false, reconnectDate: null, rawMatch: null, reason: null };
+}
+
+/**
+ * Parse a defer date from extracted text like "March 2026", "Q2", "next quarter",
+ * "the next financial year", "April", etc.
+ */
+export function parseDeferDate(text: string, emailDate: Date): Date | null {
+  const lower = text.toLowerCase().trim();
+  const emailYear = emailDate.getFullYear();
+  const emailMonth = emailDate.getMonth();
+
+  // Try "after March 2026" / "March 2026" / "March"
+  const monthYearRegex = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s*(\d{4})?\b/i;
+  const monthMatch = monthYearRegex.exec(lower);
+  if (monthMatch) {
+    const month = MONTHS[monthMatch[1].toLowerCase()];
+    if (month !== undefined) {
+      let year = monthMatch[2] ? parseInt(monthMatch[2]) : emailYear;
+      // If month is in the past for this year, assume next year
+      if (!monthMatch[2] && month <= emailMonth) year++;
+      // "after March" → start of April (month + 1)
+      const targetMonth = lower.includes("after") ? month + 1 : month;
+      const d = new Date(year, targetMonth, 1);
+      d.setHours(9, 30, 0, 0);
+      return d;
+    }
+  }
+
+  // Quarter: "Q2", "Q2 2026", "next quarter"
+  const quarterRegex = /\b(q[1-4])\s*(\d{4})?\b/i;
+  const qMatch = quarterRegex.exec(lower);
+  if (qMatch) {
+    const qMonth = QUARTER_MAP[qMatch[1].toLowerCase()];
+    let year = qMatch[2] ? parseInt(qMatch[2]) : emailYear;
+    if (!qMatch[2] && qMonth <= emailMonth) year++;
+    const d = new Date(year, qMonth, 1);
+    d.setHours(9, 30, 0, 0);
+    return d;
+  }
+
+  if (/next\s+quarter/i.test(lower)) {
+    const nextQ = Math.ceil((emailMonth + 1) / 3) * 3;
+    const year = nextQ >= 12 ? emailYear + 1 : emailYear;
+    const d = new Date(year, nextQ % 12, 1);
+    d.setHours(9, 30, 0, 0);
+    return d;
+  }
+
+  // "next year" / "next financial year" / "next FY"
+  if (/next\s+(?:financial\s+)?(?:year|fy)/i.test(lower)) {
+    // Financial year typically starts April; calendar year starts Jan
+    const isFY = /financial|fy/i.test(lower);
+    const d = isFY ? new Date(emailYear + 1, 3, 1) : new Date(emailYear + 1, 0, 1);
+    d.setHours(9, 30, 0, 0);
+    return d;
+  }
+
+  // "X months" / "a few weeks" / "a couple of months"
+  const relativeRegex = /(\d+|a few|a couple(?: of)?|several)\s+(week|month|day)s?/i;
+  const relMatch = relativeRegex.exec(lower);
+  if (relMatch) {
+    let amount = parseInt(relMatch[1]);
+    if (isNaN(amount)) {
+      if (/a few|several/i.test(relMatch[1])) amount = 3;
+      else if (/a couple/i.test(relMatch[1])) amount = 2;
+      else amount = 1;
+    }
+    const unit = relMatch[2].toLowerCase();
+    const d = new Date(emailDate);
+    if (unit === "day") d.setDate(d.getDate() + amount);
+    else if (unit === "week") d.setDate(d.getDate() + amount * 7);
+    else if (unit === "month") d.setMonth(d.getMonth() + amount);
+    d.setHours(9, 30, 0, 0);
+    return d;
+  }
+
+  // Fall back to the generic parseReturnDate from the OOO module
+  return parseReturnDate(text);
+}
