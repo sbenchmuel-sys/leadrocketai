@@ -16,11 +16,10 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-const DISMISS_REASONS = [
-  { code: "already_handled", label: "Already handled" },
-  { code: "not_relevant", label: "Not relevant" },
-  { code: "will_do_later", label: "Will do later" },
-  { code: "other", label: "Other" },
+const SNOOZE_OPTIONS = [
+  { days: 1, label: "Snooze 1 day" },
+  { days: 3, label: "Snooze 3 days" },
+  { days: 7, label: "Snooze 7 days" },
 ];
 
 interface ActionRequiredPanelProps {
@@ -37,15 +36,15 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
 
   const actionLeads = leads.filter((l) => l.needs_action && l.revenueState !== "automation").slice(0, 3);
 
-  const handleDismiss = async (lead: EnrichedLead, reasonCode: string) => {
+  const handleDismiss = async (lead: EnrichedLead, snoozeDays: number) => {
     setDismissingId(lead.id);
     try {
-      await dismissLeadAction(lead.id, reasonCode);
-      toast.success(`Dismissed action for ${lead.name}`);
+      await dismissLeadAction(lead.id, snoozeDays);
+      toast.success(`Snoozed ${lead.name} for ${snoozeDays} day${snoozeDays > 1 ? "s" : ""}`);
       onLeadUpdated?.();
     } catch (err) {
-      console.error("Failed to dismiss action:", err);
-      toast.error("Failed to dismiss action");
+      console.error("Failed to snooze action:", err);
+      toast.error("Failed to snooze action");
     } finally {
       setDismissingId(null);
     }
@@ -185,17 +184,17 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                      Dismiss because...
-                    </p>
-                    {DISMISS_REASONS.map((reason) => (
-                      <DropdownMenuItem
-                        key={reason.code}
-                        onClick={() => handleDismiss(lead, reason.code)}
-                      >
-                        {reason.label}
-                      </DropdownMenuItem>
-                    ))}
+                      <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                        Snooze for...
+                      </p>
+                      {SNOOZE_OPTIONS.map((option) => (
+                        <DropdownMenuItem
+                          key={option.days}
+                          onClick={() => handleDismiss(lead, option.days)}
+                        >
+                          {option.label}
+                        </DropdownMenuItem>
+                      ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
