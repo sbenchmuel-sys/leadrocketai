@@ -146,6 +146,30 @@ function deriveEngagementLevel(lead: LeadDetail, closingPower: number): "hot" | 
 }
 
 // ============================================
+// THREAD DATE ANNOTATION
+// ============================================
+
+function annotateThreadWithDates(emails: EmailThreadItem[], summary: string): string {
+  if (!emails.length || !summary) return summary;
+
+  const now = Date.now();
+  // Build a mapping of email snippets to relative dates
+  const dateAnnotations: string[] = [];
+  for (const email of emails) {
+    if (!email.occurred_at) continue;
+    const daysAgo = Math.floor((now - new Date(email.occurred_at).getTime()) / (1000 * 60 * 60 * 24));
+    const direction = email.direction === "outbound" ? "OUTBOUND" : "INBOUND";
+    const dateStr = new Date(email.occurred_at).toISOString().split("T")[0];
+    const relativeStr = daysAgo === 0 ? "today" : daysAgo === 1 ? "yesterday" : `${daysAgo} days ago`;
+    dateAnnotations.push(`[${direction} ${dateStr} (${relativeStr})]`);
+  }
+
+  // Prepend a temporal context header to the thread summary
+  const header = `=== EMAIL THREAD TIMELINE (most recent first) ===\n${dateAnnotations.join("\n")}\n===\n\n`;
+  return header + summary;
+}
+
+// ============================================
 // MAIN RESOLVER
 // ============================================
 
@@ -210,6 +234,9 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
   const companyKb = workspaceProfile ? (workspaceProfile as any).company_kb || null : null;
   const industryKb = workspaceProfile ? (workspaceProfile as any).industry_pack || null : null;
 
+  // Annotate thread summary with relative dates for AI temporal awareness
+  const annotatedThreadSummary = annotateThreadWithDates(emailThread.emails, emailThread.threadSummary);
+
   const resolved: ResolvedContext = {
     lead,
     source_type: sourceType,
@@ -225,7 +252,7 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     last_outbound_email: lastOutbound,
     last_inbound_email: lastInbound,
     thread_emails: emailThread.emails,
-    thread_summary: emailThread.threadSummary,
+    thread_summary: annotatedThreadSummary,
 
     last_meeting_summary: lastMeeting,
     meeting_packs: meetingPacks,

@@ -238,6 +238,17 @@ function buildAIPayload(
       : "Recent meeting with lead.";
     payload.previous_emails = ctx.thread_summary || "";
     payload.last_outbound = ctx.last_outbound_email?.body_text || "";
+
+    // Staleness guard: if last outbound is newer than last inbound,
+    // the AI should follow up on OUR email, not reply to stale inbound
+    const inboundTime = ctx.last_inbound_email?.occurred_at;
+    const outboundTime = ctx.last_outbound_email?.occurred_at;
+    if (inboundTime && outboundTime && new Date(outboundTime) > new Date(inboundTime)) {
+      payload.stale_inbound = true;
+      payload.stale_inbound_instruction = `⚠️ STALE INBOUND WARNING: The prospect's last inbound email is OLDER than your last outbound. Do NOT respond to or reference the old inbound content. Instead, write a follow-up to YOUR most recent outbound email.`;
+    } else {
+      payload.stale_inbound_instruction = "";
+    }
   }
 
   return payload;
