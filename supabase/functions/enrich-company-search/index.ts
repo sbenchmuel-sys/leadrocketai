@@ -87,8 +87,8 @@ const SIGNAL_KEYWORDS: Record<string, string[]> = {
   news: ["news", "press release", "media", "coverage", "announcement"],
 };
 
-function extractSignals(results: SearchResult[]): { signal: string; source: string }[] {
-  const signals: { signal: string; source: string }[] = [];
+function extractSignals(results: SearchResult[]): { signal: string; source: string; snippet: string }[] {
+  const signals: { signal: string; source: string; snippet: string }[] = [];
   const seen = new Set<string>();
 
   for (const r of results) {
@@ -97,7 +97,7 @@ function extractSignals(results: SearchResult[]): { signal: string; source: stri
       if (seen.has(signal)) continue;
       if (keywords.some((kw) => text.includes(kw))) {
         seen.add(signal);
-        signals.push({ signal, source: r.link });
+        signals.push({ signal, source: r.link, snippet: r.snippet.slice(0, 120) });
       }
     }
   }
@@ -136,10 +136,11 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { lead_id, company, purpose } = body as {
+    const { lead_id, company, purpose, force } = body as {
       lead_id?: string;
       company?: string;
       purpose?: string;
+      force?: boolean;
     };
 
     if (!company) {
@@ -189,8 +190,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Check cache — unexpired row for same workspace + lead
-    if (lead_id) {
+    // Check cache — unexpired row for same workspace + lead (skip if force refresh)
+    if (lead_id && !force) {
       const { data: cached } = await admin
         .from("entity_enrichment")
         .select("*")
