@@ -42,7 +42,7 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
 
   const actionLeads = useMemo(() => {
     const isActionable = (l: EnrichedLead) =>
-      l.needs_action || l.revenueState === "action_required";
+      l.revenueState === "action_required";
 
     const sortByUrgency = (list: EnrichedLead[]) =>
       [...list].sort((a, b) => {
