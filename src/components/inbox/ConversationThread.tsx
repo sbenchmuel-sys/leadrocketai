@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, MessageSquare, Mail, Clock, Check, CheckCheck } from "lucide-react";
+import { ArrowLeft, Clock, Check, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import {
   type DecryptedMessage,
   type ConversationAnalysis,
 } from "@/lib/inboxQueries";
+import { providerToCanonical, canonicalIcon, canonicalLabel, channelColors } from "@/lib/channels";
 
 type Props = {
   conversation: ConversationListItem;
@@ -57,18 +58,20 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded }: P
           <ArrowLeft className="h-4 w-4" />
         </Button>
 
-        <div className={cn(
-          "rounded-full p-1.5 shrink-0",
-          conversation.channel === "whatsapp"
-            ? "bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]"
-            : "bg-[hsl(var(--info)/0.1)] text-[hsl(var(--info))]"
-        )}>
-          {conversation.channel === "whatsapp" ? (
-            <MessageSquare className="h-4 w-4" />
-          ) : (
-            <Mail className="h-4 w-4" />
-          )}
-        </div>
+        {(() => {
+          const canonical = providerToCanonical(conversation.channel);
+          const Icon = canonicalIcon(canonical);
+          const colors = channelColors(canonical);
+          return (
+            <div
+              className="rounded-full p-1.5 shrink-0"
+              style={{ backgroundColor: colors.bg, color: colors.fg }}
+              title={canonicalLabel(canonical)}
+            >
+              <Icon className="h-4 w-4" />
+            </div>
+          );
+        })()}
 
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-foreground truncate">
@@ -123,7 +126,8 @@ function WaStatusIcon({ status }: { status: DecryptedMessage["status"] }) {
 
 function MessageBubble({ message, channel }: { message: DecryptedMessage; channel?: string }) {
   const isOutbound = message.direction === "outbound";
-  const isWa = channel === "whatsapp";
+  const canonical = providerToCanonical(channel);
+  const showDeliveryStatus = canonical === "whatsapp";
 
   return (
     <div className={cn("flex", isOutbound ? "justify-end" : "justify-start")}>
@@ -157,7 +161,7 @@ function MessageBubble({ message, channel }: { message: DecryptedMessage; channe
           isOutbound ? "justify-end text-primary-foreground/60" : "text-muted-foreground"
         )}>
           <span>{format(new Date(message.created_at), "MMM d, h:mm a")}</span>
-          {isOutbound && isWa && (
+          {isOutbound && showDeliveryStatus && (
             <WaStatusIcon status={message.status} />
           )}
         </div>
