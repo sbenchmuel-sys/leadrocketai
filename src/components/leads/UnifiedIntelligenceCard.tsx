@@ -352,43 +352,38 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Signals — only if enrichment exists with signals */}
+        {/* Signals summary — only if enrichment exists with signals */}
         {signals.length > 0 && (
           <>
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <Zap className="h-3 w-3" /> Signals ({signals.length})
+                <Zap className="h-3 w-3" /> Company Signals
               </span>
-              <div className="space-y-1.5 mt-1">
-                {signals.slice(0, isCompact ? 3 : 10).map((s, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs">
-                    <span className="font-medium text-foreground">
-                      {SIGNAL_LABELS[s.signal] ?? s.signal}
-                    </span>
-                    {s.source && (
-                      <a
-                        href={s.source}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-primary shrink-0"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                  </div>
-                ))}
-                {signals.length > (isCompact ? 3 : 10) && (
-                  <p className="text-[10px] text-muted-foreground">+{signals.length - (isCompact ? 3 : 10)} more</p>
-                )}
+              <p className="text-xs text-muted-foreground mt-1">
+                {signals.map((s) => SIGNAL_LABELS[s.signal] ?? s.signal).join(", ")}
+              </p>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-[10px] text-muted-foreground">
+                  {enrichment ? `Updated ${formatDistanceToNow(new Date(enrichment.created_at), { addSuffix: true })}` : ""}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
+                  onClick={handleEnrich}
+                  disabled={isEnriching}
+                >
+                  {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                  {isEnriching ? "Refreshing…" : "Wrong company? Retry"}
+                </Button>
               </div>
             </div>
           </>
         )}
 
-        {/* Enrich button — only when no valid enrichment */}
-        {showEnrichButton && enrichment !== undefined && (
+        {/* Enrich button — only when no signals at all */}
+        {signals.length === 0 && showEnrichButton && enrichment !== undefined && (
           <>
             <Separator />
             <div className="flex items-center justify-between gap-2">
@@ -402,11 +397,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                 onClick={handleEnrich}
                 disabled={isEnriching}
               >
-                {isEnriching ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Zap className="h-3 w-3" />
-                )}
+                {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
                 {isEnriching ? "Enriching…" : "Enrich"}
               </Button>
             </div>
