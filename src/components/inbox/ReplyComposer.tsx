@@ -85,8 +85,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         if (data?.error) throw new Error(data.error);
 
         toast({ title: "Message sent", description: "WhatsApp message delivered." });
-        setBody("");
-        setAttachments([]);
+        try { setBody(""); setAttachments([]); } catch (_) { /* non-blocking cleanup */ }
       } else {
         // Resolve the contact's email identity first
         const { data: emailIdentity, error: emailIdErr } = await supabase
@@ -124,8 +123,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         }
 
         toast({ title: "Email sent", description: "Email delivered successfully." });
-        setBody("");
-        setAttachments([]);
+        try { setBody(""); setAttachments([]); } catch (_) { /* non-blocking cleanup */ }
       }
     } catch (err: any) {
       console.error("[ReplyComposer] Send error:", err);

@@ -372,15 +372,19 @@ async function processInboundMessage(
 
   // ── Bridge to lead interactions timeline ──────────────────
   if (matchedLead) {
-    await supabase.from("interactions").insert({
-      lead_id: matchedLead.id,
-      type: "whatsapp_inbound",
-      source: "whatsapp",
-      body_text: bodyText,
-      occurred_at: timestamp,
-      direction: "inbound",
-      from_email: `+${normalizedPhone}`,
-    });
+    try {
+      await supabase.from("interactions").insert({
+        lead_id: matchedLead.id,
+        type: "whatsapp_inbound",
+        source: "whatsapp",
+        body_text: bodyText,
+        occurred_at: timestamp,
+        direction: "inbound",
+        from_email: `+${normalizedPhone}`,
+      });
+    } catch (err: any) {
+      console.warn("[whatsapp-events-processor] Non-blocking interaction insert failed:", err.message);
+    }
 
     // Update lead activity
     await supabase.from("leads").update({
@@ -561,16 +565,20 @@ Context:
     }).eq("id", conversationId);
 
     // Bridge outbound to lead timeline
-    await supabase.from("interactions").insert({
-      lead_id: matchedLead.id,
-      type: "whatsapp_outbound",
-      source: "whatsapp",
-      body_text: suggestedReply,
-      occurred_at: now,
-      direction: "outbound",
-      ai_intent: intent,
-      ai_summary: `Auto-reply (${decision.reason})`,
-    });
+    try {
+      await supabase.from("interactions").insert({
+        lead_id: matchedLead.id,
+        type: "whatsapp_outbound",
+        source: "whatsapp",
+        body_text: suggestedReply,
+        occurred_at: now,
+        direction: "outbound",
+        ai_intent: intent,
+        ai_summary: `Auto-reply (${decision.reason})`,
+      });
+    } catch (err: any) {
+      console.warn("[whatsapp-events-processor] Non-blocking outbound interaction insert failed:", err.message);
+    }
 
     // Update lead
     await supabase.from("leads").update({
