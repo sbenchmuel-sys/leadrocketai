@@ -76,11 +76,20 @@ export default function Auth() {
     toast.success("Account created! Welcome aboard.");
   };
 
+  const getSiteUrl = () => {
+    const origin = window.location.origin;
+    // Preview/dev URLs require project access — use published URL for email links
+    if (origin.includes('id-preview--') || origin.includes('lovableproject.com')) {
+      return 'https://www.drivepilot.app';
+    }
+    return origin;
+  };
+
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsForgotSubmitting(true);
     const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo: `${getSiteUrl()}/reset-password`,
     });
     setIsForgotSubmitting(false);
     if (error) { toast.error(error.message); return; }
