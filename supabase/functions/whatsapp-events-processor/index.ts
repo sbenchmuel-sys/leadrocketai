@@ -198,32 +198,65 @@ async function processInboundMessage(
     return;
   }
 
-  // ── Lead matching ─────────────────────────────────────────
+  // ── Lead matching (workspace-scoped) ───────────────────────
   let matchedLead: any = null;
+  const leadSelectCols = "id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in";
 
-  // Try exact whatsapp_number match
+  // Strategy 1: Exact whatsapp_number match within workspace
   if (normalizedPhone) {
-    const { data: waLead } = await supabase
+    const { data: waLeads } = await supabase
       .from("leads")
-      .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
+      .select(leadSelectCols)
       .eq("whatsapp_number", normalizedPhone)
-      .maybeSingle();
-    if (waLead) matchedLead = waLead;
+      .limit(10);
+
+    // Filter to workspace members only (leads don't have workspace_id, so check owner membership)
+    if (waLeads?.length) {
+      const ownerIds = [...new Set(waLeads.map((l: any) => l.owner_user_id))];
+      const { data: members } = await supabase
+        .from("workspace_members")
+        .select("user_id")
+        .eq("workspace_id", workspaceId)
+        .in("user_id", ownerIds);
+      const memberSet = new Set((members ?? []).map((m: any) => m.user_id));
+      const workspaceLeads = waLeads.filter((l: any) => memberSet.has(l.owner_user_id));
+      if (workspaceLeads.length === 1) {
+        matchedLead = workspaceLeads[0];
+      } else if (workspaceLeads.length > 1) {
+        // Ambiguous — don't match
+        console.warn(`[processor] Ambiguous whatsapp_number match: ${workspaceLeads.length} leads for ${normalizedPhone}`);
+      }
+    }
   }
 
-  // Fallback: phone suffix match
-  if (!matchedLead) {
-    const { data: allLeads } = await supabase
-      .from("leads")
-      .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
-      .filter("phone", "neq", "")
-      .not("phone", "is", null)
-      .limit(100);
+  // Strategy 2: Fallback phone/whatsapp suffix match within workspace
+  if (!matchedLead && normalizedPhone) {
+    // Get all workspace member user_ids first
+    const { data: wsMembers } = await supabase
+      .from("workspace_members")
+      .select("user_id")
+      .eq("workspace_id", workspaceId);
+    const wsMemberIds = (wsMembers ?? []).map((m: any) => m.user_id);
 
-    matchedLead = (allLeads ?? []).find((l: any) => {
-      const lp = normalizePhone(l.whatsapp_number || l.phone || "");
-      return lp.length >= 4 && normalizedPhone.endsWith(lp);
-    }) ?? null;
+    if (wsMemberIds.length > 0) {
+      const { data: candidateLeads } = await supabase
+        .from("leads")
+        .select(leadSelectCols)
+        .in("owner_user_id", wsMemberIds)
+        .or("phone.neq.,whatsapp_number.neq.")
+        .limit(200);
+
+      const matches = (candidateLeads ?? []).filter((l: any) => {
+        const lp = normalizePhone(l.whatsapp_number || l.phone || "");
+        return lp.length >= 4 && normalizedPhone.endsWith(lp);
+      });
+
+      if (matches.length === 1) {
+        matchedLead = matches[0];
+      } else if (matches.length > 1) {
+        console.warn(`[processor] Ambiguous phone suffix match: ${matches.length} leads for ${normalizedPhone}`);
+      }
+    }
   }
 
   // Auto-create minimal lead if none found
@@ -245,7 +278,7 @@ async function processInboundMessage(
         owner_user_id: ownerUserId,
         wa_opted_in: true,
       } as any)
-      .select("id, phone, whatsapp_number, owner_user_id, needs_action, next_action_key, stage, engagement_score, automation_mode, acceleration_until, wa_opted_in")
+      .select(leadSelectCols)
       .single();
 
     if (newLeadErr || !newLead) {
@@ -300,6 +333,36 @@ async function processInboundMessage(
       value: normalizedPhone,
       is_primary: true,
     });
+  }
+
+  // ── Persist contact→lead link safely ──────────────────────
+  if (matchedLead && contactId) {
+    try {
+      const { data: currentContact } = await supabase
+        .from("contacts")
+        .select("lead_id")
+        .eq("id", contactId)
+        .single();
+
+      if (!currentContact?.lead_id) {
+        // Safe to set — no existing link
+        await supabase.from("contacts")
+          .update({ lead_id: matchedLead.id })
+          .eq("id", contactId);
+        console.log(`[processor] Linked contact ${contactId} → lead ${matchedLead.id}`);
+      } else if (currentContact.lead_id !== matchedLead.id) {
+        // Conflict — log but do NOT overwrite
+        console.warn(`[processor] Contact ${contactId} already linked to lead ${currentContact.lead_id}, matched ${matchedLead.id}`);
+        await supabase.from("automation_logs").insert({
+          workspace_id: workspaceId,
+          lead_id: matchedLead.id,
+          decision: "lead_contact_conflict",
+          reason: `contact=${contactId} existing_lead=${currentContact.lead_id} matched_lead=${matchedLead.id}`,
+        } as any).then(() => {}).catch(() => {});
+      }
+    } catch (linkErr: any) {
+      console.warn("[processor] Non-blocking contact→lead link failed:", linkErr.message);
+    }
   }
 
   // ── Conversation provisioning ─────────────────────────────
