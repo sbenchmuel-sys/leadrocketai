@@ -13,6 +13,7 @@ import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EnrichedLead, DealStage, Motion } from "@/lib/dashboardUtils";
 import { STAGE_LABELS, MOTION_LABELS } from "@/lib/dashboardUtils";
+import { routeLeadAction, primaryButtonLabel } from "@/lib/actionRouter";
 
 // ── Props ──────────────────────────────────────────────────────────────
 
@@ -40,7 +41,8 @@ const STAGE_VARIANT: Record<DealStage, string> = {
 export function LeadCard({ lead, primaryAction, secondaryActions, context = "list" }: LeadCardProps) {
   const stageLabel = STAGE_LABELS[lead.stage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
-  const actionLine = lead.next_action_label || lead.next_step || "Review";
+  const routed = routeLeadAction(lead);
+  const actionLine = lead.next_action_label || routed.label;
 
   const lastActivity = lead.last_activity_at
     ? formatDistanceToNow(new Date(lead.last_activity_at), { addSuffix: true })
@@ -119,7 +121,7 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
             className="h-6 text-[11px] px-2.5 shrink-0"
             onClick={primaryAction.onClick}
           >
-            {primaryAction.label}
+            {primaryAction.label || primaryButtonLabel(routed.priority)}
           </Button>
         )}
       </div>
