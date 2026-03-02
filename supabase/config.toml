@@ -80,3 +80,6 @@ verify_jwt = false
 
 [functions.twilio-voice-outbound]
 verify_jwt = false
+
+[functions.enrich-company-search]
+verify_jwt = false
