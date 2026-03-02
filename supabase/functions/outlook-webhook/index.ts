@@ -19,6 +19,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 // Strip HTML tags for plain-text body_text
@@ -362,6 +363,31 @@ async function processNotification(
       await serviceClient.from("interactions").insert({
         lead_id: lead.id, type: "system_note", source: "automation",
         body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
+        occurred_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  // --- 9b. Meeting confirmation detection ---
+  {
+    const meetingResult = detectMeetingConfirmation(messageSubject || "", bodyText);
+    if (meetingResult.isConfirmed) {
+      logger.info("mail.outlook.meeting_confirmed", {
+        lead_id: lead.id,
+        confidence: meetingResult.confidence,
+        matched: meetingResult.matchedText,
+      });
+
+      await serviceClient.from("leads").update({
+        has_future_meeting: true,
+        needs_action: false,
+      }).eq("id", lead.id);
+
+      await serviceClient.from("interactions").insert({
+        lead_id: lead.id,
+        type: "system_note",
+        source: "automation",
+        body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
         occurred_at: new Date().toISOString(),
       });
     }

@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
 const corsHeaders = {
@@ -535,6 +536,26 @@ async function syncLeadEmails(
         }
       }
 
+      // ── Meeting confirmation detection ──
+      if (direction === "inbound" && !isBounce) {
+        const meetingResult = detectMeetingConfirmation(subject, bodyText);
+        if (meetingResult.isConfirmed) {
+          console.log(`[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed (${meetingResult.confidence}): "${meetingResult.matchedText}"`);
+          await serviceSupabase.from("leads").update({
+            has_future_meeting: true,
+            needs_action: false,
+          }).eq("id", leadId);
+
+          await serviceSupabase.from("interactions").insert({
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
+            body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
+            occurred_at: new Date().toISOString(),
+          });
+        }
+      }
+
       const { error: insertError } = await serviceSupabase
         .from("interactions")
         .insert({
@@ -703,6 +724,26 @@ async function syncLeadEmails(
             await serviceSupabase.from("interactions").insert({
               lead_id: leadId, type: "system_note", source: "automation",
               body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
+              occurred_at: new Date().toISOString(),
+            });
+          }
+        }
+
+        // ── Meeting confirmation detection (thread messages) ──
+        if (direction === "inbound" && !isBounceT) {
+          const meetingResult = detectMeetingConfirmation(subject, bodyText);
+          if (meetingResult.isConfirmed) {
+            console.log(`[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed in thread (${meetingResult.confidence}): "${meetingResult.matchedText}"`);
+            await serviceSupabase.from("leads").update({
+              has_future_meeting: true,
+              needs_action: false,
+            }).eq("id", leadId);
+
+            await serviceSupabase.from("interactions").insert({
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
+              body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
             });
           }
