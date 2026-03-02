@@ -449,6 +449,68 @@ serve(async (req) => {
           }
         }
 
+        // ── Defer / "reconnect later" detection ──
+        // Detect human emails saying "let's reconnect after March", "defer to next FY", etc.
+        if (direction === "inbound" && !isBounce) {
+          const emailDateObj = new Date(occurredAt);
+          const deferResult = detectDeferSignal(bodyText, emailDateObj);
+          if (deferResult.isDefer && deferResult.reconnectDate) {
+            const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", {
+              month: "long", day: "numeric", year: "numeric",
+            });
+            const eligibleAt = deferResult.reconnectDate.toISOString();
+
+            console.log(`[gmail-sync] Lead ${leadId}: Defer signal detected. Reconnect date: ${reconnectDateStr}. Raw: "${deferResult.rawMatch}"`);
+
+            // Build context note for personalized follow-up later
+            const reasonSnippet = deferResult.reason
+              ? deferResult.reason.slice(0, 200)
+              : "Lead requested to reconnect later.";
+
+            await serviceSupabase.from("leads").update({
+              ooo_until: eligibleAt,
+              eligible_at: eligibleAt,
+              needs_action: false,
+              next_action_key: null,
+              next_action_label: null,
+              action_reason_code: null,
+              next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
+              next_step_reason: reasonSnippet,
+              nurture_status: "paused",
+              motion: "nurture",
+              personal_notes: (() => {
+                // We can't read current notes in this loop easily, so we append via SQL later
+                return undefined;
+              })(),
+            }).eq("id", leadId);
+
+            // Append to personal_notes via raw update (preserving existing notes)
+            const { data: currentLead } = await serviceSupabase
+              .from("leads")
+              .select("personal_notes")
+              .eq("id", leadId)
+              .single();
+
+            const existingNotes = currentLead?.personal_notes || "";
+            const newNote = `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates and reference their stated timeline.`;
+            
+            await serviceSupabase.from("leads").update({
+              personal_notes: existingNotes + newNote,
+            }).eq("id", leadId);
+
+            // Log as system_note in timeline
+            await serviceSupabase.from("interactions").insert({
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
+              body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
+              occurred_at: new Date().toISOString(),
+            });
+
+            // Still insert the actual email as an interaction (don't skip it)
+          }
+        }
+
         // Unsubscribe detection in inbound emails.
         // IMPORTANT: Only trigger if:
         //   1. The email is FROM the lead (direction === "inbound")
