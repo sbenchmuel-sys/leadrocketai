@@ -152,15 +152,26 @@ Deno.serve(async (req) => {
     });
 
     if (lead) {
-      await supabase.from("interactions").insert({
-        lead_id: lead.id,
-        type: "whatsapp_outbound",
-        source: "whatsapp",
-        body_text: message_text,
-        occurred_at: now,
-        direction: "outbound",
-        from_email: `+${normalizedTo}`,
-      });
+      try {
+        await supabase.from("interactions").insert({
+          lead_id: lead.id,
+          type: "whatsapp_outbound",
+          source: "whatsapp",
+          body_text: message_text,
+          occurred_at: now,
+          direction: "outbound",
+          from_email: `+${normalizedTo}`,
+        });
+      } catch (interactionErr: any) {
+        console.warn("[whatsapp-send] Non-blocking interaction insert failed:", interactionErr.message);
+        // Log to automation_logs but don't fail the send
+        await supabase.from("automation_logs").insert({
+          workspace_id: convo.workspace_id,
+          lead_id: lead.id,
+          decision: "non_blocking_error",
+          reason: `Interaction insert failed: ${interactionErr.message}`,
+        }).then(() => {}).catch(() => {});
+      }
     }
   }
 
