@@ -1,4 +1,5 @@
 import { formatDistanceToNow } from "date-fns";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ const STAGE_VARIANT: Record<DealStage, string> = {
 // ── Component ──────────────────────────────────────────────────────────
 
 export function LeadCard({ lead, primaryAction, secondaryActions, context = "list" }: LeadCardProps) {
+  const navigate = useNavigate();
   const stageLabel = STAGE_LABELS[lead.stage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
   const routed = routeLeadAction(lead);
@@ -50,12 +52,20 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
 
   const isCompact = context === "dashboard" || context === "inbox";
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    // Don't navigate if clicking on a button or dropdown
+    const target = e.target as HTMLElement;
+    if (target.closest("button") || target.closest("[role='menuitem']")) return;
+    navigate(`/app/lead/${lead.id}`);
+  };
+
   return (
     <Card
       className={cn(
-        "group relative border border-border bg-card transition-shadow hover:shadow-md",
+        "group relative border border-border bg-card transition-shadow hover:shadow-md cursor-pointer",
         isCompact ? "px-3 py-2.5" : "px-4 py-3"
       )}
+      onClick={handleCardClick}
     >
       {/* Row 1: Name + company + stage pill */}
       <div className="flex items-start justify-between gap-2">
@@ -69,12 +79,11 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <Badge
-            variant="secondary"
-            className={cn("text-[10px] px-1.5 py-0 h-4 font-medium border-0", STAGE_VARIANT[lead.stage])}
+          <span
+            className={cn("text-[10px] px-1.5 py-0 h-4 font-medium border-0 inline-flex items-center rounded-full", STAGE_VARIANT[lead.stage])}
           >
             {stageLabel}
-          </Badge>
+          </span>
 
           {secondaryActions && secondaryActions.length > 0 && (
             <DropdownMenu>
@@ -109,9 +118,9 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
       <div className="flex items-center justify-between gap-2 mt-2">
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
           {lastActivity && <span className="truncate">{lastActivity}</span>}
-          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+          <span className="text-[10px] px-1.5 py-0 h-4 shrink-0 inline-flex items-center rounded-full border border-border">
             {motionLabel}
-          </Badge>
+          </span>
         </div>
 
         {primaryAction && (
@@ -119,7 +128,10 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
             size="sm"
             variant="secondary"
             className="h-6 text-[11px] px-2.5 shrink-0"
-            onClick={primaryAction.onClick}
+            onClick={(e) => {
+              e.stopPropagation();
+              primaryAction.onClick();
+            }}
           >
             {primaryAction.label || primaryButtonLabel(routed.priority)}
           </Button>
