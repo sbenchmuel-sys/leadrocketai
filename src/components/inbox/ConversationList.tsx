@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { MessageSquare, Mail } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { fetchConversations, type ConversationListItem } from "@/lib/inboxQueries";
+import { providerToCanonical, canonicalIcon, canonicalLabel, channelColors } from "@/lib/channels";
 
 type Props = {
   filter: "active" | "new" | "archived";
@@ -63,18 +63,20 @@ export function ConversationList({ filter, selectedId, onSelect }: Props) {
         >
           <div className="flex items-start gap-3">
             {/* Channel icon */}
-            <div className={cn(
-              "mt-0.5 rounded-full p-1.5 shrink-0",
-              convo.channel === "whatsapp"
-                ? "bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]"
-                : "bg-[hsl(var(--info)/0.1)] text-[hsl(var(--info))]"
-            )}>
-              {convo.channel === "whatsapp" ? (
-                <MessageSquare className="h-3.5 w-3.5" />
-              ) : (
-                <Mail className="h-3.5 w-3.5" />
-              )}
-            </div>
+            {(() => {
+              const canonical = providerToCanonical(convo.channel);
+              const Icon = canonicalIcon(canonical);
+              const colors = channelColors(canonical);
+              return (
+                <div
+                  className="mt-0.5 rounded-full p-1.5 shrink-0"
+                  style={{ backgroundColor: colors.bg, color: colors.fg }}
+                  title={canonicalLabel(canonical)}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                </div>
+              );
+            })()}
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
