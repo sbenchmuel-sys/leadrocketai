@@ -96,6 +96,17 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
         <Badge variant="outline" className="ml-auto text-xs capitalize">
           {conversation.contact_status}
         </Badge>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0"
+          onClick={() => loadMessages(false)}
+          disabled={isRefreshing}
+          title="Refresh messages"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
+        </Button>
       </div>
 
       {/* Message list */}
