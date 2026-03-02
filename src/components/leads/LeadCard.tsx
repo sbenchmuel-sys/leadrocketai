@@ -41,7 +41,8 @@ const STAGE_VARIANT: Record<DealStage, string> = {
 export function LeadCard({ lead, primaryAction, secondaryActions, context = "list" }: LeadCardProps) {
   const stageLabel = STAGE_LABELS[lead.stage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
-  const actionLine = lead.next_action_label || lead.next_step || "Review";
+  const routed = routeLeadAction(lead);
+  const actionLine = lead.next_action_label || routed.label;
 
   const lastActivity = lead.last_activity_at
     ? formatDistanceToNow(new Date(lead.last_activity_at), { addSuffix: true })
