@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Send, Paperclip, MessageSquare, Mail, X, Pencil, Check, Loader2 } from "lucide-react";
+import { useState, useRef, useMemo, useEffect } from "react";
+import { Send, Paperclip, X, Pencil, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -14,15 +14,82 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import type { ConversationListItem, ReplySuggestion } from "@/lib/inboxQueries";
+import {
+  providerToCanonical,
+  canonicalLabel,
+  canonicalIcon,
+  getAvailableChannelsForLead,
+  type CanonicalChannel,
+  type AvailableChannel,
+} from "@/lib/channels";
+import { refreshDashboard } from "@/lib/dashboardMetricsService";
 
 type Props = {
   conversation: ConversationListItem;
   recommendedChannel: "whatsapp" | "email";
   suggestions: ReplySuggestion[];
+  leadId?: string | null;
+  onSent?: () => void;
 };
 
-export function ReplyComposer({ conversation, recommendedChannel, suggestions }: Props) {
-  const [channel, setChannel] = useState<"whatsapp" | "email">(recommendedChannel);
+export function ReplyComposer({ conversation, recommendedChannel, suggestions, leadId, onSent }: Props) {
+  // Derive available channels
+  const [leadFields, setLeadFields] = useState<{
+    email?: string | null;
+    phone?: string | null;
+    whatsapp_number?: string | null;
+    wa_opted_in?: boolean;
+    country?: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!leadId) {
+      setLeadFields(null);
+      return;
+    }
+    supabase
+      .from("leads")
+      .select("email, phone, whatsapp_number, wa_opted_in, country")
+      .eq("id", leadId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) setLeadFields(data);
+      });
+  }, [leadId]);
+
+  const availableChannels = useMemo<AvailableChannel[]>(() => {
+    const convoCanonical = providerToCanonical(conversation.channel);
+
+    if (!leadFields) {
+      // No lead linked: offer current conversation channel + email as safe fallback
+      const channels: AvailableChannel[] = [{ channel: convoCanonical }];
+      if (convoCanonical !== "email") {
+        channels.push({ channel: "email" });
+      }
+      return channels;
+    }
+
+    // Use deterministic availability guard
+    const available = getAvailableChannelsForLead({
+      lead: leadFields,
+      workspace: {
+        whatsapp_enabled: true, // safe default; workspace settings can be fetched later
+        voice_enabled: true,
+      },
+      lastInboundCanonical: convoCanonical,
+    });
+
+    // Filter to sendable channels only (no voice/meeting in composer)
+    return available.filter((a) => a.channel === "email" || a.channel === "whatsapp" || a.channel === "sms");
+  }, [leadFields, conversation.channel]);
+
+  const defaultChannel = useMemo<CanonicalChannel>(() => {
+    const rec = recommendedChannel as CanonicalChannel;
+    if (availableChannels.some((a) => a.channel === rec)) return rec;
+    return availableChannels[0]?.channel ?? "email";
+  }, [recommendedChannel, availableChannels]);
+
+  const [channel, setChannel] = useState<CanonicalChannel>(defaultChannel);
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -30,6 +97,11 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
   const [editedSuggestions, setEditedSuggestions] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
+
+  // Sync default channel when recommendation changes but preserve draft body
+  useEffect(() => {
+    setChannel(defaultChannel);
+  }, [defaultChannel]);
 
   const handleSuggestionClick = (text: string) => {
     setBody(text);
@@ -43,7 +115,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
     const files = Array.from(e.target.files ?? []);
     const valid = files.filter((f) => {
       const isValid = f.type.startsWith("image/") || f.type === "application/pdf";
-      const sizeOk = f.size <= 10 * 1024 * 1024; // 10MB
+      const sizeOk = f.size <= 10 * 1024 * 1024;
       return isValid && sizeOk;
     });
     setAttachments((prev) => [...prev, ...valid]);
@@ -60,7 +132,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
 
     try {
       if (channel === "whatsapp") {
-        // Look up the contact's phone identity
         const { data: identity, error: idErr } = await supabase
           .from("contact_identities")
           .select("value")
@@ -85,9 +156,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         if (data?.error) throw new Error(data.error);
 
         toast({ title: "Message sent", description: "WhatsApp message delivered." });
-        try { setBody(""); setAttachments([]); } catch (_) { /* non-blocking cleanup */ }
-      } else {
-        // Resolve the contact's email identity first
+      } else if (channel === "email") {
         const { data: emailIdentity, error: emailIdErr } = await supabase
           .from("contact_identities")
           .select("value")
@@ -100,20 +169,22 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
           throw new Error("No email address found for this contact.");
         }
 
-        // Get the conversation's thread info for proper threading
         const { data: convData } = await supabase
           .from("conversations")
           .select("provider_thread_id")
           .eq("id", conversation.id)
           .single();
 
+        const sendBody: Record<string, any> = {
+          to: emailIdentity.value,
+          subject: `Re: ${conversation.contact_name}`,
+          body: body.trim(),
+          threadId: convData?.provider_thread_id || undefined,
+        };
+        if (leadId) sendBody.leadId = leadId;
+
         const { data: sendResult, error: sendErr } = await supabase.functions.invoke("gmail-send", {
-          body: {
-            to: emailIdentity.value,
-            subject: `Re: ${conversation.contact_name}`,
-            body: body.trim(),
-            threadId: convData?.provider_thread_id || undefined,
-          },
+          body: sendBody,
         });
 
         if (sendErr) throw sendErr;
@@ -123,8 +194,19 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
         }
 
         toast({ title: "Email sent", description: "Email delivered successfully." });
-        try { setBody(""); setAttachments([]); } catch (_) { /* non-blocking cleanup */ }
+      } else {
+        // SMS placeholder
+        toast({ title: "Not yet supported", description: `${canonicalLabel(channel)} sending is coming soon.` });
+        return;
       }
+
+      // Clear after successful send
+      setBody("");
+      setAttachments([]);
+
+      // Best-effort post-send hooks
+      try { onSent?.(); } catch (_) { /* non-blocking */ }
+      try { refreshDashboard("email_sent"); } catch (_) { /* non-blocking */ }
     } catch (err: any) {
       console.error("[ReplyComposer] Send error:", err);
       toast({
@@ -170,7 +252,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
                         e.stopPropagation();
                         setEditingIndex(isEditing ? null : i);
                         if (!isEditing) {
-                          // Initialize edit text if not already edited
                           setEditedSuggestions((prev) => ({
                             ...prev,
                             [i]: prev[i] ?? s.text,
@@ -242,25 +323,25 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
       {/* Composer row */}
       <div className="flex items-end gap-2">
         {/* Channel selector */}
-        <Select value={channel} onValueChange={(v) => setChannel(v as "whatsapp" | "email")}>
-          <SelectTrigger className="w-[110px] h-9 text-xs shrink-0">
+        <Select value={channel} onValueChange={(v) => setChannel(v as CanonicalChannel)}>
+          <SelectTrigger className="w-[120px] h-9 text-xs shrink-0">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="whatsapp">
-              <span className="flex items-center gap-1.5">
-                <MessageSquare className="h-3 w-3" /> WhatsApp
-              </span>
-            </SelectItem>
-            <SelectItem value="email">
-              <span className="flex items-center gap-1.5">
-                <Mail className="h-3 w-3" /> Email
-              </span>
-            </SelectItem>
+            {availableChannels.map((ac) => {
+              const Icon = canonicalIcon(ac.channel);
+              return (
+                <SelectItem key={ac.channel} value={ac.channel}>
+                  <span className="flex items-center gap-1.5">
+                    <Icon className="h-3 w-3" /> {canonicalLabel(ac.channel)}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
 
-        {/* Text input */}
+        {/* Text input — draft preserved across channel switches */}
         <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -300,9 +381,9 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions }:
       </div>
 
       {/* Channel recommendation hint */}
-      {channel !== recommendedChannel && (
+      {channel !== (recommendedChannel as CanonicalChannel) && (
         <p className="text-[10px] text-muted-foreground">
-          💡 AI recommends <span className="font-medium capitalize">{recommendedChannel}</span> for this contact
+          💡 AI recommends <span className="font-medium capitalize">{canonicalLabel(recommendedChannel as CanonicalChannel)}</span> for this contact
         </p>
       )}
     </div>
