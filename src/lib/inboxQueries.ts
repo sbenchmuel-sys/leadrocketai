@@ -13,6 +13,7 @@ export type ConversationListItem = {
   latest_summary: string | null;
   latest_sentiment: string | null;
   unread: boolean; // inbound after last outbound
+  lead_id: string | null;
 };
 
 export type DecryptedMessage = {
@@ -74,6 +75,7 @@ export async function fetchConversations(
     latest_summary: row.latest_summary,
     latest_sentiment: row.latest_sentiment,
     unread: false, // TODO: compute from last seen
+    lead_id: (row as any).lead_id ?? null,
   }));
 }
 
