@@ -36,6 +36,14 @@ function setCachedDraft(key: string, result: DraftPipelineResult): void {
   DRAFT_CACHE.set(key, { result, expires: Date.now() + CACHE_TTL });
 }
 
+export function clearDraftCache(leadId: string): void {
+  for (const key of DRAFT_CACHE.keys()) {
+    if (key.startsWith(`${leadId}::`)) {
+      DRAFT_CACHE.delete(key);
+    }
+  }
+}
+
 export interface GenerateDraftInput {
   lead_id: string;
   channel?: "email" | "linkedin" | "whatsapp";
