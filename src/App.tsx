@@ -26,6 +26,10 @@ import NotFound from "./pages/NotFound";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import ResetPassword from "./pages/ResetPassword";
+import { flags } from "@/lib/featureFlags";
+import { lazy, Suspense } from "react";
+
+const DevSmokeTests = lazy(() => import("./pages/DevSmokeTests"));
 
 const queryClient = new QueryClient();
 
@@ -67,6 +71,9 @@ const App = () => (
                 <Route path="settings" element={<Settings />} />
                 <Route path="analytics" element={<ManagerAnalytics />} />
                 <Route path="calls/:callSessionId" element={<CallDetail />} />
+                {flags.dev_smoke && (
+                  <Route path="dev-smoke" element={<Suspense fallback={null}><DevSmokeTests /></Suspense>} />
+                )}
               </Route>
               <Route path="/privacy" element={<Privacy />} />
               <Route path="/terms" element={<Terms />} />
