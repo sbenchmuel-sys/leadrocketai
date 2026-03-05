@@ -117,6 +117,42 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
     }
   };
 
+  const handleSendNow = async (target: "next" | "following") => {
+    setIsSending(true);
+    try {
+      // Trigger the automation executor for this lead by setting it eligible now
+      await supabase
+        .from("leads")
+        .update({
+          needs_action: true,
+          eligible_at: new Date().toISOString(),
+          next_action_key: `send_nurture_${nurtureSent + (target === "following" ? 2 : 1)}`,
+          next_action_label: `Nurture email #${nurtureSent + (target === "following" ? 2 : 1)}`,
+          action_reason_code: "NURTURE_DUE",
+          nurture_mode: "automatic", // temporarily set to automatic so executor processes it
+        })
+        .eq("id", lead.id);
+
+      // Invoke the automation executor directly
+      const { error } = await supabase.functions.invoke("automation-executor", {});
+      if (error) throw error;
+
+      toast.success("Nurture email sent");
+      onUpdate();
+    } catch (err) {
+      console.error("[NurturePreviewCard] Send now error:", err);
+      toast.error("Failed to send nurture email");
+      // Revert nurture_mode if it was review before
+      if (mode === "review") {
+        await supabase
+          .from("leads")
+          .update({ nurture_mode: "review" })
+          .eq("id", lead.id);
+      }
+    } finally {
+      setIsSending(false);
+    }
+
   const handleApprove = async () => {
     if (!previewContent.trim()) return;
     setIsApproving(true);
