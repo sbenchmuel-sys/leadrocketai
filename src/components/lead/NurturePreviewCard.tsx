@@ -137,12 +137,20 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       const { error } = await supabase.functions.invoke("automation-executor", {});
       if (error) throw error;
 
+      // Revert nurture_mode back to review if it was review before
+      if (mode === "review") {
+        await supabase
+          .from("leads")
+          .update({ nurture_mode: "review" })
+          .eq("id", lead.id);
+      }
+
       toast.success("Nurture email sent");
       onUpdate();
     } catch (err) {
       console.error("[NurturePreviewCard] Send now error:", err);
       toast.error("Failed to send nurture email");
-      // Revert nurture_mode if it was review before
+      // Revert nurture_mode on failure too
       if (mode === "review") {
         await supabase
           .from("leads")
