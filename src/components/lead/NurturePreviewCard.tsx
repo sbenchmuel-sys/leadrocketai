@@ -322,27 +322,87 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
         <Separator className="bg-border/40" />
 
         {/* Next Email */}
-        <div className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next</span>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next</span>
+            {isPast(nextDate) && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+                Past Due
+              </span>
+            )}
+          </div>
           <p className="text-sm font-semibold text-foreground">{nextLabel}</p>
           <p className="text-xs text-muted-foreground">
             {format(nextDate, "MMM d")} · {format(nextDate, "h:mm a")}
           </p>
+          {isPast(nextDate) && (
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleSendNow("next")}
+                disabled={isSending}
+                className="flex-1 text-xs h-7"
+              >
+                {isSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Send Now
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGenerateDraft("next")}
+                className="flex-1 text-xs h-7"
+              >
+                <Eye className="h-3 w-3 mr-1" />
+                Review
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Following */}
-        <div className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Following</span>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Following</span>
+            {isPast(followingDate) && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+                Past Due
+              </span>
+            )}
+          </div>
           <p className="text-sm font-semibold text-foreground">{followingLabel}</p>
           <p className="text-xs text-muted-foreground">
             {format(followingDate, "MMM d")} · {format(followingDate, "h:mm a")}
           </p>
+          {isPast(followingDate) && (
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleSendNow("following")}
+                disabled={isSending}
+                className="flex-1 text-xs h-7"
+              >
+                {isSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Send Now
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGenerateDraft("following")}
+                className="flex-1 text-xs h-7"
+              >
+                <Eye className="h-3 w-3 mr-1" />
+                Review
+              </Button>
+            </div>
+          )}
         </div>
 
         <Separator className="bg-border/40" />
 
-        {/* Actions — only show preview/generate for review mode */}
-        {mode === "review" && (
+        {/* Actions — only show preview/generate for review mode when NOT past due */}
+        {mode === "review" && !isPast(nextDate) && (
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -364,7 +424,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
             </Button>
           </div>
         )}
-        {mode === "automatic" && (
+        {mode === "automatic" && !isPast(nextDate) && (
           <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
             <Zap className="h-3 w-3 inline mr-1" />
             Emails send automatically at cadence. No approval needed.
