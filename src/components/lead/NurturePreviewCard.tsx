@@ -72,13 +72,13 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const theme = ((lead as any).nurture_theme as string) || "balanced";
   const nurtureSent = (lead as any).nurture_outbound_count || 0;
 
-  // Don't render if not in nurture
-  if (lead.motion !== "nurture" || status === "inactive") return null;
-
   const { nextDate, followingDate, nextLabel, followingLabel } = useMemo(
     () => getScheduledDates(lead),
     [lead]
   );
+
+  // Don't render if not in nurture
+  if (lead.motion !== "nurture" || status === "inactive") return null;
 
   // Re-engagement safety
   const isReEngaged = !!lead.last_inbound_at || lead.has_future_meeting;
