@@ -187,11 +187,29 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
   const handleEnableAutomation = async () => {
     try {
+      // Calculate next eligible_at based on cadence
+      const cadence = lead.nurture_cadence || "biweekly";
+      const days = CADENCE_DAYS[cadence] || 14;
+      const base = lead.mode_changed_at ? new Date(lead.mode_changed_at) : new Date();
+      const nextEligible = addDays(base, days * (nurtureSent + 1));
+      nextEligible.setHours(9, 30, 0, 0);
+      // If next eligible is in the past, schedule for tomorrow
+      const now = new Date();
+      const eligibleAt = nextEligible > now ? nextEligible : addDays(now, 1);
+      if (nextEligible <= now) eligibleAt.setHours(9, 30, 0, 0);
+
       await supabase
         .from("leads")
-        .update({ nurture_mode: "automatic" })
+        .update({
+          nurture_mode: "automatic",
+          needs_action: true,
+          eligible_at: eligibleAt.toISOString(),
+          next_action_key: `send_nurture_${nurtureSent + 1}`,
+          next_action_label: `Nurture email #${nurtureSent + 1}`,
+          action_reason_code: "NURTURE_DUE",
+        })
         .eq("id", lead.id);
-      toast.success("Nurture automation enabled");
+      toast.success("Nurture automation enabled — emails will send automatically");
       setShowUpgradeDialog(false);
       onUpdate();
     } catch {
@@ -285,27 +303,35 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
         <Separator className="bg-border/40" />
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleGenerateDraft("next")}
-            className="flex-1 text-xs h-7"
-          >
-            <Eye className="h-3 w-3 mr-1" />
-            Preview Next
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleGenerateDraft("following")}
-            className="flex-1 text-xs h-7"
-          >
-            <Wand2 className="h-3 w-3 mr-1" />
-            Generate Following
-          </Button>
-        </div>
+        {/* Actions — only show preview/generate for review mode */}
+        {mode === "review" && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleGenerateDraft("next")}
+              className="flex-1 text-xs h-7"
+            >
+              <Eye className="h-3 w-3 mr-1" />
+              Preview Next
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleGenerateDraft("following")}
+              className="flex-1 text-xs h-7"
+            >
+              <Wand2 className="h-3 w-3 mr-1" />
+              Generate Following
+            </Button>
+          </div>
+        )}
+        {mode === "automatic" && (
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+            <Zap className="h-3 w-3 inline mr-1" />
+            Emails send automatically at cadence. No approval needed.
+          </p>
+        )}
         <Button
           variant="ghost"
           size="sm"
