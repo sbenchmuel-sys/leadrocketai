@@ -6,10 +6,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2,
+  Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2, Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { format, addDays } from "date-fns";
+import { format, addDays, isPast } from "date-fns";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { saveDraft } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
@@ -65,19 +65,20 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   const mode = ((lead as any).nurture_mode as NurtureMode) || "review";
   const status = ((lead as any).nurture_status as NurtureStatus) || "inactive";
   const theme = ((lead as any).nurture_theme as string) || "balanced";
   const nurtureSent = (lead as any).nurture_outbound_count || 0;
 
-  // Don't render if not in nurture
-  if (lead.motion !== "nurture" || status === "inactive") return null;
-
   const { nextDate, followingDate, nextLabel, followingLabel } = useMemo(
     () => getScheduledDates(lead),
     [lead]
   );
+
+  // Don't render if not in nurture
+  if (lead.motion !== "nurture" || status === "inactive") return null;
 
   // Re-engagement safety
   const isReEngaged = !!lead.last_inbound_at || lead.has_future_meeting;
@@ -113,6 +114,51 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       toast.error("Failed to generate nurture draft");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleSendNow = async (target: "next" | "following") => {
+    setIsSending(true);
+    try {
+      // Trigger the automation executor for this lead by setting it eligible now
+      await supabase
+        .from("leads")
+        .update({
+          needs_action: true,
+          eligible_at: new Date().toISOString(),
+          next_action_key: `send_nurture_${nurtureSent + (target === "following" ? 2 : 1)}`,
+          next_action_label: `Nurture email #${nurtureSent + (target === "following" ? 2 : 1)}`,
+          action_reason_code: "NURTURE_DUE",
+          nurture_mode: "automatic", // temporarily set to automatic so executor processes it
+        })
+        .eq("id", lead.id);
+
+      // Invoke the automation executor directly
+      const { error } = await supabase.functions.invoke("automation-executor", {});
+      if (error) throw error;
+
+      // Revert nurture_mode back to review if it was review before
+      if (mode === "review") {
+        await supabase
+          .from("leads")
+          .update({ nurture_mode: "review" })
+          .eq("id", lead.id);
+      }
+
+      toast.success("Nurture email sent");
+      onUpdate();
+    } catch (err) {
+      console.error("[NurturePreviewCard] Send now error:", err);
+      toast.error("Failed to send nurture email");
+      // Revert nurture_mode on failure too
+      if (mode === "review") {
+        await supabase
+          .from("leads")
+          .update({ nurture_mode: "review" })
+          .eq("id", lead.id);
+      }
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -284,27 +330,87 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
         <Separator className="bg-border/40" />
 
         {/* Next Email */}
-        <div className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next</span>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next</span>
+            {isPast(nextDate) && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+                Past Due
+              </span>
+            )}
+          </div>
           <p className="text-sm font-semibold text-foreground">{nextLabel}</p>
           <p className="text-xs text-muted-foreground">
             {format(nextDate, "MMM d")} · {format(nextDate, "h:mm a")}
           </p>
+          {isPast(nextDate) && (
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleSendNow("next")}
+                disabled={isSending}
+                className="flex-1 text-xs h-7"
+              >
+                {isSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Send Now
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGenerateDraft("next")}
+                className="flex-1 text-xs h-7"
+              >
+                <Eye className="h-3 w-3 mr-1" />
+                Review
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Following */}
-        <div className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Following</span>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Following</span>
+            {isPast(followingDate) && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+                Past Due
+              </span>
+            )}
+          </div>
           <p className="text-sm font-semibold text-foreground">{followingLabel}</p>
           <p className="text-xs text-muted-foreground">
             {format(followingDate, "MMM d")} · {format(followingDate, "h:mm a")}
           </p>
+          {isPast(followingDate) && (
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleSendNow("following")}
+                disabled={isSending}
+                className="flex-1 text-xs h-7"
+              >
+                {isSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Send Now
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGenerateDraft("following")}
+                className="flex-1 text-xs h-7"
+              >
+                <Eye className="h-3 w-3 mr-1" />
+                Review
+              </Button>
+            </div>
+          )}
         </div>
 
         <Separator className="bg-border/40" />
 
-        {/* Actions — only show preview/generate for review mode */}
-        {mode === "review" && (
+        {/* Actions — only show preview/generate for review mode when NOT past due */}
+        {mode === "review" && !isPast(nextDate) && (
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -326,7 +432,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
             </Button>
           </div>
         )}
-        {mode === "automatic" && (
+        {mode === "automatic" && !isPast(nextDate) && (
           <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
             <Zap className="h-3 w-3 inline mr-1" />
             Emails send automatically at cadence. No approval needed.
