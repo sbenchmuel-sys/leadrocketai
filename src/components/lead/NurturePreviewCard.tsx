@@ -152,6 +152,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
     } finally {
       setIsSending(false);
     }
+  };
 
   const handleApprove = async () => {
     if (!previewContent.trim()) return;
