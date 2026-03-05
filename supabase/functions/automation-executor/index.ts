@@ -151,7 +151,6 @@ serve(async (req) => {
       .in("status", ["active", "new"])
       .eq("unsubscribed", false)
       .neq("next_action_key", "ooo_return_followup") // OOO returns are handled above — no email needed
-      .neq("motion", "nurture") // SAFETY: nurture leads must never enter the prospecting email pipeline
       .limit(20);
 
     // ── MAX_SENDS_PER_RUN cap ───────────────────────────────
@@ -485,12 +484,12 @@ serve(async (req) => {
         const actionKey = lead.next_action_key;
 
         // Determine AI task type — motion-aware resolution
-        // SAFETY: nurture leads are blocked by the query filter above, but double-check here
-        // to ensure we never send a prospecting email to a nurture lead via any code path.
-        if (lead.motion === "nurture") {
-          console.warn(`[automation-executor] BLOCKED: nurture lead ${lead.id} reached email send path — skipping`);
+        // SAFETY: nurture leads in "review" mode require manual approval — block auto-send.
+        // Only nurture leads with nurture_mode="automatic" are allowed through.
+        if (lead.motion === "nurture" && lead.nurture_mode !== "automatic") {
+          console.log(`[automation-executor] Nurture lead ${lead.id} in review mode — skipping (requires manual approval)`);
           logEntry.status = "skipped";
-          logEntry.error_message = "Nurture lead blocked from prospecting email pipeline";
+          logEntry.error_message = "Nurture lead in review mode — manual approval required";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
