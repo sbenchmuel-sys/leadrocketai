@@ -6,7 +6,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2,
+  Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2, Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays } from "date-fns";
