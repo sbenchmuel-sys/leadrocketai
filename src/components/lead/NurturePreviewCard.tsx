@@ -9,7 +9,7 @@ import {
   Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2, Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { format, addDays } from "date-fns";
+import { format, addDays, isPast } from "date-fns";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { saveDraft } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
