@@ -317,22 +317,22 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           Pause
         </Button>
 
-        {/* Upgrade prompt (inline) */}
-        {showUpgradePrompt && mode === "review" && (
+        {/* Switch to Auto mode */}
+        {mode === "review" && (
           <>
             <Separator className="bg-border/40" />
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">
-                You've reviewed your first nurture email. Enable automatic sending?
+                Emails require manual approval in Review mode. Switch to Auto to send on schedule.
               </p>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowUpgradeDialog(true)}
-                className="w-full text-xs h-7"
+                className="w-full text-xs h-7 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
               >
                 <Zap className="h-3 w-3 mr-1" />
-                Enable Automation
+                Switch to Auto
               </Button>
             </div>
           </>
