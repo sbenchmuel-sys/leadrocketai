@@ -355,8 +355,10 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   // Step 4: Complexity scoring + model selection
   const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
 
-  // Step 5: Build raw payload
-  const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
+  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+  const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
+  const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
+  const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
   // Derive subject immediately (no AI needed)
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
