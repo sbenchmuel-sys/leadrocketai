@@ -318,6 +318,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                     <p className="font-medium text-foreground text-xs">{lead.name}</p>
                     <p className="text-muted-foreground text-[11px]">
                       {lead.company} • {lead.email}
+                      {lead.city || lead.state ? ` • ${[lead.city, lead.state].filter(Boolean).join(", ")}` : ""}
                     </p>
                   </div>
                 ))}
