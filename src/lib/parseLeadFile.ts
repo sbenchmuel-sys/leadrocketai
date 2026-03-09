@@ -10,6 +10,11 @@ export interface ParsedLead {
   industry?: string;
   country?: string;
   initial_message?: string;
+  website?: string;
+  linkedin_url?: string;
+  company_linkedin_url?: string;
+  city?: string;
+  state?: string;
 }
 
 // Canonical key aliases: maps normalized variations to a single canonical name
