@@ -144,7 +144,7 @@ serve(async (req) => {
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed")
+      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
