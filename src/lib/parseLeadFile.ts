@@ -117,6 +117,11 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     industry: (r["industry"] || "").trim() || undefined,
     country: (r["country"] || "").trim() || undefined,
     initial_message: (r["message"] || "").trim() || undefined,
+    website: (r["website"] || "").trim() || undefined,
+    linkedin_url: (r["linkedin_url"] || "").trim() || undefined,
+    company_linkedin_url: (r["company_linkedin_url"] || "").trim() || undefined,
+    city: (r["city"] || "").trim() || undefined,
+    state: (r["state"] || "").trim() || undefined,
   };
 }
 
