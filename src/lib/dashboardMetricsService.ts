@@ -76,7 +76,7 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
     .from("leads")
     .select(DASHBOARD_LEAD_COLUMNS)
     .order("last_activity_at", { ascending: false })
-    .limit(200);
+    .limit(1000);
 
   if (error) {
     console.error("[dashboardMetrics] fetch error:", error);
