@@ -380,7 +380,8 @@ serve(async (req) => {
                           needs_action: analysis.needs_action ?? false,
                           last_outbound_at: new Date().toISOString(),
                           last_activity_at: new Date().toISOString(),
-                          action_instructions: null, // Clear instructions after send
+                      // Keep action_instructions for automated campaign sequences; clear only for manual sends
+                      ...(skipStateUpdate ? {} : { action_instructions: null }),
                         })
                         .eq("id", leadId);
                       

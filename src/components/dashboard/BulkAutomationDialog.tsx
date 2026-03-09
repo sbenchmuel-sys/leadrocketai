@@ -11,12 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Zap, Loader2, AlertTriangle, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { EnrichedLead, MOTION_LABELS, Motion } from "@/lib/dashboardUtils";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { addDays } from "date-fns";
+import { CampaignSettingsPanel, composeCampaignInstructions, type CampaignSettings } from "./CampaignSettingsPanel";
 
 interface BulkAutomationDialogProps {
   selectedLeads: EnrichedLead[];
@@ -138,6 +140,11 @@ export function BulkAutomationDialog({
   onSuccess,
 }: BulkAutomationDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [campaignSettings, setCampaignSettings] = useState<CampaignSettings>({
+    includeMeetingCTA: false,
+    globalInstructions: "",
+    stepInstructions: {},
+  });
 
   const categorized = useMemo(
     () => selectedLeads.map(categorizeLead),
@@ -148,12 +155,20 @@ export function BulkAutomationDialog({
     return new Set(categorized.filter((c) => c.eligible).map((c) => c.lead.id));
   });
 
+  // Detect if any leads are nurture motion
+  const hasNurtureLeads = categorized.some((c) => c.lead.motion === "nurture");
+
   // Reset checked state when dialog opens with new leads
   const leadIds = selectedLeads.map((l) => l.id).join(",");
   const [prevLeadIds, setPrevLeadIds] = useState(leadIds);
   if (leadIds !== prevLeadIds) {
     setPrevLeadIds(leadIds);
     setChecked(new Set(categorized.filter((c) => c.eligible).map((c) => c.lead.id)));
+    setCampaignSettings({
+      includeMeetingCTA: false,
+      globalInstructions: "",
+      stepInstructions: {},
+    });
   }
 
   const eligibleChecked = categorized.filter(
@@ -172,12 +187,15 @@ export function BulkAutomationDialog({
     setIsSubmitting(true);
 
     try {
+      // Compose campaign instructions from settings
+      const actionInstructions = composeCampaignInstructions(campaignSettings);
+
       // Process each lead individually since they may have different next_action_key/eligible_at
       const updates = eligibleChecked.map((c) => {
         const fields = computeAutomationFields(c.lead);
         return supabase
           .from("leads")
-          .update(fields)
+          .update({ ...fields, action_instructions: actionInstructions })
           .eq("id", c.lead.id);
       });
 
@@ -217,7 +235,18 @@ export function BulkAutomationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[360px] -mx-2 px-2">
+        {/* Campaign Settings */}
+        <div className="border rounded-lg p-3 bg-muted/30">
+          <CampaignSettingsPanel
+            settings={campaignSettings}
+            onChange={setCampaignSettings}
+            isNurture={hasNurtureLeads}
+          />
+        </div>
+
+        <Separator />
+
+        <ScrollArea className="max-h-[300px] -mx-2 px-2">
           <div className="space-y-1">
             {categorized.map((c) => (
               <label

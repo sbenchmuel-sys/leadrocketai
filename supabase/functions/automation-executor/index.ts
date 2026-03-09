@@ -2,6 +2,47 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 
+/** Extract step-specific + global campaign instructions from action_instructions.
+ *  Format: CAMPAIGN RULES at top, then STEP N INSTRUCTIONS blocks.
+ *  Returns combined instructions relevant to the current step. */
+function buildStepInstructions(actionInstructions: string | null | undefined, nextActionKey: string | null | undefined): string | null {
+  if (!actionInstructions) return null;
+
+  const lines = actionInstructions.split("\n");
+  const globalLines: string[] = [];
+  const stepBlocks: Record<string, string[]> = {};
+  let currentBlock: string | null = null;
+
+  for (const line of lines) {
+    const stepMatch = line.match(/^STEP\s+(\d+)\s+INSTRUCTIONS\s*:/i);
+    if (stepMatch) {
+      currentBlock = stepMatch[1];
+      stepBlocks[currentBlock] = [];
+    } else if (currentBlock) {
+      stepBlocks[currentBlock].push(line);
+    } else {
+      globalLines.push(line);
+    }
+  }
+
+  // Determine which step number we're on from the action key (e.g. "send_pre_2" → "2", "nurture_3" → "3")
+  let stepNum: string | null = null;
+  if (nextActionKey) {
+    const match = nextActionKey.match(/(\d+)/);
+    if (match) stepNum = match[1];
+  }
+
+  const parts: string[] = [];
+  const globalText = globalLines.join("\n").trim();
+  if (globalText) parts.push(globalText);
+  if (stepNum && stepBlocks[stepNum]) {
+    const stepText = stepBlocks[stepNum].join("\n").trim();
+    if (stepText) parts.push(`STEP ${stepNum} SPECIFIC INSTRUCTIONS:\n${stepText}`);
+  }
+
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -144,7 +185,7 @@ serve(async (req) => {
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed")
+      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
@@ -611,7 +652,7 @@ serve(async (req) => {
                 motion: lead.motion,
                 lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
-                custom_instructions: null,
+                custom_instructions: buildStepInstructions(lead.action_instructions, lead.next_action_key),
               },
             }),
           });

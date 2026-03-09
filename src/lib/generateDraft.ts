@@ -117,6 +117,19 @@ function getAuthUserName(): string | null {
 }
 
 // ============================================
+// INSTRUCTION MERGE HELPER
+// ============================================
+
+/** Merge user-provided instructions with lead's saved action_instructions.
+ *  User instructions take priority; lead instructions are appended. */
+function mergeInstructions(userInstructions: string | null, leadInstructions: string | null): string | null {
+  if (!userInstructions && !leadInstructions) return null;
+  if (!leadInstructions) return userInstructions;
+  if (!userInstructions) return leadInstructions;
+  return `${userInstructions}\n\n--- CAMPAIGN INSTRUCTIONS ---\n${leadInstructions}`;
+}
+
+// ============================================
 // PAYLOAD BUILDER (raw data + metadata flags)
 // ============================================
 
@@ -355,8 +368,10 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   // Step 4: Complexity scoring + model selection
   const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
 
-  // Step 5: Build raw payload
-  const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
+  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+  const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
+  const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
+  const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
   // Derive subject immediately (no AI needed)
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
@@ -516,8 +531,10 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     finalIntent: override_intent ? `${finalIntent} (override)` : finalIntent,
   });
 
-  // Step 5: Build raw payload (no prompt blocks — edge function handles assembly)
-  const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
+  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+  const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
+  const mergedInstructions2 = mergeInstructions(instructions || null, leadInstructions2);
+  const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
 
   // Step 6: Call AI edge function
   let draftText: string | null = null;

@@ -1,78 +1,70 @@
 
 
-## Problem Statement
+## Analysis: Hallucinated Follow-up Email for Siddhesh Malvankar
 
-Two bugs need fixing:
+### Root Cause
 
-1. **`action_instructions` not wired anywhere** — The `leads.action_instructions` column exists but is never read by:
-   - The **automation-executor** (hardcodes `custom_instructions: null` at line 614)
-   - The **client-side generateDraft** pipeline (never reads `action_instructions` from the lead; only uses the `instructions` param passed from the UI composer)
+The AI generated a response based on **Siddhesh's January 30 email** (requesting reschedule to 11:30 AM IST on Feb 3rd, with additional team members joining) rather than responding to **your most recent outbound on February 23**.
 
-2. **No bulk campaign instructions UI** — When enabling automation on multiple leads via `BulkAutomationDialog`, there is no way to set shared instructions (meeting CTA, promotional content for specific steps). This applies to all motions (outbound, inbound, nurture).
+The hallucination traces to a **staleness guard** in `generateDraft.ts` (lines 182-189) combined with the **task selection logic**:
 
----
+#### Problem 1: Wrong task selected — `post_meeting_followup_email` instead of `pre_email_X_followup`
 
-## Plan
+The lead's motion is `post_meeting` and the playbook resolver likely selected `post_meeting_followup_email`. This task's prompt says:
 
-### 1. Wire `action_instructions` into automation-executor
+> "Generate a personalized follow-up email based on the meeting and FULL email thread context"
 
-**File:** `supabase/functions/automation-executor/index.ts`
+Since the last **inbound** email (Jan 30) contains the reschedule request and questions about accuracy/FDA/GDPR, the AI treated it as the context to respond to — producing a reply to that old January email instead of writing a follow-up to your February 23 outbound.
 
-- Add `action_instructions` to the SELECT query on line 147
-- Replace `custom_instructions: null` on line 614 with `custom_instructions: lead.action_instructions || null`
-- Ensure the post-send state update does NOT clear `action_instructions` (verify lines ~815-858)
+#### Problem 2: Stale inbound treated as current context
 
-### 2. Wire `action_instructions` into client-side draft generation
+The staleness guard in `generateDraft.ts` works correctly for `reply_to_thread` (it checks if inbound is newer than outbound), but for `post_meeting_followup_email`, the prompt template uses `{{PREVIOUS_EMAILS}}` and `{{LAST_OUTBOUND}}` — and the **thread_summary** includes ALL emails chronologically, with the January 30 inbound prominently featured.
 
-**File:** `src/lib/generateDraft.ts`
+The AI sees:
+- **Last inbound**: Jan 30 — "reschedule to 11:30 AM IST, additional members joining"
+- **Last outbound**: Feb 23 — "checking in on POC use case"
+- **Motion**: `post_meeting`
 
-- In the main `generateDraft` / `streamDraft` functions, after resolving context, read `action_instructions` from the lead record
-- Merge it with any user-provided `instructions` param (user instructions take priority, lead instructions are appended)
-- This ensures single-email previews and manual draft generation also respect saved instructions
+The `post_meeting_followup_email` prompt tells it to check if materials were already shared. Since the Feb 23 email mentions "review the materials we shared," the AI conflates the Jan 30 reschedule request with a live conversation, producing a reply that references rescheduling to 11:30 AM and "additional team members."
 
-### 3. Add Campaign Settings UI to BulkAutomationDialog
+#### Problem 3: Date mismatch — "February 3rd" in generated email
 
-**File:** `src/components/dashboard/BulkAutomationDialog.tsx`
+The AI pulled the date "February 3rd" directly from Siddhesh's January 30 email ("I have scheduled the meeting for 3rd February 2026"). Since no date awareness is injected into the prompt, the AI doesn't know it's now March 2, making "February 3rd" look current.
 
-Add a collapsible "Campaign Settings" section before the lead list with:
+### Fix Plan
 
-- **Meeting CTA toggle** (checkbox) — "Include meeting booking link in all emails"
-- **Campaign instructions** (textarea) — Global instructions for all steps (e.g., "Focus on healthcare compliance")
-- **Step-specific instructions** — Accordion with textareas for each step:
-  - Step 1 (Intro Email)
-  - Step 2 (Follow-up 1) 
-  - Step 3 (Follow-up 2)
-  - Step 4 (Breakup / final)
+#### 1. Inject current date into AI task system prompt
 
-On confirm, compose a single `action_instructions` string from these fields and save it to each lead's `action_instructions` column. Format:
+Add `Current date: ${new Date().toISOString().split('T')[0]}` to the system prompt in `ai_task/index.ts`. This gives the LLM temporal awareness to avoid referencing past dates as if they're upcoming.
 
+#### 2. Add staleness guard to `post_meeting_followup_email` payload
+
+In `generateDraft.ts`, when building the payload for `post_meeting_followup_email`, apply the same staleness check used for `reply_to_thread`: if the last inbound is older than the last outbound, mark it as stale context so the AI doesn't try to "respond" to it.
+
+```typescript
+// In buildAIPayload, for post_meeting_followup_email:
+if (taskType === "post_meeting_followup_email") {
+  // ... existing code ...
+  // Add staleness marker
+  const inboundTime = ctx.last_inbound_email?.occurred_at;
+  const outboundTime = ctx.last_outbound_email?.occurred_at;
+  if (inboundTime && outboundTime && new Date(outboundTime) > new Date(inboundTime)) {
+    payload.stale_inbound = true;
+  }
+}
 ```
-CAMPAIGN RULES:
-- Always include a meeting booking CTA with calendar link
-STEP 2 INSTRUCTIONS:
-- Include promotional starter kit offer
-STEP 3 INSTRUCTIONS:
-- Remind about starter kit promotion expiry
-```
 
-### 4. Ensure instructions persist across sequence steps
+#### 3. Update `post_meeting_followup_email` prompt to respect staleness
 
-**Files:** 
-- `supabase/functions/automation-executor/index.ts` — Verify post-send update does not null out `action_instructions`
-- `supabase/functions/gmail-send/index.ts` and `outlook-send/index.ts` — Check if they clear `action_instructions` after send; if so, skip clearing when the send originates from the automation executor (add an `automated: true` flag in the send payload)
+Add a rule to the prompt: "If the most recent interaction is an OUTBOUND email (not inbound), do NOT write a reply to the last inbound. Instead, write a follow-up to YOUR last outbound."
 
-### 5. Support step-specific instruction extraction in executor
+#### 4. Add date context to thread summary
 
-**File:** `supabase/functions/automation-executor/index.ts`
+Modify the thread summary builder to include relative timestamps (e.g., "31 days ago" vs "7 days ago") so the AI can distinguish recent from stale context.
 
-When building the AI payload, parse `action_instructions` for step-specific blocks. If the current `next_action_key` matches a step number, extract and prioritize that step's instructions alongside the global campaign rules.
+### Files to Change
 
----
-
-## Technical Notes
-
-- No database migrations needed — `action_instructions` column already exists on `leads`
-- The `ai_task` edge function already supports `{{CUSTOM_INSTRUCTIONS}}` in prompt templates — once the executor passes the value, it flows through automatically
-- The `BulkAutomationDialog` already handles per-lead updates in `handleConfirm` — we add `action_instructions` to the update payload
-- Nurture leads use the same `action_instructions` column, so this works for all motions
+- `supabase/functions/ai_task/index.ts` — Add current date to system prompt; update `post_meeting_followup_email` prompt with staleness rules
+- `src/lib/generateDraft.ts` — Add staleness marker for `post_meeting_followup_email` payload; add relative dates to thread summary
+- `src/lib/contextResolver.ts` — Optionally annotate thread emails with age indicators
 
