@@ -140,6 +140,11 @@ export function BulkAutomationDialog({
   onSuccess,
 }: BulkAutomationDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [campaignSettings, setCampaignSettings] = useState<CampaignSettings>({
+    includeMeetingCTA: false,
+    globalInstructions: "",
+    stepInstructions: {},
+  });
 
   const categorized = useMemo(
     () => selectedLeads.map(categorizeLead),
@@ -150,12 +155,20 @@ export function BulkAutomationDialog({
     return new Set(categorized.filter((c) => c.eligible).map((c) => c.lead.id));
   });
 
+  // Detect if any leads are nurture motion
+  const hasNurtureLeads = categorized.some((c) => c.lead.motion === "nurture");
+
   // Reset checked state when dialog opens with new leads
   const leadIds = selectedLeads.map((l) => l.id).join(",");
   const [prevLeadIds, setPrevLeadIds] = useState(leadIds);
   if (leadIds !== prevLeadIds) {
     setPrevLeadIds(leadIds);
     setChecked(new Set(categorized.filter((c) => c.eligible).map((c) => c.lead.id)));
+    setCampaignSettings({
+      includeMeetingCTA: false,
+      globalInstructions: "",
+      stepInstructions: {},
+    });
   }
 
   const eligibleChecked = categorized.filter(
