@@ -117,6 +117,19 @@ function getAuthUserName(): string | null {
 }
 
 // ============================================
+// INSTRUCTION MERGE HELPER
+// ============================================
+
+/** Merge user-provided instructions with lead's saved action_instructions.
+ *  User instructions take priority; lead instructions are appended. */
+function mergeInstructions(userInstructions: string | null, leadInstructions: string | null): string | null {
+  if (!userInstructions && !leadInstructions) return null;
+  if (!leadInstructions) return userInstructions;
+  if (!userInstructions) return leadInstructions;
+  return `${userInstructions}\n\n--- CAMPAIGN INSTRUCTIONS ---\n${leadInstructions}`;
+}
+
+// ============================================
 // PAYLOAD BUILDER (raw data + metadata flags)
 // ============================================
 
