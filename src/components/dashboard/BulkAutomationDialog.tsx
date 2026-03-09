@@ -187,12 +187,15 @@ export function BulkAutomationDialog({
     setIsSubmitting(true);
 
     try {
+      // Compose campaign instructions from settings
+      const actionInstructions = composeCampaignInstructions(campaignSettings);
+
       // Process each lead individually since they may have different next_action_key/eligible_at
       const updates = eligibleChecked.map((c) => {
         const fields = computeAutomationFields(c.lead);
         return supabase
           .from("leads")
-          .update(fields)
+          .update({ ...fields, action_instructions: actionInstructions })
           .eq("id", c.lead.id);
       });
 
