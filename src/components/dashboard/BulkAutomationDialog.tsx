@@ -235,7 +235,18 @@ export function BulkAutomationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[360px] -mx-2 px-2">
+        {/* Campaign Settings */}
+        <div className="border rounded-lg p-3 bg-muted/30">
+          <CampaignSettingsPanel
+            settings={campaignSettings}
+            onChange={setCampaignSettings}
+            isNurture={hasNurtureLeads}
+          />
+        </div>
+
+        <Separator />
+
+        <ScrollArea className="max-h-[300px] -mx-2 px-2">
           <div className="space-y-1">
             {categorized.map((c) => (
               <label
