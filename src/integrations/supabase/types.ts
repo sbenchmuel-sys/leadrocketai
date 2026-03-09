@@ -1068,7 +1068,9 @@ export type Database = {
           auto_created: boolean
           auto_nurture_eligible: boolean | null
           automation_mode: string | null
+          city: string | null
           company: string
+          company_linkedin_url: string | null
           country: string | null
           created_at: string
           deal_factors_json: Json | null
@@ -1088,6 +1090,7 @@ export type Database = {
           last_nurture_outbound_at: string | null
           last_outbound_at: string | null
           last_read_at: string | null
+          linkedin_url: string | null
           meeting_link: string | null
           meeting_summary_count: number
           milestones_json: Json | null
@@ -1113,10 +1116,12 @@ export type Database = {
           risks_json: Json | null
           source_type: string
           stage: string
+          state: string | null
           status: string
           strategy: string
           unsubscribed: boolean
           wa_opted_in: boolean
+          website: string | null
           whatsapp_number: string | null
         }
         Insert: {
@@ -1127,7 +1132,9 @@ export type Database = {
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
+          city?: string | null
           company: string
+          company_linkedin_url?: string | null
           country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
@@ -1147,6 +1154,7 @@ export type Database = {
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
           last_read_at?: string | null
+          linkedin_url?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
@@ -1172,10 +1180,12 @@ export type Database = {
           risks_json?: Json | null
           source_type?: string
           stage?: string
+          state?: string | null
           status?: string
           strategy: string
           unsubscribed?: boolean
           wa_opted_in?: boolean
+          website?: string | null
           whatsapp_number?: string | null
         }
         Update: {
@@ -1186,7 +1196,9 @@ export type Database = {
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
+          city?: string | null
           company?: string
+          company_linkedin_url?: string | null
           country?: string | null
           created_at?: string
           deal_factors_json?: Json | null
@@ -1206,6 +1218,7 @@ export type Database = {
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
           last_read_at?: string | null
+          linkedin_url?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
@@ -1231,10 +1244,12 @@ export type Database = {
           risks_json?: Json | null
           source_type?: string
           stage?: string
+          state?: string | null
           status?: string
           strategy?: string
           unsubscribed?: boolean
           wa_opted_in?: boolean
+          website?: string | null
           whatsapp_number?: string | null
         }
         Relationships: []
