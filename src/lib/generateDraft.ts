@@ -518,8 +518,10 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     finalIntent: override_intent ? `${finalIntent} (override)` : finalIntent,
   });
 
-  // Step 5: Build raw payload (no prompt blocks — edge function handles assembly)
-  const aiPayload = buildAIPayload(resolvedContext, finalIntent, instructions || null);
+  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+  const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
+  const mergedInstructions2 = mergeInstructions(instructions || null, leadInstructions2);
+  const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
 
   // Step 6: Call AI edge function
   let draftText: string | null = null;

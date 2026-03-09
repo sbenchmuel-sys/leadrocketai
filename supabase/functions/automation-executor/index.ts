@@ -611,7 +611,7 @@ serve(async (req) => {
                 motion: lead.motion,
                 lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}`,
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
-                custom_instructions: null,
+                custom_instructions: buildStepInstructions(lead.action_instructions, lead.next_action_key),
               },
             }),
           });
