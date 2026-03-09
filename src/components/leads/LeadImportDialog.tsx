@@ -193,7 +193,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
               <div className="bg-muted/50 rounded-md p-3 text-xs text-muted-foreground">
                 <p className="font-medium mb-1">Expected columns:</p>
-                <p>First Name, Last Name, Company Name, Email, Job Title, Phone Number, Industry, Country/Region, Message</p>
+                <p>First Name, Last Name, Company Name, Email, Job Title, Phone Number, Industry, Country/Region, Website, LinkedIn URL, City, State, Message</p>
               </div>
             </>
           )}
@@ -318,6 +318,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                     <p className="font-medium text-foreground text-xs">{lead.name}</p>
                     <p className="text-muted-foreground text-[11px]">
                       {lead.company} • {lead.email}
+                      {lead.city || lead.state ? ` • ${[lead.city, lead.state].filter(Boolean).join(", ")}` : ""}
                     </p>
                   </div>
                 ))}

@@ -1,88 +1,70 @@
 
 
-## Column Mapping Analysis: Your ONT_Lead_Gen.xlsx
+## Analysis: Hallucinated Follow-up Email for Siddhesh Malvankar
 
-Your file has **14 columns**. Here's what happens to each:
+### Root Cause
 
-### Currently Mapped (7 columns)
-| Excel Column | Maps To | Used in Emails? |
-|---|---|---|
-| First Name | `name` (combined with Last Name) | Yes — greeting, personalization |
-| Last Name | `name` (combined with First Name) | Yes — greeting, personalization |
-| Company Name | `company` | Yes — company references |
-| Email | `email` | Yes — delivery address |
-| Title | `job_title` | Yes — context for AI drafts |
-| Phone | `phone` | Stored but not used in email campaigns |
-| Industry | `industry` | Yes — AI uses for industry-relevant messaging |
+The AI generated a response based on **Siddhesh's January 30 email** (requesting reschedule to 11:30 AM IST on Feb 3rd, with additional team members joining) rather than responding to **your most recent outbound on February 23**.
 
-### Currently Dropped (7 columns)
-| Excel Column | What Happens |
-|---|---|
-| **Website** | Completely ignored during import |
-| **Person Linkedin Url** | Completely ignored |
-| **Company Linkedin Url** | Completely ignored |
-| **Company Street** | Completely ignored |
-| **Company City** | Completely ignored |
-| **Company State** | Completely ignored |
-| **Company Country** | Maps to `country` column — this IS captured |
+The hallucination traces to a **staleness guard** in `generateDraft.ts` (lines 182-189) combined with the **task selection logic**:
 
-So actually **Company Country** is mapped. That leaves **6 columns dropped**: Website, Person LinkedIn, Company LinkedIn, Street, City, State.
+#### Problem 1: Wrong task selected — `post_meeting_followup_email` instead of `pre_email_X_followup`
 
-### What's Missing from AI Context
+The lead's motion is `post_meeting` and the playbook resolver likely selected `post_meeting_followup_email`. This task's prompt says:
 
-The `contextResolver.ts` feeds the AI all lead fields when generating drafts. The `leads` table already has a `country` field, but there's no place for website, LinkedIn URLs, city, or state. These could significantly improve personalization:
+> "Generate a personalized follow-up email based on the meeting and FULL email thread context"
 
-- **Website** — AI can reference the prospect's actual business, products, services
-- **Person LinkedIn URL** — AI can mention shared connections or recent posts (with enrichment)
-- **City/State** — AI can use geographic proximity, local references, regional relevance ("fellow Ontario business")
+Since the last **inbound** email (Jan 30) contains the reschedule request and questions about accuracy/FDA/GDPR, the AI treated it as the context to respond to — producing a reply to that old January email instead of writing a follow-up to your February 23 outbound.
 
----
+#### Problem 2: Stale inbound treated as current context
 
-## Recommended Plan
+The staleness guard in `generateDraft.ts` works correctly for `reply_to_thread` (it checks if inbound is newer than outbound), but for `post_meeting_followup_email`, the prompt template uses `{{PREVIOUS_EMAILS}}` and `{{LAST_OUTBOUND}}` — and the **thread_summary** includes ALL emails chronologically, with the January 30 inbound prominently featured.
 
-### Option A: Store extra fields in `initial_message` as structured context (Quick, no DB change)
+The AI sees:
+- **Last inbound**: Jan 30 — "reschedule to 11:30 AM IST, additional members joining"
+- **Last outbound**: Feb 23 — "checking in on POC use case"
+- **Motion**: `post_meeting`
 
-During import, concatenate the unmapped columns into the `initial_message` field as structured context the AI already reads:
+The `post_meeting_followup_email` prompt tells it to check if materials were already shared. Since the Feb 23 email mentions "review the materials we shared," the AI conflates the Jan 30 reschedule request with a live conversation, producing a reply that references rescheduling to 11:30 AM and "additional team members."
 
+#### Problem 3: Date mismatch — "February 3rd" in generated email
+
+The AI pulled the date "February 3rd" directly from Siddhesh's January 30 email ("I have scheduled the meeting for 3rd February 2026"). Since no date awareness is injected into the prompt, the AI doesn't know it's now March 2, making "February 3rd" look current.
+
+### Fix Plan
+
+#### 1. Inject current date into AI task system prompt
+
+Add `Current date: ${new Date().toISOString().split('T')[0]}` to the system prompt in `ai_task/index.ts`. This gives the LLM temporal awareness to avoid referencing past dates as if they're upcoming.
+
+#### 2. Add staleness guard to `post_meeting_followup_email` payload
+
+In `generateDraft.ts`, when building the payload for `post_meeting_followup_email`, apply the same staleness check used for `reply_to_thread`: if the last inbound is older than the last outbound, mark it as stale context so the AI doesn't try to "respond" to it.
+
+```typescript
+// In buildAIPayload, for post_meeting_followup_email:
+if (taskType === "post_meeting_followup_email") {
+  // ... existing code ...
+  // Add staleness marker
+  const inboundTime = ctx.last_inbound_email?.occurred_at;
+  const outboundTime = ctx.last_outbound_email?.occurred_at;
+  if (inboundTime && outboundTime && new Date(outboundTime) > new Date(inboundTime)) {
+    payload.stale_inbound = true;
+  }
+}
 ```
-LEAD CONTEXT:
-- Website: www.edgeimaging.ca
-- LinkedIn: linkedin.com/in/jim-agnew
-- Location: Burlington, Ontario, Canada
-```
 
-**Pros**: No database migration, AI already reads `initial_message` in prompts.
-**Cons**: Mixes data with any actual message; not queryable.
+#### 3. Update `post_meeting_followup_email` prompt to respect staleness
 
-### Option B: Add columns to the leads table (Recommended)
+Add a rule to the prompt: "If the most recent interaction is an OUTBOUND email (not inbound), do NOT write a reply to the last inbound. Instead, write a follow-up to YOUR last outbound."
 
-Add `website`, `linkedin_url`, `city`, `state` columns to the `leads` table. Update the parser to map them. Update `contextResolver.ts` to include them in AI context.
+#### 4. Add date context to thread summary
 
-**Implementation**:
-1. **DB migration** — Add 4 nullable text columns: `website`, `linkedin_url`, `city`, `state`
-2. **parseLeadFile.ts** — Add aliases for new columns (`website`, `person linkedin url`, `company street` → `street`, `company city` → `city`, `company state` → `state`); expand `ParsedLead` interface
-3. **LeadImportDialog.tsx** — Pass new fields in insert payload
-4. **contextResolver.ts** — Include new fields in the resolved context passed to AI
-5. **automation-executor** — Already reads all lead fields from the SELECT query; just needs the new columns added to the select
+Modify the thread summary builder to include relative timestamps (e.g., "31 days ago" vs "7 days ago") so the AI can distinguish recent from stale context.
 
-**Pros**: Clean, queryable, available to all AI prompts automatically.
-**Cons**: Requires a small migration.
+### Files to Change
 
-### Option C: Flexible `custom_fields` JSON column (Future-proof)
-
-Add a single `custom_fields jsonb` column to `leads`. Any unmapped columns from the spreadsheet get stored there. The AI prompt includes them as additional context.
-
-**Pros**: Handles any spreadsheet format without new migrations.
-**Cons**: Not queryable without JSON operators; slightly more complex prompt injection.
-
-### My Recommendation
-
-**Option B** for the known high-value fields (website, linkedin_url, city, state), with the parser also capturing Company LinkedIn URL since your file includes it. This gives the AI rich context for personalization — mentioning the prospect's website, their local area, and their LinkedIn presence makes outbound emails significantly more relevant.
-
-The 5 new fields to add:
-- `website` — prospect's company website
-- `linkedin_url` — person's LinkedIn profile
-- `company_linkedin_url` — company's LinkedIn page
-- `city` — company city
-- `state` — company state/province
+- `supabase/functions/ai_task/index.ts` — Add current date to system prompt; update `post_meeting_followup_email` prompt with staleness rules
+- `src/lib/generateDraft.ts` — Add staleness marker for `post_meeting_followup_email` payload; add relative dates to thread summary
+- `src/lib/contextResolver.ts` — Optionally annotate thread emails with age indicators
 

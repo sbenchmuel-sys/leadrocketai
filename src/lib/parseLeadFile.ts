@@ -10,6 +10,11 @@ export interface ParsedLead {
   industry?: string;
   country?: string;
   initial_message?: string;
+  website?: string;
+  linkedin_url?: string;
+  company_linkedin_url?: string;
+  city?: string;
+  state?: string;
 }
 
 // Canonical key aliases: maps normalized variations to a single canonical name
@@ -55,6 +60,27 @@ const KEY_ALIASES: Record<string, string> = {
   "note": "message",
   "initial message": "message",
   "initial_message": "message",
+  "website": "website",
+  "company website": "website",
+  "web": "website",
+  "url": "website",
+  "person linkedin url": "linkedin_url",
+  "linkedin url": "linkedin_url",
+  "linkedin": "linkedin_url",
+  "linkedin_url": "linkedin_url",
+  "person linkedin": "linkedin_url",
+  "company linkedin url": "company_linkedin_url",
+  "company linkedin": "company_linkedin_url",
+  "company_linkedin_url": "company_linkedin_url",
+  "company street": "street",
+  "street": "street",
+  "address": "street",
+  "company city": "city",
+  "city": "city",
+  "company state": "state",
+  "state": "state",
+  "state/province": "state",
+  "province": "state",
 };
 
 /** Normalize all row keys to canonical names for case/variation-insensitive lookup */
@@ -91,6 +117,11 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     industry: (r["industry"] || "").trim() || undefined,
     country: (r["country"] || "").trim() || undefined,
     initial_message: (r["message"] || "").trim() || undefined,
+    website: (r["website"] || "").trim() || undefined,
+    linkedin_url: (r["linkedin_url"] || "").trim() || undefined,
+    company_linkedin_url: (r["company_linkedin_url"] || "").trim() || undefined,
+    city: (r["city"] || "").trim() || undefined,
+    state: (r["state"] || "").trim() || undefined,
   };
 }
 
