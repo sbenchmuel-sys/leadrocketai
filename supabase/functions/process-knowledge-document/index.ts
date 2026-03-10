@@ -76,7 +76,20 @@ serve(async (req) => {
       });
     }
 
-    const { text, title, source, allowed_customer_facing = true, lead_id = null } = await req.json();
+    const {
+      text,
+      title,
+      source,
+      allowed_customer_facing = true,
+      lead_id = null,
+      content_type = "knowledge",
+      segment = null,
+      tags = null,
+      priority = 1,
+    } = await req.json();
+
+    // Validate content_type
+    const safeContentType: ContentType = isValidContentType(content_type) ? content_type : "knowledge";
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return new Response(JSON.stringify({ ok: false, error: "Missing or invalid text" }), {
