@@ -1,27 +1,40 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// Tasks that require semantic knowledge search
-const KNOWLEDGE_SEARCH_TASKS = [
-  "email_intro_fast",
-  "email_intro_nurture",
-  "followup_sequence_4",
-  "post_meeting_recap",
-  "answer_questions",
-  "pre_email_1_intro",
-  "inbound_intro",
-  "post_meeting_followup_personalized",
-  "nurture_sequence",
-  "nurture_email_single",
-  "post_meeting_followup_email",
-  "extract_milestones_risks",
-  "extract_deal_factors",
-  "recommend_next_steps",
-  "lead_deep_analysis",
-  "linkedin_followup",
-  "reply_to_thread",
-  "re_engagement_intro",
-];
+// Task-aware KB retrieval config: maps AI tasks → required content_types
+// Retrieval returns max 1 chunk per content_type, max 4 total chunks
+const TASK_KB_CONFIG: Record<string, string[]> = {
+  // Outbound first touch / intros
+  email_intro_fast:                   ["messaging", "knowledge", "industry"],
+  email_intro_nurture:                ["messaging", "knowledge", "industry"],
+  pre_email_1_intro:                  ["messaging", "knowledge", "industry"],
+  inbound_intro:                      ["messaging", "knowledge", "industry"],
+  re_engagement_intro:                ["messaging", "knowledge", "industry"],
+  // Follow-ups
+  followup_sequence_4:                ["messaging", "knowledge"],
+  linkedin_followup:                  ["messaging", "knowledge"],
+  // Reply handling
+  reply_to_thread:                    ["knowledge", "objection", "messaging"],
+  answer_questions:                   ["knowledge", "objection", "messaging"],
+  // Meeting
+  post_meeting_recap:                 ["knowledge", "discovery", "strategy"],
+  post_meeting_followup_personalized: ["knowledge", "discovery", "strategy"],
+  post_meeting_followup_email:        ["knowledge", "discovery"],
+  // Nurture
+  nurture_sequence:                   ["messaging", "industry"],
+  nurture_email_single:               ["messaging", "industry"],
+  // Analysis
+  extract_milestones_risks:           ["strategy", "signal"],
+  extract_deal_factors:               ["strategy", "signal"],
+  recommend_next_steps:               ["strategy", "signal", "knowledge"],
+  lead_deep_analysis:                 ["strategy", "signal", "industry"],
+};
+
+// Derive flat list for backward-compatible "should we search KB?" check
+const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
+
+/** Max chunks returned per retrieval call */
+const MAX_KB_CHUNKS = 4;
 
 // Generate a query embedding via OpenAI
 async function generateQueryEmbedding(text: string, apiKey: string): Promise<number[] | null> {
@@ -53,6 +66,7 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
 }
 
 // Semantic search using embeddings (primary)
+// When contentTypes is provided, enforces max 1 chunk per content_type
 async function getSemanticKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
@@ -76,11 +90,14 @@ async function getSemanticKnowledgeContext(
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Fetch more than needed so we can deduplicate by content_type
+    const fetchCount = contentTypes ? Math.max(contentTypes.length * 3, 10) : MAX_KB_CHUNKS;
+
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
       query_embedding: JSON.stringify(queryEmbedding),
       p_owner_user_id: userId,
       match_threshold: 0.4,
-      match_count: 5,
+      match_count: fetchCount,
       filter_customer_facing: true,
       filter_lead_id: leadId || null,
       filter_content_types: contentTypes || null,
@@ -96,9 +113,20 @@ async function getSemanticKnowledgeContext(
       return "";
     }
 
-    console.log(`[ai_task] Found ${matches.length} semantic matches (top similarity: ${matches[0]?.similarity?.toFixed(3)})`);
+    // Deduplicate: keep only the top-scoring chunk per content_type, max MAX_KB_CHUNKS total
+    const seenTypes = new Set<string>();
+    const deduped: typeof matches = [];
+    for (const m of matches) {
+      const ct = m.content_type || "knowledge";
+      if (seenTypes.has(ct)) continue;
+      seenTypes.add(ct);
+      deduped.push(m);
+      if (deduped.length >= MAX_KB_CHUNKS) break;
+    }
 
-    return matches
+    console.log(`[ai_task] Semantic: ${matches.length} raw → ${deduped.length} deduped (types: ${[...seenTypes].join(",")}), top sim: ${deduped[0]?.similarity?.toFixed(3)}`);
+
+    return deduped
       .map((m: { title: string | null; content: string; content_type: string; similarity: number }) => {
         const header = m.title ? `[${m.title}]` : "";
         const typeTag = m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
@@ -174,18 +202,26 @@ async function getTextBasedKnowledgeContext(
 }
 
 // Combined retrieval: semantic first, ILIKE fallback
+// Accepts task name to resolve content_type filters from TASK_KB_CONFIG
 async function getKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
   userId: string,
-  leadId?: string
+  leadId?: string,
+  task?: string
 ): Promise<string> {
-  // Try semantic search first
-  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+  // Resolve content types for this task
+  const contentTypes = task ? TASK_KB_CONFIG[task] || undefined : undefined;
+  if (contentTypes) {
+    console.log(`[ai_task] Task "${task}" → KB content_types: [${contentTypes.join(", ")}]`);
+  }
+
+  // Try semantic search first (with content_type filtering)
+  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes);
   if (semanticResult) return semanticResult;
 
-  // Fallback to text-based search
+  // Fallback to text-based search (no content_type filtering — best-effort)
   console.log("[ai_task] Falling back to text-based KB search");
   return getTextBasedKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
 }
@@ -1779,7 +1815,7 @@ serve(async (req) => {
         const supabaseServiceKeyForKb = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId, task);
       }
     }
 
