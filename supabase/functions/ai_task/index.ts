@@ -2311,10 +2311,16 @@ serve(async (req) => {
     const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
     if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
 
-    // Build final prompt in one pass (diversity block goes between style and playbook)
+    // 5. Channel framework — resolve channel and inject structure constraints
+    const resolvedChannel = resolveChannel(task, payload?.channel ? String(payload.channel) : undefined);
+    const channelFrameworkBlock = getChannelFramework(task, resolvedChannel);
+    if (channelFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] Framework: ${resolvedChannel}`);
+
+    // Build final prompt in one pass: motion → style → channel → diversity → playbook → task
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
+    if (channelFrameworkBlock) promptParts.push(channelFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
@@ -2324,6 +2330,7 @@ serve(async (req) => {
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Framework injected: ${!!channelFrameworkBlock}`);
 
     // Select model: honor client-side model_hint (from complexity scorer) if provided,
     // otherwise fall back to server-side task tier
