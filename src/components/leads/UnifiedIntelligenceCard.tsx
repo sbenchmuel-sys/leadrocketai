@@ -356,10 +356,33 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     <Card className={cn(isCompact ? "border-0 shadow-none" : "")}>
       {!isCompact && (
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Brain className="h-4 w-4 text-primary" />
-            Intelligence
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Brain className="h-4 w-4 text-primary" />
+              Intelligence
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {contextCacheAge && (
+                <span className="text-[10px] text-muted-foreground">
+                  Context: {contextCacheAge}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={handleRefreshContext}
+                disabled={isRefreshingContext}
+                title="Refresh intelligence context"
+              >
+                {isRefreshingContext ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
       )}
 
