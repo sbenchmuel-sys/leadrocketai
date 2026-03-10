@@ -395,6 +395,46 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
+        {/* Lead Sales Signals */}
+        {leadSignals.length > 0 && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                <TrendingUp className="h-3 w-3" /> Sales Signals ({leadSignals.length})
+              </span>
+              <div className="space-y-1.5 mt-1">
+                {leadSignals.slice(0, maxItems).map((s) => (
+                  <div key={s.id} className="flex items-start gap-2">
+                    <Badge className={cn("text-[10px] shrink-0", SIGNAL_TYPE_COLORS[s.signal_type] ?? "bg-muted text-muted-foreground")}>
+                      {SIGNAL_LABELS[s.signal_type] ?? s.signal_type}
+                    </Badge>
+                    <div className="min-w-0">
+                      <p className="text-xs text-foreground">{s.signal_description}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatDistanceToNow(new Date(s.detected_at), { addSuffix: true })}
+                        </span>
+                        {s.source_url && (
+                          <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline flex items-center gap-0.5">
+                            <ExternalLink className="h-2.5 w-2.5" /> Source
+                          </a>
+                        )}
+                        {s.confidence_score != null && (
+                          <span className="text-[10px] text-muted-foreground">{Math.round(s.confidence_score * 100)}%</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {leadSignals.length > maxItems && (
+                  <p className="text-[10px] text-muted-foreground">+{leadSignals.length - maxItems} more</p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Signals summary — only if enrichment exists with signals */}
         {signals.length > 0 && (
           <>
