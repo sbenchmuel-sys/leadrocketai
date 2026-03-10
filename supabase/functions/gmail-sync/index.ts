@@ -4,6 +4,7 @@ import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import {
   type CadenceSettingsV1,
   type LeadMetrics,
