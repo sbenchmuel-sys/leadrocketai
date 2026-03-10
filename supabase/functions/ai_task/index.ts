@@ -82,32 +82,29 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
   }
 }
 
-// Semantic search using embeddings (primary)
-// When contentTypes is provided, enforces max 1 chunk per content_type
-async function getSemanticKnowledgeContext(
+// Semantic search — returns structured chunks grouped by content_type
+async function getSemanticKnowledgeChunks(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
   userId: string,
   leadId?: string,
   contentTypes?: string[]
-): Promise<string> {
+): Promise<KBChunksGrouped | null> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
     console.log("[ai_task] No OPENAI_API_KEY — falling back to text search");
-    return "";
+    return null;
   }
 
   const queryEmbedding = await generateQueryEmbedding(queryText, openaiKey);
   if (!queryEmbedding) {
     console.warn("[ai_task] Failed to generate query embedding — falling back to text search");
-    return "";
+    return null;
   }
 
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Fetch more than needed so we can deduplicate by content_type
     const fetchCount = contentTypes ? Math.max(contentTypes.length * 3, 10) : MAX_KB_CHUNKS;
 
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
@@ -122,41 +119,35 @@ async function getSemanticKnowledgeContext(
 
     if (error) {
       console.error("[ai_task] Semantic search failed:", error);
-      return "";
+      return null;
     }
 
     if (!matches || matches.length === 0) {
       console.log("[ai_task] No semantic matches found");
-      return "";
+      return null;
     }
 
-    // Deduplicate: keep only the top-scoring chunk per content_type, max MAX_KB_CHUNKS total
-    const seenTypes = new Set<string>();
-    const deduped: typeof matches = [];
+    // Deduplicate: 1 chunk per content_type, max MAX_KB_CHUNKS
+    const grouped: KBChunksGrouped = {};
+    let count = 0;
     for (const m of matches) {
       const ct = m.content_type || "knowledge";
-      if (seenTypes.has(ct)) continue;
-      seenTypes.add(ct);
-      deduped.push(m);
-      if (deduped.length >= MAX_KB_CHUNKS) break;
+      if (grouped[ct]) continue;
+      const header = m.title ? `[${m.title}] ` : "";
+      grouped[ct] = `${header}${m.content}`;
+      count++;
+      if (count >= MAX_KB_CHUNKS) break;
     }
 
-    console.log(`[ai_task] Semantic: ${matches.length} raw → ${deduped.length} deduped (types: ${[...seenTypes].join(",")}), top sim: ${deduped[0]?.similarity?.toFixed(3)}`);
-
-    return deduped
-      .map((m: { title: string | null; content: string; content_type: string; similarity: number }) => {
-        const header = m.title ? `[${m.title}]` : "";
-        const typeTag = m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
-        return `${header}${typeTag}\n${m.content}`;
-      })
-      .join("\n\n---\n\n");
+    console.log(`[ai_task] Semantic: ${matches.length} raw → ${count} grouped (${Object.keys(grouped).join(",")}), top sim: ${matches[0]?.similarity?.toFixed(3)}`);
+    return grouped;
   } catch (err) {
     console.error("[ai_task] Error in semantic search:", err);
-    return "";
+    return null;
   }
 }
 
-// Fallback: text-based ILIKE search (used when embeddings unavailable)
+// Fallback: text-based ILIKE search — returns structured chunks grouped by content_type
 async function getTextBasedKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
