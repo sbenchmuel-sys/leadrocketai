@@ -1,0 +1,1 @@
+ALTER TABLE public.message_generation_log ADD COLUMN IF NOT EXISTS sequence_step integer NULL;

@@ -1667,6 +1667,7 @@ export type Database = {
           opening_type: string
           primary_angle: string
           secondary_angle: string | null
+          sequence_step: number | null
           task_type: string
           tone: string
           workspace_id: string
@@ -1683,6 +1684,7 @@ export type Database = {
           opening_type?: string
           primary_angle?: string
           secondary_angle?: string | null
+          sequence_step?: number | null
           task_type: string
           tone?: string
           workspace_id: string
@@ -1699,6 +1701,7 @@ export type Database = {
           opening_type?: string
           primary_angle?: string
           secondary_angle?: string | null
+          sequence_step?: number | null
           task_type?: string
           tone?: string
           workspace_id?: string
