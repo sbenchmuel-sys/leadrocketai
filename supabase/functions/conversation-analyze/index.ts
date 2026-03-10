@@ -387,6 +387,28 @@ Analyze this conversation and extract the structured sales intelligence.`;
       conversation_id
     );
 
+    // ── 9. Capture winning interaction if positive outcome ──
+    const isPositive = extracted.sentiment === "positive" || extracted.sentiment === "very_positive";
+    const isDealWon = extracted.deal_stage === "closed_won";
+    if ((isPositive || isDealWon) && contact?.lead_id) {
+      // Get last outbound message text for this conversation
+      const lastOutboundMsg = decryptedMessages
+        .filter((m: any) => m.direction === "outbound" && m.text)
+        .pop();
+
+      if (lastOutboundMsg?.text) {
+        const channel = conversation.channel || "whatsapp";
+        captureWinningInteraction({
+          supabaseAdmin: supabase,
+          userId: conversation.owner_user_id,
+          leadId: contact.lead_id,
+          messageContent: lastOutboundMsg.text,
+          channel,
+          outcomeType: isDealWon ? "deal_won" : "positive_reply",
+        });
+      }
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
