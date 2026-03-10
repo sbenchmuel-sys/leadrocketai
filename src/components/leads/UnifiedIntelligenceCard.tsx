@@ -168,10 +168,66 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     }
   }, [lead.id]);
 
+  // ── Load context cache age ──
+  const loadContextCacheAge = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from("lead_context_cache")
+        .select("last_generated_at")
+        .eq("lead_id", lead.id)
+        .maybeSingle();
+
+      if (data?.last_generated_at) {
+        setContextCacheAge(formatDistanceToNow(new Date(data.last_generated_at), { addSuffix: true }));
+      } else {
+        setContextCacheAge(null);
+      }
+    } catch {
+      setContextCacheAge(null);
+    }
+  }, [lead.id]);
+
+  // ── Refresh context cache ──
+  const handleRefreshContext = async () => {
+    setIsRefreshingContext(true);
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast.error("Please log in first.");
+        return;
+      }
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ lead_id: lead.id, force: true }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Context refresh failed (${res.status})`);
+      }
+
+      toast.success("Intelligence context refreshed");
+      await loadContextCacheAge();
+    } catch (err: any) {
+      console.error("[UnifiedIntelligenceCard] Context refresh error:", err);
+      toast.error(err.message || "Context refresh failed");
+    } finally {
+      setIsRefreshingContext(false);
+    }
+  };
+
   useEffect(() => {
     loadEnrichment();
     loadLeadSignals();
-  }, [loadEnrichment, loadLeadSignals]);
+    loadContextCacheAge();
+  }, [loadEnrichment, loadLeadSignals, loadContextCacheAge]);
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
