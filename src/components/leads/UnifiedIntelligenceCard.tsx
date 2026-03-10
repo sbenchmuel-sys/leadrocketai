@@ -120,7 +120,8 @@ const SIGNAL_TYPE_COLORS: Record<string, string> = {
 export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: UnifiedIntelligenceCardProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
-  const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined); // undefined = not loaded
+  const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined);
+  const [leadSignals, setLeadSignals] = useState<LeadSignal[]>([]);
   const { runTask } = useAITask();
 
   const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
@@ -146,6 +147,22 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
       setEnrichment(data as unknown as EnrichmentRow | null);
     } catch {
       setEnrichment(null);
+    }
+  }, [lead.id]);
+
+  // ── Load lead signals ──
+  const loadLeadSignals = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from("lead_signals")
+        .select("id, signal_type, signal_description, source_url, detected_at, confidence_score")
+        .eq("lead_id", lead.id)
+        .order("detected_at", { ascending: false })
+        .limit(10);
+
+      setLeadSignals((data as LeadSignal[]) ?? []);
+    } catch {
+      setLeadSignals([]);
     }
   }, [lead.id]);
 
