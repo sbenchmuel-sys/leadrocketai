@@ -1779,7 +1779,7 @@ serve(async (req) => {
         const supabaseServiceKeyForKb = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getTextBasedKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
       }
     }
 
