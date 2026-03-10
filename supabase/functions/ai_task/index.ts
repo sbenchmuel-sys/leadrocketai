@@ -253,6 +253,89 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
   }
 }
 
+// ============================================
+// CHANNEL MESSAGING FRAMEWORK ROUTER
+// ============================================
+
+const CHANNEL_FRAMEWORKS: Record<string, string> = {
+  email: `=== CHANNEL FRAMEWORK: EMAIL ===
+Structure (follow this order):
+1. Personalized observation — reference something specific about the lead or company
+2. Business problem — articulate a clear pain point or challenge they likely face
+3. Value proposition — one concise outcome or benefit (not a feature list)
+4. Soft call to action — a low-friction question or next step
+
+Constraints:
+- 90–150 words
+- Professional, structured tone
+- Short paragraphs (1–3 sentences each)
+- One CTA only
+- No attachments in first email
+- No calendar links unless explicitly provided`,
+
+  sms: `=== CHANNEL FRAMEWORK: SMS ===
+Structure (follow this order):
+1. Curiosity hook — one compelling statement that creates intrigue
+2. Quick question — a single low-friction question as CTA
+
+Constraints:
+- MAXIMUM 160 characters total (this is a hard limit)
+- One sentence only
+- Direct, concise tone
+- No greeting beyond first name
+- No sign-off or signature
+- No links unless explicitly provided
+- No emojis unless natural to the context`,
+
+  whatsapp: `=== CHANNEL FRAMEWORK: WHATSAPP ===
+Structure (follow this order):
+1. Friendly opener — casual greeting with first name
+2. Short context — 1–2 sentences explaining why you're reaching out
+3. Question — a conversational question to invite a reply
+
+Constraints:
+- 1–3 short paragraphs maximum
+- Casual, conversational tone (like texting a colleague)
+- No formal sign-offs (no "Best regards", no signature blocks)
+- Maximum 60 words
+- One emoji max, only if natural
+- No subject line
+- No bracketed placeholders`,
+
+  voice: `=== CHANNEL FRAMEWORK: VOICE ===
+Structure (follow this order):
+1. Reason for call — why you're calling in one sentence
+2. Credibility context — brief mention of relevant experience, client, or insight
+3. Discovery question — an open-ended question to start a conversation
+
+Constraints:
+- Use natural spoken language (not written/formal prose)
+- Format as a short talk track with bullet points or brief sentences
+- 3–5 bullet points maximum
+- Each bullet should be speakable in under 10 seconds
+- No jargon, no marketing language
+- Include a suggested objection response if appropriate`,
+};
+
+const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
+  "intent_router", "extract_milestones_risks", "extract_deal_factors",
+  "recommend_next_steps", "lead_deep_analysis", "analyze_outgoing_email",
+  "match_email_to_milestones", "dedupe_milestones", "whatsapp_classify_intent",
+  "followup_sequence_4", "post_meeting_recap", "nurture_sequence",
+]);
+
+function resolveChannel(task: string, payloadChannel?: string): string {
+  if (task.startsWith("whatsapp_")) return "whatsapp";
+  if (task.startsWith("linkedin_")) return "email";
+  if (task === "shorten_draft") return payloadChannel || "email";
+  return payloadChannel || "email";
+}
+
+function getChannelFramework(task: string, channel: string): string {
+  if (CHANNEL_FRAMEWORK_EXEMPT_TASKS.has(task)) return "";
+  return CHANNEL_FRAMEWORKS[channel] || "";
+}
+
 // Semantic search — returns structured chunks grouped by content_type
 async function getSemanticKnowledgeChunks(
   queryText: string,
@@ -2217,10 +2300,16 @@ serve(async (req) => {
     const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
     if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
 
-    // Build final prompt in one pass (diversity block goes between style and playbook)
+    // 5. Channel framework — resolve channel and inject structure constraints
+    const resolvedChannel = resolveChannel(task, payload?.channel ? String(payload.channel) : undefined);
+    const channelFrameworkBlock = getChannelFramework(task, resolvedChannel);
+    if (channelFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] Framework: ${resolvedChannel}`);
+
+    // Build final prompt in one pass: motion → style → channel → diversity → playbook → task
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
+    if (channelFrameworkBlock) promptParts.push(channelFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
@@ -2230,6 +2319,7 @@ serve(async (req) => {
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Framework injected: ${!!channelFrameworkBlock}`);
 
     // Select model: honor client-side model_hint (from complexity scorer) if provided,
     // otherwise fall back to server-side task tier
