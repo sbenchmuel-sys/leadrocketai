@@ -148,13 +148,13 @@ async function getSemanticKnowledgeChunks(
 }
 
 // Fallback: text-based ILIKE search — returns structured chunks grouped by content_type
-async function getTextBasedKnowledgeContext(
+async function getTextBasedKnowledgeChunks(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
   userId: string,
   leadId?: string
-): Promise<string> {
+): Promise<KBChunksGrouped | null> {
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
@@ -164,7 +164,7 @@ async function getTextBasedKnowledgeContext(
       .eq("owner_user_id", userId)
       .eq("allowed_customer_facing", true)
       .eq("processing_status", "completed")
-      .limit(5);
+      .limit(10);
     
     if (leadId) {
       query = query.or(`lead_id.eq.${leadId},lead_id.is.null`);
@@ -186,31 +186,59 @@ async function getTextBasedKnowledgeContext(
 
     if (error) {
       console.error("[ai_task] Text search failed:", error);
-      return "";
+      return null;
     }
 
     if (!matches || matches.length === 0) {
       console.log("[ai_task] No text matches found");
-      return "";
+      return null;
     }
 
-    console.log(`[ai_task] Found ${matches.length} text matches (fallback)${leadId ? ` for lead ${leadId}` : ""}`);
+    // Group by content_type, 1 per type, max MAX_KB_CHUNKS
+    const grouped: KBChunksGrouped = {};
+    let count = 0;
+    for (const m of matches) {
+      const ct = (m as any).content_type || "knowledge";
+      if (grouped[ct]) continue;
+      const header = m.title ? `[${m.title}] ` : "";
+      grouped[ct] = `${header}${m.content}`;
+      count++;
+      if (count >= MAX_KB_CHUNKS) break;
+    }
 
-    return matches
-      .map((m: { title: string | null; content: string; content_type?: string }) => {
-        const header = m.title ? `[${m.title}]` : "";
-        const typeTag = m.content_type && m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
-        return `${header}${typeTag}\n${m.content}`;
-      })
-      .join("\n\n---\n\n");
+    console.log(`[ai_task] Text fallback: ${matches.length} raw → ${count} grouped (${Object.keys(grouped).join(",")})`);
+    return grouped;
   } catch (err) {
     console.error("[ai_task] Error in text search:", err);
-    return "";
+    return null;
   }
 }
 
+/** Format grouped KB chunks into a structured context block with char limit */
+function formatKBContext(grouped: KBChunksGrouped, charLimit: number): string {
+  const parts: string[] = [];
+  let totalLen = 0;
+
+  for (const [contentType, content] of Object.entries(grouped)) {
+    const label = contentType.toUpperCase();
+    const entry = `[${label}]\n${content}`;
+    if (totalLen + entry.length > charLimit) {
+      // Truncate this entry to fit
+      const remaining = charLimit - totalLen;
+      if (remaining > 50) {
+        parts.push(`[${label}]\n${content.slice(0, remaining - label.length - 4)}…`);
+      }
+      break;
+    }
+    parts.push(entry);
+    totalLen += entry.length;
+  }
+
+  return parts.join("\n\n---\n\n");
+}
+
 // Combined retrieval: semantic first, ILIKE fallback
-// Accepts task name to resolve content_type filters from TASK_KB_CONFIG
+// Returns structured KB context string with task-aware char limits
 async function getKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
@@ -218,20 +246,29 @@ async function getKnowledgeContext(
   userId: string,
   leadId?: string,
   task?: string
-): Promise<string> {
-  // Resolve content types for this task
+): Promise<{ formatted: string; grouped: KBChunksGrouped }> {
   const contentTypes = task ? TASK_KB_CONFIG[task] || undefined : undefined;
+  const charLimit = task ? getKbCharLimit(task) : KB_CHAR_LIMIT_OUTBOUND;
+
   if (contentTypes) {
-    console.log(`[ai_task] Task "${task}" → KB content_types: [${contentTypes.join(", ")}]`);
+    console.log(`[ai_task] Task "${task}" → KB types: [${contentTypes.join(", ")}], limit: ${charLimit} chars`);
   }
 
-  // Try semantic search first (with content_type filtering)
-  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes);
-  if (semanticResult) return semanticResult;
+  // Try semantic search first
+  let grouped = await getSemanticKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes);
 
-  // Fallback to text-based search (no content_type filtering — best-effort)
-  console.log("[ai_task] Falling back to text-based KB search");
-  return getTextBasedKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+  // Fallback to text-based search
+  if (!grouped) {
+    console.log("[ai_task] Falling back to text-based KB search");
+    grouped = await getTextBasedKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+  }
+
+  if (!grouped || Object.keys(grouped).length === 0) {
+    return { formatted: "", grouped: {} };
+  }
+
+  const formatted = formatKBContext(grouped, charLimit);
+  return { formatted, grouped };
 }
 
 // Dynamic CORS based on allowed origins
