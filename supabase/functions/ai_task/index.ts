@@ -1844,11 +1844,8 @@ serve(async (req) => {
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
     // Run cadence fetch AND KB search in parallel
-    let kbSearchPromise: Promise<string> = Promise.resolve("");
+    let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
-      if (isOutboundFirstTouch) {
-        console.log(`[ai_task] ⚡ Outbound first touch — skipping full KB search, limiting to 1 chunk (600 char cap)`);
-      }
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
@@ -1865,21 +1862,22 @@ serve(async (req) => {
     }
 
     // Await both in parallel
-    const [textContext] = await Promise.all([kbSearchPromise, cadencePromise]);
+    const [kbResult] = await Promise.all([kbSearchPromise, cadencePromise]);
 
-    if (textContext) {
+    if (kbResult.formatted) {
+      // For outbound first touch, apply stricter cap
       if (isOutboundFirstTouch) {
-        const capped = textContext.slice(0, 600);
+        const capped = kbResult.formatted.slice(0, 600);
         enhancedPayload.knowledge_context = capped;
         knowledgeContextUsed = true;
-        console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${textContext.length} chars`);
+        console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${kbResult.formatted.length} chars`);
       } else {
-        enhancedPayload.knowledge_context = textContext;
+        enhancedPayload.knowledge_context = kbResult.formatted;
         knowledgeContextUsed = true;
-        console.log(`[ai_task] ✅ Added text-based knowledge context (${textContext.length} chars)`);
+        console.log(`[ai_task] ✅ Structured KB context (${kbResult.formatted.length} chars, types: ${Object.keys(kbResult.grouped).join(",")})`);
       }
     } else if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
-      console.log(`[ai_task] ⚠️ No text matches found for task ${task}`);
+      console.log(`[ai_task] ⚠️ No KB matches found for task ${task}`);
     }
 
     // Remaining explicit flags (motion/isFirstTouch already read above)
