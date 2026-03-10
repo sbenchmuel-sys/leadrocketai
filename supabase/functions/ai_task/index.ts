@@ -36,6 +36,23 @@ const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
 /** Max chunks returned per retrieval call */
 const MAX_KB_CHUNKS = 4;
 
+// Task categories for KB char limits
+const ANALYSIS_TASKS = new Set([
+  "post_meeting_recap", "post_meeting_followup_personalized", "post_meeting_followup_email",
+  "extract_milestones_risks", "extract_deal_factors", "recommend_next_steps", "lead_deep_analysis",
+]);
+const KB_CHAR_LIMIT_OUTBOUND = 1200;
+const KB_CHAR_LIMIT_ANALYSIS = 2400;
+
+function getKbCharLimit(task: string): number {
+  return ANALYSIS_TASKS.has(task) ? KB_CHAR_LIMIT_ANALYSIS : KB_CHAR_LIMIT_OUTBOUND;
+}
+
+/** Structured KB result grouped by content_type */
+interface KBChunksGrouped {
+  [contentType: string]: string;
+}
+
 // Generate a query embedding via OpenAI
 async function generateQueryEmbedding(text: string, apiKey: string): Promise<number[] | null> {
   try {
