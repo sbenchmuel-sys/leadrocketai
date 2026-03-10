@@ -7,7 +7,20 @@ const corsHeaders = {
 };
 
 // Smart chunking function that preserves context
-function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize = 100): string[] {
+// Valid content_type values for Sales Brain
+const VALID_CONTENT_TYPES = [
+  "knowledge", "messaging", "objection", "discovery",
+  "industry", "competitor", "signal", "strategy", "case_study",
+] as const;
+
+type ContentType = typeof VALID_CONTENT_TYPES[number];
+
+function isValidContentType(v: string): v is ContentType {
+  return (VALID_CONTENT_TYPES as readonly string[]).includes(v);
+}
+
+// Smart chunking function that preserves context — title is stored as metadata, NOT prefixed into content
+function chunkText(text: string, maxChunkSize = 600, overlapSize = 100): string[] {
   const chunks: string[] = [];
   const sentences = text.split(/(?<=[.!?])\s+/);
   
@@ -15,13 +28,9 @@ function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize 
   let lastSentences: string[] = [];
   
   for (const sentence of sentences) {
-    // If adding this sentence exceeds the limit, save the chunk
     if (currentChunk.length + sentence.length > maxChunkSize && currentChunk.length > 0) {
-      // Add title context to the chunk
-      const finalChunk = title ? `[${title}]\n${currentChunk.trim()}` : currentChunk.trim();
-      chunks.push(finalChunk);
+      chunks.push(currentChunk.trim());
       
-      // Keep the last few sentences for overlap
       const overlapText = lastSentences.slice(-2).join(" ");
       currentChunk = overlapText.length < overlapSize ? overlapText + " " : "";
       lastSentences = [];
@@ -31,10 +40,8 @@ function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize 
     lastSentences.push(sentence);
   }
   
-  // Add the final chunk if there's remaining content
   if (currentChunk.trim().length > 50) {
-    const finalChunk = title ? `[${title}]\n${currentChunk.trim()}` : currentChunk.trim();
-    chunks.push(finalChunk);
+    chunks.push(currentChunk.trim());
   }
   
   return chunks;
@@ -69,7 +76,20 @@ serve(async (req) => {
       });
     }
 
-    const { text, title, source, allowed_customer_facing = true, lead_id = null } = await req.json();
+    const {
+      text,
+      title,
+      source,
+      allowed_customer_facing = true,
+      lead_id = null,
+      content_type = "knowledge",
+      segment = null,
+      tags = null,
+      priority = 1,
+    } = await req.json();
+
+    // Validate content_type
+    const safeContentType: ContentType = isValidContentType(content_type) ? content_type : "knowledge";
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return new Response(JSON.stringify({ ok: false, error: "Missing or invalid text" }), {
@@ -135,11 +155,9 @@ serve(async (req) => {
     // Generate a unique document ID to group chunks
     const documentId = crypto.randomUUID();
     
-    // Split the document into smart chunks
-    const chunks = chunkText(text, title || "", 600, 100);
-    console.log(`[process-knowledge-document] Created ${chunks.length} chunks`);
-
-    // Insert all chunks using service role client
+    // Split the document into smart chunks (title stored as metadata, not in content)
+    const chunks = chunkText(text, 600, 100);
+    console.log(`[process-knowledge-document] Created ${chunks.length} chunks, content_type=${safeContentType}`);
 
     // Insert all chunks - mark as completed since we use text search (no embeddings needed)
     const chunkInserts = chunks.map((content, index) => ({
@@ -150,8 +168,12 @@ serve(async (req) => {
       owner_user_id: user.id,
       document_id: documentId,
       chunk_index: index,
-      processing_status: "completed", // Text search doesn't need embeddings
+      processing_status: "completed",
       lead_id: verified_lead_id,
+      content_type: safeContentType,
+      segment: segment || null,
+      tags: Array.isArray(tags) ? tags : null,
+      priority: typeof priority === "number" ? priority : 1,
     }));
 
     const { data: insertedChunks, error: insertError } = await supabaseAdmin
