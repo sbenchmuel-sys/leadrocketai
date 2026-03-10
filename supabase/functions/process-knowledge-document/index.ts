@@ -155,11 +155,9 @@ serve(async (req) => {
     // Generate a unique document ID to group chunks
     const documentId = crypto.randomUUID();
     
-    // Split the document into smart chunks
-    const chunks = chunkText(text, title || "", 600, 100);
-    console.log(`[process-knowledge-document] Created ${chunks.length} chunks`);
-
-    // Insert all chunks using service role client
+    // Split the document into smart chunks (title stored as metadata, not in content)
+    const chunks = chunkText(text, 600, 100);
+    console.log(`[process-knowledge-document] Created ${chunks.length} chunks, content_type=${safeContentType}`);
 
     // Insert all chunks - mark as completed since we use text search (no embeddings needed)
     const chunkInserts = chunks.map((content, index) => ({
@@ -170,8 +168,12 @@ serve(async (req) => {
       owner_user_id: user.id,
       document_id: documentId,
       chunk_index: index,
-      processing_status: "completed", // Text search doesn't need embeddings
+      processing_status: "completed",
       lead_id: verified_lead_id,
+      content_type: safeContentType,
+      segment: segment || null,
+      tags: Array.isArray(tags) ? tags : null,
+      priority: typeof priority === "number" ? priority : 1,
     }));
 
     const { data: insertedChunks, error: insertError } = await supabaseAdmin
