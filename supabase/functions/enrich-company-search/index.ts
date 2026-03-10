@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
+import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
 
 // ---- CORS ----
 const corsHeaders = {
