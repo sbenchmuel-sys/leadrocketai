@@ -16,6 +16,7 @@ export interface Guardrails {
   max_emails_per_lead_per_30d: number;
   same_day_send_allowed: boolean;
   jitter_percent: number;
+  max_sends_per_day_per_mailbox: number;
 }
 
 export interface StopPauseRules {
