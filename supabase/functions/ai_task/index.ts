@@ -1,6 +1,177 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// ============================================
+// MESSAGE DIVERSITY CONTROL
+// ============================================
+
+const OPENING_TYPES = ["observation", "problem", "trigger_event", "compliment", "direct_offer", "question", "followup_reference", "breakup"] as const;
+const CTA_TYPES = ["quick_question", "soft_offer", "meeting_request", "permission_based", "timing_check", "breakup_close"] as const;
+
+// Tasks that produce outreach messages (diversity applies to these)
+const OUTREACH_TASKS = new Set([
+  "email_intro_fast", "email_intro_nurture", "pre_email_1_intro", "pre_email_2_followup",
+  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro", "re_engagement_intro",
+  "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
+  "whatsapp_message", "linkedin_connect", "linkedin_followup",
+]);
+
+interface DiversityConstraints {
+  avoid_opening_types: string[];
+  avoid_angles: string[];
+  avoid_cta_types: string[];
+  preferred_angles: string[];
+  preferred_cta_types: string[];
+}
+
+/** Fetch recent message log and build diversity constraints */
+async function buildDiversityConstraints(
+  adminClient: ReturnType<typeof createClient>,
+  leadId: string,
+  workspaceId: string | null,
+  campaignId: string | null,
+): Promise<DiversityConstraints> {
+  const constraints: DiversityConstraints = {
+    avoid_opening_types: [],
+    avoid_angles: [],
+    avoid_cta_types: [],
+    preferred_angles: [],
+    preferred_cta_types: [],
+  };
+
+  try {
+    // Fetch recent messages for this lead (for sequential dedup)
+    const { data: leadMessages } = await adminClient
+      .from("message_generation_log")
+      .select("opening_type, primary_angle, cta_type")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (leadMessages && leadMessages.length > 0) {
+      // Rule: don't reuse same opening_type as the last message
+      const lastOpening = leadMessages[0].opening_type;
+      if (lastOpening) constraints.avoid_opening_types.push(lastOpening);
+
+      // Rule: don't reuse same cta_type more than 2x in a row
+      const recentCtas = leadMessages.slice(0, 3).map((m: any) => m.cta_type);
+      const ctaCounts: Record<string, number> = {};
+      for (const c of recentCtas) { if (c) ctaCounts[c] = (ctaCounts[c] || 0) + 1; }
+      for (const [cta, count] of Object.entries(ctaCounts)) {
+        if (count >= 2) constraints.avoid_cta_types.push(cta);
+      }
+
+      // Rule: avoid the last 2 primary_angles for this lead
+      const recentAngles = leadMessages.slice(0, 2).map((m: any) => m.primary_angle).filter(Boolean);
+      constraints.avoid_angles.push(...recentAngles);
+    }
+
+    // Fetch recent workspace-level messages for cross-lead diversity
+    if (workspaceId) {
+      let wsQuery = adminClient
+        .from("message_generation_log")
+        .select("primary_angle, opening_type, cta_type")
+        .eq("workspace_id", workspaceId)
+        .neq("lead_id", leadId)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (campaignId) {
+        wsQuery = wsQuery.eq("campaign_id", campaignId);
+      }
+
+      const { data: wsMessages } = await wsQuery;
+
+      if (wsMessages && wsMessages.length > 0) {
+        // Rule: don't reuse same primary_angle > 3 times in last 20 similar messages
+        const angleCounts: Record<string, number> = {};
+        for (const m of wsMessages) {
+          if (m.primary_angle) angleCounts[m.primary_angle] = (angleCounts[m.primary_angle] || 0) + 1;
+        }
+        for (const [angle, count] of Object.entries(angleCounts)) {
+          if (count >= 3 && !constraints.avoid_angles.includes(angle)) {
+            constraints.avoid_angles.push(angle);
+          }
+        }
+
+        // Suggest underused CTAs and openings as preferred
+        const usedOpenings = new Set(wsMessages.map((m: any) => m.opening_type).filter(Boolean));
+        const usedCtas = new Set(wsMessages.map((m: any) => m.cta_type).filter(Boolean));
+        for (const ot of OPENING_TYPES) {
+          if (!usedOpenings.has(ot) && !constraints.avoid_opening_types.includes(ot)) {
+            constraints.preferred_angles.push(ot); // suggest underused openings
+          }
+        }
+        for (const ct of CTA_TYPES) {
+          if (!usedCtas.has(ct) && !constraints.avoid_cta_types.includes(ct)) {
+            constraints.preferred_cta_types.push(ct);
+          }
+        }
+      }
+    }
+
+    console.log(`[ai_task] Diversity constraints: avoid_openings=[${constraints.avoid_opening_types}], avoid_angles=[${constraints.avoid_angles.slice(0,3)}], avoid_ctas=[${constraints.avoid_cta_types}]`);
+  } catch (err) {
+    console.error("[ai_task] Diversity constraint build failed:", err);
+  }
+
+  return constraints;
+}
+
+/** Format diversity constraints as a prompt injection block */
+function formatDiversityBlock(constraints: DiversityConstraints): string {
+  const parts: string[] = [];
+  parts.push("=== MESSAGE DIVERSITY CONSTRAINTS ===");
+  parts.push("To ensure fresh, varied outreach, follow these constraints:");
+
+  if (constraints.avoid_opening_types.length > 0) {
+    parts.push(`- DO NOT use these opening styles (recently used): ${constraints.avoid_opening_types.join(", ")}`);
+  }
+  if (constraints.avoid_angles.length > 0) {
+    parts.push(`- DO NOT use these angles/themes (overused): ${constraints.avoid_angles.join(", ")}`);
+  }
+  if (constraints.avoid_cta_types.length > 0) {
+    parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
+  }
+  if (constraints.preferred_cta_types.length > 0) {
+    parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  }
+
+  parts.push("- Maintain brand voice consistency while varying approach");
+  parts.push("- Quality and relevance always take priority over forced variation");
+
+  return parts.join("\n");
+}
+
+/** Classification prompt for post-generation analysis */
+const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON ONLY:
+{
+  "opening_type": "observation|problem|trigger_event|compliment|direct_offer|question|followup_reference|breakup",
+  "primary_angle": "short description of main value angle used (max 5 words)",
+  "secondary_angle": "optional secondary angle or null",
+  "cta_type": "quick_question|soft_offer|meeting_request|permission_based|timing_check|breakup_close",
+  "tone": "professional|casual|urgent|empathetic|direct|consultative"
+}
+
+Message:
+`;
+
+/** Simple text similarity (Jaccard on word bigrams) */
+function textSimilarity(a: string, b: string): number {
+  const bigrams = (s: string) => {
+    const words = s.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
+    const bg = new Set<string>();
+    for (let i = 0; i < words.length - 1; i++) bg.add(`${words[i]} ${words[i+1]}`);
+    return bg;
+  };
+  const setA = bigrams(a);
+  const setB = bigrams(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const bg of setA) { if (setB.has(bg)) intersection++; }
+  return intersection / (setA.size + setB.size - intersection);
+}
+
 // Task-aware KB retrieval config: maps AI tasks → required content_types
 // Retrieval returns max 1 chunk per content_type, max 4 total chunks
 const TASK_KB_CONFIG: Record<string, string[]> = {
