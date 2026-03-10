@@ -1855,6 +1855,35 @@ serve(async (req) => {
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
+    // ── Context Cache: read precomputed intelligence if available ──
+    let contextCachePromise: Promise<Record<string, unknown> | null> = Promise.resolve(null);
+    if (payload?.lead_id) {
+      contextCachePromise = (async () => {
+        try {
+          const cacheClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          const { data } = await cacheClient
+            .from("lead_context_cache")
+            .select("context_json, last_generated_at")
+            .eq("lead_id", payload.lead_id)
+            .maybeSingle();
+
+          if (data) {
+            const age = Date.now() - new Date(data.last_generated_at).getTime();
+            const MAX_AGE = 6 * 60 * 60 * 1000; // 6 hours
+            if (age < MAX_AGE) {
+              console.log(`[ai_task] ✅ Context cache hit for lead ${payload.lead_id}, age: ${Math.round(age / 60000)}min`);
+              return data.context_json as Record<string, unknown>;
+            }
+            console.log(`[ai_task] Context cache expired for lead ${payload.lead_id}`);
+          }
+          return null;
+        } catch (err) {
+          console.error("[ai_task] Context cache lookup failed:", err);
+          return null;
+        }
+      })();
+    }
+
     // Fetch lead_signals for AI context injection
     let signalsPromise: Promise<{ type: string; description: string; source: string }[]> = Promise.resolve([]);
     if (payload?.lead_id) {
@@ -1879,7 +1908,7 @@ serve(async (req) => {
       })();
     }
 
-    // Run cadence fetch AND KB search AND signals fetch in parallel
+    // Run cadence fetch AND KB search AND signals fetch AND context cache in parallel
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
@@ -1898,9 +1927,33 @@ serve(async (req) => {
     }
 
     // Await all in parallel
-    const [kbResult, , leadSignals] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise]);
+    const [kbResult, , leadSignals, cachedContext] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise]);
 
-    // Inject lead signals into context
+    // Inject cached context if available — enriches the payload with precomputed intelligence
+    if (cachedContext) {
+      // Inject recommended angles as custom context
+      if (Array.isArray(cachedContext.recommended_angles) && (cachedContext.recommended_angles as string[]).length > 0) {
+        const anglesStr = (cachedContext.recommended_angles as string[]).join("\n- ");
+        enhancedPayload.recommended_angles = `Recommended outreach angles:\n- ${anglesStr}`;
+      }
+      // Inject company summary and interactions summary as supplementary context
+      if (cachedContext.company_summary) {
+        enhancedPayload.company_intelligence = String(cachedContext.company_summary);
+      }
+      if (cachedContext.previous_interactions_summary) {
+        enhancedPayload.interaction_summary = String(cachedContext.previous_interactions_summary);
+      }
+      if (cachedContext.industry_context && String(cachedContext.industry_context) !== "No industry-specific context available.") {
+        enhancedPayload.industry_intelligence = String(cachedContext.industry_context);
+      }
+      // Use cached signals if live signals are empty
+      if (leadSignals.length === 0 && Array.isArray(cachedContext.signals) && (cachedContext.signals as any[]).length > 0) {
+        enhancedPayload.signals = JSON.stringify(cachedContext.signals);
+        console.log(`[ai_task] ✅ Injected ${(cachedContext.signals as any[]).length} signals from context cache`);
+      }
+    }
+
+    // Inject live lead signals into context (takes priority over cached)
     if (leadSignals.length > 0) {
       enhancedPayload.signals = JSON.stringify(leadSignals);
       console.log(`[ai_task] ✅ Injected ${leadSignals.length} lead signals into context`);
