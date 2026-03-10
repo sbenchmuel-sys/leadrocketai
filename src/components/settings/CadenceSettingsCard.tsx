@@ -648,6 +648,22 @@ export function CadenceSettingsCard() {
                         className="w-24" />
 
                     </div>
+
+                    <div className="space-y-2">
+                      <Label>Max emails per day (all leads)</Label>
+                      <Input
+                        type="number"
+                        value={settings.guardrails.max_sends_per_day_per_mailbox ?? 40}
+                        onChange={(e) =>
+                        updateGuardrail("max_sends_per_day_per_mailbox", parseInt(e.target.value, 10) || 1)
+                        }
+                        min={1}
+                        max={200}
+                        className="w-24" />
+                      <p className="text-xs text-muted-foreground">
+                        Total automated emails sent per day across all leads. Start low (20-30) for new domains, increase gradually.
+                      </p>
+                    </div>
                   </div>
 
                   <Separator />
