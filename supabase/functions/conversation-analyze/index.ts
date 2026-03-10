@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
+import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -387,7 +388,52 @@ Analyze this conversation and extract the structured sales intelligence.`;
       conversation_id
     );
 
-    // ── 9. Capture winning interaction if positive outcome ──
+    // ── 9. Ingest conversation signals into lead_signals ──
+    if (contact?.lead_id) {
+      const conversationSignals: SignalInput[] = [];
+
+      // Map extracted features to signals
+      const CONVERSATION_KEYWORDS: Record<string, string[]> = {
+        outsourcing_discussion: ["outsourcing", "outsource", "offshore"],
+        budget_discussion: ["budget", "pricing", "cost", "spend", "investment"],
+        timeline_discussion: ["timeline", "deadline", "urgency", "by when", "q1", "q2", "q3", "q4"],
+        competitor_mentioned: ["competitor", "alternative", "compared to", "vs", "switch from"],
+      };
+
+      const allText = (extracted.key_facts || []).join(" ") + " " + (extracted.summary_short || "") + " " + (extracted.topics || []).join(" ");
+      const lowerText = allText.toLowerCase();
+
+      for (const [signalType, keywords] of Object.entries(CONVERSATION_KEYWORDS)) {
+        if (keywords.some((kw) => lowerText.includes(kw))) {
+          conversationSignals.push({
+            lead_id: contact.lead_id,
+            signal_type: signalType,
+            signal_description: `Detected in conversation: ${signalType.replace(/_/g, " ")}`,
+            signal_source: "conversation",
+            confidence_score: 0.75,
+            source_detail: { conversation_id, analysis_id: analysis.id },
+          });
+        }
+      }
+
+      // Buying signals from extraction
+      for (const bs of (extracted.buying_signals || [])) {
+        conversationSignals.push({
+          lead_id: contact.lead_id,
+          signal_type: "buying_signal",
+          signal_description: String(bs).slice(0, 120),
+          signal_source: "conversation",
+          confidence_score: 0.8,
+          source_detail: { conversation_id, analysis_id: analysis.id },
+        });
+      }
+
+      if (conversationSignals.length > 0) {
+        await ingestSignals(supabase, conversationSignals);
+      }
+    }
+
+    // ── 10. Capture winning interaction if positive outcome ──
     const isPositive = extracted.sentiment === "positive" || extracted.sentiment === "very_positive";
     const isDealWon = extracted.deal_stage === "closed_won";
     if ((isPositive || isDealWon) && contact?.lead_id) {
