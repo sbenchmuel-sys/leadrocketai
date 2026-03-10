@@ -2576,26 +2576,13 @@ serve(async (req) => {
 
     // ── Post-generation: Diversity logging (fire-and-forget for outreach tasks) ──
     if (OUTREACH_TASKS.has(task) && content && payload?.lead_id && resolvedWorkspaceId) {
+      const capturedStep = sequenceStep;
+      const capturedChannel = resolvedChannel;
       (async () => {
         try {
           const logClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-          // Check text similarity against recent messages for this lead
-          const { data: recentMsgs } = await logClient
-            .from("message_generation_log")
-            .select("generated_message")
-            .eq("lead_id", payload.lead_id)
-            .order("created_at", { ascending: false })
-            .limit(3);
-
-          if (recentMsgs && recentMsgs.length > 0) {
-            const maxSim = Math.max(...recentMsgs.map((m: any) => textSimilarity(content, m.generated_message)));
-            if (maxSim > 0.6) {
-              console.warn(`[ai_task] ⚠️ High similarity (${maxSim.toFixed(2)}) to recent message — consider regeneration`);
-            }
-          }
-
-          // Classify the generated message
+          // Classify the generated message (run early so we can log even if similarity check fails)
           const classifyResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -2628,20 +2615,67 @@ serve(async (req) => {
             await classifyResp.text(); // consume body
           }
 
-          // Optionally generate embedding
+          // Generate embedding for the message
           let embedding: number[] | null = null;
           const openaiKey = Deno.env.get("OPENAI_API_KEY");
           if (openaiKey) {
             embedding = await generateQueryEmbedding(content.slice(0, 4000), openaiKey);
           }
 
-          // Store in message_generation_log
+          // Similarity check: embedding-based (cosine > 0.85) then text fallback (Jaccard > 0.6)
+          const { data: recentMsgs } = await logClient
+            .from("message_generation_log")
+            .select("generated_message, message_embedding")
+            .eq("lead_id", payload.lead_id)
+            .order("created_at", { ascending: false })
+            .limit(5);
+
+          if (recentMsgs && recentMsgs.length > 0) {
+            let highEmbeddingSim = false;
+
+            // Embedding-based cosine similarity check
+            if (embedding && recentMsgs.some((m: any) => m.message_embedding)) {
+              for (const m of recentMsgs) {
+                if (!m.message_embedding) continue;
+                try {
+                  const stored = typeof m.message_embedding === "string"
+                    ? JSON.parse(m.message_embedding)
+                    : m.message_embedding;
+                  if (Array.isArray(stored) && stored.length === embedding.length) {
+                    let dot = 0, normA = 0, normB = 0;
+                    for (let i = 0; i < embedding.length; i++) {
+                      dot += embedding[i] * stored[i];
+                      normA += embedding[i] * embedding[i];
+                      normB += stored[i] * stored[i];
+                    }
+                    const cosineSim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+                    if (cosineSim > 0.85) {
+                      highEmbeddingSim = true;
+                      console.warn(`[ai_task] ⚠️ High embedding similarity (${cosineSim.toFixed(3)}) — message may be too similar`);
+                      break;
+                    }
+                  }
+                } catch { /* skip malformed embeddings */ }
+              }
+            }
+
+            // Text-based fallback similarity
+            if (!highEmbeddingSim) {
+              const maxTextSim = Math.max(...recentMsgs.map((m: any) => textSimilarity(content, m.generated_message)));
+              if (maxTextSim > 0.6) {
+                console.warn(`[ai_task] ⚠️ High text similarity (${maxTextSim.toFixed(2)}) to recent message`);
+              }
+            }
+          }
+
+          // Store in message_generation_log with sequence_step
           await logClient.from("message_generation_log").insert({
             workspace_id: resolvedWorkspaceId,
             lead_id: payload.lead_id,
             campaign_id: payload.campaign_id || null,
-            channel: payload.channel || "email",
+            channel: capturedChannel,
             task_type: task,
+            sequence_step: capturedStep,
             generated_message: content.slice(0, 10000),
             opening_type: classification.opening_type,
             primary_angle: classification.primary_angle,
@@ -2651,7 +2685,7 @@ serve(async (req) => {
             message_embedding: embedding ? JSON.stringify(embedding) : null,
           });
 
-          console.log(`[ai_task] ✅ Diversity log saved: opening=${classification.opening_type}, angle=${classification.primary_angle}, cta=${classification.cta_type}`);
+          console.log(`[ai_task] ✅ Diversity log saved: ch=${capturedChannel}, step=${capturedStep ?? "-"}, opening=${classification.opening_type}, angle=${classification.primary_angle}, cta=${classification.cta_type}`);
         } catch (err) {
           console.error("[ai_task] Diversity logging failed (non-blocking):", err);
         }
