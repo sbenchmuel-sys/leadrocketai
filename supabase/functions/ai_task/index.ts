@@ -2097,8 +2097,40 @@ serve(async (req) => {
       }
     }
 
+    // ── Message Diversity: fetch recent generation patterns ──
+    let diversityPromise: Promise<DiversityConstraints> = Promise.resolve({
+      avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [],
+      preferred_angles: [], preferred_cta_types: [],
+    });
+    // Resolve workspace_id for diversity lookups
+    let resolvedWorkspaceId: string | null = null;
+    if (payload?.lead_id && OUTREACH_TASKS.has(task)) {
+      diversityPromise = (async () => {
+        try {
+          const divClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          // Resolve workspace from lead ownership
+          const { data: membership } = await divClient
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", isServiceRole ? "service-role" : user.id)
+            .limit(1)
+            .maybeSingle();
+          resolvedWorkspaceId = membership?.workspace_id || null;
+          return buildDiversityConstraints(
+            divClient, String(payload.lead_id), resolvedWorkspaceId,
+            payload?.campaign_id ? String(payload.campaign_id) : null
+          );
+        } catch (err) {
+          console.error("[ai_task] Diversity fetch failed:", err);
+          return { avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [] };
+        }
+      })();
+    }
+
     // Await all in parallel
-    const [kbResult, , leadSignals, cachedContext] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise]);
+    const [kbResult, , leadSignals, cachedContext, diversityConstraints] = await Promise.all([
+      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise,
+    ]);
 
     // Inject cached context if available — enriches the payload with precomputed intelligence
     if (cachedContext) {
