@@ -955,6 +955,8 @@ serve(async (req) => {
 
         sentLeads.push({ leadId: lead.id, leadName: lead.name, subject });
         processed++;
+        // Increment daily send counter for this owner
+        dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
       } catch (leadErr) {
         console.error(`[automation-executor] Error processing lead ${lead.id}:`, leadErr);
         logEntry.status = "failed";
