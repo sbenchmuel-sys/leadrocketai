@@ -2208,8 +2208,23 @@ serve(async (req) => {
     // 3. Playbook context
     const playbookContext = enhancedPayload.playbook_context ? String(enhancedPayload.playbook_context) : "";
 
-    // Build final prompt in one pass
-    const userPrompt = buildFinalUserPrompt({ motionBlock, styleModifier, playbookContext, taskPrompt: taskBody });
+    // 4. Diversity constraints (injected for outreach tasks)
+    const hasDiversityConstraints = OUTREACH_TASKS.has(task) && (
+      diversityConstraints.avoid_opening_types.length > 0 ||
+      diversityConstraints.avoid_angles.length > 0 ||
+      diversityConstraints.avoid_cta_types.length > 0
+    );
+    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
+    if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
+
+    // Build final prompt in one pass (diversity block goes between style and playbook)
+    const promptParts: string[] = [];
+    if (motionBlock) promptParts.push(motionBlock);
+    if (styleModifier) promptParts.push(styleModifier);
+    if (diversityBlock) promptParts.push(diversityBlock);
+    if (playbookContext) promptParts.push(playbookContext);
+    promptParts.push(taskBody);
+    const userPrompt = promptParts.join("\n\n");
 
     // Log what was assembled
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
