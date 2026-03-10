@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink } from "lucide-react";
+import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 
@@ -40,6 +40,15 @@ interface EnrichmentRow {
   signals: EnrichmentSignal[];
   expires_at: string;
   created_at: string;
+}
+
+interface LeadSignal {
+  id: string;
+  signal_type: string;
+  signal_description: string;
+  source_url: string | null;
+  detected_at: string;
+  confidence_score: number | null;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────
@@ -89,6 +98,21 @@ const SIGNAL_LABELS: Record<string, string> = {
   leadership_change: "Leadership Change",
   partnership: "Partnership",
   news: "In the News",
+  new_partnership: "New Partnership",
+  job_change: "Job Change",
+  event: "Event",
+  press: "Press Coverage",
+};
+
+const SIGNAL_TYPE_COLORS: Record<string, string> = {
+  funding: "bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]",
+  hiring: "bg-primary/10 text-primary",
+  expansion: "bg-[hsl(var(--info)/0.1)] text-[hsl(var(--info))]",
+  product_launch: "bg-accent/50 text-accent-foreground",
+  new_partnership: "bg-secondary text-secondary-foreground",
+  job_change: "bg-[hsl(var(--warning)/0.1)] text-[hsl(var(--warning))]",
+  event: "bg-muted text-muted-foreground",
+  press: "bg-primary/10 text-primary",
 };
 
 // ── Component ──────────────────────────────────────────────────────────
@@ -96,7 +120,8 @@ const SIGNAL_LABELS: Record<string, string> = {
 export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: UnifiedIntelligenceCardProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
-  const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined); // undefined = not loaded
+  const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined);
+  const [leadSignals, setLeadSignals] = useState<LeadSignal[]>([]);
   const { runTask } = useAITask();
 
   const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
@@ -125,9 +150,26 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     }
   }, [lead.id]);
 
+  // ── Load lead signals ──
+  const loadLeadSignals = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from("lead_signals")
+        .select("id, signal_type, signal_description, source_url, detected_at, confidence_score")
+        .eq("lead_id", lead.id)
+        .order("detected_at", { ascending: false })
+        .limit(10);
+
+      setLeadSignals((data as LeadSignal[]) ?? []);
+    } catch {
+      setLeadSignals([]);
+    }
+  }, [lead.id]);
+
   useEffect(() => {
     loadEnrichment();
-  }, [loadEnrichment]);
+    loadLeadSignals();
+  }, [loadEnrichment, loadLeadSignals]);
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
@@ -348,6 +390,46 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                     {typeof obj === "string" ? obj : JSON.stringify(obj)}
                   </p>
                 ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Lead Sales Signals */}
+        {leadSignals.length > 0 && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                <TrendingUp className="h-3 w-3" /> Sales Signals ({leadSignals.length})
+              </span>
+              <div className="space-y-1.5 mt-1">
+                {leadSignals.slice(0, maxItems).map((s) => (
+                  <div key={s.id} className="flex items-start gap-2">
+                    <Badge className={cn("text-[10px] shrink-0", SIGNAL_TYPE_COLORS[s.signal_type] ?? "bg-muted text-muted-foreground")}>
+                      {SIGNAL_LABELS[s.signal_type] ?? s.signal_type}
+                    </Badge>
+                    <div className="min-w-0">
+                      <p className="text-xs text-foreground">{s.signal_description}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatDistanceToNow(new Date(s.detected_at), { addSuffix: true })}
+                        </span>
+                        {s.source_url && (
+                          <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline flex items-center gap-0.5">
+                            <ExternalLink className="h-2.5 w-2.5" /> Source
+                          </a>
+                        )}
+                        {s.confidence_score != null && (
+                          <span className="text-[10px] text-muted-foreground">{Math.round(s.confidence_score * 100)}%</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {leadSignals.length > maxItems && (
+                  <p className="text-[10px] text-muted-foreground">+{leadSignals.length - maxItems} more</p>
+                )}
               </div>
             </div>
           </>

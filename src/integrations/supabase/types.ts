@@ -1071,6 +1071,47 @@ export type Database = {
           },
         ]
       }
+      lead_signals: {
+        Row: {
+          confidence_score: number | null
+          created_at: string
+          detected_at: string
+          id: string
+          lead_id: string
+          signal_description: string
+          signal_type: string
+          source_url: string | null
+        }
+        Insert: {
+          confidence_score?: number | null
+          created_at?: string
+          detected_at?: string
+          id?: string
+          lead_id: string
+          signal_description: string
+          signal_type: string
+          source_url?: string | null
+        }
+        Update: {
+          confidence_score?: number | null
+          created_at?: string
+          detected_at?: string
+          id?: string
+          lead_id?: string
+          signal_description?: string
+          signal_type?: string
+          source_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_signals_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           acceleration_until: string | null

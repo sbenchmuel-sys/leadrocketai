@@ -589,6 +589,9 @@ Inbound Email:
 Knowledge Context (approved snippets):
 {{KNOWLEDGE_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Meeting Link:
 {{MEETING_LINK}}
 
@@ -869,6 +872,9 @@ Rules:
 Lead Context:
 {{LEAD_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Interactions (most recent first):
 {{INTERACTIONS_TEXT}}
 
@@ -951,6 +957,9 @@ Rep Context:
 
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
+
+Sales Signals (recent intelligence — use for personalization):
+{{SIGNALS}}
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
@@ -1515,6 +1524,9 @@ Latest Inbound Email:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Meeting Link (optional):
 {{MEETING_LINK}}
 
@@ -1843,7 +1855,31 @@ serve(async (req) => {
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
-    // Run cadence fetch AND KB search in parallel
+    // Fetch lead_signals for AI context injection
+    let signalsPromise: Promise<{ type: string; description: string; source: string }[]> = Promise.resolve([]);
+    if (payload?.lead_id) {
+      signalsPromise = (async () => {
+        try {
+          const adminClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          const { data } = await adminClient
+            .from("lead_signals")
+            .select("signal_type, signal_description, source_url")
+            .eq("lead_id", payload.lead_id)
+            .order("detected_at", { ascending: false })
+            .limit(8);
+          return (data || []).map((s: any) => ({
+            type: s.signal_type,
+            description: s.signal_description,
+            source: s.source_url || "",
+          }));
+        } catch (err) {
+          console.error("[ai_task] Failed to load lead_signals:", err);
+          return [];
+        }
+      })();
+    }
+
+    // Run cadence fetch AND KB search AND signals fetch in parallel
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
@@ -1861,8 +1897,14 @@ serve(async (req) => {
       }
     }
 
-    // Await both in parallel
-    const [kbResult] = await Promise.all([kbSearchPromise, cadencePromise]);
+    // Await all in parallel
+    const [kbResult, , leadSignals] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise]);
+
+    // Inject lead signals into context
+    if (leadSignals.length > 0) {
+      enhancedPayload.signals = JSON.stringify(leadSignals);
+      console.log(`[ai_task] ✅ Injected ${leadSignals.length} lead signals into context`);
+    }
 
     if (kbResult.formatted) {
       // For outbound first touch, apply stricter cap
