@@ -872,6 +872,9 @@ Rules:
 Lead Context:
 {{LEAD_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Interactions (most recent first):
 {{INTERACTIONS_TEXT}}
 
