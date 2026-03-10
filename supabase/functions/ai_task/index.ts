@@ -23,7 +23,95 @@ const KNOWLEDGE_SEARCH_TASKS = [
   "re_engagement_intro",
 ];
 
-// Function to get knowledge context using text-based search (no embeddings required)
+// Generate a query embedding via OpenAI
+async function generateQueryEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text.slice(0, 8000), // text-embedding-3-small context limit
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[ai_task] Embedding API error (${response.status}):`, errText.slice(0, 200));
+      return null;
+    }
+
+    const data = await response.json();
+    return data.data?.[0]?.embedding || null;
+  } catch (err) {
+    console.error("[ai_task] Failed to generate query embedding:", err);
+    return null;
+  }
+}
+
+// Semantic search using embeddings (primary)
+async function getSemanticKnowledgeContext(
+  queryText: string,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  userId: string,
+  leadId?: string,
+  contentTypes?: string[]
+): Promise<string> {
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
+    console.log("[ai_task] No OPENAI_API_KEY — falling back to text search");
+    return "";
+  }
+
+  const queryEmbedding = await generateQueryEmbedding(queryText, openaiKey);
+  if (!queryEmbedding) {
+    console.warn("[ai_task] Failed to generate query embedding — falling back to text search");
+    return "";
+  }
+
+  try {
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+    const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
+      query_embedding: JSON.stringify(queryEmbedding),
+      p_owner_user_id: userId,
+      match_threshold: 0.4,
+      match_count: 5,
+      filter_customer_facing: true,
+      filter_lead_id: leadId || null,
+      filter_content_types: contentTypes || null,
+    });
+
+    if (error) {
+      console.error("[ai_task] Semantic search failed:", error);
+      return "";
+    }
+
+    if (!matches || matches.length === 0) {
+      console.log("[ai_task] No semantic matches found");
+      return "";
+    }
+
+    console.log(`[ai_task] Found ${matches.length} semantic matches (top similarity: ${matches[0]?.similarity?.toFixed(3)})`);
+
+    return matches
+      .map((m: { title: string | null; content: string; content_type: string; similarity: number }) => {
+        const header = m.title ? `[${m.title}]` : "";
+        const typeTag = m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
+        return `${header}${typeTag}\n${m.content}`;
+      })
+      .join("\n\n---\n\n");
+  } catch (err) {
+    console.error("[ai_task] Error in semantic search:", err);
+    return "";
+  }
+}
+
+// Fallback: text-based ILIKE search (used when embeddings unavailable)
 async function getTextBasedKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
@@ -34,33 +122,18 @@ async function getTextBasedKnowledgeContext(
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Extract key terms from the query for text search
-    const searchTerms = queryText
-      .toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter(term => term.length > 3)
-      .slice(0, 10)
-      .join(' | '); // OR search
-    
-    console.log(`[ai_task] Text search terms: "${searchTerms.slice(0, 100)}..."`);
-    
-    // Build query for text-based search
     let query = supabaseAdmin
       .from("kb_chunks")
-      .select("id, title, content, source")
+      .select("id, title, content, source, content_type")
       .eq("owner_user_id", userId)
       .eq("allowed_customer_facing", true)
       .eq("processing_status", "completed")
       .limit(5);
     
-    // Filter by lead_id if provided (include both lead-specific and global knowledge)
     if (leadId) {
       query = query.or(`lead_id.eq.${leadId},lead_id.is.null`);
     }
     
-    // Use ilike for flexible text matching on multiple terms
-    // Search in content for any of the key terms
     const keyTerms = queryText
       .toLowerCase()
       .replace(/[^\w\s]/g, ' ')
@@ -69,7 +142,6 @@ async function getTextBasedKnowledgeContext(
       .slice(0, 5);
     
     if (keyTerms.length > 0) {
-      // Create an OR condition for content matching
       const contentFilters = keyTerms.map(term => `content.ilike.%${term}%`).join(',');
       query = query.or(contentFilters);
     }
@@ -86,21 +158,36 @@ async function getTextBasedKnowledgeContext(
       return "";
     }
 
-    console.log(`[ai_task] Found ${matches.length} text matches${leadId ? ` for lead ${leadId}` : ""}`);
+    console.log(`[ai_task] Found ${matches.length} text matches (fallback)${leadId ? ` for lead ${leadId}` : ""}`);
 
-    // Format the matched chunks as context
-    const context = matches
-      .map((m: { title: string | null; content: string; source: string | null }) => {
+    return matches
+      .map((m: { title: string | null; content: string; content_type?: string }) => {
         const header = m.title ? `[${m.title}]` : "";
-        return `${header}\n${m.content}`;
+        const typeTag = m.content_type && m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
+        return `${header}${typeTag}\n${m.content}`;
       })
       .join("\n\n---\n\n");
-
-    return context;
   } catch (err) {
     console.error("[ai_task] Error in text search:", err);
     return "";
   }
+}
+
+// Combined retrieval: semantic first, ILIKE fallback
+async function getKnowledgeContext(
+  queryText: string,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  userId: string,
+  leadId?: string
+): Promise<string> {
+  // Try semantic search first
+  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+  if (semanticResult) return semanticResult;
+
+  // Fallback to text-based search
+  console.log("[ai_task] Falling back to text-based KB search");
+  return getTextBasedKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
 }
 
 // Dynamic CORS based on allowed origins
@@ -1692,7 +1779,7 @@ serve(async (req) => {
         const supabaseServiceKeyForKb = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getTextBasedKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKeyForKb, user.id, leadId);
       }
     }
 
