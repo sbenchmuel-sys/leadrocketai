@@ -1121,7 +1121,9 @@ export type Database = {
           id: string
           lead_id: string
           signal_description: string
+          signal_source: string
           signal_type: string
+          source_detail: Json | null
           source_url: string | null
         }
         Insert: {
@@ -1131,7 +1133,9 @@ export type Database = {
           id?: string
           lead_id: string
           signal_description: string
+          signal_source?: string
           signal_type: string
+          source_detail?: Json | null
           source_url?: string | null
         }
         Update: {
@@ -1141,7 +1145,9 @@ export type Database = {
           id?: string
           lead_id?: string
           signal_description?: string
+          signal_source?: string
           signal_type?: string
+          source_detail?: Json | null
           source_url?: string | null
         }
         Relationships: [
