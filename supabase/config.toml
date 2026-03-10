@@ -86,3 +86,9 @@ verify_jwt = false
 
 [functions.generate-personalized-suggestions]
 verify_jwt = false
+
+[functions.ingest-website-signals]
+verify_jwt = false
+
+[functions.ingest-crm-signals]
+verify_jwt = false
