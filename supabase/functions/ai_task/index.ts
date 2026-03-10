@@ -317,6 +317,171 @@ Constraints:
 - Include a suggested objection response if appropriate`,
 };
 
+// ============================================
+// SEQUENCE-AWARE MESSAGING FRAMEWORKS
+// ============================================
+
+type SequenceStepFramework = { structure: string; goal: string; constraints: string };
+
+const EMAIL_SEQUENCE: Record<number, SequenceStepFramework> = {
+  1: {
+    structure: `1. Personalized observation — reference something specific about the lead or company
+2. Quick context — one sentence on why you're reaching out
+3. Question — a curiosity-driven question to invite a reply`,
+    goal: "Spark curiosity and earn a reply",
+    constraints: "Maximum 120 words. One CTA only. No attachments. No calendar links.",
+  },
+  2: {
+    structure: `1. Industry insight — share a relevant trend or data point
+2. Business problem — connect the insight to a likely challenge they face
+3. Question — ask if they're experiencing this or exploring solutions`,
+    goal: "Create problem awareness",
+    constraints: "90–150 words. Reference a specific insight. One CTA only.",
+  },
+  3: {
+    structure: `1. Proof or example — mention a relevant result, case study, or client outcome
+2. Value proposition — tie the proof to a clear benefit for their situation
+3. Soft CTA — suggest a next step without pressure`,
+    goal: "Build credibility and demonstrate value",
+    constraints: "90–150 words. One concrete proof point. One soft CTA.",
+  },
+  4: {
+    structure: `1. Polite close — acknowledge you've reached out multiple times
+2. Low pressure message — no guilt, no urgency tricks
+3. Optional reconnect — leave the door open for future contact`,
+    goal: "Respectful breakup that preserves the relationship",
+    constraints: "60–100 words. No guilt language. No fake urgency. Warm and professional.",
+  },
+};
+
+const SMS_SEQUENCE: Record<number, SequenceStepFramework> = {
+  1: {
+    structure: "Curiosity question — one compelling question that creates intrigue",
+    goal: "Spark curiosity",
+    constraints: "MAXIMUM 160 characters. One sentence. Direct tone. No greeting beyond first name.",
+  },
+  2: {
+    structure: "Problem question — ask about a specific pain point relevant to their role",
+    goal: "Surface a problem",
+    constraints: "MAXIMUM 160 characters. One sentence. No sign-off.",
+  },
+  3: {
+    structure: "Short insight — share one concise data point or outcome",
+    goal: "Provide value in minimal space",
+    constraints: "MAXIMUM 160 characters. One sentence. Include a number or metric if possible.",
+  },
+  4: {
+    structure: "Soft close — respectful final nudge or permission to close the loop",
+    goal: "Breakup without pressure",
+    constraints: "MAXIMUM 160 characters. No guilt. Warm tone.",
+  },
+};
+
+const WHATSAPP_SEQUENCE: Record<number, SequenceStepFramework> = {
+  1: {
+    structure: `1. Friendly opener — casual greeting with first name
+2. Question — a conversational question to invite a reply`,
+    goal: "Start a conversation naturally",
+    constraints: "Maximum 60 words. Casual tone. One emoji max. No sign-off.",
+  },
+  2: {
+    structure: `1. Short insight — one relevant trend or observation
+2. Question — ask if this resonates with their situation`,
+    goal: "Share value and keep the conversation going",
+    constraints: "Maximum 60 words. Conversational. No formal language.",
+  },
+  3: {
+    structure: `1. Proof — mention a relevant result or example briefly
+2. Question — ask if they'd like to learn more`,
+    goal: "Build credibility through a real example",
+    constraints: "Maximum 60 words. Keep it light. No marketing speak.",
+  },
+  4: {
+    structure: `1. Soft close — friendly message acknowledging the outreach
+2. Open door — leave room for future contact`,
+    goal: "Respectful close that preserves the relationship",
+    constraints: "Maximum 50 words. Warm. No pressure.",
+  },
+};
+
+const VOICE_SEQUENCE: Record<number, SequenceStepFramework> = {
+  1: {
+    structure: `1. Reason for call — one sentence on why you're calling
+2. Discovery question — an open-ended question to start a conversation`,
+    goal: "Earn 30 more seconds of attention",
+    constraints: "3–4 bullet points. Natural spoken language. Under 10 seconds per bullet.",
+  },
+  2: {
+    structure: `1. Problem framing — articulate a challenge relevant to their role
+2. Bridge question — ask how they're currently handling it`,
+    goal: "Surface a pain point through conversation",
+    constraints: "3–4 bullet points. No jargon. Conversational phrasing.",
+  },
+  3: {
+    structure: `1. Proof — mention a relevant client result or outcome
+2. Value bridge — connect the proof to their likely situation
+3. Next step question — ask if it's worth exploring`,
+    goal: "Demonstrate credibility and propose next step",
+    constraints: "4–5 bullet points. Include one specific metric or name if available.",
+  },
+  4: {
+    structure: `1. Permission close — acknowledge multiple attempts respectfully
+2. Final question — ask if timing is wrong or if there's someone better to speak with`,
+    goal: "Respectful close or redirect",
+    constraints: "3 bullet points max. No guilt. Professional warmth.",
+  },
+};
+
+const SEQUENCE_FRAMEWORKS: Record<string, Record<number, SequenceStepFramework>> = {
+  email: EMAIL_SEQUENCE,
+  sms: SMS_SEQUENCE,
+  whatsapp: WHATSAPP_SEQUENCE,
+  voice: VOICE_SEQUENCE,
+};
+
+// Map task_type to implicit sequence step
+const TASK_TO_SEQUENCE_STEP: Record<string, number> = {
+  pre_email_1_intro: 1,
+  email_intro_fast: 1,
+  email_intro_nurture: 1,
+  inbound_intro: 1,
+  re_engagement_intro: 1,
+  pre_email_2_followup: 2,
+  pre_email_3_followup: 3,
+  pre_email_4_breakup: 4,
+};
+
+/**
+ * Resolve sequence step from explicit payload or task_type mapping.
+ */
+function resolveSequenceStep(task: string, payloadStep?: number | string): number | null {
+  if (payloadStep != null) {
+    const n = Number(payloadStep);
+    if (n >= 1 && n <= 4) return n;
+  }
+  return TASK_TO_SEQUENCE_STEP[task] ?? null;
+}
+
+/**
+ * Get sequence-aware framework block. When a sequence step is known,
+ * this overrides the generic channel framework with step-specific structure.
+ */
+function getSequenceFramework(channel: string, step: number): string {
+  const channelSeq = SEQUENCE_FRAMEWORKS[channel];
+  if (!channelSeq) return "";
+  const fw = channelSeq[step];
+  if (!fw) return "";
+
+  return `=== SEQUENCE STEP ${step} FRAMEWORK (${channel.toUpperCase()}) ===
+Goal: ${fw.goal}
+
+Structure (follow this order):
+${fw.structure}
+
+Constraints:
+${fw.constraints}`;
+}
+
 const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
   "intent_router", "extract_milestones_risks", "extract_deal_factors",
   "recommend_next_steps", "lead_deep_analysis", "analyze_outgoing_email",
