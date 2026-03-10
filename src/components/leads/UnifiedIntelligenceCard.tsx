@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp } from "lucide-react";
+import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 
@@ -120,6 +120,8 @@ const SIGNAL_TYPE_COLORS: Record<string, string> = {
 export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: UnifiedIntelligenceCardProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
+  const [isRefreshingContext, setIsRefreshingContext] = useState(false);
+  const [contextCacheAge, setContextCacheAge] = useState<string | null>(null);
   const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined);
   const [leadSignals, setLeadSignals] = useState<LeadSignal[]>([]);
   const { runTask } = useAITask();
@@ -166,10 +168,66 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     }
   }, [lead.id]);
 
+  // ── Load context cache age ──
+  const loadContextCacheAge = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from("lead_context_cache")
+        .select("last_generated_at")
+        .eq("lead_id", lead.id)
+        .maybeSingle();
+
+      if (data?.last_generated_at) {
+        setContextCacheAge(formatDistanceToNow(new Date(data.last_generated_at), { addSuffix: true }));
+      } else {
+        setContextCacheAge(null);
+      }
+    } catch {
+      setContextCacheAge(null);
+    }
+  }, [lead.id]);
+
+  // ── Refresh context cache ──
+  const handleRefreshContext = async () => {
+    setIsRefreshingContext(true);
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast.error("Please log in first.");
+        return;
+      }
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ lead_id: lead.id, force: true }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Context refresh failed (${res.status})`);
+      }
+
+      toast.success("Intelligence context refreshed");
+      await loadContextCacheAge();
+    } catch (err: any) {
+      console.error("[UnifiedIntelligenceCard] Context refresh error:", err);
+      toast.error(err.message || "Context refresh failed");
+    } finally {
+      setIsRefreshingContext(false);
+    }
+  };
+
   useEffect(() => {
     loadEnrichment();
     loadLeadSignals();
-  }, [loadEnrichment, loadLeadSignals]);
+    loadContextCacheAge();
+  }, [loadEnrichment, loadLeadSignals, loadContextCacheAge]);
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
@@ -298,10 +356,33 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     <Card className={cn(isCompact ? "border-0 shadow-none" : "")}>
       {!isCompact && (
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Brain className="h-4 w-4 text-primary" />
-            Intelligence
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Brain className="h-4 w-4 text-primary" />
+              Intelligence
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {contextCacheAge && (
+                <span className="text-[10px] text-muted-foreground">
+                  Context: {contextCacheAge}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={handleRefreshContext}
+                disabled={isRefreshingContext}
+                title="Refresh intelligence context"
+              >
+                {isRefreshingContext ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
       )}
 

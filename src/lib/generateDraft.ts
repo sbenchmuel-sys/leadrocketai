@@ -391,7 +391,33 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   };
   onPipelineReady(partialResult);
 
-  // Step 6: Stream AI response via SSE
+  // Step 6: Ensure context cache exists (fire-and-forget, non-blocking)
+  // If cache is missing, trigger build so it's ready for future calls
+  try {
+    const { data: cacheCheck } = await supabase
+      .from("lead_context_cache")
+      .select("id")
+      .eq("lead_id", lead_id)
+      .maybeSingle();
+
+    if (!cacheCheck) {
+      console.log("[streamDraft] No context cache — triggering build (fire-and-forget)");
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const { data: { session: s } } = await supabase.auth.getSession();
+      fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${s?.access_token || supabaseKey}`,
+          apikey: supabaseKey,
+        },
+        body: JSON.stringify({ lead_id }),
+      }).catch(() => {}); // fire-and-forget
+    }
+  } catch { /* ignore cache check failures */ }
+
+  // Step 7: Stream AI response via SSE
   let fullText = "";
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
