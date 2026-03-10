@@ -43,10 +43,10 @@ async function buildDiversityConstraints(
     // Fetch recent messages for this lead (for sequential dedup)
     const { data: leadMessages } = await adminClient
       .from("message_generation_log")
-      .select("opening_type, primary_angle, cta_type")
+      .select("opening_type, primary_angle, cta_type, sequence_step, channel")
       .eq("lead_id", leadId)
       .order("created_at", { ascending: false })
-      .limit(5);
+      .limit(8);
 
     if (leadMessages && leadMessages.length > 0) {
       // Rule: don't reuse same opening_type as the last message
