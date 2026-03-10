@@ -7,7 +7,20 @@ const corsHeaders = {
 };
 
 // Smart chunking function that preserves context
-function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize = 100): string[] {
+// Valid content_type values for Sales Brain
+const VALID_CONTENT_TYPES = [
+  "knowledge", "messaging", "objection", "discovery",
+  "industry", "competitor", "signal", "strategy", "case_study",
+] as const;
+
+type ContentType = typeof VALID_CONTENT_TYPES[number];
+
+function isValidContentType(v: string): v is ContentType {
+  return (VALID_CONTENT_TYPES as readonly string[]).includes(v);
+}
+
+// Smart chunking function that preserves context — title is stored as metadata, NOT prefixed into content
+function chunkText(text: string, maxChunkSize = 600, overlapSize = 100): string[] {
   const chunks: string[] = [];
   const sentences = text.split(/(?<=[.!?])\s+/);
   
@@ -15,13 +28,9 @@ function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize 
   let lastSentences: string[] = [];
   
   for (const sentence of sentences) {
-    // If adding this sentence exceeds the limit, save the chunk
     if (currentChunk.length + sentence.length > maxChunkSize && currentChunk.length > 0) {
-      // Add title context to the chunk
-      const finalChunk = title ? `[${title}]\n${currentChunk.trim()}` : currentChunk.trim();
-      chunks.push(finalChunk);
+      chunks.push(currentChunk.trim());
       
-      // Keep the last few sentences for overlap
       const overlapText = lastSentences.slice(-2).join(" ");
       currentChunk = overlapText.length < overlapSize ? overlapText + " " : "";
       lastSentences = [];
@@ -31,10 +40,8 @@ function chunkText(text: string, title: string, maxChunkSize = 600, overlapSize 
     lastSentences.push(sentence);
   }
   
-  // Add the final chunk if there's remaining content
   if (currentChunk.trim().length > 50) {
-    const finalChunk = title ? `[${title}]\n${currentChunk.trim()}` : currentChunk.trim();
-    chunks.push(finalChunk);
+    chunks.push(currentChunk.trim());
   }
   
   return chunks;
