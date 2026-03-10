@@ -42,6 +42,15 @@ interface EnrichmentRow {
   created_at: string;
 }
 
+interface LeadSignal {
+  id: string;
+  signal_type: string;
+  signal_description: string;
+  source_url: string | null;
+  detected_at: string;
+  confidence_score: number | null;
+}
+
 // ── Props ──────────────────────────────────────────────────────────────
 
 interface UnifiedIntelligenceCardProps {
