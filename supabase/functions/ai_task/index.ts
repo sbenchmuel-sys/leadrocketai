@@ -1,27 +1,40 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// Tasks that require semantic knowledge search
-const KNOWLEDGE_SEARCH_TASKS = [
-  "email_intro_fast",
-  "email_intro_nurture",
-  "followup_sequence_4",
-  "post_meeting_recap",
-  "answer_questions",
-  "pre_email_1_intro",
-  "inbound_intro",
-  "post_meeting_followup_personalized",
-  "nurture_sequence",
-  "nurture_email_single",
-  "post_meeting_followup_email",
-  "extract_milestones_risks",
-  "extract_deal_factors",
-  "recommend_next_steps",
-  "lead_deep_analysis",
-  "linkedin_followup",
-  "reply_to_thread",
-  "re_engagement_intro",
-];
+// Task-aware KB retrieval config: maps AI tasks → required content_types
+// Retrieval returns max 1 chunk per content_type, max 4 total chunks
+const TASK_KB_CONFIG: Record<string, string[]> = {
+  // Outbound first touch / intros
+  email_intro_fast:                   ["messaging", "knowledge", "industry"],
+  email_intro_nurture:                ["messaging", "knowledge", "industry"],
+  pre_email_1_intro:                  ["messaging", "knowledge", "industry"],
+  inbound_intro:                      ["messaging", "knowledge", "industry"],
+  re_engagement_intro:                ["messaging", "knowledge", "industry"],
+  // Follow-ups
+  followup_sequence_4:                ["messaging", "knowledge"],
+  linkedin_followup:                  ["messaging", "knowledge"],
+  // Reply handling
+  reply_to_thread:                    ["knowledge", "objection", "messaging"],
+  answer_questions:                   ["knowledge", "objection", "messaging"],
+  // Meeting
+  post_meeting_recap:                 ["knowledge", "discovery", "strategy"],
+  post_meeting_followup_personalized: ["knowledge", "discovery", "strategy"],
+  post_meeting_followup_email:        ["knowledge", "discovery"],
+  // Nurture
+  nurture_sequence:                   ["messaging", "industry"],
+  nurture_email_single:               ["messaging", "industry"],
+  // Analysis
+  extract_milestones_risks:           ["strategy", "signal"],
+  extract_deal_factors:               ["strategy", "signal"],
+  recommend_next_steps:               ["strategy", "signal", "knowledge"],
+  lead_deep_analysis:                 ["strategy", "signal", "industry"],
+};
+
+// Derive flat list for backward-compatible "should we search KB?" check
+const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
+
+/** Max chunks returned per retrieval call */
+const MAX_KB_CHUNKS = 4;
 
 // Generate a query embedding via OpenAI
 async function generateQueryEmbedding(text: string, apiKey: string): Promise<number[] | null> {
