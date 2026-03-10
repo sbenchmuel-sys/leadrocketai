@@ -1011,42 +1011,54 @@ export type Database = {
           allowed_customer_facing: boolean
           chunk_index: number | null
           content: string
+          content_type: string
           created_at: string
           document_id: string | null
           embedding: string | null
           id: string
           lead_id: string | null
           owner_user_id: string | null
+          priority: number
           processing_status: string | null
+          segment: string | null
           source: string | null
+          tags: string[] | null
           title: string | null
         }
         Insert: {
           allowed_customer_facing?: boolean
           chunk_index?: number | null
           content: string
+          content_type?: string
           created_at?: string
           document_id?: string | null
           embedding?: string | null
           id?: string
           lead_id?: string | null
           owner_user_id?: string | null
+          priority?: number
           processing_status?: string | null
+          segment?: string | null
           source?: string | null
+          tags?: string[] | null
           title?: string | null
         }
         Update: {
           allowed_customer_facing?: boolean
           chunk_index?: number | null
           content?: string
+          content_type?: string
           created_at?: string
           document_id?: string | null
           embedding?: string | null
           id?: string
           lead_id?: string | null
           owner_user_id?: string | null
+          priority?: number
           processing_status?: string | null
+          segment?: string | null
           source?: string | null
+          tags?: string[] | null
           title?: string | null
         }
         Relationships: [
