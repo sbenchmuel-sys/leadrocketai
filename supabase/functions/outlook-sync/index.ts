@@ -15,6 +15,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
+import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -365,6 +366,27 @@ serve(async (req) => {
               body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
             });
+
+            // Capture last outbound as winning interaction
+            const { data: lastOutbound } = await serviceSupabase
+              .from("interactions")
+              .select("body_text")
+              .eq("lead_id", leadId)
+              .eq("direction", "outbound")
+              .order("occurred_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (lastOutbound?.body_text) {
+              captureWinningInteraction({
+                supabaseAdmin: serviceSupabase,
+                userId: ownerUserId,
+                leadId,
+                messageContent: lastOutbound.body_text,
+                channel: "email",
+                outcomeType: "meeting_booked",
+              });
+            }
           }
         }
 
