@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { safeDecryptToken } from "../_shared/encryption.ts";
+import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
