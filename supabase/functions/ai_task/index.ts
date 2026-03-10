@@ -202,18 +202,26 @@ async function getTextBasedKnowledgeContext(
 }
 
 // Combined retrieval: semantic first, ILIKE fallback
+// Accepts task name to resolve content_type filters from TASK_KB_CONFIG
 async function getKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
   userId: string,
-  leadId?: string
+  leadId?: string,
+  task?: string
 ): Promise<string> {
-  // Try semantic search first
-  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+  // Resolve content types for this task
+  const contentTypes = task ? TASK_KB_CONFIG[task] || undefined : undefined;
+  if (contentTypes) {
+    console.log(`[ai_task] Task "${task}" → KB content_types: [${contentTypes.join(", ")}]`);
+  }
+
+  // Try semantic search first (with content_type filtering)
+  const semanticResult = await getSemanticKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes);
   if (semanticResult) return semanticResult;
 
-  // Fallback to text-based search
+  // Fallback to text-based search (no content_type filtering — best-effort)
   console.log("[ai_task] Falling back to text-based KB search");
   return getTextBasedKnowledgeContext(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
 }
