@@ -98,6 +98,21 @@ const SIGNAL_LABELS: Record<string, string> = {
   leadership_change: "Leadership Change",
   partnership: "Partnership",
   news: "In the News",
+  new_partnership: "New Partnership",
+  job_change: "Job Change",
+  event: "Event",
+  press: "Press Coverage",
+};
+
+const SIGNAL_TYPE_COLORS: Record<string, string> = {
+  funding: "bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]",
+  hiring: "bg-primary/10 text-primary",
+  expansion: "bg-[hsl(var(--info)/0.1)] text-[hsl(var(--info))]",
+  product_launch: "bg-accent/50 text-accent-foreground",
+  new_partnership: "bg-secondary text-secondary-foreground",
+  job_change: "bg-[hsl(var(--warning)/0.1)] text-[hsl(var(--warning))]",
+  event: "bg-muted text-muted-foreground",
+  press: "bg-primary/10 text-primary",
 };
 
 // ── Component ──────────────────────────────────────────────────────────
