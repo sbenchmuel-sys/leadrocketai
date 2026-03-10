@@ -198,6 +198,48 @@ serve(async (req) => {
     const maxSendsEnv = Deno.env.get("MAX_SENDS_PER_RUN");
     const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : Infinity;
 
+    // ── DAILY SEND CAP PER MAILBOX ──────────────────────────
+    // Counts emails already sent today (UTC) from automation_log for each owner.
+    // Enforced per-owner inside the lead loop below.
+    const dailySendCounts = new Map<string, number>();
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    // Pre-load daily cap from workspace cadence settings (per-owner, loaded lazily)
+    const dailyCapCache = new Map<string, number>();
+
+    async function getDailyCapForOwner(ownerId: string): Promise<number> {
+      const cached = dailyCapCache.get(ownerId);
+      if (cached !== undefined) return cached;
+
+      const { data: wpProfile } = await supabase
+        .from("workspace_profiles")
+        .select("cadence_settings")
+        .eq("user_id", ownerId)
+        .single();
+
+      const cadence = (wpProfile?.cadence_settings as any) ?? {};
+      const cap = cadence?.guardrails?.max_sends_per_day_per_mailbox ?? 40;
+      dailyCapCache.set(ownerId, cap);
+      return cap;
+    }
+
+    async function getDailySendCount(ownerId: string): Promise<number> {
+      const cached = dailySendCounts.get(ownerId);
+      if (cached !== undefined) return cached;
+
+      const { count } = await supabase
+        .from("automation_log")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_user_id", ownerId)
+        .eq("status", "sent")
+        .gte("created_at", todayStart.toISOString());
+
+      const c = count ?? 0;
+      dailySendCounts.set(ownerId, c);
+      return c;
+    }
+
     if (ownerFilter) {
       query = query.eq("owner_user_id", ownerFilter);
     }
@@ -263,6 +305,15 @@ serve(async (req) => {
       if (processed >= maxSendsPerRun) {
         console.log(`[automation-executor] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping`);
         break;
+      }
+
+      // Enforce daily send cap per mailbox/owner
+      const dailyCap = await getDailyCapForOwner(lead.owner_user_id);
+      const dailyCount = await getDailySendCount(lead.owner_user_id);
+      if (dailyCount >= dailyCap) {
+        console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap}`);
+        skipped++;
+        continue;
       }
 
       const logEntry: Record<string, unknown> = {
@@ -904,6 +955,8 @@ serve(async (req) => {
 
         sentLeads.push({ leadId: lead.id, leadName: lead.name, subject });
         processed++;
+        // Increment daily send counter for this owner
+        dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
       } catch (leadErr) {
         console.error(`[automation-executor] Error processing lead ${lead.id}:`, leadErr);
         logEntry.status = "failed";

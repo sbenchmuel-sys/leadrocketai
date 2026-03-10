@@ -16,6 +16,7 @@ export interface Guardrails {
   max_emails_per_lead_per_30d: number;
   same_day_send_allowed: boolean;
   jitter_percent: number;
+  max_sends_per_day_per_mailbox: number;
 }
 
 export interface StopPauseRules {
@@ -123,6 +124,7 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
     max_emails_per_lead_per_30d: 8,
     same_day_send_allowed: false,
     jitter_percent: 0.15,
+    max_sends_per_day_per_mailbox: 40,
   },
   stop_pause_rules: {
     stop_on_any_reply: true,
