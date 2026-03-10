@@ -589,6 +589,9 @@ Inbound Email:
 Knowledge Context (approved snippets):
 {{KNOWLEDGE_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Meeting Link:
 {{MEETING_LINK}}
 
