@@ -2465,16 +2465,26 @@ serve(async (req) => {
     const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
     if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
 
-    // 5. Channel framework — resolve channel and inject structure constraints
+    // 5. Channel + Sequence framework — resolve channel, detect step, select framework
     const resolvedChannel = resolveChannel(task, payload?.channel ? String(payload.channel) : undefined);
-    const channelFrameworkBlock = getChannelFramework(task, resolvedChannel);
-    if (channelFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] Framework: ${resolvedChannel}`);
+    const sequenceStep = resolveSequenceStep(task, payload?.sequence_step);
+    
+    // Sequence-aware framework overrides generic channel framework when step is known
+    let messagingFrameworkBlock = "";
+    if (sequenceStep && !CHANNEL_FRAMEWORK_EXEMPT_TASKS.has(task)) {
+      messagingFrameworkBlock = getSequenceFramework(resolvedChannel, sequenceStep);
+    }
+    // Fall back to generic channel framework if no sequence step
+    if (!messagingFrameworkBlock) {
+      messagingFrameworkBlock = getChannelFramework(task, resolvedChannel);
+    }
+    if (messagingFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] ${resolvedChannel}${sequenceStep ? ` step=${sequenceStep}` : " (generic)"}`);
 
-    // Build final prompt in one pass: motion → style → channel → diversity → playbook → task
+    // Build final prompt in one pass: motion → style → channel/sequence → diversity → playbook → task
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
-    if (channelFrameworkBlock) promptParts.push(channelFrameworkBlock);
+    if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
@@ -2484,7 +2494,7 @@ serve(async (req) => {
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    console.log(`[ai_task] Channel: ${resolvedChannel}, Framework injected: ${!!channelFrameworkBlock}`);
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${!!messagingFrameworkBlock}`);
 
     // Select model: honor client-side model_hint (from complexity scorer) if provided,
     // otherwise fall back to server-side task tier
