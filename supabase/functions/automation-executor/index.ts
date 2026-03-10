@@ -307,6 +307,15 @@ serve(async (req) => {
         break;
       }
 
+      // Enforce daily send cap per mailbox/owner
+      const dailyCap = await getDailyCapForOwner(lead.owner_user_id);
+      const dailyCount = await getDailySendCount(lead.owner_user_id);
+      if (dailyCount >= dailyCap) {
+        console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap}`);
+        skipped++;
+        continue;
+      }
+
       const logEntry: Record<string, unknown> = {
         lead_id: lead.id,
         owner_user_id: lead.owner_user_id,
