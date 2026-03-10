@@ -2309,6 +2309,90 @@ serve(async (req) => {
 
     console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
 
+    // ── Post-generation: Diversity logging (fire-and-forget for outreach tasks) ──
+    if (OUTREACH_TASKS.has(task) && content && payload?.lead_id && resolvedWorkspaceId) {
+      (async () => {
+        try {
+          const logClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+          // Check text similarity against recent messages for this lead
+          const { data: recentMsgs } = await logClient
+            .from("message_generation_log")
+            .select("generated_message")
+            .eq("lead_id", payload.lead_id)
+            .order("created_at", { ascending: false })
+            .limit(3);
+
+          if (recentMsgs && recentMsgs.length > 0) {
+            const maxSim = Math.max(...recentMsgs.map((m: any) => textSimilarity(content, m.generated_message)));
+            if (maxSim > 0.6) {
+              console.warn(`[ai_task] ⚠️ High similarity (${maxSim.toFixed(2)}) to recent message — consider regeneration`);
+            }
+          }
+
+          // Classify the generated message
+          const classifyResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + content.slice(0, 2000) }],
+            }),
+          });
+
+          let classification = {
+            opening_type: "observation",
+            primary_angle: "general",
+            secondary_angle: null as string | null,
+            cta_type: "quick_question",
+            tone: "professional",
+          };
+
+          if (classifyResp.ok) {
+            const classifyData = await classifyResp.json();
+            const classifyContent = classifyData.choices?.[0]?.message?.content || "";
+            const cleaned = classifyContent.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+            try {
+              const parsed = JSON.parse(cleaned);
+              classification = { ...classification, ...parsed };
+            } catch { /* use defaults */ }
+          } else {
+            await classifyResp.text(); // consume body
+          }
+
+          // Optionally generate embedding
+          let embedding: number[] | null = null;
+          const openaiKey = Deno.env.get("OPENAI_API_KEY");
+          if (openaiKey) {
+            embedding = await generateQueryEmbedding(content.slice(0, 4000), openaiKey);
+          }
+
+          // Store in message_generation_log
+          await logClient.from("message_generation_log").insert({
+            workspace_id: resolvedWorkspaceId,
+            lead_id: payload.lead_id,
+            campaign_id: payload.campaign_id || null,
+            channel: payload.channel || "email",
+            task_type: task,
+            generated_message: content.slice(0, 10000),
+            opening_type: classification.opening_type,
+            primary_angle: classification.primary_angle,
+            secondary_angle: classification.secondary_angle,
+            cta_type: classification.cta_type,
+            tone: classification.tone,
+            message_embedding: embedding ? JSON.stringify(embedding) : null,
+          });
+
+          console.log(`[ai_task] ✅ Diversity log saved: opening=${classification.opening_type}, angle=${classification.primary_angle}, cta=${classification.cta_type}`);
+        } catch (err) {
+          console.error("[ai_task] Diversity logging failed (non-blocking):", err);
+        }
+      })();
+    }
+
     return new Response(
       JSON.stringify({ ok: true, content, raw: data, knowledge_context_used: knowledgeContextUsed }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
