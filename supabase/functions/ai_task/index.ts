@@ -237,7 +237,101 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
         model: "text-embedding-3-small",
         input: text.slice(0, 8000), // text-embedding-3-small context limit
       }),
-    });
+});
+
+// ============================================
+// CHANNEL MESSAGING FRAMEWORK ROUTER
+// ============================================
+
+const CHANNEL_FRAMEWORKS: Record<string, string> = {
+  email: `=== CHANNEL FRAMEWORK: EMAIL ===
+Structure (follow this order):
+1. Personalized observation — reference something specific about the lead or company
+2. Business problem — articulate a clear pain point or challenge they likely face
+3. Value proposition — one concise outcome or benefit (not a feature list)
+4. Soft call to action — a low-friction question or next step
+
+Constraints:
+- 90–150 words
+- Professional, structured tone
+- Short paragraphs (1–3 sentences each)
+- One CTA only
+- No attachments in first email
+- No calendar links unless explicitly provided`,
+
+  sms: `=== CHANNEL FRAMEWORK: SMS ===
+Structure (follow this order):
+1. Curiosity hook — one compelling statement that creates intrigue
+2. Quick question — a single low-friction question as CTA
+
+Constraints:
+- MAXIMUM 160 characters total (this is a hard limit)
+- One sentence only
+- Direct, concise tone
+- No greeting beyond first name
+- No sign-off or signature
+- No links unless explicitly provided
+- No emojis unless natural to the context`,
+
+  whatsapp: `=== CHANNEL FRAMEWORK: WHATSAPP ===
+Structure (follow this order):
+1. Friendly opener — casual greeting with first name
+2. Short context — 1–2 sentences explaining why you're reaching out
+3. Question — a conversational question to invite a reply
+
+Constraints:
+- 1–3 short paragraphs maximum
+- Casual, conversational tone (like texting a colleague)
+- No formal sign-offs (no "Best regards", no signature blocks)
+- Maximum 60 words
+- One emoji max, only if natural
+- No subject line
+- No bracketed placeholders`,
+
+  voice: `=== CHANNEL FRAMEWORK: VOICE ===
+Structure (follow this order):
+1. Reason for call — why you're calling in one sentence
+2. Credibility context — brief mention of relevant experience, client, or insight
+3. Discovery question — an open-ended question to start a conversation
+
+Constraints:
+- Use natural spoken language (not written/formal prose)
+- Format as a short talk track with bullet points or brief sentences
+- 3–5 bullet points maximum
+- Each bullet should be speakable in under 10 seconds
+- No jargon, no marketing language
+- Include a suggested objection response if appropriate`,
+};
+
+// Tasks where channel framework should NOT override existing task-specific formatting
+const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
+  "intent_router", "extract_milestones_risks", "extract_deal_factors",
+  "recommend_next_steps", "lead_deep_analysis", "analyze_outgoing_email",
+  "match_email_to_milestones", "dedupe_milestones", "whatsapp_classify_intent",
+  "followup_sequence_4", "post_meeting_recap", "nurture_sequence",
+]);
+
+/**
+ * Resolve the channel for a given task.
+ * Some tasks have implicit channels; otherwise use the payload channel.
+ */
+function resolveChannel(task: string, payloadChannel?: string): string {
+  // Task-type implies channel
+  if (task.startsWith("whatsapp_")) return "whatsapp";
+  if (task.startsWith("linkedin_")) return "email"; // LinkedIn uses email-like framework
+  if (task === "shorten_draft") return payloadChannel || "email";
+  return payloadChannel || "email";
+}
+
+/**
+ * Get the channel-specific framework block for prompt injection.
+ * Returns empty string if the task is exempt or channel is unknown.
+ */
+function getChannelFramework(task: string, channel: string): string {
+  if (CHANNEL_FRAMEWORK_EXEMPT_TASKS.has(task)) return "";
+  return CHANNEL_FRAMEWORKS[channel] || "";
+}
+
 
     if (!response.ok) {
       const errText = await response.text();
