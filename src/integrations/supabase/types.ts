@@ -2354,6 +2354,27 @@ export type Database = {
               title: string
             }[]
           }
+      match_knowledge_chunks_v2: {
+        Args: {
+          filter_content_types?: string[]
+          filter_customer_facing?: boolean
+          filter_lead_id?: string
+          match_count?: number
+          match_threshold?: number
+          p_owner_user_id: string
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          content_type: string
+          id: string
+          segment: string
+          similarity: number
+          source: string
+          tags: string[]
+          title: string
+        }[]
+      }
     }
     Enums: {
       app_role: "admin" | "sales"
