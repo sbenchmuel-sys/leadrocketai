@@ -1,6 +1,177 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// ============================================
+// MESSAGE DIVERSITY CONTROL
+// ============================================
+
+const OPENING_TYPES = ["observation", "problem", "trigger_event", "compliment", "direct_offer", "question", "followup_reference", "breakup"] as const;
+const CTA_TYPES = ["quick_question", "soft_offer", "meeting_request", "permission_based", "timing_check", "breakup_close"] as const;
+
+// Tasks that produce outreach messages (diversity applies to these)
+const OUTREACH_TASKS = new Set([
+  "email_intro_fast", "email_intro_nurture", "pre_email_1_intro", "pre_email_2_followup",
+  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro", "re_engagement_intro",
+  "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
+  "whatsapp_message", "linkedin_connect", "linkedin_followup",
+]);
+
+interface DiversityConstraints {
+  avoid_opening_types: string[];
+  avoid_angles: string[];
+  avoid_cta_types: string[];
+  preferred_angles: string[];
+  preferred_cta_types: string[];
+}
+
+/** Fetch recent message log and build diversity constraints */
+async function buildDiversityConstraints(
+  adminClient: ReturnType<typeof createClient>,
+  leadId: string,
+  workspaceId: string | null,
+  campaignId: string | null,
+): Promise<DiversityConstraints> {
+  const constraints: DiversityConstraints = {
+    avoid_opening_types: [],
+    avoid_angles: [],
+    avoid_cta_types: [],
+    preferred_angles: [],
+    preferred_cta_types: [],
+  };
+
+  try {
+    // Fetch recent messages for this lead (for sequential dedup)
+    const { data: leadMessages } = await adminClient
+      .from("message_generation_log")
+      .select("opening_type, primary_angle, cta_type")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (leadMessages && leadMessages.length > 0) {
+      // Rule: don't reuse same opening_type as the last message
+      const lastOpening = leadMessages[0].opening_type;
+      if (lastOpening) constraints.avoid_opening_types.push(lastOpening);
+
+      // Rule: don't reuse same cta_type more than 2x in a row
+      const recentCtas = leadMessages.slice(0, 3).map((m: any) => m.cta_type);
+      const ctaCounts: Record<string, number> = {};
+      for (const c of recentCtas) { if (c) ctaCounts[c] = (ctaCounts[c] || 0) + 1; }
+      for (const [cta, count] of Object.entries(ctaCounts)) {
+        if (count >= 2) constraints.avoid_cta_types.push(cta);
+      }
+
+      // Rule: avoid the last 2 primary_angles for this lead
+      const recentAngles = leadMessages.slice(0, 2).map((m: any) => m.primary_angle).filter(Boolean);
+      constraints.avoid_angles.push(...recentAngles);
+    }
+
+    // Fetch recent workspace-level messages for cross-lead diversity
+    if (workspaceId) {
+      let wsQuery = adminClient
+        .from("message_generation_log")
+        .select("primary_angle, opening_type, cta_type")
+        .eq("workspace_id", workspaceId)
+        .neq("lead_id", leadId)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (campaignId) {
+        wsQuery = wsQuery.eq("campaign_id", campaignId);
+      }
+
+      const { data: wsMessages } = await wsQuery;
+
+      if (wsMessages && wsMessages.length > 0) {
+        // Rule: don't reuse same primary_angle > 3 times in last 20 similar messages
+        const angleCounts: Record<string, number> = {};
+        for (const m of wsMessages) {
+          if (m.primary_angle) angleCounts[m.primary_angle] = (angleCounts[m.primary_angle] || 0) + 1;
+        }
+        for (const [angle, count] of Object.entries(angleCounts)) {
+          if (count >= 3 && !constraints.avoid_angles.includes(angle)) {
+            constraints.avoid_angles.push(angle);
+          }
+        }
+
+        // Suggest underused CTAs and openings as preferred
+        const usedOpenings = new Set(wsMessages.map((m: any) => m.opening_type).filter(Boolean));
+        const usedCtas = new Set(wsMessages.map((m: any) => m.cta_type).filter(Boolean));
+        for (const ot of OPENING_TYPES) {
+          if (!usedOpenings.has(ot) && !constraints.avoid_opening_types.includes(ot)) {
+            constraints.preferred_angles.push(ot); // suggest underused openings
+          }
+        }
+        for (const ct of CTA_TYPES) {
+          if (!usedCtas.has(ct) && !constraints.avoid_cta_types.includes(ct)) {
+            constraints.preferred_cta_types.push(ct);
+          }
+        }
+      }
+    }
+
+    console.log(`[ai_task] Diversity constraints: avoid_openings=[${constraints.avoid_opening_types}], avoid_angles=[${constraints.avoid_angles.slice(0,3)}], avoid_ctas=[${constraints.avoid_cta_types}]`);
+  } catch (err) {
+    console.error("[ai_task] Diversity constraint build failed:", err);
+  }
+
+  return constraints;
+}
+
+/** Format diversity constraints as a prompt injection block */
+function formatDiversityBlock(constraints: DiversityConstraints): string {
+  const parts: string[] = [];
+  parts.push("=== MESSAGE DIVERSITY CONSTRAINTS ===");
+  parts.push("To ensure fresh, varied outreach, follow these constraints:");
+
+  if (constraints.avoid_opening_types.length > 0) {
+    parts.push(`- DO NOT use these opening styles (recently used): ${constraints.avoid_opening_types.join(", ")}`);
+  }
+  if (constraints.avoid_angles.length > 0) {
+    parts.push(`- DO NOT use these angles/themes (overused): ${constraints.avoid_angles.join(", ")}`);
+  }
+  if (constraints.avoid_cta_types.length > 0) {
+    parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
+  }
+  if (constraints.preferred_cta_types.length > 0) {
+    parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  }
+
+  parts.push("- Maintain brand voice consistency while varying approach");
+  parts.push("- Quality and relevance always take priority over forced variation");
+
+  return parts.join("\n");
+}
+
+/** Classification prompt for post-generation analysis */
+const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON ONLY:
+{
+  "opening_type": "observation|problem|trigger_event|compliment|direct_offer|question|followup_reference|breakup",
+  "primary_angle": "short description of main value angle used (max 5 words)",
+  "secondary_angle": "optional secondary angle or null",
+  "cta_type": "quick_question|soft_offer|meeting_request|permission_based|timing_check|breakup_close",
+  "tone": "professional|casual|urgent|empathetic|direct|consultative"
+}
+
+Message:
+`;
+
+/** Simple text similarity (Jaccard on word bigrams) */
+function textSimilarity(a: string, b: string): number {
+  const bigrams = (s: string) => {
+    const words = s.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
+    const bg = new Set<string>();
+    for (let i = 0; i < words.length - 1; i++) bg.add(`${words[i]} ${words[i+1]}`);
+    return bg;
+  };
+  const setA = bigrams(a);
+  const setB = bigrams(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const bg of setA) { if (setB.has(bg)) intersection++; }
+  return intersection / (setA.size + setB.size - intersection);
+}
+
 // Task-aware KB retrieval config: maps AI tasks → required content_types
 // Retrieval returns max 1 chunk per content_type, max 4 total chunks
 const TASK_KB_CONFIG: Record<string, string[]> = {
@@ -1926,8 +2097,40 @@ serve(async (req) => {
       }
     }
 
+    // ── Message Diversity: fetch recent generation patterns ──
+    let diversityPromise: Promise<DiversityConstraints> = Promise.resolve({
+      avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [],
+      preferred_angles: [], preferred_cta_types: [],
+    });
+    // Resolve workspace_id for diversity lookups
+    let resolvedWorkspaceId: string | null = null;
+    if (payload?.lead_id && OUTREACH_TASKS.has(task)) {
+      diversityPromise = (async () => {
+        try {
+          const divClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          // Resolve workspace from lead ownership
+          const { data: membership } = await divClient
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", isServiceRole ? "service-role" : user.id)
+            .limit(1)
+            .maybeSingle();
+          resolvedWorkspaceId = membership?.workspace_id || null;
+          return buildDiversityConstraints(
+            divClient, String(payload.lead_id), resolvedWorkspaceId,
+            payload?.campaign_id ? String(payload.campaign_id) : null
+          );
+        } catch (err) {
+          console.error("[ai_task] Diversity fetch failed:", err);
+          return { avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [] };
+        }
+      })();
+    }
+
     // Await all in parallel
-    const [kbResult, , leadSignals, cachedContext] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise]);
+    const [kbResult, , leadSignals, cachedContext, diversityConstraints] = await Promise.all([
+      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise,
+    ]);
 
     // Inject cached context if available — enriches the payload with precomputed intelligence
     if (cachedContext) {
@@ -2005,8 +2208,23 @@ serve(async (req) => {
     // 3. Playbook context
     const playbookContext = enhancedPayload.playbook_context ? String(enhancedPayload.playbook_context) : "";
 
-    // Build final prompt in one pass
-    const userPrompt = buildFinalUserPrompt({ motionBlock, styleModifier, playbookContext, taskPrompt: taskBody });
+    // 4. Diversity constraints (injected for outreach tasks)
+    const hasDiversityConstraints = OUTREACH_TASKS.has(task) && (
+      diversityConstraints.avoid_opening_types.length > 0 ||
+      diversityConstraints.avoid_angles.length > 0 ||
+      diversityConstraints.avoid_cta_types.length > 0
+    );
+    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
+    if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
+
+    // Build final prompt in one pass (diversity block goes between style and playbook)
+    const promptParts: string[] = [];
+    if (motionBlock) promptParts.push(motionBlock);
+    if (styleModifier) promptParts.push(styleModifier);
+    if (diversityBlock) promptParts.push(diversityBlock);
+    if (playbookContext) promptParts.push(playbookContext);
+    promptParts.push(taskBody);
+    const userPrompt = promptParts.join("\n\n");
 
     // Log what was assembled
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
@@ -2090,6 +2308,90 @@ serve(async (req) => {
     }
 
     console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
+
+    // ── Post-generation: Diversity logging (fire-and-forget for outreach tasks) ──
+    if (OUTREACH_TASKS.has(task) && content && payload?.lead_id && resolvedWorkspaceId) {
+      (async () => {
+        try {
+          const logClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+          // Check text similarity against recent messages for this lead
+          const { data: recentMsgs } = await logClient
+            .from("message_generation_log")
+            .select("generated_message")
+            .eq("lead_id", payload.lead_id)
+            .order("created_at", { ascending: false })
+            .limit(3);
+
+          if (recentMsgs && recentMsgs.length > 0) {
+            const maxSim = Math.max(...recentMsgs.map((m: any) => textSimilarity(content, m.generated_message)));
+            if (maxSim > 0.6) {
+              console.warn(`[ai_task] ⚠️ High similarity (${maxSim.toFixed(2)}) to recent message — consider regeneration`);
+            }
+          }
+
+          // Classify the generated message
+          const classifyResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + content.slice(0, 2000) }],
+            }),
+          });
+
+          let classification = {
+            opening_type: "observation",
+            primary_angle: "general",
+            secondary_angle: null as string | null,
+            cta_type: "quick_question",
+            tone: "professional",
+          };
+
+          if (classifyResp.ok) {
+            const classifyData = await classifyResp.json();
+            const classifyContent = classifyData.choices?.[0]?.message?.content || "";
+            const cleaned = classifyContent.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+            try {
+              const parsed = JSON.parse(cleaned);
+              classification = { ...classification, ...parsed };
+            } catch { /* use defaults */ }
+          } else {
+            await classifyResp.text(); // consume body
+          }
+
+          // Optionally generate embedding
+          let embedding: number[] | null = null;
+          const openaiKey = Deno.env.get("OPENAI_API_KEY");
+          if (openaiKey) {
+            embedding = await generateQueryEmbedding(content.slice(0, 4000), openaiKey);
+          }
+
+          // Store in message_generation_log
+          await logClient.from("message_generation_log").insert({
+            workspace_id: resolvedWorkspaceId,
+            lead_id: payload.lead_id,
+            campaign_id: payload.campaign_id || null,
+            channel: payload.channel || "email",
+            task_type: task,
+            generated_message: content.slice(0, 10000),
+            opening_type: classification.opening_type,
+            primary_angle: classification.primary_angle,
+            secondary_angle: classification.secondary_angle,
+            cta_type: classification.cta_type,
+            tone: classification.tone,
+            message_embedding: embedding ? JSON.stringify(embedding) : null,
+          });
+
+          console.log(`[ai_task] ✅ Diversity log saved: opening=${classification.opening_type}, angle=${classification.primary_angle}, cta=${classification.cta_type}`);
+        } catch (err) {
+          console.error("[ai_task] Diversity logging failed (non-blocking):", err);
+        }
+      })();
+    }
 
     return new Response(
       JSON.stringify({ ok: true, content, raw: data, knowledge_context_used: knowledgeContextUsed }),

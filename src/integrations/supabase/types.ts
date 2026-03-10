@@ -1654,6 +1654,72 @@ export type Database = {
           },
         ]
       }
+      message_generation_log: {
+        Row: {
+          campaign_id: string | null
+          channel: string
+          created_at: string
+          cta_type: string
+          generated_message: string
+          id: string
+          lead_id: string
+          message_embedding: string | null
+          opening_type: string
+          primary_angle: string
+          secondary_angle: string | null
+          task_type: string
+          tone: string
+          workspace_id: string
+        }
+        Insert: {
+          campaign_id?: string | null
+          channel?: string
+          created_at?: string
+          cta_type?: string
+          generated_message: string
+          id?: string
+          lead_id: string
+          message_embedding?: string | null
+          opening_type?: string
+          primary_angle?: string
+          secondary_angle?: string | null
+          task_type: string
+          tone?: string
+          workspace_id: string
+        }
+        Update: {
+          campaign_id?: string | null
+          channel?: string
+          created_at?: string
+          cta_type?: string
+          generated_message?: string
+          id?: string
+          lead_id?: string
+          message_embedding?: string | null
+          opening_type?: string
+          primary_angle?: string
+          secondary_angle?: string | null
+          task_type?: string
+          tone?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_generation_log_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_generation_log_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           ai_confidence: number | null
