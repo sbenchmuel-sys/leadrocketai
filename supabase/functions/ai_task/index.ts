@@ -958,6 +958,9 @@ Rep Context:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
+Sales Signals (recent intelligence — use for personalization):
+{{SIGNALS}}
+
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
