@@ -1885,8 +1885,14 @@ serve(async (req) => {
       }
     }
 
-    // Await both in parallel
-    const [kbResult] = await Promise.all([kbSearchPromise, cadencePromise]);
+    // Await all in parallel
+    const [kbResult, , leadSignals] = await Promise.all([kbSearchPromise, cadencePromise, signalsPromise]);
+
+    // Inject lead signals into context
+    if (leadSignals.length > 0) {
+      enhancedPayload.signals = JSON.stringify(leadSignals);
+      console.log(`[ai_task] ✅ Injected ${leadSignals.length} lead signals into context`);
+    }
 
     if (kbResult.formatted) {
       // For outbound first touch, apply stricter cap
