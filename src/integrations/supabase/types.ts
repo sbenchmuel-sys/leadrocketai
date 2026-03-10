@@ -1071,6 +1071,48 @@ export type Database = {
           },
         ]
       }
+      lead_context_cache: {
+        Row: {
+          context_json: Json
+          created_at: string
+          id: string
+          last_generated_at: string
+          lead_id: string
+          workspace_id: string
+        }
+        Insert: {
+          context_json?: Json
+          created_at?: string
+          id?: string
+          last_generated_at?: string
+          lead_id: string
+          workspace_id: string
+        }
+        Update: {
+          context_json?: Json
+          created_at?: string
+          id?: string
+          last_generated_at?: string
+          lead_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_context_cache_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_context_cache_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_signals: {
         Row: {
           confidence_score: number | null
