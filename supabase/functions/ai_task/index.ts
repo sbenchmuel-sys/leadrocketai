@@ -1524,6 +1524,9 @@ Latest Inbound Email:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
+Sales Signals (recent intelligence):
+{{SIGNALS}}
+
 Meeting Link (optional):
 {{MEETING_LINK}}
 
