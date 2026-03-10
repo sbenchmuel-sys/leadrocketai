@@ -2070,6 +2070,54 @@ export type Database = {
           },
         ]
       }
+      winning_interactions: {
+        Row: {
+          channel: string
+          created_at: string
+          id: string
+          lead_id: string
+          message_content: string
+          outcome_type: string
+          promoted_to_kb: boolean
+          workspace_id: string
+        }
+        Insert: {
+          channel?: string
+          created_at?: string
+          id?: string
+          lead_id: string
+          message_content: string
+          outcome_type: string
+          promoted_to_kb?: boolean
+          workspace_id: string
+        }
+        Update: {
+          channel?: string
+          created_at?: string
+          id?: string
+          lead_id?: string
+          message_content?: string
+          outcome_type?: string
+          promoted_to_kb?: boolean
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "winning_interactions_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "winning_interactions_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspace_automation_settings: {
         Row: {
           after_hours_auto: boolean
