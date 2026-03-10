@@ -237,7 +237,21 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
         model: "text-embedding-3-small",
         input: text.slice(0, 8000), // text-embedding-3-small context limit
       }),
-});
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[ai_task] Embedding API error (${response.status}):`, errText.slice(0, 200));
+      return null;
+    }
+
+    const data = await response.json();
+    return data.data?.[0]?.embedding || null;
+  } catch (err) {
+    console.error("[ai_task] Failed to generate query embedding:", err);
+    return null;
+  }
+}
 
 // ============================================
 // CHANNEL MESSAGING FRAMEWORK ROUTER
@@ -303,7 +317,6 @@ Constraints:
 - Include a suggested objection response if appropriate`,
 };
 
-// Tasks where channel framework should NOT override existing task-specific formatting
 const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
   "intent_router", "extract_milestones_risks", "extract_deal_factors",
   "recommend_next_steps", "lead_deep_analysis", "analyze_outgoing_email",
@@ -311,40 +324,16 @@ const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
   "followup_sequence_4", "post_meeting_recap", "nurture_sequence",
 ]);
 
-/**
- * Resolve the channel for a given task.
- * Some tasks have implicit channels; otherwise use the payload channel.
- */
 function resolveChannel(task: string, payloadChannel?: string): string {
-  // Task-type implies channel
   if (task.startsWith("whatsapp_")) return "whatsapp";
-  if (task.startsWith("linkedin_")) return "email"; // LinkedIn uses email-like framework
+  if (task.startsWith("linkedin_")) return "email";
   if (task === "shorten_draft") return payloadChannel || "email";
   return payloadChannel || "email";
 }
 
-/**
- * Get the channel-specific framework block for prompt injection.
- * Returns empty string if the task is exempt or channel is unknown.
- */
 function getChannelFramework(task: string, channel: string): string {
   if (CHANNEL_FRAMEWORK_EXEMPT_TASKS.has(task)) return "";
   return CHANNEL_FRAMEWORKS[channel] || "";
-}
-
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[ai_task] Embedding API error (${response.status}):`, errText.slice(0, 200));
-      return null;
-    }
-
-    const data = await response.json();
-    return data.data?.[0]?.embedding || null;
-  } catch (err) {
-    console.error("[ai_task] Failed to generate query embedding:", err);
-    return null;
-  }
 }
 
 // Semantic search — returns structured chunks grouped by content_type
