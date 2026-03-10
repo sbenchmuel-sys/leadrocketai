@@ -66,6 +66,7 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
 }
 
 // Semantic search using embeddings (primary)
+// When contentTypes is provided, enforces max 1 chunk per content_type
 async function getSemanticKnowledgeContext(
   queryText: string,
   supabaseUrl: string,
@@ -89,11 +90,14 @@ async function getSemanticKnowledgeContext(
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Fetch more than needed so we can deduplicate by content_type
+    const fetchCount = contentTypes ? Math.max(contentTypes.length * 3, 10) : MAX_KB_CHUNKS;
+
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
       query_embedding: JSON.stringify(queryEmbedding),
       p_owner_user_id: userId,
       match_threshold: 0.4,
-      match_count: 5,
+      match_count: fetchCount,
       filter_customer_facing: true,
       filter_lead_id: leadId || null,
       filter_content_types: contentTypes || null,
@@ -109,9 +113,20 @@ async function getSemanticKnowledgeContext(
       return "";
     }
 
-    console.log(`[ai_task] Found ${matches.length} semantic matches (top similarity: ${matches[0]?.similarity?.toFixed(3)})`);
+    // Deduplicate: keep only the top-scoring chunk per content_type, max MAX_KB_CHUNKS total
+    const seenTypes = new Set<string>();
+    const deduped: typeof matches = [];
+    for (const m of matches) {
+      const ct = m.content_type || "knowledge";
+      if (seenTypes.has(ct)) continue;
+      seenTypes.add(ct);
+      deduped.push(m);
+      if (deduped.length >= MAX_KB_CHUNKS) break;
+    }
 
-    return matches
+    console.log(`[ai_task] Semantic: ${matches.length} raw → ${deduped.length} deduped (types: ${[...seenTypes].join(",")}), top sim: ${deduped[0]?.similarity?.toFixed(3)}`);
+
+    return deduped
       .map((m: { title: string | null; content: string; content_type: string; similarity: number }) => {
         const header = m.title ? `[${m.title}]` : "";
         const typeTag = m.content_type !== "knowledge" ? ` (${m.content_type})` : "";
