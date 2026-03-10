@@ -257,6 +257,19 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Write signals to lead_signals table for the intelligence layer
+    if (lead_id && signals.length > 0) {
+      const signalInputs: SignalInput[] = signals.map((s: { signal: string; source: string; snippet: string }) => ({
+        lead_id: lead_id!,
+        signal_type: s.signal,
+        signal_description: s.snippet.slice(0, 120),
+        signal_source: "google_search" as const,
+        confidence_score: 0.7,
+        source_url: s.source,
+      }));
+      await ingestSignals(admin, signalInputs);
+    }
+
     logger.info("enrichment_complete", { lead_id, company, provider, resultCount: allResults.length, signalCount: signals.length });
 
     return new Response(JSON.stringify(inserted), {
