@@ -168,7 +168,8 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
 
   useEffect(() => {
     loadEnrichment();
-  }, [loadEnrichment]);
+    loadLeadSignals();
+  }, [loadEnrichment, loadLeadSignals]);
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
