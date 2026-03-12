@@ -34,12 +34,23 @@ export type AITaskType =
   | "whatsapp_reply_suggestion"
   | "re_engagement_intro";
 
+export interface EmailQualityScore {
+  curiosity: number;
+  human_tone: number;
+  spam_risk: number;
+  reply_likelihood: number;
+  summary?: string;
+}
+
 export interface AITaskResponse {
   ok: boolean;
   content?: string;
   raw?: unknown;
   error?: string;
   error_id?: string;
+  quality_score?: EmailQualityScore;
+  regenerated?: boolean;
+  framework_used?: string;
 }
 
 export function useAITask() {

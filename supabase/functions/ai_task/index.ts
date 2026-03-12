@@ -844,6 +844,97 @@ function getColdOutreachBlock(playbookId: string): string {
   return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
 }
 
+// ============================================
+// EMAIL FRAMEWORK ROUTER
+// ============================================
+
+type EmailFramework = "curiosity" | "observation" | "hypothesis" | "ultra_short";
+
+const EMAIL_FRAMEWORK_BLOCKS: Record<EmailFramework, string> = {
+  curiosity: `=== MESSAGE FRAMEWORK: CURIOSITY ===
+Opening: Start with a question that creates genuine curiosity about their situation.
+The question must be specific enough to feel relevant, but open enough to invite a reply.
+Do NOT answer the question yourself. Let them respond.
+Example pattern: "What if the biggest growth lever for [industry] isn't [obvious thing] — it's [unexpected thing]?"`,
+
+  observation: `=== MESSAGE FRAMEWORK: OBSERVATION ===
+Opening: Reference a REAL signal or activity about their company.
+The observation must come from the Sales Signals provided. Do NOT fabricate observations.
+Connect the observation to a relevant question or insight.
+Example pattern: "Noticed [specific signal]. Curious how that's affecting [related area]?"`,
+
+  hypothesis: `=== MESSAGE FRAMEWORK: HYPOTHESIS ===
+Opening: Propose a likely bottleneck or challenge they face based on their industry/role.
+The hypothesis must be specific and testable — something they can confirm or deny.
+Frame it as a question, not a statement.
+Example pattern: "Most [role] at [industry type] companies tell us [specific bottleneck]. Is that true for [company]?"`,
+
+  ultra_short: `=== MESSAGE FRAMEWORK: ULTRA-SHORT ===
+Structure: 2-3 sentences MAXIMUM. No paragraphs. No greeting beyond first name.
+Get to the point in one breath. One question only.
+Example pattern: "Hi [name], [one sentence context]. [one question]?"`,
+};
+
+/** Select email framework based on available signals and context */
+function selectEmailFramework(
+  signals: { type: string; description: string }[],
+  industry?: string,
+  leadContext?: string,
+): EmailFramework {
+  if (signals && signals.length > 0) {
+    const actionableTypes = ["hiring", "funding", "expansion", "product_launch", "new_partnership", "press_coverage"];
+    if (signals.some(s => actionableTypes.includes(s.type))) return "observation";
+  }
+  if (industry || leadContext) {
+    const ctx = `${industry || ""} ${leadContext || ""}`.toLowerCase();
+    const painIndicators = ["manual", "spreadsheet", "legacy", "outdated", "inefficient", "scaling", "bottleneck", "turnover", "compliance"];
+    if (painIndicators.some(p => ctx.includes(p))) return "hypothesis";
+  }
+  return "curiosity";
+}
+
+function getEmailFrameworkBlock(framework: EmailFramework): string {
+  return EMAIL_FRAMEWORK_BLOCKS[framework] || EMAIL_FRAMEWORK_BLOCKS.curiosity;
+}
+
+// ============================================
+// COLD EMAIL QUALITY SCORER
+// ============================================
+
+interface EmailQualityScore {
+  curiosity: number;
+  human_tone: number;
+  spam_risk: number;
+  reply_likelihood: number;
+  summary: string;
+}
+
+const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email for reply probability.
+
+Score the email on these four dimensions (0-10 each):
+
+1. Curiosity — Does the opening create curiosity or a question that invites response?
+2. Human Tone — Does the message sound like a real human email rather than marketing copy?
+3. Spam Risk — Does the message avoid spam triggers, buzzwords, or promotional tone? (10 = no spam risk)
+4. Reply Likelihood — How likely is this email to receive a response?
+
+Return JSON ONLY:
+{
+  "curiosity": <number 0-10>,
+  "human_tone": <number 0-10>,
+  "spam_risk": <number 0-10>,
+  "reply_likelihood": <number 0-10>,
+  "summary": "<one sentence explanation>"
+}`;
+
+const QUALITY_THRESHOLD = 24;
+
+/** Outbound email tasks that should be quality-scored */
+const QUALITY_SCORED_TASKS = new Set([
+  "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup",
+  "email_intro_fast", "email_intro_nurture", "re_engagement_intro",
+]);
+
 // Centralized motion block builder
 function buildMotionBlock({ motion, first_touch }: { motion: string; first_touch: boolean }): string {
   if (motion === "outbound_prospecting" && first_touch) {
@@ -1362,10 +1453,35 @@ Return EMAIL BODY ONLY. The email must be complete and ready to send with real n
 
   // Pre-Meeting Email Cadence
   pre_email_1_intro: `ROLE
-You are generating Email 1 (Cold Intro) in an outbound prospecting cadence.
+You are generating Email 1 in a cold outbound sequence.
 
 GOAL
-Trigger a reply. NOT to close, NOT to fully explain, NOT to book a meeting yet.
+Start a conversation and trigger a reply. NOT to close, NOT to pitch, NOT to book a meeting.
+
+LENGTH
+40–90 words. Target 65 words. Count every word.
+
+STRUCTURE (2–4 paragraphs):
+
+Paragraph 1:
+Opening based on the MESSAGE FRAMEWORK provided above.
+
+Paragraph 2:
+One short contextual sentence explaining why you are asking. Do NOT pitch the product. Do NOT list features.
+
+Paragraph 3:
+Simple micro-CTA question. One question only. No calendar links. No meeting duration mentions.
+
+RULES
+- Do NOT pitch the product
+- Do NOT list features
+- Do NOT include metrics unless extremely relevant
+- Do NOT include calendar links
+- Do NOT mention meeting duration
+- Use natural conversational tone
+- Use simple punctuation
+- Do NOT use em dashes (—)
+- AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well"
 
 INPUTS
 Lead Context:
@@ -1383,26 +1499,10 @@ Sales Signals (recent intelligence — use for personalization):
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
-CRITICAL: Under 90 words. Target 75 words. Count every word.
-
-STRUCTURE (5 short paragraphs max):
-1. Personalized observation about their company/role OR a specific problem hypothesis (1-2 lines)
-2. One clear outcome your product enables — NOT a feature list (1-2 lines)
-3. Micro-CTA question: "Worth a quick look?" / "Is this something you're exploring?" / "Open to a short conversation?" (1 line)
-
-Do NOT:
-- Include calendar links or meeting booking URLs
-- List features or product capabilities
-- Write company history or long introductions
-- Use multiple CTAs
-- Exceed 90 words under any circumstances
-- Use hype language or buzzwords
-- Mention specific meeting durations
-
-GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best,\nShai")
-CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
-If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders.
+GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Jack Smith", write "Hi Jack,")
+SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+If the lead's company is missing, simply omit company references.
 
 Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
 
@@ -1410,30 +1510,34 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_2_followup: `ROLE
-You are generating Email 2 in a pre-meeting outreach cadence.
+You are writing Follow-up Email 1 in a cold outbound sequence.
+
+CONTEXT
+The prospect has not replied to Email 1.
 
 GOAL
-Politely follow up after no response, add one value point, and reduce friction to reply.
+Light reminder. Keep the conversation easy. No pitch.
 
-CRITICAL DEDUPLICATION:
-Your last email said:
-{{LAST_OUTBOUND_BODY}}
+LENGTH
+Maximum 60 words. Count every word.
 
-Do NOT repeat the same:
-- Opening angle or observation
-- Value proposition or benefit
-- CTA phrasing
-- Company/product description
+RULES
+- Reference previous email briefly (one sentence max)
+- Keep tone casual and friendly
+- No product pitch
+- One question only
+- Do NOT use em dashes
+- AVOID: "Just checking in", "Following up", "Circling back"
 
-Instead, choose ONE fresh re-engagement angle from:
-1. Reference a milestone or deal progress point: {{MILESTONES}}
-2. Address a detected buying signal: {{BUYING_SIGNALS}}
-3. Share a relevant industry insight or peer example
-4. Reference a meeting discussion point: {{MEETING_CONTEXT}}
-5. Acknowledge the silence directly with a binary question
+STRUCTURE
+Hi {{first_name}},
 
-Engagement: {{ENGAGEMENT_LEVEL}} | Days inactive: {{DAYS_SINCE_ACTIVITY}}
-Risk signals: {{RISK_SIGNALS}}
+[Brief reference to previous note — 1 sentence]
+
+[One relevant question about their situation]
+
+Best,
+{{rep_first_name}}
 
 INPUTS
 Lead Context:
@@ -1445,56 +1549,55 @@ Rep Context:
 Previous Outreach Summary:
 {{PREVIOUS_EMAIL_SUMMARY}}
 
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
-
-Meeting Link:
-{{MEETING_LINK}}
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- STRICT MAXIMUM: 60–90 words. Count carefully. Under 75 is ideal.
-- 3 short paragraphs max (greeting, body, CTA+sign-off)
-- Friendly, respectful of time
-- Use a DIFFERENT angle than the last email — do not rehash the same value prop
-- No hype or guarantees
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
-- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
-- If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders
-- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence (e.g., "Book here: https://calendly.com/..."). Copy exact URL. If no Calendar Link, ask them to reply with availability.
-- DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL. Use generic terms like "call" or "meeting".
-- One clear CTA (book a call)
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+- If the lead's company is missing, simply omit company references
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_3_followup: `ROLE
-You are generating Email 3 in a pre-meeting outreach cadence.
+You are writing Follow-up Email 2 in a cold outbound sequence.
+
+CONTEXT
+The prospect has not replied to Email 1 or Follow-up 1.
 
 GOAL
-Check relevance, prompt a yes/no response, and keep tone professional. This is a more direct follow-up.
+Offer an additional angle or context. Add one small insight or observation.
 
-CRITICAL DEDUPLICATION:
-Your last email said:
-{{LAST_OUTBOUND_BODY}}
+LENGTH
+Maximum 70 words. Count every word.
 
-Do NOT repeat the same:
-- Opening angle or observation
-- Value proposition or benefit
-- CTA phrasing
+RULES
+- Add one small insight, observation, or industry trend
+- No product pitch
+- One question only
+- Do NOT repeat angles from previous emails
+- Do NOT use em dashes
+- AVOID: "Just checking in", "Following up", "Circling back"
 
-Choose a COMPLETELY DIFFERENT approach from previous emails:
-1. Ask a direct binary question about priorities: {{MILESTONES}}
-2. Reference a specific buying signal to re-engage: {{BUYING_SIGNALS}}
-3. Share a brief peer comparison or industry trend
-4. Call back to a meeting discussion: {{MEETING_CONTEXT}}
-5. Use a permission-based close ("If this isn't relevant, happy to close the loop")
+STRUCTURE
+Hi {{first_name}},
 
-Engagement: {{ENGAGEMENT_LEVEL}} | Days inactive: {{DAYS_SINCE_ACTIVITY}}
-Risk signals: {{RISK_SIGNALS}}
+One quick follow-up.
+
+[One insight or observation relevant to their industry — 1-2 sentences]
+
+[One question connecting the insight to their situation]
+
+Best,
+{{rep_first_name}}
 
 INPUTS
 Lead Context:
@@ -1506,33 +1609,56 @@ Rep Context:
 Previous Outreach Summary:
 {{PREVIOUS_EMAIL_SUMMARY}}
 
-Meeting Link:
-{{MEETING_LINK}}
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- STRICT MAXIMUM: 50–75 words. Count carefully. Under 60 is ideal.
-- 2-3 short paragraphs max (greeting, one question or observation, sign-off)
-- More direct, still polite
-- Explicitly acknowledge silence without pressure
-- Must use a DIFFERENT angle and CTA style than any previous email
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
-- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
-- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence. Copy exact URL.
-- DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL. Use generic terms.
-- One clear CTA (call, redirect, or deprioritize)
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+- If the lead's company is missing, simply omit company references
+- Must use a DIFFERENT angle than any previous email
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_4_breakup: `ROLE
-You are generating Email 4 (Breakup) in a pre-meeting outreach cadence.
+You are writing the final email in a cold outbound sequence (Closing the Loop).
+
+CONTEXT
+The prospect has not replied to any of the previous 3 emails.
 
 GOAL
-Close the loop respectfully and leave the door open.
+Politely close the loop while leaving the door open. No sales language.
+
+LENGTH
+Maximum 55 words. Count every word.
+
+RULES
+- No sales language at all
+- Respectful, warm tone
+- Give the recipient an easy way to opt out
+- Do NOT use em dashes
+- Do NOT guilt trip or create urgency
+- Leave door open for future contact
+
+STRUCTURE
+Hi {{first_name}},
+
+[Acknowledge you have been reaching out — 1 sentence]
+
+[If this is relevant later, feel free to reach out — 1 sentence]
+
+[Otherwise close the loop — 1 sentence]
+
+Best,
+{{rep_first_name}}
 
 INPUTS
 Lead Context:
@@ -1545,14 +1671,9 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- STRICT MAXIMUM: 40–60 words. Under 50 is ideal.
-- 2 short paragraphs max
-- Calm, polite, non-defensive
-- No CTA except soft invitation to reconnect
-- No claims
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
-- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], etc.
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
@@ -2480,11 +2601,26 @@ serve(async (req) => {
     }
     if (messagingFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] ${resolvedChannel}${sequenceStep ? ` step=${sequenceStep}` : " (generic)"}`);
 
-    // Build final prompt in one pass: motion → style → channel/sequence → diversity → playbook → task
+    // 6. Email Framework Router — select and inject framework for cold outreach emails
+    let emailFrameworkBlock = "";
+    let selectedFramework: EmailFramework | null = null;
+    const isOutboundEmailTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "re_engagement_intro";
+    if (isOutboundEmailTask && isOutboundMotion) {
+      selectedFramework = selectEmailFramework(
+        leadSignals,
+        enhancedPayload.industry ? String(enhancedPayload.industry) : undefined,
+        enhancedPayload.lead_context ? String(enhancedPayload.lead_context) : undefined,
+      );
+      emailFrameworkBlock = getEmailFrameworkBlock(selectedFramework);
+      console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
+    }
+
+    // Build final prompt in one pass: motion → style → channel/sequence → framework → diversity → playbook → task
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
+    if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
@@ -2494,7 +2630,8 @@ serve(async (req) => {
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${!!messagingFrameworkBlock}`);
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}`);
+
 
     // Select model: honor client-side model_hint (from complexity scorer) if provided,
     // otherwise fall back to server-side task tier
@@ -2566,13 +2703,102 @@ serve(async (req) => {
     const data = await response.json();
     let content = data.choices?.[0]?.message?.content || "";
 
-    // Word count logging for outbound first touch (no retry — prompt handles enforcement)
+    // Word count logging for outbound first touch
     if (isOutboundFirstTouch && content) {
       const wordCount = content.split(/\s+/).filter(Boolean).length;
       console.log(`[ai_task] Outbound first touch word count: ${wordCount}`);
     }
 
-    console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
+    // ── Quality Scoring: evaluate and optionally regenerate outbound emails ──
+    let qualityScore: EmailQualityScore | null = null;
+    let regenerated = false;
+
+    if (QUALITY_SCORED_TASKS.has(task) && content && !streamRequested) {
+      try {
+        const scoreResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: QUALITY_SCORER_PROMPT },
+              { role: "user", content: `Email to evaluate:\n\n${content}` },
+            ],
+          }),
+        });
+
+        if (scoreResp.ok) {
+          const scoreData = await scoreResp.json();
+          const scoreContent = scoreData.choices?.[0]?.message?.content || "";
+          const cleaned = scoreContent.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+          try {
+            // Extract JSON from potential wrapper text
+            const jsonStart = cleaned.indexOf("{");
+            const jsonEnd = cleaned.lastIndexOf("}");
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+              qualityScore = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+            }
+          } catch { /* scoring parse failed, continue without */ }
+        } else {
+          await scoreResp.text(); // consume body
+        }
+
+        if (qualityScore) {
+          const total = qualityScore.curiosity + qualityScore.human_tone + qualityScore.spam_risk + qualityScore.reply_likelihood;
+          console.log(`[ai_task] Quality score: ${total}/40 (C:${qualityScore.curiosity} H:${qualityScore.human_tone} S:${qualityScore.spam_risk} R:${qualityScore.reply_likelihood})`);
+
+          // If score below threshold, regenerate once using curiosity framework
+          if (total < QUALITY_THRESHOLD) {
+            console.log(`[ai_task] ⚠️ Score ${total} < ${QUALITY_THRESHOLD} — regenerating with curiosity framework`);
+            const curiosityFramework = getEmailFrameworkBlock("curiosity");
+            const regenParts = promptParts.filter(p => !Object.values(EMAIL_FRAMEWORK_BLOCKS).includes(p));
+            // Insert curiosity framework before task body
+            const taskIdx = regenParts.indexOf(taskBody);
+            if (taskIdx >= 0) {
+              regenParts.splice(taskIdx, 0, curiosityFramework);
+            } else {
+              regenParts.push(curiosityFramework);
+            }
+            const regenPrompt = regenParts.join("\n\n");
+
+            const regenResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${LOVABLE_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
+                  { role: "user", content: regenPrompt },
+                ],
+              }),
+            });
+
+            if (regenResp.ok) {
+              const regenData = await regenResp.json();
+              const regenContent = regenData.choices?.[0]?.message?.content || "";
+              if (regenContent) {
+                content = regenContent;
+                regenerated = true;
+                console.log(`[ai_task] ✅ Regenerated email (curiosity framework), length: ${content.length}`);
+              }
+            } else {
+              await regenResp.text(); // consume body
+              console.warn("[ai_task] Regeneration failed, using original email");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[ai_task] Quality scoring failed (non-blocking):", err);
+      }
+    }
+
+    console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}, quality_scored: ${!!qualityScore}, regenerated: ${regenerated}`);
 
     // ── Post-generation: Diversity logging (fire-and-forget for outreach tasks) ──
     if (OUTREACH_TASKS.has(task) && content && payload?.lead_id && resolvedWorkspaceId) {
@@ -2692,8 +2918,24 @@ serve(async (req) => {
       })();
     }
 
+    const responsePayload: Record<string, unknown> = {
+      ok: true,
+      content,
+      raw: data,
+      knowledge_context_used: knowledgeContextUsed,
+    };
+
+    // Include quality score and framework info for scored email tasks
+    if (qualityScore) {
+      responsePayload.quality_score = qualityScore;
+      responsePayload.regenerated = regenerated;
+    }
+    if (selectedFramework) {
+      responsePayload.framework_used = selectedFramework;
+    }
+
     return new Response(
-      JSON.stringify({ ok: true, content, raw: data, knowledge_context_used: knowledgeContextUsed }),
+      JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
