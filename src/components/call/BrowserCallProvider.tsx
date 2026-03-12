@@ -252,7 +252,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
           desc = "Check your internet connection and try again.";
         }
         toast.error(title, { description: desc });
-        setState((s) => ({ ...s, status: "ready", activeCall: null }));
+        setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
       });
 
       // Set connecting state with call reference
