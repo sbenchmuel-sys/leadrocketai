@@ -1453,10 +1453,35 @@ Return EMAIL BODY ONLY. The email must be complete and ready to send with real n
 
   // Pre-Meeting Email Cadence
   pre_email_1_intro: `ROLE
-You are generating Email 1 (Cold Intro) in an outbound prospecting cadence.
+You are generating Email 1 in a cold outbound sequence.
 
 GOAL
-Trigger a reply. NOT to close, NOT to fully explain, NOT to book a meeting yet.
+Start a conversation and trigger a reply. NOT to close, NOT to pitch, NOT to book a meeting.
+
+LENGTH
+40–90 words. Target 65 words. Count every word.
+
+STRUCTURE (2–4 paragraphs):
+
+Paragraph 1:
+Opening based on the MESSAGE FRAMEWORK provided above.
+
+Paragraph 2:
+One short contextual sentence explaining why you are asking. Do NOT pitch the product. Do NOT list features.
+
+Paragraph 3:
+Simple micro-CTA question. One question only. No calendar links. No meeting duration mentions.
+
+RULES
+- Do NOT pitch the product
+- Do NOT list features
+- Do NOT include metrics unless extremely relevant
+- Do NOT include calendar links
+- Do NOT mention meeting duration
+- Use natural conversational tone
+- Use simple punctuation
+- Do NOT use em dashes (—)
+- AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well"
 
 INPUTS
 Lead Context:
@@ -1473,12 +1498,6 @@ Sales Signals (recent intelligence — use for personalization):
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
-
-CRITICAL: Under 90 words. Target 75 words. Count every word.
-
-STRUCTURE (5 short paragraphs max):
-1. Personalized observation about their company/role OR a specific problem hypothesis (1-2 lines)
-2. One clear outcome your product enables — NOT a feature list (1-2 lines)
 3. Micro-CTA question: "Worth a quick look?" / "Is this something you're exploring?" / "Open to a short conversation?" (1 line)
 
 Do NOT:
