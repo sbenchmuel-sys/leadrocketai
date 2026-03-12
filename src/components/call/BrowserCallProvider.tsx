@@ -252,7 +252,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
           desc = "Check your internet connection and try again.";
         }
         toast.error(title, { description: desc });
-        setState((s) => ({ ...s, status: "ready", activeCall: null }));
+        setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
       });
 
       // Set connecting state with call reference
@@ -264,7 +264,12 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
   }, [initDevice]);
 
   const hangUp = useCallback(() => {
-    state.activeCall?.disconnect();
+    if (state.activeCall) {
+      state.activeCall.disconnect();
+    } else {
+      // Force reset if call object is already gone (e.g. after error)
+      setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
+    }
   }, [state.activeCall]);
 
   const toggleMute = useCallback(() => {
