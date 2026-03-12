@@ -2611,11 +2611,26 @@ serve(async (req) => {
     }
     if (messagingFrameworkBlock) console.log(`[ai_task] [5/CHANNEL] ${resolvedChannel}${sequenceStep ? ` step=${sequenceStep}` : " (generic)"}`);
 
-    // Build final prompt in one pass: motion → style → channel/sequence → diversity → playbook → task
+    // 6. Email Framework Router — select and inject framework for cold outreach emails
+    let emailFrameworkBlock = "";
+    let selectedFramework: EmailFramework | null = null;
+    const isOutboundEmailTask = task === "pre_email_1_intro" || task === "email_intro_fast" || task === "re_engagement_intro";
+    if (isOutboundEmailTask && isOutboundMotion) {
+      selectedFramework = selectEmailFramework(
+        leadSignals,
+        enhancedPayload.industry ? String(enhancedPayload.industry) : undefined,
+        enhancedPayload.lead_context ? String(enhancedPayload.lead_context) : undefined,
+      );
+      emailFrameworkBlock = getEmailFrameworkBlock(selectedFramework);
+      console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
+    }
+
+    // Build final prompt in one pass: motion → style → channel/sequence → framework → diversity → playbook → task
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
+    if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
@@ -2625,7 +2640,8 @@ serve(async (req) => {
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${!!messagingFrameworkBlock}`);
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}`);
+
 
     // Select model: honor client-side model_hint (from complexity scorer) if provided,
     // otherwise fall back to server-side task tier
