@@ -2928,8 +2928,24 @@ serve(async (req) => {
       })();
     }
 
+    const responsePayload: Record<string, unknown> = {
+      ok: true,
+      content,
+      raw: data,
+      knowledge_context_used: knowledgeContextUsed,
+    };
+
+    // Include quality score and framework info for scored email tasks
+    if (qualityScore) {
+      responsePayload.quality_score = qualityScore;
+      responsePayload.regenerated = regenerated;
+    }
+    if (selectedFramework) {
+      responsePayload.framework_used = selectedFramework;
+    }
+
     return new Response(
-      JSON.stringify({ ok: true, content, raw: data, knowledge_context_used: knowledgeContextUsed }),
+      JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
