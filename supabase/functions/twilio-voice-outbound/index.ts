@@ -31,19 +31,18 @@ Deno.serve(async (req) => {
     });
   }
 
-  const token = authHeader.replace("Bearer ", "");
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims) {
+  const { data: { user }, error: userErr } = await userClient.auth.getUser();
+  if (userErr || !user) {
     return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  const userId = claimsData.claims.sub as string;
+  const userId = user.id;
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {

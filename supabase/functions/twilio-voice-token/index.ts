@@ -45,7 +45,7 @@ async function createTwilioAccessToken(opts: {
   ttl?: number;
 }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const ttl = opts.ttl ?? 600; // 10 minutes
+  const ttl = opts.ttl ?? 3600; // 1 hour
 
   const header = { typ: "JWT", alg: "HS256", cty: "twilio-fpa;v=1" };
   const grants: Record<string, unknown> = {
@@ -104,19 +104,19 @@ Deno.serve(async (req) => {
     });
   }
 
-  const token = authHeader.replace("Bearer ", "");
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims) {
+  const { data: { user }, error: userErr } = await userClient.auth.getUser();
+  if (userErr || !user) {
+    logger.error("twilio_voice_token_auth_failed", { error: userErr?.message });
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  const userId = claimsData.claims.sub as string;
+  const userId = user.id;
 
   if (!twilioAccountSid || !twilioApiKey || !twilioApiSecret || !twimlAppSid) {
     logger.error("twilio_voice_token_missing_config");
@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
       apiSecret: twilioApiSecret,
       identity,
       twimlAppSid,
-      ttl: 600,
+      ttl: 3600, // 1 hour
     });
 
     logger.info("twilio_voice_token_issued", {
