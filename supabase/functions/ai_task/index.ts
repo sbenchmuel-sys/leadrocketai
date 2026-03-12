@@ -1639,10 +1639,36 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_4_breakup: `ROLE
-You are generating Email 4 (Breakup) in a pre-meeting outreach cadence.
+You are writing the final email in a cold outbound sequence (Closing the Loop).
+
+CONTEXT
+The prospect has not replied to any of the previous 3 emails.
 
 GOAL
-Close the loop respectfully and leave the door open.
+Politely close the loop while leaving the door open. No sales language.
+
+LENGTH
+Maximum 55 words. Count every word.
+
+RULES
+- No sales language at all
+- Respectful, warm tone
+- Give the recipient an easy way to opt out
+- Do NOT use em dashes
+- Do NOT guilt trip or create urgency
+- Leave door open for future contact
+
+STRUCTURE
+Hi {{first_name}},
+
+[Acknowledge you have been reaching out — 1 sentence]
+
+[If this is relevant later, feel free to reach out — 1 sentence]
+
+[Otherwise close the loop — 1 sentence]
+
+Best,
+{{rep_first_name}}
 
 INPUTS
 Lead Context:
@@ -1655,14 +1681,9 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- STRICT MAXIMUM: 40–60 words. Under 50 is ideal.
-- 2 short paragraphs max
-- Calm, polite, non-defensive
-- No CTA except soft invitation to reconnect
-- No claims
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY from Rep Context on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best regards,\nShai")
-- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], etc.
+- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
