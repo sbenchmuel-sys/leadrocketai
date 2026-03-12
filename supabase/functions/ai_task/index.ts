@@ -844,6 +844,97 @@ function getColdOutreachBlock(playbookId: string): string {
   return PLAYBOOK_OUTREACH_BLOCKS[playbookId] || COLD_OUTREACH_STYLE_BLOCK;
 }
 
+// ============================================
+// EMAIL FRAMEWORK ROUTER
+// ============================================
+
+type EmailFramework = "curiosity" | "observation" | "hypothesis" | "ultra_short";
+
+const EMAIL_FRAMEWORK_BLOCKS: Record<EmailFramework, string> = {
+  curiosity: `=== MESSAGE FRAMEWORK: CURIOSITY ===
+Opening: Start with a question that creates genuine curiosity about their situation.
+The question must be specific enough to feel relevant, but open enough to invite a reply.
+Do NOT answer the question yourself. Let them respond.
+Example pattern: "What if the biggest growth lever for [industry] isn't [obvious thing] — it's [unexpected thing]?"`,
+
+  observation: `=== MESSAGE FRAMEWORK: OBSERVATION ===
+Opening: Reference a REAL signal or activity about their company.
+The observation must come from the Sales Signals provided. Do NOT fabricate observations.
+Connect the observation to a relevant question or insight.
+Example pattern: "Noticed [specific signal]. Curious how that's affecting [related area]?"`,
+
+  hypothesis: `=== MESSAGE FRAMEWORK: HYPOTHESIS ===
+Opening: Propose a likely bottleneck or challenge they face based on their industry/role.
+The hypothesis must be specific and testable — something they can confirm or deny.
+Frame it as a question, not a statement.
+Example pattern: "Most [role] at [industry type] companies tell us [specific bottleneck]. Is that true for [company]?"`,
+
+  ultra_short: `=== MESSAGE FRAMEWORK: ULTRA-SHORT ===
+Structure: 2-3 sentences MAXIMUM. No paragraphs. No greeting beyond first name.
+Get to the point in one breath. One question only.
+Example pattern: "Hi [name], [one sentence context]. [one question]?"`,
+};
+
+/** Select email framework based on available signals and context */
+function selectEmailFramework(
+  signals: { type: string; description: string }[],
+  industry?: string,
+  leadContext?: string,
+): EmailFramework {
+  if (signals && signals.length > 0) {
+    const actionableTypes = ["hiring", "funding", "expansion", "product_launch", "new_partnership", "press_coverage"];
+    if (signals.some(s => actionableTypes.includes(s.type))) return "observation";
+  }
+  if (industry || leadContext) {
+    const ctx = `${industry || ""} ${leadContext || ""}`.toLowerCase();
+    const painIndicators = ["manual", "spreadsheet", "legacy", "outdated", "inefficient", "scaling", "bottleneck", "turnover", "compliance"];
+    if (painIndicators.some(p => ctx.includes(p))) return "hypothesis";
+  }
+  return "curiosity";
+}
+
+function getEmailFrameworkBlock(framework: EmailFramework): string {
+  return EMAIL_FRAMEWORK_BLOCKS[framework] || EMAIL_FRAMEWORK_BLOCKS.curiosity;
+}
+
+// ============================================
+// COLD EMAIL QUALITY SCORER
+// ============================================
+
+interface EmailQualityScore {
+  curiosity: number;
+  human_tone: number;
+  spam_risk: number;
+  reply_likelihood: number;
+  summary: string;
+}
+
+const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email for reply probability.
+
+Score the email on these four dimensions (0-10 each):
+
+1. Curiosity — Does the opening create curiosity or a question that invites response?
+2. Human Tone — Does the message sound like a real human email rather than marketing copy?
+3. Spam Risk — Does the message avoid spam triggers, buzzwords, or promotional tone? (10 = no spam risk)
+4. Reply Likelihood — How likely is this email to receive a response?
+
+Return JSON ONLY:
+{
+  "curiosity": <number 0-10>,
+  "human_tone": <number 0-10>,
+  "spam_risk": <number 0-10>,
+  "reply_likelihood": <number 0-10>,
+  "summary": "<one sentence explanation>"
+}`;
+
+const QUALITY_THRESHOLD = 24;
+
+/** Outbound email tasks that should be quality-scored */
+const QUALITY_SCORED_TASKS = new Set([
+  "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup",
+  "email_intro_fast", "email_intro_nurture", "re_engagement_intro",
+]);
+
 // Centralized motion block builder
 function buildMotionBlock({ motion, first_touch }: { motion: string; first_touch: boolean }): string {
   if (motion === "outbound_prospecting" && first_touch) {
