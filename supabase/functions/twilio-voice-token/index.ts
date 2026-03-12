@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
       apiSecret: twilioApiSecret,
       identity,
       twimlAppSid,
-      ttl: 600,
+      ttl: 3600, // 1 hour
     });
 
     logger.info("twilio_voice_token_issued", {
