@@ -45,7 +45,7 @@ async function createTwilioAccessToken(opts: {
   ttl?: number;
 }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const ttl = opts.ttl ?? 600; // 10 minutes
+  const ttl = opts.ttl ?? 3600; // 1 hour
 
   const header = { typ: "JWT", alg: "HS256", cty: "twilio-fpa;v=1" };
   const grants: Record<string, unknown> = {
