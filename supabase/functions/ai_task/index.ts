@@ -1578,29 +1578,36 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_3_followup: `ROLE
-You are generating Email 3 in a pre-meeting outreach cadence.
+You are writing Follow-up Email 2 in a cold outbound sequence.
+
+CONTEXT
+The prospect has not replied to Email 1 or Follow-up 1.
 
 GOAL
-Check relevance, prompt a yes/no response, and keep tone professional. This is a more direct follow-up.
+Offer an additional angle or context. Add one small insight or observation.
 
-CRITICAL DEDUPLICATION:
-Your last email said:
-{{LAST_OUTBOUND_BODY}}
+LENGTH
+Maximum 70 words. Count every word.
 
-Do NOT repeat the same:
-- Opening angle or observation
-- Value proposition or benefit
-- CTA phrasing
+RULES
+- Add one small insight, observation, or industry trend
+- No product pitch
+- One question only
+- Do NOT repeat angles from previous emails
+- Do NOT use em dashes
+- AVOID: "Just checking in", "Following up", "Circling back"
 
-Choose a COMPLETELY DIFFERENT approach from previous emails:
-1. Ask a direct binary question about priorities: {{MILESTONES}}
-2. Reference a specific buying signal to re-engage: {{BUYING_SIGNALS}}
-3. Share a brief peer comparison or industry trend
-4. Call back to a meeting discussion: {{MEETING_CONTEXT}}
-5. Use a permission-based close ("If this isn't relevant, happy to close the loop")
+STRUCTURE
+Hi {{first_name}},
 
-Engagement: {{ENGAGEMENT_LEVEL}} | Days inactive: {{DAYS_SINCE_ACTIVITY}}
-Risk signals: {{RISK_SIGNALS}}
+One quick follow-up.
+
+[One insight or observation relevant to their industry — 1-2 sentences]
+
+[One question connecting the insight to their situation]
+
+Best,
+{{rep_first_name}}
 
 INPUTS
 Lead Context:
@@ -1612,24 +1619,21 @@ Rep Context:
 Previous Outreach Summary:
 {{PREVIOUS_EMAIL_SUMMARY}}
 
-Meeting Link:
-{{MEETING_LINK}}
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- STRICT MAXIMUM: 50–75 words. Count carefully. Under 60 is ideal.
-- 2-3 short paragraphs max (greeting, one question or observation, sign-off)
-- More direct, still polite
-- Explicitly acknowledge silence without pressure
-- Must use a DIFFERENT angle and CTA style than any previous email
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY (extracted from Sender Name in Rep Context) on the next line with NO blank line between
-- CRITICAL: Use the ACTUAL names from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Meeting Link], etc.
-- MEETING LINK EMBEDDING: CRITICAL - If a "Calendar Link" appears in Rep Context above, you MUST embed the complete URL directly in a sentence. Copy exact URL.
-- DURATION: Do NOT mention specific meeting durations unless you can extract it from the Meeting Link URL. Use generic terms.
-- One clear CTA (call, redirect, or deprioritize)
+- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+- If the lead's company is missing, simply omit company references
+- Must use a DIFFERENT angle than any previous email
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
