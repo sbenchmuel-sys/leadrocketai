@@ -2713,13 +2713,102 @@ serve(async (req) => {
     const data = await response.json();
     let content = data.choices?.[0]?.message?.content || "";
 
-    // Word count logging for outbound first touch (no retry — prompt handles enforcement)
+    // Word count logging for outbound first touch
     if (isOutboundFirstTouch && content) {
       const wordCount = content.split(/\s+/).filter(Boolean).length;
       console.log(`[ai_task] Outbound first touch word count: ${wordCount}`);
     }
 
-    console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}`);
+    // ── Quality Scoring: evaluate and optionally regenerate outbound emails ──
+    let qualityScore: EmailQualityScore | null = null;
+    let regenerated = false;
+
+    if (QUALITY_SCORED_TASKS.has(task) && content && !streamRequested) {
+      try {
+        const scoreResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: QUALITY_SCORER_PROMPT },
+              { role: "user", content: `Email to evaluate:\n\n${content}` },
+            ],
+          }),
+        });
+
+        if (scoreResp.ok) {
+          const scoreData = await scoreResp.json();
+          const scoreContent = scoreData.choices?.[0]?.message?.content || "";
+          const cleaned = scoreContent.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+          try {
+            // Extract JSON from potential wrapper text
+            const jsonStart = cleaned.indexOf("{");
+            const jsonEnd = cleaned.lastIndexOf("}");
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+              qualityScore = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+            }
+          } catch { /* scoring parse failed, continue without */ }
+        } else {
+          await scoreResp.text(); // consume body
+        }
+
+        if (qualityScore) {
+          const total = qualityScore.curiosity + qualityScore.human_tone + qualityScore.spam_risk + qualityScore.reply_likelihood;
+          console.log(`[ai_task] Quality score: ${total}/40 (C:${qualityScore.curiosity} H:${qualityScore.human_tone} S:${qualityScore.spam_risk} R:${qualityScore.reply_likelihood})`);
+
+          // If score below threshold, regenerate once using curiosity framework
+          if (total < QUALITY_THRESHOLD) {
+            console.log(`[ai_task] ⚠️ Score ${total} < ${QUALITY_THRESHOLD} — regenerating with curiosity framework`);
+            const curiosityFramework = getEmailFrameworkBlock("curiosity");
+            const regenParts = promptParts.filter(p => !Object.values(EMAIL_FRAMEWORK_BLOCKS).includes(p));
+            // Insert curiosity framework before task body
+            const taskIdx = regenParts.indexOf(taskBody);
+            if (taskIdx >= 0) {
+              regenParts.splice(taskIdx, 0, curiosityFramework);
+            } else {
+              regenParts.push(curiosityFramework);
+            }
+            const regenPrompt = regenParts.join("\n\n");
+
+            const regenResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${LOVABLE_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
+                  { role: "user", content: regenPrompt },
+                ],
+              }),
+            });
+
+            if (regenResp.ok) {
+              const regenData = await regenResp.json();
+              const regenContent = regenData.choices?.[0]?.message?.content || "";
+              if (regenContent) {
+                content = regenContent;
+                regenerated = true;
+                console.log(`[ai_task] ✅ Regenerated email (curiosity framework), length: ${content.length}`);
+              }
+            } else {
+              await regenResp.text(); // consume body
+              console.warn("[ai_task] Regeneration failed, using original email");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[ai_task] Quality scoring failed (non-blocking):", err);
+      }
+    }
+
+    console.log(`[ai_task] Success. Response length: ${content.length}, knowledge_used: ${knowledgeContextUsed}, quality_scored: ${!!qualityScore}, regenerated: ${regenerated}`);
 
     // ── Post-generation: Diversity logging (fire-and-forget for outreach tasks) ──
     if (OUTREACH_TASKS.has(task) && content && payload?.lead_id && resolvedWorkspaceId) {
