@@ -23,6 +23,11 @@ const editLeadSchema = z.object({
   phone: z.string().trim().max(50).optional().or(z.literal("")),
   industry: z.string().trim().max(100).optional().or(z.literal("")),
   country: z.string().trim().max(100).optional().or(z.literal("")),
+  website: z.string().trim().max(500).optional().or(z.literal("")),
+  linkedin_url: z.string().trim().max(500).optional().or(z.literal("")),
+  company_linkedin_url: z.string().trim().max(500).optional().or(z.literal("")),
+  city: z.string().trim().max(100).optional().or(z.literal("")),
+  state: z.string().trim().max(100).optional().or(z.literal("")),
   stage: z.enum(["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"]),
   meeting_link: z.string().trim().max(500).optional().or(z.literal("")),
   personal_notes: z.string().trim().max(2000).optional().or(z.literal("")),
@@ -52,6 +57,11 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
       phone: lead.phone || "",
       industry: lead.industry || "",
       country: lead.country || "",
+      website: lead.website || "",
+      linkedin_url: lead.linkedin_url || "",
+      company_linkedin_url: lead.company_linkedin_url || "",
+      city: lead.city || "",
+      state: lead.state || "",
       stage: (lead.stage as "new" | "contacted" | "engaged" | "post_meeting" | "closing" | "closed_won" | "closed_lost") || "new",
       meeting_link: lead.meeting_link || "",
       personal_notes: lead.personal_notes || "",
@@ -74,6 +84,11 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
           phone: data.phone || null,
           industry: data.industry || null,
           country: data.country || null,
+          website: data.website || null,
+          linkedin_url: data.linkedin_url || null,
+          company_linkedin_url: data.company_linkedin_url || null,
+          city: data.city || null,
+          state: data.state || null,
           stage: data.stage,
           meeting_link: data.meeting_link || null,
           personal_notes: data.personal_notes || null,
@@ -200,12 +215,41 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}
+                name="city"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>City</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Toronto" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="state"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>State / Province</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Ontario" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
                 name="country"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Country</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. United States" {...field} />
+                      <Input placeholder="e.g. Canada" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -225,6 +269,49 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
                 )}
               />
             </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="website"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Website</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. https://www.example.com" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="linkedin_url"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>LinkedIn URL</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. https://linkedin.com/in/..." {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="company_linkedin_url"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Company LinkedIn URL</FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g. https://linkedin.com/company/..." {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <div className="grid grid-cols-2 gap-4">
               <FormField
