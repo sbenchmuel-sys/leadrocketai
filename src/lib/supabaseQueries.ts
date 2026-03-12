@@ -156,7 +156,7 @@ export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
 
   const { data: lead, error: leadErr } = await supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode')
+    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode, website, linkedin_url, company_linkedin_url, city, state')
     .eq('id', leadId)
     .single();
   if (leadErr) throw leadErr;

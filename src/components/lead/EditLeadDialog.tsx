@@ -215,12 +215,41 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}
+                name="city"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>City</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Toronto" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="state"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>State / Province</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Ontario" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
                 name="country"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Country</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. United States" {...field} />
+                      <Input placeholder="e.g. Canada" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -240,6 +269,49 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
                 )}
               />
             </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="website"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Website</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. https://www.example.com" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="linkedin_url"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>LinkedIn URL</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. https://linkedin.com/in/..." {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="company_linkedin_url"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Company LinkedIn URL</FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g. https://linkedin.com/company/..." {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <div className="grid grid-cols-2 gap-4">
               <FormField
