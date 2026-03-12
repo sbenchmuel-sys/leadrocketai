@@ -131,7 +131,8 @@ export type LeadDetail = Pick<Lead,
   'motion' | 'source_type' | 'needs_action' | 'next_action_key' | 'next_action_label' |
   'has_future_meeting' | 'last_inbound_at' | 'last_outbound_at' | 'eligible_at' |
   'nurture_cadence' | 'mode_changed_at' | 'nurture_status' | 'nurture_mode' | 'nurture_theme' |
-  'wa_opted_in' | 'automation_mode'
+  'wa_opted_in' | 'automation_mode' |
+  'website' | 'linkedin_url' | 'company_linkedin_url' | 'city' | 'state'
 >;
 
 export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
