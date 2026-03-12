@@ -1498,21 +1498,11 @@ Sales Signals (recent intelligence — use for personalization):
 
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
-3. Micro-CTA question: "Worth a quick look?" / "Is this something you're exploring?" / "Open to a short conversation?" (1 line)
 
-Do NOT:
-- Include calendar links or meeting booking URLs
-- List features or product capabilities
-- Write company history or long introductions
-- Use multiple CTAs
-- Exceed 90 words under any circumstances
-- Use hype language or buzzwords
-- Mention specific meeting durations
-
-GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Talal Khan", write "Hi Talal,")
-SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY (extracted from "Sender Name" in Rep Context) on the next line with NO blank line between (e.g., if Sender Name is "Shai Benchmuel", write "Best,\nShai")
-CRITICAL: Use the ACTUAL names and company from the contexts above. NEVER output bracketed placeholders like [Name], [Unknown Company], [Rep's first name], [Your Name], [Lead's implied need], [Meeting Link], etc.
-If the lead's company is missing or says "Unknown Company", simply omit company references rather than using placeholders.
+GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Jack Smith", write "Hi Jack,")
+SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
+CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+If the lead's company is missing, simply omit company references.
 
 Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
 
