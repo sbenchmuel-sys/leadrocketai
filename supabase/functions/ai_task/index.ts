@@ -834,10 +834,34 @@ const BREAKUP_CLOSERS: Record<string, string> = {
   general_sales: `Breakup style: "Seems like timing may not be right. Should I close the loop for now?"`,
 };
 
+const COLD_OUTREACH_GENERAL_BLOCK = `
+=== COLD OUTREACH STYLE: GENERAL B2B HIGH REPLY ===
+Length: Under 90 words. Target 65 words.
+Opening:
+- Reference something specific about their role, company, or industry
+- OR ask a direct question about a likely challenge they face
+- NEVER start with abstract/philosophical questions
+Core:
+- One sentence connecting your outreach to a clear business outcome
+- No feature lists, no product pitches
+CTA:
+- One simple question that's easy to reply to
+- "Is this something you're dealing with?"
+- "Worth a quick chat?"
+Avoid:
+- Abstract "What if" questions
+- Vague value propositions
+- Marketing language
+- Long intros or company history
+Psychological triggers:
+- Specificity, relevance, low friction, conversational tone
+`;
+
 // Map playbook IDs to specialized outreach blocks
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
   medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
+  general_sales: COLD_OUTREACH_GENERAL_BLOCK,
 };
 
 function getColdOutreachBlock(playbookId: string): string {
