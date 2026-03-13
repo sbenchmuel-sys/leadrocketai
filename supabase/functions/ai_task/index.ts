@@ -834,10 +834,34 @@ const BREAKUP_CLOSERS: Record<string, string> = {
   general_sales: `Breakup style: "Seems like timing may not be right. Should I close the loop for now?"`,
 };
 
+const COLD_OUTREACH_GENERAL_BLOCK = `
+=== COLD OUTREACH STYLE: GENERAL B2B HIGH REPLY ===
+Length: Under 90 words. Target 65 words.
+Opening:
+- Reference something specific about their role, company, or industry
+- OR ask a direct question about a likely challenge they face
+- NEVER start with abstract/philosophical questions
+Core:
+- One sentence connecting your outreach to a clear business outcome
+- No feature lists, no product pitches
+CTA:
+- One simple question that's easy to reply to
+- "Is this something you're dealing with?"
+- "Worth a quick chat?"
+Avoid:
+- Abstract "What if" questions
+- Vague value propositions
+- Marketing language
+- Long intros or company history
+Psychological triggers:
+- Specificity, relevance, low friction, conversational tone
+`;
+
 // Map playbook IDs to specialized outreach blocks
 const PLAYBOOK_OUTREACH_BLOCKS: Record<string, string> = {
   b2b_saas: COLD_OUTREACH_SAAS_BLOCK,
   medical_device_rep: COLD_OUTREACH_MEDICAL_BLOCK,
+  general_sales: COLD_OUTREACH_GENERAL_BLOCK,
 };
 
 function getColdOutreachBlock(playbookId: string): string {
@@ -852,10 +876,18 @@ type EmailFramework = "curiosity" | "observation" | "hypothesis" | "ultra_short"
 
 const EMAIL_FRAMEWORK_BLOCKS: Record<EmailFramework, string> = {
   curiosity: `=== MESSAGE FRAMEWORK: CURIOSITY ===
-Opening: Start with a question that creates genuine curiosity about their situation.
-The question must be specific enough to feel relevant, but open enough to invite a reply.
+Opening: Start with a SHORT question that creates genuine curiosity about their specific situation.
+The question MUST reference their industry, role, or company directly — never be abstract or philosophical.
 Do NOT answer the question yourself. Let them respond.
-Example pattern: "What if the biggest growth lever for [industry] isn't [obvious thing] — it's [unexpected thing]?"`,
+Do NOT use "What if..." constructions. Use direct, specific questions instead.
+GOOD examples:
+- "Are your printing teams still manually tracking reprint rates?"
+- "How are you handling turnaround guarantees when order volume spikes?"
+- "Curious — what's your biggest bottleneck during peak season?"
+BAD examples (NEVER use these patterns):
+- "What if the biggest growth lever for X isn't Y — it's Z?"
+- "What if transforming existing operations was the key?"
+- Any philosophical/abstract question that could apply to any industry`,
 
   observation: `=== MESSAGE FRAMEWORK: OBSERVATION ===
 Opening: Reference a REAL signal or activity about their company.
