@@ -1493,29 +1493,36 @@ Start a conversation and trigger a reply. NOT to close, NOT to pitch.
 LENGTH
 40–90 words. Target 65 words. Count every word.
 
-STRUCTURE (2–4 paragraphs):
+STRUCTURE (2–3 short paragraphs):
 
 Paragraph 1:
 Opening based on the MESSAGE FRAMEWORK provided above.
-IMPORTANT: Only reference facts that appear in Lead Context or Sales Signals below. Do NOT invent or guess specifics about the lead's operations, processes, or challenges. If no specific signal exists, use a general industry-relevant observation.
+IMPORTANT: Only reference facts that appear in Lead Context or Sales Signals below. The lead's ACTUAL industry and business is defined by their company name and Lead Context — NOT by what you sell (Knowledge Context). If the lead is a crane rental company, talk about crane rentals, not your product category.
 
-Paragraph 2:
-One short contextual sentence explaining why you are asking. Do NOT pitch the product. Do NOT list features.
+Paragraph 2 (optional, merge with CTA if possible):
+One short sentence bridging to a question. Do NOT pitch. Do NOT list features. Keep it under 20 words.
 
-Paragraph 3:
+Final paragraph:
 CTA. One question only.
 - If Custom Instructions mention "meeting" or "calendar" AND a Meeting Link is provided: end with a brief meeting invite using the EXACT Meeting Link URL (e.g., "Open to a quick chat? Here's my calendar: [exact URL]"). Do NOT mention meeting duration.
 - Otherwise: use a simple micro-CTA question. No calendar links.
 
+CRITICAL CONTEXT SEPARATION:
+- "Lead Context" = WHO you are emailing (their company, role, industry). Use this for the opening.
+- "Knowledge Context" = YOUR product/service. Use this ONLY to understand what angle might resonate. Do NOT describe your product to the lead. Do NOT assume the lead is in YOUR industry.
+- Example: If you sell sublimation supplies and the lead runs a crane rental company, do NOT ask about "sourcing sublimation products." Instead, ask about something relevant to THEIR business (e.g., fleet branding, equipment marketing).
+
 RULES
 - Do NOT pitch the product
 - Do NOT list features
-- Do NOT include metrics unless extremely relevant
+- Do NOT project YOUR industry onto the lead — reference THEIR actual business
 - Do NOT fabricate specifics — if you don't know what tools they use, what challenges they face, or what processes they follow, do NOT guess. Use only what's in Lead Context and Sales Signals.
+- Do NOT include metrics unless extremely relevant
+- Prefer 2 paragraphs over 3 when possible
 - Use natural conversational tone
 - Use simple punctuation
 - Do NOT use em dashes (—)
-- AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well"
+- AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well", "I ask because", "many businesses"
 - CALENDAR LINKS: Only include if Custom Instructions explicitly request a meeting CTA AND a Meeting Link is provided. Otherwise, NO calendar links.
 
 INPUTS
@@ -1543,7 +1550,7 @@ CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name],
 If the lead's company is missing, simply omit company references.
 MEETING LINK: If Custom Instructions request a meeting CTA, use the EXACT URL from Meeting Link above. Do NOT invent URLs. If Meeting Link is empty, ask them to reply with availability instead.
 
-Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
+Knowledge usage: Use ONLY to understand your product positioning. Do NOT describe your product to the lead. Do NOT assume the lead operates in your industry. Focus the email on the LEAD's world.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
