@@ -2592,6 +2592,19 @@ serve(async (req) => {
 
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
+    // Gate meeting_link: only pass to cold outbound tasks if custom instructions explicitly request it
+    const COLD_OUTBOUND_TASKS = new Set(["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup", "re_engagement_intro"]);
+    if (COLD_OUTBOUND_TASKS.has(task) && enhancedPayload.meeting_link) {
+      const instructions = String(enhancedPayload.custom_instructions || "").toLowerCase();
+      const mentionsMeeting = /meeting|calendar|book.*time|schedule.*call|meeting.*cta|include.*cta/i.test(instructions);
+      if (!mentionsMeeting) {
+        console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — not requested in custom instructions`);
+        delete enhancedPayload.meeting_link;
+      } else {
+        console.log(`[ai_task] ✅ Meeting link kept for ${task} — requested in custom instructions`);
+      }
+    }
+
     // Build the task prompt with template variables replaced
     const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
 
