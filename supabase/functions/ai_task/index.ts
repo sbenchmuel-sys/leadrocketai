@@ -1550,7 +1550,7 @@ CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name],
 If the lead's company is missing, simply omit company references.
 MEETING LINK: If Custom Instructions request a meeting CTA, use the EXACT URL from Meeting Link above. Do NOT invent URLs. If Meeting Link is empty, ask them to reply with availability instead.
 
-Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
+Knowledge usage: Use ONLY to understand your product positioning. Do NOT describe your product to the lead. Do NOT assume the lead operates in your industry. Focus the email on the LEAD's world.
 
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
