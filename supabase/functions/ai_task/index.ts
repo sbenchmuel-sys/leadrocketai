@@ -1488,7 +1488,7 @@ Return EMAIL BODY ONLY. The email must be complete and ready to send with real n
 You are generating Email 1 in a cold outbound sequence.
 
 GOAL
-Start a conversation and trigger a reply. NOT to close, NOT to pitch, NOT to book a meeting.
+Start a conversation and trigger a reply. NOT to close, NOT to pitch.
 
 LENGTH
 40–90 words. Target 65 words. Count every word.
@@ -1497,23 +1497,26 @@ STRUCTURE (2–4 paragraphs):
 
 Paragraph 1:
 Opening based on the MESSAGE FRAMEWORK provided above.
+IMPORTANT: Only reference facts that appear in Lead Context or Sales Signals below. Do NOT invent or guess specifics about the lead's operations, processes, or challenges. If no specific signal exists, use a general industry-relevant observation.
 
 Paragraph 2:
 One short contextual sentence explaining why you are asking. Do NOT pitch the product. Do NOT list features.
 
 Paragraph 3:
-Simple micro-CTA question. One question only. No calendar links. No meeting duration mentions.
+CTA. One question only.
+- If Custom Instructions mention "meeting" or "calendar" AND a Meeting Link is provided: end with a brief meeting invite using the EXACT Meeting Link URL (e.g., "Open to a quick chat? Here's my calendar: [exact URL]"). Do NOT mention meeting duration.
+- Otherwise: use a simple micro-CTA question. No calendar links.
 
 RULES
 - Do NOT pitch the product
 - Do NOT list features
 - Do NOT include metrics unless extremely relevant
-- Do NOT include calendar links
-- Do NOT mention meeting duration
+- Do NOT fabricate specifics — if you don't know what tools they use, what challenges they face, or what processes they follow, do NOT guess. Use only what's in Lead Context and Sales Signals.
 - Use natural conversational tone
 - Use simple punctuation
 - Do NOT use em dashes (—)
 - AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well"
+- CALENDAR LINKS: Only include if Custom Instructions explicitly request a meeting CTA AND a Meeting Link is provided. Otherwise, NO calendar links.
 
 INPUTS
 Lead Context:
@@ -1528,6 +1531,9 @@ Knowledge Context:
 Sales Signals (recent intelligence — use for personalization):
 {{SIGNALS}}
 
+Meeting Link:
+{{MEETING_LINK}}
+
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
@@ -1535,6 +1541,7 @@ GREETING: Start with "Hi" followed by the prospect's first name from Lead Contex
 SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
 CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
 If the lead's company is missing, simply omit company references.
+MEETING LINK: If Custom Instructions request a meeting CTA, use the EXACT URL from Meeting Link above. Do NOT invent URLs. If Meeting Link is empty, ask them to reply with availability instead.
 
 Knowledge usage: Use ONLY for positioning alignment. Do NOT include case studies, long explanations, or technical details.
 
