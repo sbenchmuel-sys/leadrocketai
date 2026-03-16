@@ -957,6 +957,15 @@ serve(async (req) => {
         processed++;
         // Increment daily send counter for this owner
         dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
+
+        // ── INTER-SEND STAGGER ──────────────────────────────
+        // Delay 30–90 seconds between sends to avoid mailbox
+        // flagging from rapid-fire outbound bursts.
+        if (processed < eligibleLeads.length) {
+          const staggerMs = 30_000 + Math.floor(Math.random() * 60_000); // 30–90s
+          console.log(`[automation-executor] Stagger delay: ${Math.round(staggerMs / 1000)}s before next send`);
+          await new Promise(r => setTimeout(r, staggerMs));
+        }
       } catch (leadErr) {
         console.error(`[automation-executor] Error processing lead ${lead.id}:`, leadErr);
         logEntry.status = "failed";
