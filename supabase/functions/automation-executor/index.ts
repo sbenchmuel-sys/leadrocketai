@@ -195,8 +195,10 @@ serve(async (req) => {
       .limit(20);
 
     // ── MAX_SENDS_PER_RUN cap ───────────────────────────────
+    // Default to 5 per run to stay within Edge Function time limits
+    // when inter-send stagger is active (5 × ~60s avg = ~5 min).
     const maxSendsEnv = Deno.env.get("MAX_SENDS_PER_RUN");
-    const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : Infinity;
+    const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : 5;
 
     // ── DAILY SEND CAP PER MAILBOX ──────────────────────────
     // Counts emails already sent today (UTC) from automation_log for each owner.
