@@ -531,34 +531,41 @@ OUTPUT
 Return EMAIL BODY ONLY. Complete, ready to send, real names.`,
 
   pre_email_2_followup: `ROLE
-You are writing Follow-up Email 1 in a cold outbound sequence.
+You are writing Follow-up 1 in a cold outbound sequence.
 
 CONTEXT
-The prospect has not replied to Email 1.
+They didn't reply to Email 1. That's normal. Don't make it weird.
 
 GOAL
-Light reminder. Keep the conversation easy. No pitch.
+Give them a new reason to reply. NOT a reminder that you emailed before.
 
 LENGTH
-Maximum 60 words. Count every word.
+Under 50 words. Count them.
 
-RULES
-- Reference previous email briefly (one sentence max)
-- Keep tone casual and friendly
-- No product pitch
-- One question only
-- Do NOT use em dashes
-- AVOID: "Just checking in", "Following up", "Circling back"
+FEW-SHOT EXAMPLES:
 
-STRUCTURE
-Hi {{first_name}},
+Example 1:
+Hi Jack,
 
-[Brief reference to previous note — 1 sentence]
-
-[One relevant question about their situation]
+Sent you a note last week about peak-season bottlenecks. Quick thought — are reprints still the biggest margin killer for print shops your size?
 
 Best,
-{{rep_first_name}}
+Mike
+
+Example 2:
+Hi Sarah,
+
+Dropped you a line about vendor security reviews. Curious — are you handling those in-house or outsourcing?
+
+Best,
+Mike
+
+RULES
+- Do NOT start with "Just following up" / "Checking in" / "Circling back" / "Hope you had a good week"
+- Reference your previous email in passing (half a sentence max), then pivot to a NEW angle
+- One question only
+- No pitch, no features
+- Do NOT use em dashes
 
 INPUTS
 Lead Context:
@@ -580,13 +587,12 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
-- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
-- If the lead's company is missing, simply omit company references
+- GREETING: "Hi" + first name
+- SIGN-OFF: "Best," + rep's first name
+- Use ACTUAL names. No placeholders.
 
 OUTPUT
-Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
+Return EMAIL BODY ONLY.`,
 
   pre_email_3_followup: `ROLE
 You are writing Follow-up Email 2 in a cold outbound sequence.
