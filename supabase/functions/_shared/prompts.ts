@@ -585,12 +585,18 @@ Dropped you a line about vendor security reviews. Curious — are you handling t
 Best,
 Mike
 
+KB-GROUNDING CHECK:
+- Before writing, identify which KB insight or Sales Signal you're using for the NEW angle
+- If no relevant KB insight exists, ask a neutral question about their specific role/company
+- NEVER invent industry pain points not found in Knowledge Context
+
 RULES
 - Do NOT start with "Just following up" / "Checking in" / "Circling back" / "Hope you had a good week"
 - Reference your previous email in passing (half a sentence max), then pivot to a NEW angle
 - One question only
 - No pitch, no features
 - Do NOT use em dashes
+- Every claim must map to a KB chunk or Sales Signal
 
 INPUTS
 Lead Context:
