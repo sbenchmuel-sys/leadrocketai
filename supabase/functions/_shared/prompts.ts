@@ -1315,13 +1315,45 @@ AUTOMATIC SCORE CAPS:
 - Contains generic industry pain points not from KB → specificity capped at 3 AND reply_likelihood capped at 4
 - Contains phrases like "many businesses", "I hear", "in your industry" → human_tone capped at 3
 
+GROUNDING VIOLATION DETECTION (AUTOMATIC FAIL):
+- Email assumes a pain point about the lead that only makes sense if they were in the SELLER's industry → ALL scores capped at 3
+  Example: Asking a crane rental company about "sublimation" or "print quality" when the seller sells printing supplies
+- Email uses seller product descriptions as if they describe the lead's problem → specificity = 0
+- Email references "previous outreach" or "my last email" when this is a first-touch → reply_likelihood = 0
+
 Return JSON ONLY:
 {
   "curiosity": <number 0-10>,
   "human_tone": <number 0-10>,
   "spam_risk": <number 0-10>,
   "reply_likelihood": <number 0-10>,
+  "grounding_violation": <true|false>,
+  "violation_reason": "<if grounding_violation=true, explain what was projected onto the lead>",
   "summary": "<one sentence explaining the weakest dimension>"
+}`;
+
+export const GROUNDING_VALIDATOR_PROMPT = `You are a grounding validator for outbound sales emails. Your job is to catch hallucinations and ungrounded claims BEFORE the email is sent.
+
+INPUTS:
+- Generated email
+- Lead Context (who the email is TO)
+- Seller Context (who the email is FROM)
+- Signals (verified intelligence about the lead)
+
+CHECK EACH SENTENCE:
+1. Does it reference a fact about the lead? → Must be in Lead Context or Signals
+2. Does it assume a pain point? → Must be in Signals or Lead Intelligence, NOT from Seller Context
+3. Does it describe the seller's product? → FAIL (first-touch emails should not pitch)
+4. Does it reference "previous outreach" or "my last email"? → Check if this is actually a first-touch. If yes → FAIL
+5. Does it use the seller's industry terminology on a lead from a different industry? → FAIL
+
+Return JSON ONLY:
+{
+  "pass": true|false,
+  "violations": [
+    {"sentence": "exact sentence", "issue": "pain_point_from_seller_kb|product_pitch|fake_prior_outreach|industry_projection", "fix": "suggested replacement or removal"}
+  ],
+  "safe_to_send": true|false
 }`;
 
 export const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON ONLY:
