@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 // Import from shared modules
-import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT } from "../_shared/prompts.ts";
+import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT } from "../_shared/prompts.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
