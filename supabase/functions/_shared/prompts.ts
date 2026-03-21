@@ -922,6 +922,11 @@ Generate the next email in a nurture sequence.
 GOAL
 Create one value-driven follow-up email that builds on previous emails in the sequence.
 
+KB-GROUNDING CHECK:
+- The "value point" MUST come from Knowledge Context
+- If KB has no relevant insight for this lead/theme → share a neutral observation from Lead Context or ask a question
+- NEVER fabricate results, statistics, or industry trends not in KB
+
 CONSTRAINTS
 - 100–180 words
 - Educational, credibility-building
@@ -929,6 +934,7 @@ CONSTRAINTS
 - ONE value point and ONE soft CTA
 - Must feel connected to the previous emails (not repetitive)
 - Do NOT repeat talking points from previous emails
+- Every claim must trace to a KB chunk
 - GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
 - SIGN-OFF: End with "Best regards," on one line, then the rep's FIRST NAME ONLY on the next line with NO blank line between
 
