@@ -440,45 +440,66 @@ OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
   pre_email_1_intro: `ROLE
-You are generating Email 1 in a cold outbound sequence.
+You are writing Email 1 in a cold outbound sequence.
 
 GOAL
-Start a conversation and trigger a reply. NOT to close, NOT to pitch.
+Get a reply. That's it. Not to pitch, not to educate, not to impress.
 
 LENGTH
-40–90 words. Target 65 words. Count every word.
+40–75 words. Target 55 words. If you write more than 75 words, start over.
 
-STRUCTURE (2–3 short paragraphs):
+STRUCTURE (2 short paragraphs):
 
 Paragraph 1:
-Opening based on the MESSAGE FRAMEWORK provided above.
-IMPORTANT: Only reference facts that appear in Lead Context or Sales Signals below. The lead's ACTUAL industry and business is defined by their company name and Lead Context — NOT by what you sell (Knowledge Context). If the lead is a crane rental company, talk about crane rentals, not your product category.
+One sentence that proves you know who they are. Reference their company, role, or industry specifically. Use the MESSAGE FRAMEWORK above for the opening style.
 
-Paragraph 2 (optional, merge with CTA if possible):
-One short sentence bridging to a question. Do NOT pitch. Do NOT list features. Keep it under 20 words.
-
-Final paragraph:
-CTA. One question only.
-- If Custom Instructions mention "meeting" or "calendar" AND a Meeting Link is provided: end with a brief meeting invite using the EXACT Meeting Link URL (e.g., "Open to a quick chat? Here's my calendar: [exact URL]"). Do NOT mention meeting duration.
-- Otherwise: use a simple micro-CTA question. No calendar links.
+Paragraph 2:
+One question. Simple enough to answer in 10 seconds. This is your CTA.
 
 CRITICAL CONTEXT SEPARATION:
-- "Lead Context" = WHO you are emailing (their company, role, industry). Use this for the opening.
-- "Knowledge Context" = YOUR product/service. Use this ONLY to understand what angle might resonate. Do NOT describe your product to the lead. Do NOT assume the lead is in YOUR industry.
-- Example: If you sell sublimation supplies and the lead runs a crane rental company, do NOT ask about "sourcing sublimation products." Instead, ask about something relevant to THEIR business (e.g., fleet branding, equipment marketing).
+- "Lead Context" = WHO you are emailing. Their company, role, industry. Use this for the opening.
+- "Knowledge Context" = YOUR product/service. Use ONLY to choose the right angle. NEVER describe your product. NEVER assume the lead is in your industry.
+- Example: If you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding — NOT sublimation.
+
+FEW-SHOT EXAMPLES (match this style, not these exact words):
+
+Example 1 (printing company lead):
+Hi Jack,
+
+Running a custom print shop with 15+ years in business — curious what your biggest bottleneck is during peak order season?
+
+Best,
+Mike
+
+Example 2 (SaaS company lead):
+Hi Sarah,
+
+Most engineering leads at Series B companies end up buried in vendor security reviews. Is that eating your team's time too?
+
+Best,
+Mike
+
+Example 3 (construction company lead):
+Hi Tom,
+
+Quick question — how are you sourcing branded gear and uniforms for your crews right now?
+
+Best,
+Mike
 
 RULES
 - Do NOT pitch the product
 - Do NOT list features
-- Do NOT project YOUR industry onto the lead — reference THEIR actual business
-- Do NOT fabricate specifics — if you don't know what tools they use, what challenges they face, or what processes they follow, do NOT guess. Use only what's in Lead Context and Sales Signals.
-- Do NOT include metrics unless extremely relevant
-- Prefer 2 paragraphs over 3 when possible
-- Use natural conversational tone
-- Use simple punctuation
+- Do NOT project YOUR industry onto the lead
+- Do NOT fabricate specifics not in Lead Context or Sales Signals
+- Do NOT use filler sentences ("Hope you're well", "I wanted to reach out", "I ask because")
 - Do NOT use em dashes (—)
-- AVOID these phrases: "Given your work in", "Noticed your company", "Just checking in", "I wanted to reach out", "Hope this finds you well", "I ask because", "many businesses"
-- CALENDAR LINKS: Only include if Custom Instructions explicitly request a meeting CTA AND a Meeting Link is provided. Otherwise, NO calendar links.
+- Do NOT use abstract "What if" questions
+- CALENDAR LINKS: Only if Custom Instructions explicitly request it AND Meeting Link is provided
+- Every sentence must contain specific information. If it could apply to any company, delete it.
+
+BANNED PHRASES (never use these):
+"I hope this finds you well" | "I wanted to reach out" | "Given your work in" | "Noticed your company" | "Just checking in" | "I ask because" | "many businesses" | "Hope you had a good week" | "in today's competitive landscape" | "with advancements in" | "Are you exploring" (too vague) | "What if" (as an opener)
 
 INPUTS
 Lead Context:
@@ -499,16 +520,15 @@ Meeting Link:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
-GREETING: Start with "Hi" followed by the prospect's first name from Lead Context (e.g., if lead name is "Jack Smith", write "Hi Jack,")
-SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
-CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
-If the lead's company is missing, simply omit company references.
-MEETING LINK: If Custom Instructions request a meeting CTA, use the EXACT URL from Meeting Link above. Do NOT invent URLs. If Meeting Link is empty, ask them to reply with availability instead.
+GREETING: "Hi" + prospect's first name from Lead Context
+SIGN-OFF: "Best," + rep's FIRST NAME ONLY on next line
+CRITICAL: Use ACTUAL names. NEVER output bracketed placeholders.
+If the lead's company is missing, omit company references.
 
-Knowledge usage: Use ONLY to understand your product positioning. Do NOT describe your product to the lead. Do NOT assume the lead operates in your industry. Focus the email on the LEAD's world.
+Knowledge usage: Use ONLY to pick the right angle. NEVER describe your product. Focus on the LEAD's world.
 
 OUTPUT
-Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
+Return EMAIL BODY ONLY. Complete, ready to send, real names.`,
 
   pre_email_2_followup: `ROLE
 You are writing Follow-up Email 1 in a cold outbound sequence.
