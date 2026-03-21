@@ -505,6 +505,12 @@ Quick question — how are you sourcing branded gear and uniforms for your crews
 Best,
 Mike
 
+KB-GROUNDING CHECK (do this BEFORE writing):
+1. Scan Knowledge Context for pain points, use cases, or value props relevant to THIS lead's industry/role
+2. If you find a relevant KB insight → use it to frame your question (but do NOT describe your product)
+3. If NO relevant KB insight exists → ask a neutral question about their company/role from Lead Context only
+4. NEVER invent pain points like "color matching", "seasonal demand", "tight margins" unless they appear verbatim in Knowledge Context
+
 RULES
 - Do NOT pitch the product
 - Do NOT list features
@@ -515,9 +521,10 @@ RULES
 - Do NOT use abstract "What if" questions
 - CALENDAR LINKS: Only if Custom Instructions explicitly request it AND Meeting Link is provided
 - Every sentence must contain specific information. If it could apply to any company, delete it.
+- Every pain point or claim must map to a KB chunk or Sales Signal. If it doesn't, delete it.
 
 BANNED PHRASES (never use these):
-"I hope this finds you well" | "I wanted to reach out" | "Given your work in" | "Noticed your company" | "Just checking in" | "I ask because" | "many businesses" | "Hope you had a good week" | "in today's competitive landscape" | "with advancements in" | "Are you exploring" (too vague) | "What if" (as an opener)
+"I hope this finds you well" | "I wanted to reach out" | "Given your work in" | "Noticed your company" | "Just checking in" | "I ask because" | "many businesses" | "Hope you had a good week" | "in today's competitive landscape" | "with advancements in" | "Are you exploring" (too vague) | "What if" (as an opener) | "I hear" | "many printing businesses" | "many companies in your space"
 
 INPUTS
 Lead Context:
