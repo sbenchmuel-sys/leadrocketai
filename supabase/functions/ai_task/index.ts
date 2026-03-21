@@ -801,13 +801,6 @@ serve(async (req) => {
               regenPromptParts.splice(regenPromptParts.length - 1, 0, 
                 "=== REGENERATION INSTRUCTION ===\nThe previous attempt failed grounding validation. Write a SAFER email:\n- Use ONLY facts from Lead Context (Section B)\n- Ask a neutral question about their role or company\n- Do NOT reference seller products or assume pain points\n- If unsure, keep it ultra-short: one observation + one question"
               );
-              if (emailFrameworkBlock) {
-                const idx = regenPromptParts.indexOf(emailFrameworkBlock);
-                if (idx >= 0) regenPromptParts[idx] = curiosityBlock;
-                else regenPromptParts.splice(regenPromptParts.length - 1, 0, curiosityBlock);
-              } else {
-                regenPromptParts.splice(regenPromptParts.length - 1, 0, curiosityBlock);
-              }
 
               const regenResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
                 method: "POST",
