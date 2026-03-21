@@ -743,11 +743,18 @@ CRITICAL CONTEXT:
 This lead has gone quiet after previous engagement. Your last email said:
 {{LAST_OUTBOUND_BODY}}
 
+KB-GROUNDING CHECK:
+- Before choosing your re-engagement angle, check Knowledge Context for relevant insights, use cases, or value props
+- Any "new development" or "insight" you share MUST come from KB or Sales Signals
+- If KB has nothing relevant, use milestones/meeting history to frame a neutral follow-up question
+- NEVER invent industry trends or generic pain points
+
 Do NOT:
 - Repeat any angle, value prop, or CTA from your last email
 - Write a cold intro as if you've never spoken
 - Use generic openers like "I wanted to reach out" without referencing shared context
 - List features or give a product overview
+- Use generic industry pain points not found in KB
 
 RELATIONSHIP CONTEXT:
 Milestones from your engagement: {{MILESTONES}}
