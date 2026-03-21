@@ -1277,18 +1277,21 @@ Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.
 
-Score on these four dimensions (0-10 each):
+Score on these five dimensions (0-10 each):
 
 1. Specificity — Does the email reference something specific about THIS person/company? (Generic = 0-3, could-be-anyone = 4-5, clearly researched = 7-10)
 2. Human Tone — Would a real person write this? Filler phrases like "Hope you had a good week" or "I wanted to reach out" = automatic 3 or lower. Marketing language = 0-2.
 3. Brevity — Is every sentence earning its place? Under 60 words = 8-10. Over 90 words = 0-4. Filler sentences that add no information = subtract 2 points.
 4. Reply Likelihood — Would a busy executive respond to this? Vague questions = 2-4. Specific questions about their business = 7-9.
+5. KB Grounding — Are all claims/pain points grounded in provided context, or are they generic assumptions? Generic industry pain points (e.g., "color matching", "seasonal demand", "tight margins") with no KB backing = 0-3. All claims traceable to KB or signals = 8-10.
 
 AUTOMATIC SCORE CAPS:
 - Contains "I hope this finds you well" or similar → human_tone capped at 2
 - Contains "What if" as an opener → specificity capped at 3
 - Over 90 words → brevity capped at 3
 - Question could apply to any company → reply_likelihood capped at 4
+- Contains generic industry pain points not from KB → specificity capped at 3 AND reply_likelihood capped at 4
+- Contains phrases like "many businesses", "I hear", "in your industry" → human_tone capped at 3
 
 Return JSON ONLY:
 {
