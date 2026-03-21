@@ -646,6 +646,12 @@ One more thought. We've been seeing print shops cut reprint costs 20% by switchi
 Best,
 Mike
 
+KB-GROUNDING CHECK:
+- The "concrete insight or result" MUST come from Knowledge Context or Sales Signals
+- If Knowledge Context has no relevant insight for this lead → ask a neutral question about their business instead
+- NEVER fabricate statistics (e.g., "20% reduction") unless they appear in KB
+- NEVER use generic industry pain points not found in KB
+
 RULES
 - Lead with the insight, not a reference to your previous emails
 - The insight must relate to THEIR industry, not yours
@@ -653,6 +659,7 @@ RULES
 - No pitch, no features
 - Different angle than previous emails
 - Do NOT use em dashes
+- Every claim must trace to a KB chunk or Sales Signal
 
 INPUTS
 Lead Context:
