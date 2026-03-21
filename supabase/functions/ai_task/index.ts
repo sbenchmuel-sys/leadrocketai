@@ -694,10 +694,11 @@ serve(async (req) => {
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");
 
+    if (segmentBlock) console.log(`[ai_task] [0/SEGMENT] ${leadSegment} → ${segmentConfig.label}`);
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}`);
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}, Segment: ${leadSegment}`);
 
     const clientModelHint = payload?.model_hint ? String(payload.model_hint) : null;
     const model = clientModelHint && ["google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"].includes(clientModelHint)
