@@ -521,9 +521,23 @@ serve(async (req) => {
       })();
     }
 
+    // Classify lead segment for KB-grounded outreach
+    const leadSegment = classifyLeadSegment({
+      industry: payload?.industry ? String(payload.industry) : undefined,
+      job_title: payload?.job_title ? String(payload.job_title) : undefined,
+      company: payload?.company ? String(payload.company) : undefined,
+      lead_context: payload?.lead_context ? String(payload.lead_context) : undefined,
+    });
+    const segmentConfig = SEGMENT_CONFIGS[leadSegment];
+    console.log(`[ai_task] Lead segment: ${leadSegment} (${segmentConfig.label})`);
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
+      // Prepend segment boost terms to bias KB retrieval toward relevant chunks
+      if (segmentConfig.kb_boost_terms.length > 0 && OUTREACH_TASKS.has(task)) {
+        queryParts.push(segmentConfig.kb_boost_terms.join(" "));
+      }
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
       if (payload?.lead_context) queryParts.push(String(payload.lead_context).slice(0, 500));
@@ -531,7 +545,7 @@ serve(async (req) => {
       const searchQuery = queryParts.join("\n").slice(0, 2000);
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}, segment boost: ${segmentConfig.kb_boost_terms.length > 0}`);
         kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, user.id, leadId, task);
       }
     }
