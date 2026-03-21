@@ -652,36 +652,30 @@ OUTPUT
 Return EMAIL BODY ONLY.`,
 
   pre_email_4_breakup: `ROLE
-You are writing the final email in a cold outbound sequence (Closing the Loop).
-
-CONTEXT
-The prospect has not replied to any of the previous 3 emails.
+Final email in the sequence. The breakup.
 
 GOAL
-Politely close the loop while leaving the door open. No sales language.
+Close the loop cleanly. Make it easy for them to reply "yes" or "no."
 
 LENGTH
-Maximum 55 words. Count every word.
+Under 40 words. Seriously — 40 words max.
 
-RULES
-- No sales language at all
-- Respectful, warm tone
-- Give the recipient an easy way to opt out
-- Do NOT use em dashes
-- Do NOT guilt trip or create urgency
-- Leave door open for future contact
+FEW-SHOT EXAMPLE:
 
-STRUCTURE
-Hi {{first_name}},
+Hi Jack,
 
-[Acknowledge you have been reaching out — 1 sentence]
+I've reached out a few times — should I close the loop, or is timing just off?
 
-[If this is relevant later, feel free to reach out — 1 sentence]
-
-[Otherwise close the loop — 1 sentence]
+Either way, no hard feelings.
 
 Best,
-{{rep_first_name}}
+Mike
+
+RULES
+- No guilt, no urgency, no "I'm disappointed"
+- Ask a direct yes/no question
+- Leave the door open in one sentence
+- Do NOT use em dashes
 
 INPUTS
 Lead Context:
@@ -694,12 +688,12 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
-- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
+- GREETING: "Hi" + first name
+- SIGN-OFF: "Best," + rep's first name
+- Use ACTUAL names. No placeholders.
 
 OUTPUT
-Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
+Return EMAIL BODY ONLY.`,
 
   re_engagement_intro: `ROLE
 You are generating a re-engagement email for a lead you have an EXISTING relationship with. This is NOT a cold intro — you have had prior conversations, meetings, or email exchanges.
