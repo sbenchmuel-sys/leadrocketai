@@ -387,7 +387,7 @@
 
     "@twilio/voice-errors": ["@twilio/voice-errors@1.7.0", "", {}, "sha512-9TvniWpzU0iy6SYFAcDP+HG+/mNz2yAHSs7+m0DZk86lE+LoTB6J/ZONTPuxXrXWi4tso/DulSHuA0w7nIQtGg=="],
 
-    "@twilio/voice-sdk": ["@twilio/voice-sdk@2.18.0", "", { "dependencies": { "@twilio/voice-errors": "1.7.0", "@types/events": "^3.0.3", "events": "3.3.0", "loglevel": "1.9.2", "tslib": "2.8.1" } }, "sha512-7SGkTn3cr+V0Cj0cd8kW300154mtrDNvfCXNT3v7Ip+7nv51vt7igTeJX7Sc83tMXfsGEkHTxjQy6lMCbZQ2eQ=="],
+    "@twilio/voice-sdk": ["@twilio/voice-sdk@2.18.1", "", { "dependencies": { "@twilio/voice-errors": "1.7.0", "@types/events": "^3.0.3", "events": "3.3.0", "loglevel": "1.9.2", "tslib": "2.8.1" } }, "sha512-4IvFgQOWrnluJrtJ79s1B4CiLbXLG7DKAXJW/uzgEsG9zQP30avs4d98LmtpOFr9ozd1kdKtjhKoqD+RbsY+MA=="],
 
     "@types/d3-array": ["@types/d3-array@3.2.1", "", {}, "sha512-Y2Jn2idRrLzUfAKV2LyRImR+y4oa2AntrgID95SHJxuMUrkNXmanDSed71sRNZysveJVt1hLLemQZIady0FpEg=="],
 
