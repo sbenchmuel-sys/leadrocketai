@@ -391,8 +391,8 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   };
   onPipelineReady(partialResult);
 
-  // Step 6: Ensure context cache exists (fire-and-forget, non-blocking)
-  // If cache is missing, trigger build so it's ready for future calls
+  // Step 6: Ensure context cache exists — BLOCK for new leads so signals/angles are ready before LLM call
+  const isFirstTouch = !resolvedContext.last_outbound_email && !resolvedContext.last_inbound_email;
   try {
     const { data: cacheCheck } = await supabase
       .from("lead_context_cache")
@@ -401,19 +401,35 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
       .maybeSingle();
 
     if (!cacheCheck) {
-      console.log("[streamDraft] No context cache — triggering build (fire-and-forget)");
+      console.log("[streamDraft] No context cache — triggering build", isFirstTouch ? "(BLOCKING for first-touch)" : "(fire-and-forget)");
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const { data: { session: s } } = await supabase.auth.getSession();
-      fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
+      const buildPromise = fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${s?.access_token || supabaseKey}`,
           apikey: supabaseKey,
         },
-        body: JSON.stringify({ lead_id }),
-      }).catch(() => {}); // fire-and-forget
+        body: JSON.stringify({ lead_id, force: true }),
+      });
+
+      if (isFirstTouch) {
+        // BLOCK: wait for context cache to build so ai_task has signals + angles
+        try {
+          const resp = await buildPromise;
+          if (resp.ok) {
+            console.log("[streamDraft] ✅ Context cache built before draft generation");
+          } else {
+            console.warn("[streamDraft] Context cache build returned", resp.status);
+          }
+        } catch (err) {
+          console.warn("[streamDraft] Context cache build failed, proceeding without:", err);
+        }
+      } else {
+        buildPromise.catch(() => {}); // fire-and-forget for non-first-touch
+      }
     }
   } catch { /* ignore cache check failures */ }
 
