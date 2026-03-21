@@ -1220,14 +1220,20 @@ OUTPUT
 Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 };
 
-export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email for reply probability.
+export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.
 
-Score the email on these four dimensions (0-10 each):
+Score on these four dimensions (0-10 each):
 
-1. Curiosity — Does the opening create curiosity or a question that invites response?
-2. Human Tone — Does the message sound like a real human email rather than marketing copy?
-3. Spam Risk — Does the message avoid spam triggers, buzzwords, or promotional tone? (10 = no spam risk)
-4. Reply Likelihood — How likely is this email to receive a response?
+1. Specificity — Does the email reference something specific about THIS person/company? (Generic = 0-3, could-be-anyone = 4-5, clearly researched = 7-10)
+2. Human Tone — Would a real person write this? Filler phrases like "Hope you had a good week" or "I wanted to reach out" = automatic 3 or lower. Marketing language = 0-2.
+3. Brevity — Is every sentence earning its place? Under 60 words = 8-10. Over 90 words = 0-4. Filler sentences that add no information = subtract 2 points.
+4. Reply Likelihood — Would a busy executive respond to this? Vague questions = 2-4. Specific questions about their business = 7-9.
+
+AUTOMATIC SCORE CAPS:
+- Contains "I hope this finds you well" or similar → human_tone capped at 2
+- Contains "What if" as an opener → specificity capped at 3
+- Over 90 words → brevity capped at 3
+- Question could apply to any company → reply_likelihood capped at 4
 
 Return JSON ONLY:
 {
@@ -1235,7 +1241,7 @@ Return JSON ONLY:
   "human_tone": <number 0-10>,
   "spam_risk": <number 0-10>,
   "reply_likelihood": <number 0-10>,
-  "summary": "<one sentence explanation>"
+  "summary": "<one sentence explaining the weakest dimension>"
 }`;
 
 export const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON ONLY:
