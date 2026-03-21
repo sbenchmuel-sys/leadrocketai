@@ -131,6 +131,59 @@ function textSimilarity(a: string, b: string): number {
 }
 
 // ============================================
+// LEAD SEGMENTATION
+// ============================================
+
+type LeadSegment = "print_shop" | "promotional_products" | "apparel_customization" | "unknown";
+
+interface SegmentConfig {
+  label: string;
+  kb_boost_terms: string[];
+  angle_hint: string;
+}
+
+const SEGMENT_CONFIGS: Record<LeadSegment, SegmentConfig> = {
+  print_shop: {
+    label: "Print Shop / Custom Printing",
+    kb_boost_terms: ["print", "printing", "reprint", "press", "sublimation press", "mug press", "heat press", "proofing"],
+    angle_hint: "Focus on production efficiency, equipment upgrades, or expanding product lines (mugs, tumblers, apparel). Reference starter kits or equipment bundles if in KB.",
+  },
+  promotional_products: {
+    label: "Promotional Products / Corporate Gifting",
+    kb_boost_terms: ["promotional", "branded", "corporate", "gifts", "custom merchandise", "bulk orders", "logo", "branding"],
+    angle_hint: "Focus on sourcing branded merchandise, bulk customization, or expanding product catalog with sublimation items.",
+  },
+  apparel_customization: {
+    label: "Apparel Customization / Fashion",
+    kb_boost_terms: ["apparel", "clothing", "t-shirt", "garment", "fabric", "fashion", "jersey", "sportswear", "textile"],
+    angle_hint: "Focus on apparel decoration methods, garment printing workflows, or expanding into sublimation for fabrics.",
+  },
+  unknown: {
+    label: "General Business",
+    kb_boost_terms: [],
+    angle_hint: "No specific segment identified. Ask a neutral question about their business. Do NOT assume they are in printing or sublimation.",
+  },
+};
+
+function classifyLeadSegment(lead: { industry?: string; job_title?: string; company?: string; lead_context?: string }): LeadSegment {
+  const text = `${lead.industry || ""} ${lead.job_title || ""} ${lead.company || ""} ${lead.lead_context || ""}`.toLowerCase();
+
+  const printIndicators = ["print", "printing", "screen print", "digital print", "sign shop", "signage", "graphics", "wide format", "prepress", "lithograph"];
+  const promoIndicators = ["promotional", "promo product", "corporate gift", "branded merch", "awards", "trophies", "engraving", "logo products"];
+  const apparelIndicators = ["apparel", "clothing", "t-shirt", "tshirt", "garment", "fashion", "embroid", "textile", "sportswear", "jersey", "uniform"];
+
+  const printScore = printIndicators.filter(p => text.includes(p)).length;
+  const promoScore = promoIndicators.filter(p => text.includes(p)).length;
+  const apparelScore = apparelIndicators.filter(p => text.includes(p)).length;
+
+  const maxScore = Math.max(printScore, promoScore, apparelScore);
+  if (maxScore === 0) return "unknown";
+  if (printScore === maxScore) return "print_shop";
+  if (promoScore === maxScore) return "promotional_products";
+  return "apparel_customization";
+}
+
+// ============================================
 // KNOWLEDGE BASE CONFIG & RETRIEVAL
 // ============================================
 
