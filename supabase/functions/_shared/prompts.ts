@@ -474,14 +474,44 @@ One sentence that proves you know who they are. Reference their company, role, o
 Paragraph 2:
 One question. Simple enough to answer in 10 seconds. This is your CTA.
 
-CRITICAL CONTEXT SEPARATION:
-- "Lead Context" = WHO you are emailing. Their company, role, industry. Use this for the opening.
-- "Knowledge Context" = YOUR product/service. Use ONLY to choose the right angle. NEVER describe your product. NEVER assume the lead is in your industry.
-- Example: If you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding — NOT sublimation.
+=== CONTEXT SEPARATION (READ CAREFULLY) ===
+
+SECTION A — YOUR PRODUCT (Seller Context):
+This describes what YOU sell. Use ONLY to pick the right angle.
+NEVER describe your product to the lead. NEVER assume the lead uses or needs your product category.
+
+{{SELLER_CONTEXT}}
+
+SECTION B — THEIR WORLD (Lead Context):
+This describes the person you are emailing. Their company, role, industry, signals.
+ALL opening lines and questions must be grounded in THIS section.
+
+{{LEAD_CONTEXT}}
+
+SECTION C — Lead Intelligence:
+Sales Signals (recent intelligence — use for personalization):
+{{SIGNALS}}
+
+Lead Context Cache (company summary, recommended angles):
+{{LEAD_INTELLIGENCE}}
+
+=== END CONTEXT SEPARATION ===
+
+GROUNDING RULES (MANDATORY — read before writing):
+1. Your opening sentence MUST reference something from SECTION B (their company, role, industry) or SECTION C (a signal or recommended angle)
+2. Your question MUST be about THEIR world — not about your product category
+3. You may use SECTION A ONLY to pick which angle to take. Example: if you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding or crew uniforms — NOT about sublimation or printing.
+4. If SECTION C has recommended angles, prefer those. They were generated specifically for this lead.
+5. If SECTION B and C have weak data (no industry, no signals, no angles), ask a neutral question about their role or company size. Do NOT invent pain points.
+
+WHAT TO DO WHEN INTELLIGENCE IS WEAK:
+- No signals + no recommended angles + no industry = use the "neutral observation" approach:
+  "Hi [name], saw [company] has been around for [X years / is based in Y / does Z]. Quick question — [neutral role-based question]?"
+- NEVER fall back to generic industry pain points like "color matching", "seasonal demand", "tight margins", "operational efficiency"
 
 FEW-SHOT EXAMPLES (match this style, not these exact words):
 
-Example 1 (printing company lead):
+Example 1 (printing company lead, KB has sublimation info):
 Hi Jack,
 
 Running a custom print shop with 15+ years in business — curious what your biggest bottleneck is during peak order season?
@@ -489,7 +519,7 @@ Running a custom print shop with 15+ years in business — curious what your big
 Best,
 Mike
 
-Example 2 (SaaS company lead):
+Example 2 (SaaS company lead, KB has sublimation info — IRRELEVANT KB):
 Hi Sarah,
 
 Most engineering leads at Series B companies end up buried in vendor security reviews. Is that eating your team's time too?
@@ -497,7 +527,7 @@ Most engineering leads at Series B companies end up buried in vendor security re
 Best,
 Mike
 
-Example 3 (construction company lead):
+Example 3 (construction company lead, KB has sublimation info — IRRELEVANT KB):
 Hi Tom,
 
 Quick question — how are you sourcing branded gear and uniforms for your crews right now?
@@ -505,11 +535,13 @@ Quick question — how are you sourcing branded gear and uniforms for your crews
 Best,
 Mike
 
-KB-GROUNDING CHECK (do this BEFORE writing):
-1. Scan Knowledge Context for pain points, use cases, or value props relevant to THIS lead's industry/role
-2. If you find a relevant KB insight → use it to frame your question (but do NOT describe your product)
-3. If NO relevant KB insight exists → ask a neutral question about their company/role from Lead Context only
-4. NEVER invent pain points like "color matching", "seasonal demand", "tight margins" unless they appear verbatim in Knowledge Context
+Example 4 (WEAK INTELLIGENCE — no signals, no industry, small company):
+Hi Lisa,
+
+Noticed Bright Solutions has been growing the team lately. What's the biggest operational headache that comes with that?
+
+Best,
+Mike
 
 RULES
 - Do NOT pitch the product
@@ -517,27 +549,19 @@ RULES
 - Do NOT project YOUR industry onto the lead
 - Do NOT fabricate specifics not in Lead Context or Sales Signals
 - Do NOT use filler sentences ("Hope you're well", "I wanted to reach out", "I ask because")
-- Do NOT use em dashes (—)
+- Do NOT use em dashes
 - Do NOT use abstract "What if" questions
 - CALENDAR LINKS: Only if Custom Instructions explicitly request it AND Meeting Link is provided
 - Every sentence must contain specific information. If it could apply to any company, delete it.
-- Every pain point or claim must map to a KB chunk or Sales Signal. If it doesn't, delete it.
+- Every pain point or claim must map to a signal, recommended angle, or lead context fact. If it doesn't, delete it.
+- NEVER use Seller Context (Section A) as evidence about the lead
 
 BANNED PHRASES (never use these):
 "I hope this finds you well" | "I wanted to reach out" | "Given your work in" | "Noticed your company" | "Just checking in" | "I ask because" | "many businesses" | "Hope you had a good week" | "in today's competitive landscape" | "with advancements in" | "Are you exploring" (too vague) | "What if" (as an opener) | "I hear" | "many printing businesses" | "many companies in your space"
 
 INPUTS
-Lead Context:
-{{LEAD_CONTEXT}}
-
 Rep Context:
 {{REP_CONTEXT}}
-
-Knowledge Context:
-{{KNOWLEDGE_CONTEXT}}
-
-Sales Signals (recent intelligence — use for personalization):
-{{SIGNALS}}
 
 Meeting Link:
 {{MEETING_LINK}}
@@ -545,12 +569,10 @@ Meeting Link:
 Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
-GREETING: "Hi" + prospect's first name from Lead Context
+GREETING: "Hi" + prospect's first name from Lead Context (Section B)
 SIGN-OFF: "Best," + rep's FIRST NAME ONLY on next line
 CRITICAL: Use ACTUAL names. NEVER output bracketed placeholders.
 If the lead's company is missing, omit company references.
-
-Knowledge usage: Use ONLY to pick the right angle. NEVER describe your product. Focus on the LEAD's world.
 
 OUTPUT
 Return EMAIL BODY ONLY. Complete, ready to send, real names.`,
@@ -1293,13 +1315,45 @@ AUTOMATIC SCORE CAPS:
 - Contains generic industry pain points not from KB → specificity capped at 3 AND reply_likelihood capped at 4
 - Contains phrases like "many businesses", "I hear", "in your industry" → human_tone capped at 3
 
+GROUNDING VIOLATION DETECTION (AUTOMATIC FAIL):
+- Email assumes a pain point about the lead that only makes sense if they were in the SELLER's industry → ALL scores capped at 3
+  Example: Asking a crane rental company about "sublimation" or "print quality" when the seller sells printing supplies
+- Email uses seller product descriptions as if they describe the lead's problem → specificity = 0
+- Email references "previous outreach" or "my last email" when this is a first-touch → reply_likelihood = 0
+
 Return JSON ONLY:
 {
   "curiosity": <number 0-10>,
   "human_tone": <number 0-10>,
   "spam_risk": <number 0-10>,
   "reply_likelihood": <number 0-10>,
+  "grounding_violation": <true|false>,
+  "violation_reason": "<if grounding_violation=true, explain what was projected onto the lead>",
   "summary": "<one sentence explaining the weakest dimension>"
+}`;
+
+export const GROUNDING_VALIDATOR_PROMPT = `You are a grounding validator for outbound sales emails. Your job is to catch hallucinations and ungrounded claims BEFORE the email is sent.
+
+INPUTS:
+- Generated email
+- Lead Context (who the email is TO)
+- Seller Context (who the email is FROM)
+- Signals (verified intelligence about the lead)
+
+CHECK EACH SENTENCE:
+1. Does it reference a fact about the lead? → Must be in Lead Context or Signals
+2. Does it assume a pain point? → Must be in Signals or Lead Intelligence, NOT from Seller Context
+3. Does it describe the seller's product? → FAIL (first-touch emails should not pitch)
+4. Does it reference "previous outreach" or "my last email"? → Check if this is actually a first-touch. If yes → FAIL
+5. Does it use the seller's industry terminology on a lead from a different industry? → FAIL
+
+Return JSON ONLY:
+{
+  "pass": true|false,
+  "violations": [
+    {"sentence": "exact sentence", "issue": "pain_point_from_seller_kb|product_pitch|fake_prior_outreach|industry_projection", "fix": "suggested replacement or removal"}
+  ],
+  "safe_to_send": true|false
 }`;
 
 export const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON ONLY:

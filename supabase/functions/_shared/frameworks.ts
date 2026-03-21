@@ -286,32 +286,37 @@ export const BREAKUP_CLOSERS: Record<string, string> = {
 // EMAIL FRAMEWORK ROUTER
 // ============================================
 
-export type EmailFramework = "curiosity" | "observation" | "hypothesis" | "ultra_short";
+export type EmailFramework = "neutral_observation" | "observation" | "hypothesis" | "ultra_short";
 
 export const EMAIL_FRAMEWORK_BLOCKS: Record<EmailFramework, string> = {
-  curiosity: `=== MESSAGE FRAMEWORK: DIRECT QUESTION ===
-Opening: Ask ONE specific question about their business. The question must reference their actual role, industry, or company.
-The question must be something only THEY can answer — not a generic question you could ask anyone.
+  neutral_observation: `=== MESSAGE FRAMEWORK: NEUTRAL OBSERVATION ===
+Opening: Make ONE factual observation about their company, role, or industry from Lead Context / Lead Intelligence ONLY.
+Then ask ONE neutral question that they can answer in 10 seconds.
+
+The observation must be verifiable — something you can see from their company name, job title, location, or a sales signal.
+The question must NOT assume a pain point. It should be genuinely curious about how they do something.
 
 GOOD:
-- "How are you handling [specific process] at [company] right now?"
-- "What's your biggest headache with [thing their role deals with]?"
-- "Are you still running [process] manually at [company]?"
+- "Running a 50-person construction crew in Texas — how are you handling branded workwear right now?"
+- "Saw your team has been growing this year. What's been the biggest ops challenge with the growth?"
+- "Quick question for someone running procurement at a mid-size manufacturer — how do you currently source [relevant category]?"
 
 BAD (NEVER use):
-- "What if the biggest growth lever was X?"
-- "Have you considered optimizing your operations?"
-- Any question that doesn't reference their specific situation`,
+- "What if the biggest growth lever was X?" (assumes pain)
+- "Have you considered optimizing your operations?" (vague, assumes problem)
+- "Many companies in your space struggle with X" (generic, ungrounded)
+- Any question that assumes they have a specific problem without signal evidence`,
 
   observation: `=== MESSAGE FRAMEWORK: SIGNAL-BASED ===
-Opening: Reference ONE real signal from Sales Signals. State it as a fact, then ask a question.
+Opening: Reference ONE real signal from Lead Intelligence / Sales Signals. State it as a fact, then ask a question.
 Must use actual data — never fabricate.
 Pattern: "Saw [signal]. How is that affecting [related area]?"`,
 
   hypothesis: `=== MESSAGE FRAMEWORK: CHALLENGE ===
 Opening: Name a specific problem their role/industry faces. Be bold but accurate.
 Frame it as something you're seeing, then ask if it's true for them.
-Pattern: "Most [role] at [industry] companies struggle with [specific thing]. Is that true at [company]?"`,
+The problem MUST come from a Sales Signal or Lead Intelligence — NOT from your product KB.
+Pattern: "Most [role] at [industry] companies struggle with [specific thing from signals]. Is that true at [company]?"`,
 
   ultra_short: `=== MESSAGE FRAMEWORK: ULTRA-SHORT ===
 Total email: 2-3 sentences. No greeting beyond first name. No sign-off beyond name.
@@ -332,11 +337,12 @@ export function selectEmailFramework(
     const painIndicators = ["manual", "spreadsheet", "legacy", "outdated", "inefficient", "scaling", "bottleneck", "turnover", "compliance"];
     if (painIndicators.some(p => ctx.includes(p))) return "hypothesis";
   }
-  return "curiosity";
+  // Default: safe neutral observation instead of weak curiosity
+  return "neutral_observation";
 }
 
 export function getEmailFrameworkBlock(framework: EmailFramework): string {
-  return EMAIL_FRAMEWORK_BLOCKS[framework] || EMAIL_FRAMEWORK_BLOCKS.curiosity;
+  return EMAIL_FRAMEWORK_BLOCKS[framework] || EMAIL_FRAMEWORK_BLOCKS.neutral_observation;
 }
 
 // ============================================
