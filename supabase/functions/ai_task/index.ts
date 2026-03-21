@@ -131,59 +131,6 @@ function textSimilarity(a: string, b: string): number {
 }
 
 // ============================================
-// LEAD SEGMENTATION
-// ============================================
-
-type LeadSegment = "print_shop" | "promotional_products" | "apparel_customization" | "unknown";
-
-interface SegmentConfig {
-  label: string;
-  kb_boost_terms: string[];
-  angle_hint: string;
-}
-
-const SEGMENT_CONFIGS: Record<LeadSegment, SegmentConfig> = {
-  print_shop: {
-    label: "Print Shop / Custom Printing",
-    kb_boost_terms: ["print", "printing", "reprint", "press", "sublimation press", "mug press", "heat press", "proofing"],
-    angle_hint: "Focus on production efficiency, equipment upgrades, or expanding product lines (mugs, tumblers, apparel). Reference starter kits or equipment bundles if in KB.",
-  },
-  promotional_products: {
-    label: "Promotional Products / Corporate Gifting",
-    kb_boost_terms: ["promotional", "branded", "corporate", "gifts", "custom merchandise", "bulk orders", "logo", "branding"],
-    angle_hint: "Focus on sourcing branded merchandise, bulk customization, or expanding product catalog with sublimation items.",
-  },
-  apparel_customization: {
-    label: "Apparel Customization / Fashion",
-    kb_boost_terms: ["apparel", "clothing", "t-shirt", "garment", "fabric", "fashion", "jersey", "sportswear", "textile"],
-    angle_hint: "Focus on apparel decoration methods, garment printing workflows, or expanding into sublimation for fabrics.",
-  },
-  unknown: {
-    label: "General Business",
-    kb_boost_terms: [],
-    angle_hint: "No specific segment identified. Ask a neutral question about their business. Do NOT assume they are in printing or sublimation.",
-  },
-};
-
-function classifyLeadSegment(lead: { industry?: string; job_title?: string; company?: string; lead_context?: string }): LeadSegment {
-  const text = `${lead.industry || ""} ${lead.job_title || ""} ${lead.company || ""} ${lead.lead_context || ""}`.toLowerCase();
-
-  const printIndicators = ["print", "printing", "screen print", "digital print", "sign shop", "signage", "graphics", "wide format", "prepress", "lithograph"];
-  const promoIndicators = ["promotional", "promo product", "corporate gift", "branded merch", "awards", "trophies", "engraving", "logo products"];
-  const apparelIndicators = ["apparel", "clothing", "t-shirt", "tshirt", "garment", "fashion", "embroid", "textile", "sportswear", "jersey", "uniform"];
-
-  const printScore = printIndicators.filter(p => text.includes(p)).length;
-  const promoScore = promoIndicators.filter(p => text.includes(p)).length;
-  const apparelScore = apparelIndicators.filter(p => text.includes(p)).length;
-
-  const maxScore = Math.max(printScore, promoScore, apparelScore);
-  if (maxScore === 0) return "unknown";
-  if (printScore === maxScore) return "print_shop";
-  if (promoScore === maxScore) return "promotional_products";
-  return "apparel_customization";
-}
-
-// ============================================
 // KNOWLEDGE BASE CONFIG & RETRIEVAL
 // ============================================
 
@@ -521,23 +468,9 @@ serve(async (req) => {
       })();
     }
 
-    // Classify lead segment for KB-grounded outreach
-    const leadSegment = classifyLeadSegment({
-      industry: payload?.industry ? String(payload.industry) : undefined,
-      job_title: payload?.job_title ? String(payload.job_title) : undefined,
-      company: payload?.company ? String(payload.company) : undefined,
-      lead_context: payload?.lead_context ? String(payload.lead_context) : undefined,
-    });
-    const segmentConfig = SEGMENT_CONFIGS[leadSegment];
-    console.log(`[ai_task] Lead segment: ${leadSegment} (${segmentConfig.label})`);
-
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
-      // Prepend segment boost terms to bias KB retrieval toward relevant chunks
-      if (segmentConfig.kb_boost_terms.length > 0 && OUTREACH_TASKS.has(task)) {
-        queryParts.push(segmentConfig.kb_boost_terms.join(" "));
-      }
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
       if (payload?.lead_context) queryParts.push(String(payload.lead_context).slice(0, 500));
@@ -545,7 +478,7 @@ serve(async (req) => {
       const searchQuery = queryParts.join("\n").slice(0, 2000);
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}, segment boost: ${segmentConfig.kb_boost_terms.length > 0}`);
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
         kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, user.id, leadId, task);
       }
     }
@@ -675,16 +608,7 @@ serve(async (req) => {
       console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
     }
 
-    // Build segment context block for outreach tasks
-    let segmentBlock = "";
-    if (OUTREACH_TASKS.has(task) && leadSegment !== "unknown") {
-      segmentBlock = `=== LEAD SEGMENT: ${segmentConfig.label.toUpperCase()} ===\nThis lead has been classified as: ${segmentConfig.label}\n${segmentConfig.angle_hint}\nOnly use KB insights relevant to this segment. Ignore KB content about other segments.`;
-    } else if (OUTREACH_TASKS.has(task) && leadSegment === "unknown") {
-      segmentBlock = `=== LEAD SEGMENT: UNKNOWN ===\n${segmentConfig.angle_hint}`;
-    }
-
     const promptParts: string[] = [];
-    if (segmentBlock) promptParts.push(segmentBlock);
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
@@ -694,11 +618,10 @@ serve(async (req) => {
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");
 
-    if (segmentBlock) console.log(`[ai_task] [0/SEGMENT] ${leadSegment} → ${segmentConfig.label}`);
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
-    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}, Segment: ${leadSegment}`);
+    console.log(`[ai_task] Channel: ${resolvedChannel}, Step: ${sequenceStep ?? "none"}, Framework: ${selectedFramework ?? "none"}`);
 
     const clientModelHint = payload?.model_hint ? String(payload.model_hint) : null;
     const model = clientModelHint && ["google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"].includes(clientModelHint)
