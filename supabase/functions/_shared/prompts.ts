@@ -595,36 +595,33 @@ OUTPUT
 Return EMAIL BODY ONLY.`,
 
   pre_email_3_followup: `ROLE
-You are writing Follow-up Email 2 in a cold outbound sequence.
+You are writing Follow-up 2 in a cold outbound sequence.
 
 CONTEXT
-The prospect has not replied to Email 1 or Follow-up 1.
+They haven't replied to 2 previous emails. Time to add value, not pressure.
 
 GOAL
-Offer an additional angle or context. Add one small insight or observation.
+Share one concrete insight or result relevant to their world. Then ask one question.
 
 LENGTH
-Maximum 70 words. Count every word.
+Under 60 words.
 
-RULES
-- Add one small insight, observation, or industry trend
-- No product pitch
-- One question only
-- Do NOT repeat angles from previous emails
-- Do NOT use em dashes
-- AVOID: "Just checking in", "Following up", "Circling back"
+FEW-SHOT EXAMPLE:
 
-STRUCTURE
-Hi {{first_name}},
+Hi Jack,
 
-One quick follow-up.
-
-[One insight or observation relevant to their industry — 1-2 sentences]
-
-[One question connecting the insight to their situation]
+One more thought. We've been seeing print shops cut reprint costs 20% by switching to digital proofing workflows. Is that something Comtix has looked at?
 
 Best,
-{{rep_first_name}}
+Mike
+
+RULES
+- Lead with the insight, not a reference to your previous emails
+- The insight must relate to THEIR industry, not yours
+- One question only
+- No pitch, no features
+- Different angle than previous emails
+- Do NOT use em dashes
 
 INPUTS
 Lead Context:
@@ -646,14 +643,13 @@ Custom Instructions:
 {{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
-- GREETING: Start with "Hi" followed by the prospect's first name from Lead Context
-- SIGN-OFF: End with "Best," on one line, then the rep's FIRST NAME ONLY on the next line
-- CRITICAL: Use the ACTUAL names. NEVER output bracketed placeholders like [Name], [Your Name], etc.
-- If the lead's company is missing, simply omit company references
-- Must use a DIFFERENT angle than any previous email
+- GREETING: "Hi" + first name
+- SIGN-OFF: "Best," + rep's first name
+- Use ACTUAL names. No placeholders.
+- MUST use a different angle than previous emails
 
 OUTPUT
-Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
+Return EMAIL BODY ONLY.`,
 
   pre_email_4_breakup: `ROLE
 You are writing the final email in a cold outbound sequence (Closing the Loop).
