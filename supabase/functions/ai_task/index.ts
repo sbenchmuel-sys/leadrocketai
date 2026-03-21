@@ -725,17 +725,53 @@ serve(async (req) => {
 
     if (QUALITY_SCORED_TASKS.has(task)) {
       try {
-        const scoreResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [
-              { role: "system", content: QUALITY_SCORER_PROMPT },
-              { role: "user", content: content },
-            ],
+        // Run quality score and grounding validation in parallel
+        const [scoreResponse, groundingResponse] = await Promise.all([
+          fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [
+                { role: "system", content: QUALITY_SCORER_PROMPT },
+                { role: "user", content: content },
+              ],
+            }),
           }),
-        });
+          // Grounding validation for first-touch outbound
+          isFirstTouchTask && isOutboundFirstTouch
+            ? fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: "google/gemini-2.5-flash-lite",
+                  messages: [
+                    { role: "system", content: GROUNDING_VALIDATOR_PROMPT },
+                    { role: "user", content: `Generated Email:\n${content}\n\nLead Context:\n${enhancedPayload.lead_context || ""}\n\nSeller Context:\n${enhancedPayload.seller_context || enhancedPayload.workspace_context || ""}\n\nSignals:\n${enhancedPayload.signals || "None"}` },
+                  ],
+                }),
+              })
+            : Promise.resolve(null),
+        ]);
+
+        // Process grounding validation
+        let groundingFailed = false;
+        if (groundingResponse && groundingResponse.ok) {
+          try {
+            const groundingResult = await groundingResponse.json();
+            const groundingText = groundingResult.choices?.[0]?.message?.content || "";
+            const groundingMatch = groundingText.match(/\{[\s\S]*\}/);
+            if (groundingMatch) {
+              const grounding = JSON.parse(groundingMatch[0]);
+              if (grounding.pass === false || grounding.safe_to_send === false) {
+                groundingFailed = true;
+                console.log(`[ai_task] ⚠️ GROUNDING VIOLATION detected: ${JSON.stringify(grounding.violations?.slice(0, 2))}`);
+              } else {
+                console.log(`[ai_task] ✅ Grounding validation passed`);
+              }
+            }
+          } catch (gErr) { console.error("[ai_task] Grounding parse failed:", gErr); }
+        }
 
         if (scoreResponse.ok) {
           const scoreResult = await scoreResponse.json();
@@ -744,12 +780,27 @@ serve(async (req) => {
           if (jsonMatch) {
             qualityScore = JSON.parse(jsonMatch[0]);
             const total = (qualityScore!.curiosity || 0) + (qualityScore!.human_tone || 0) + (qualityScore!.spam_risk || 0) + (qualityScore!.reply_likelihood || 0);
-            console.log(`[ai_task] Quality score: ${total}/40 (C:${qualityScore!.curiosity} H:${qualityScore!.human_tone} S:${qualityScore!.spam_risk} R:${qualityScore!.reply_likelihood})`);
+            const hasGroundingViolation = (qualityScore as any)?.grounding_violation === true;
+            console.log(`[ai_task] Quality score: ${total}/40 (C:${qualityScore!.curiosity} H:${qualityScore!.human_tone} S:${qualityScore!.spam_risk} R:${qualityScore!.reply_likelihood})${hasGroundingViolation ? " [GROUNDING VIOLATION]" : ""}`);
 
-            if (total < QUALITY_THRESHOLD) {
-              console.log(`[ai_task] Score below threshold (${total} < ${QUALITY_THRESHOLD}), regenerating with curiosity framework...`);
+            // Trigger regeneration if quality is low OR grounding failed
+            const needsRegen = total < QUALITY_THRESHOLD || groundingFailed || hasGroundingViolation;
+            if (needsRegen) {
+              const reason = groundingFailed || hasGroundingViolation ? "grounding violation" : `low score (${total})`;
+              console.log(`[ai_task] Regenerating: ${reason}. Using neutral_observation framework...`);
               const regenPromptParts = [...promptParts];
-              const curiosityBlock = getEmailFrameworkBlock("curiosity");
+              const safeBlock = getEmailFrameworkBlock("neutral_observation");
+              if (emailFrameworkBlock) {
+                const idx = regenPromptParts.indexOf(emailFrameworkBlock);
+                if (idx >= 0) regenPromptParts[idx] = safeBlock;
+                else regenPromptParts.splice(regenPromptParts.length - 1, 0, safeBlock);
+              } else {
+                regenPromptParts.splice(regenPromptParts.length - 1, 0, safeBlock);
+              }
+              // Add explicit anti-hallucination instruction for regen
+              regenPromptParts.splice(regenPromptParts.length - 1, 0, 
+                "=== REGENERATION INSTRUCTION ===\nThe previous attempt failed grounding validation. Write a SAFER email:\n- Use ONLY facts from Lead Context (Section B)\n- Ask a neutral question about their role or company\n- Do NOT reference seller products or assume pain points\n- If unsure, keep it ultra-short: one observation + one question"
+              );
               if (emailFrameworkBlock) {
                 const idx = regenPromptParts.indexOf(emailFrameworkBlock);
                 if (idx >= 0) regenPromptParts[idx] = curiosityBlock;
