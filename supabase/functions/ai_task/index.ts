@@ -523,19 +523,54 @@ serve(async (req) => {
       console.log(`[ai_task] ✅ Injected ${leadSignals.length} lead signals into context`);
     }
 
-    if (kbResult.formatted) {
-      if (isOutboundFirstTouch) {
-        const capped = kbResult.formatted.slice(0, 600);
-        enhancedPayload.knowledge_context = capped;
-        knowledgeContextUsed = true;
-        console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${kbResult.formatted.length} chars`);
+    // === NEW: Build structured seller context from workspace_context for pre_email_1_intro ===
+    const FIRST_TOUCH_TASKS = new Set(["pre_email_1_intro", "email_intro_fast", "re_engagement_intro"]);
+    const isFirstTouchTask = FIRST_TOUCH_TASKS.has(task);
+
+    if (isFirstTouchTask && isOutboundFirstTouch) {
+      // Build SELLER_CONTEXT from workspace_context (product info, value props, use cases)
+      const workspaceCtx = enhancedPayload.workspace_context ? String(enhancedPayload.workspace_context) : "";
+      if (workspaceCtx) {
+        enhancedPayload.seller_context = workspaceCtx;
+        console.log(`[ai_task] ✅ Injected seller_context (${workspaceCtx.length} chars)`);
       } else {
-        enhancedPayload.knowledge_context = kbResult.formatted;
-        knowledgeContextUsed = true;
-        console.log(`[ai_task] ✅ Structured KB context (${kbResult.formatted.length} chars, types: ${Object.keys(kbResult.grouped).join(",")})`);
+        enhancedPayload.seller_context = "(No seller context available — use neutral observation approach)";
       }
-    } else if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
-      console.log(`[ai_task] ⚠️ No KB matches found for task ${task}`);
+
+      // Build LEAD_INTELLIGENCE from cached context (angles, company summary, signals)
+      const intelligenceParts: string[] = [];
+      if (enhancedPayload.company_intelligence) intelligenceParts.push(`Company: ${enhancedPayload.company_intelligence}`);
+      if (enhancedPayload.recommended_angles) intelligenceParts.push(String(enhancedPayload.recommended_angles));
+      if (enhancedPayload.industry_intelligence) intelligenceParts.push(`Industry Intel: ${enhancedPayload.industry_intelligence}`);
+      enhancedPayload.lead_intelligence = intelligenceParts.length > 0
+        ? intelligenceParts.join("\n")
+        : "(No lead intelligence available — use neutral observation based on lead name/company/role only)";
+      console.log(`[ai_task] ✅ Lead intelligence: ${intelligenceParts.length} sections`);
+
+      // For first-touch: KB should be labeled as seller knowledge, not lead evidence
+      if (kbResult.formatted) {
+        const capped = kbResult.formatted.slice(0, 600);
+        // Wrap KB in explicit seller label so prompt knows not to use as lead evidence
+        enhancedPayload.knowledge_context = `(SELLER KNOWLEDGE — use ONLY to pick outreach angle, NOT as evidence about the lead)\n${capped}`;
+        knowledgeContextUsed = true;
+        console.log(`[ai_task] ✅ KB context labeled as SELLER KNOWLEDGE for first touch: ${capped.length} chars`);
+      }
+    } else {
+      // Non-first-touch: standard KB injection
+      if (kbResult.formatted) {
+        if (isOutboundFirstTouch) {
+          const capped = kbResult.formatted.slice(0, 600);
+          enhancedPayload.knowledge_context = capped;
+          knowledgeContextUsed = true;
+          console.log(`[ai_task] ✅ KB context capped for first touch: ${capped.length}/${kbResult.formatted.length} chars`);
+        } else {
+          enhancedPayload.knowledge_context = kbResult.formatted;
+          knowledgeContextUsed = true;
+          console.log(`[ai_task] ✅ Structured KB context (${kbResult.formatted.length} chars, types: ${Object.keys(kbResult.grouped).join(",")})`);
+        }
+      } else if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
+        console.log(`[ai_task] ⚠️ No KB matches found for task ${task}`);
+      }
     }
 
     const playbookId = String(enhancedPayload.playbook_id || "general");
