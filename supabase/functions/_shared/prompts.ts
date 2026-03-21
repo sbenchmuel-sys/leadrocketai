@@ -502,43 +502,31 @@ GROUNDING RULES (MANDATORY — read before writing):
 2. Your question MUST be about THEIR world — not about your product category
 3. You may use SECTION A ONLY to pick which angle to take. Example: if you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding or crew uniforms — NOT about sublimation or printing.
 4. If SECTION C has recommended angles, prefer those. They were generated specifically for this lead.
-5. If SECTION B and C have weak data (no industry, no signals, no angles), ask a neutral question about their role or company size. Do NOT invent pain points.
+5. If SECTION B and C have weak data (no industry, no signals, no angles), DO NOT mention any business problem at all. Only reference: role, company type, industry, or ask one neutral use-case question.
 
-WHAT TO DO WHEN INTELLIGENCE IS WEAK:
-- No signals + no recommended angles + no industry = use the "neutral observation" approach:
-  "Hi [name], saw [company] has been around for [X years / is based in Y / does Z]. Quick question — [neutral role-based question]?"
-- NEVER fall back to generic industry pain points like "color matching", "seasonal demand", "tight margins", "operational efficiency"
+WHAT TO DO WHEN INTELLIGENCE IS WEAK (STRICT):
+- No signals + no recommended angles + low confidence on company context = LOW-INTEL MODE
+- In LOW-INTEL MODE you may ONLY reference:
+  a) Their role / job title
+  b) Their company name and type of business
+  c) Their industry (if known)
+  d) One neutral use-case question (what they do, how they handle X)
+- You MUST NOT mention ANY business problem, pain point, bottleneck, challenge, or headache
+- You MUST NOT assume what is hard, expensive, time-consuming, or broken for them
+- NEVER fall back to generic industry pain points like "color matching", "seasonal demand", "tight margins", "operational efficiency", "bottleneck", "headache", "challenge"
 
-FEW-SHOT EXAMPLES (match this style, not these exact words):
-
-Example 1 (printing company lead, KB has sublimation info):
-Hi Jack,
-
-Running a custom print shop with 15+ years in business — curious what your biggest bottleneck is during peak order season?
-
-Best,
-Mike
-
-Example 2 (SaaS company lead, KB has sublimation info — IRRELEVANT KB):
-Hi Sarah,
-
-Most engineering leads at Series B companies end up buried in vendor security reviews. Is that eating your team's time too?
-
-Best,
-Mike
-
-Example 3 (construction company lead, KB has sublimation info — IRRELEVANT KB):
-Hi Tom,
-
-Quick question — how are you sourcing branded gear and uniforms for your crews right now?
-
-Best,
-Mike
-
-Example 4 (WEAK INTELLIGENCE — no signals, no industry, small company):
+Example 4 (WEAK INTELLIGENCE — no signals, no industry):
 Hi Lisa,
 
-Noticed Bright Solutions has been growing the team lately. What's the biggest operational headache that comes with that?
+Saw Bright Solutions does custom apparel — curious, are you handling decoration in-house or outsourcing?
+
+Best,
+Mike
+
+Example 5 (WEAK INTELLIGENCE — only role and company known):
+Hi Dave,
+
+Quick one — what does a typical project look like for Summit Construction these days?
 
 Best,
 Mike

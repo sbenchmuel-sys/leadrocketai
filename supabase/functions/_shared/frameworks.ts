@@ -291,17 +291,26 @@ export type EmailFramework = "neutral_observation" | "observation" | "hypothesis
 export const EMAIL_FRAMEWORK_BLOCKS: Record<EmailFramework, string> = {
   neutral_observation: `=== MESSAGE FRAMEWORK: NEUTRAL OBSERVATION ===
 Opening: Make ONE factual observation about their company, role, or industry from Lead Context / Lead Intelligence ONLY.
-Then ask ONE neutral question that they can answer in 10 seconds.
+Then ask ONE neutral use-case question that they can answer in 10 seconds.
 
-The observation must be verifiable — something you can see from their company name, job title, location, or a sales signal.
-The question must NOT assume a pain point. It should be genuinely curious about how they do something.
+STRICT CONSTRAINT — You may ONLY reference:
+- Their role / job title
+- Their company name and what it does
+- Their industry (if known)
+- One neutral question about how they do something (use-case question)
+
+You MUST NOT:
+- Mention any business problem, pain point, bottleneck, challenge, or headache
+- Assume what is hard, expensive, broken, or time-consuming for them
+- Use words like "struggle", "challenge", "headache", "bottleneck", "pain", "issue"
 
 GOOD:
 - "Running a 50-person construction crew in Texas — how are you handling branded workwear right now?"
-- "Saw your team has been growing this year. What's been the biggest ops challenge with the growth?"
+- "Saw your team ships custom packaging — are you producing that in-house or outsourcing?"
 - "Quick question for someone running procurement at a mid-size manufacturer — how do you currently source [relevant category]?"
 
 BAD (NEVER use):
+- "What's been the biggest ops challenge?" (assumes a challenge exists)
 - "What if the biggest growth lever was X?" (assumes pain)
 - "Have you considered optimizing your operations?" (vague, assumes problem)
 - "Many companies in your space struggle with X" (generic, ungrounded)
