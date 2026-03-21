@@ -57,10 +57,11 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Allow both service-role and user-auth calls
+    // Allow service-role, anon-key (cron), and user-auth calls
     const authHeader = req.headers.get("Authorization") ?? "";
     const token = authHeader.replace("Bearer ", "");
-    const isServiceRole = token === supabaseServiceKey;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const isServiceRole = token === supabaseServiceKey || token === supabaseAnonKey;
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
