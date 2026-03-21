@@ -675,7 +675,16 @@ serve(async (req) => {
       console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
     }
 
+    // Build segment context block for outreach tasks
+    let segmentBlock = "";
+    if (OUTREACH_TASKS.has(task) && leadSegment !== "unknown") {
+      segmentBlock = `=== LEAD SEGMENT: ${segmentConfig.label.toUpperCase()} ===\nThis lead has been classified as: ${segmentConfig.label}\n${segmentConfig.angle_hint}\nOnly use KB insights relevant to this segment. Ignore KB content about other segments.`;
+    } else if (OUTREACH_TASKS.has(task) && leadSegment === "unknown") {
+      segmentBlock = `=== LEAD SEGMENT: UNKNOWN ===\n${segmentConfig.angle_hint}`;
+    }
+
     const promptParts: string[] = [];
+    if (segmentBlock) promptParts.push(segmentBlock);
     if (motionBlock) promptParts.push(motionBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
