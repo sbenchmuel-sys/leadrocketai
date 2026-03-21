@@ -819,7 +819,7 @@ serve(async (req) => {
                 const regenContent = regenResult.choices?.[0]?.message?.content || "";
                 if (regenContent) {
                   regenerated = true;
-                  selectedFramework = "curiosity";
+                  selectedFramework = "neutral_observation" as any;
                   // Re-score
                   const rescore = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
                     method: "POST",
