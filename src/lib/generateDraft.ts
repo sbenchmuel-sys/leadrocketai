@@ -195,6 +195,10 @@ function buildAIPayload(
     motion,
     first_touch: isFirstTouch,
     has_latest_inbound: hasLatestInbound,
+    // Lead attributes for segment classification
+    industry: lead.industry || "",
+    job_title: (lead as any).job_title || "",
+    company: lead.company || "",
   };
 
   // Thread context for replies
