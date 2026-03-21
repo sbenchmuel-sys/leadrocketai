@@ -1181,6 +1181,10 @@ You are writing a short WhatsApp message for a B2B sales context.
 GOAL
 Send a quick, natural, conversational message. This is NOT an email — it's a text message.
 
+KB-GROUNDING CHECK:
+- Any pain point or claim must come from Knowledge Context or Sales Signals
+- If no relevant KB insight, ask a neutral question about their role/company
+
 FORMAT RULES (MANDATORY)
 - Maximum 60 words
 - NO greeting like "Dear" or "Hello" — start with "Hey [first name]," or "Hi [first name],"
