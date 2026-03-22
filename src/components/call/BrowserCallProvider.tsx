@@ -103,7 +103,17 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
 
     device.on("error", (err) => {
       console.error("Twilio Device error:", err);
-      toast.error("Call device error", { description: err.message });
+      const code = err?.code ?? (err as any)?.originalError?.code;
+      let title = "Call device error";
+      let desc = err.message;
+      if (code === 31009) {
+        title = "Network error";
+        desc = "Cannot connect to call servers. If using the preview, try the published URL instead. Also check your firewall/VPN.";
+      } else if (code === 31005) {
+        title = "Connection error";
+        desc = "Call signaling failed. Try refreshing the page or using the published URL.";
+      }
+      toast.error(title, { description: desc });
     });
 
     device.on("tokenWillExpire", async () => {
