@@ -710,7 +710,13 @@ serve(async (req) => {
     }
 
     const aiResult = await response.json();
-    const content = aiResult.choices?.[0]?.message?.content || "";
+    let content = aiResult.choices?.[0]?.message?.content || "";
+    
+    // Strip any leaked internal reasoning from the output
+    content = content.replace(/^(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS)[:\s]*[\s\S]*?(?=(?:^(?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b|\n(?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b))/im, "").trim();
+    // Also strip if reasoning appears as a block before the actual email
+    const reasoningBlockMatch = content.match(/^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's)[^\n]*\n)+[\s\S]*?\n\n((?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b[\s\S]*)/im);
+    if (reasoningBlockMatch) content = reasoningBlockMatch[1].trim();
 
     if (!content) {
       console.error("[ai_task] Empty response from AI gateway");
@@ -816,7 +822,11 @@ serve(async (req) => {
 
               if (regenResponse.ok) {
                 const regenResult = await regenResponse.json();
-                const regenContent = regenResult.choices?.[0]?.message?.content || "";
+                let regenContent = regenResult.choices?.[0]?.message?.content || "";
+                // Strip leaked reasoning from regenerated content
+                regenContent = regenContent.replace(/^(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS)[:\s]*[\s\S]*?(?=(?:^(?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b|\n(?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b))/im, "").trim();
+                const regenReasoningMatch = regenContent.match(/^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's)[^\n]*\n)+[\s\S]*?\n\n((?:Hi|Hey|Hello|Dear|Subject:|Thanks)\b[\s\S]*)/im);
+                if (regenReasoningMatch) regenContent = regenReasoningMatch[1].trim();
                 if (regenContent) {
                   regenerated = true;
                   selectedFramework = "neutral_observation" as any;
