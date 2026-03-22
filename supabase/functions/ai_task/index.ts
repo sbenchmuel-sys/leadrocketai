@@ -368,6 +368,22 @@ serve(async (req) => {
       user = authUser;
     }
 
+    // Resolve actual owner_user_id for service-role calls
+    let resolvedUserId = user.id;
+    if (isServiceRole) {
+      const { task: _t, payload: _p } = await req.clone().json().catch(() => ({ task: null, payload: null }));
+      if (_p?.lead_id) {
+        try {
+          const ownerClient = createClient(supabaseUrl, supabaseServiceKey);
+          const { data: leadRow } = await ownerClient.from("leads").select("owner_user_id").eq("id", _p.lead_id).maybeSingle();
+          if (leadRow?.owner_user_id) {
+            resolvedUserId = leadRow.owner_user_id;
+            console.log(`[ai_task] Resolved owner_user_id: ${resolvedUserId} from lead ${_p.lead_id}`);
+          }
+        } catch (err) { console.error("[ai_task] Failed to resolve owner from lead:", err); }
+      }
+    }
+
     const { task, payload } = await req.json();
 
     if (!task || typeof task !== "string") {
