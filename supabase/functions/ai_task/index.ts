@@ -368,6 +368,22 @@ serve(async (req) => {
       user = authUser;
     }
 
+    // Resolve actual owner_user_id for service-role calls
+    let resolvedUserId = user.id;
+    if (isServiceRole) {
+      const { task: _t, payload: _p } = await req.clone().json().catch(() => ({ task: null, payload: null }));
+      if (_p?.lead_id) {
+        try {
+          const ownerClient = createClient(supabaseUrl, supabaseServiceKey);
+          const { data: leadRow } = await ownerClient.from("leads").select("owner_user_id").eq("id", _p.lead_id).maybeSingle();
+          if (leadRow?.owner_user_id) {
+            resolvedUserId = leadRow.owner_user_id;
+            console.log(`[ai_task] Resolved owner_user_id: ${resolvedUserId} from lead ${_p.lead_id}`);
+          }
+        } catch (err) { console.error("[ai_task] Failed to resolve owner from lead:", err); }
+      }
+    }
+
     const { task, payload } = await req.json();
 
     if (!task || typeof task !== "string") {
@@ -479,7 +495,7 @@ serve(async (req) => {
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, user.id, leadId, task);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task);
       }
     }
 
@@ -492,7 +508,7 @@ serve(async (req) => {
         try {
           const divClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
           const { data: membership } = await divClient.from("workspace_members")
-            .select("workspace_id").eq("user_id", isServiceRole ? "service-role" : user.id).limit(1).maybeSingle();
+            .select("workspace_id").eq("user_id", resolvedUserId).limit(1).maybeSingle();
           resolvedWorkspaceId = membership?.workspace_id || null;
           return buildDiversityConstraints(divClient, String(payload.lead_id), resolvedWorkspaceId, payload?.campaign_id ? String(payload.campaign_id) : null);
         } catch (err) { console.error("[ai_task] Diversity fetch failed:", err); return { avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [] }; }
