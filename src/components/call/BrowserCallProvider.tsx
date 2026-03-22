@@ -85,8 +85,9 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     }
 
     const device = new Device(token, {
-      // edge removed for diagnostic — use default routing
+      edge: ["ashburn", "toronto", "umatilla"],
       closeProtection: true,
+      maxCallSignalingTimeoutMs: 30000,
     });
 
     // Attach audio output to our pre-created element
