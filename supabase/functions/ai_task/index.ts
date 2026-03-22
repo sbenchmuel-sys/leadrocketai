@@ -508,7 +508,7 @@ serve(async (req) => {
         try {
           const divClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
           const { data: membership } = await divClient.from("workspace_members")
-            .select("workspace_id").eq("user_id", isServiceRole ? "service-role" : user.id).limit(1).maybeSingle();
+            .select("workspace_id").eq("user_id", resolvedUserId).limit(1).maybeSingle();
           resolvedWorkspaceId = membership?.workspace_id || null;
           return buildDiversityConstraints(divClient, String(payload.lead_id), resolvedWorkspaceId, payload?.campaign_id ? String(payload.campaign_id) : null);
         } catch (err) { console.error("[ai_task] Diversity fetch failed:", err); return { avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [] }; }
