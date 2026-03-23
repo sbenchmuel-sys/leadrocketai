@@ -426,6 +426,9 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     setKnowledgeUsed(false);
     setReplyThreadId(null);
     setReplyToMessageId(null);
+    setAiReasoning(null);
+    setShowCorrectionInput(false);
+    setCorrectionNote("");
 
     try {
       const pipelineResult = await streamDraft({
