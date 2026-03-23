@@ -6,6 +6,7 @@ import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, R
 import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
+import { flags } from "@/lib/featureFlags";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import {
