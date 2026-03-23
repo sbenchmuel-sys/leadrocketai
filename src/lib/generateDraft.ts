@@ -671,6 +671,16 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   // Step 7: Derive subject
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
 
+  // Strip reasoning from non-streamed draft
+  let aiReasoning: string | null = null;
+  if (draftText) {
+    const [cleanText, reasoning] = stripReasoningClient(draftText);
+    if (reasoning) {
+      draftText = cleanText;
+      aiReasoning = reasoning;
+    }
+  }
+
   const result: DraftPipelineResult = {
     resolved_context: resolvedContext,
     playbook,
@@ -679,6 +689,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     sequence_step: playbook.next_sequence_step,
     draft_text: draftText,
     suggested_subject: suggestedSubject,
+    ai_reasoning: aiReasoning,
     complexity_score: complexity.complexity_score,
     model_used: complexity.model_used,
     scoring_factors: complexity.scoring_factors,
