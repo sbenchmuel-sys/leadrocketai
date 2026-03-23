@@ -1071,6 +1071,63 @@ export type Database = {
           },
         ]
       }
+      lead_ai_corrections: {
+        Row: {
+          ai_reasoning: string | null
+          context_json: Json | null
+          corrected_draft: string | null
+          correction_text: string
+          correction_type: string
+          created_at: string
+          id: string
+          lead_id: string
+          original_draft: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          ai_reasoning?: string | null
+          context_json?: Json | null
+          corrected_draft?: string | null
+          correction_text: string
+          correction_type?: string
+          created_at?: string
+          id?: string
+          lead_id: string
+          original_draft?: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          ai_reasoning?: string | null
+          context_json?: Json | null
+          corrected_draft?: string | null
+          correction_text?: string
+          correction_type?: string
+          created_at?: string
+          id?: string
+          lead_id?: string
+          original_draft?: string | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_ai_corrections_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_ai_corrections_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_context_cache: {
         Row: {
           context_json: Json
