@@ -29,7 +29,6 @@ import {
   Paperclip,
   Lightbulb,
   PenLine,
-  Wand2,
   Scissors,
   Sparkles,
   Calendar,
@@ -57,6 +56,7 @@ import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 import { generateDraft, streamDraft, resolveEmailPlaceholders, clearDraftCache } from "@/lib/generateDraft";
+import { flags } from "@/lib/featureFlags";
 import type { DraftPipelineResult } from "@/lib/generateDraft";
 import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
@@ -639,18 +639,11 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
   }
 
   // Action handlers
-  const handleFixGrammar = () => runOneClickAction("shorten_draft", "Fix grammar", { target: "fix_grammar" });
-  const handleShorten = () => runOneClickAction("shorten_draft", "Shorten", { target: "shorten_30" });
-  const handleAddMeetingCTA = () => runOneClickAction("shorten_draft", "Add CTA", { 
+  const handleAddMeetingCTA = () => runOneClickAction("shorten_draft", "Add CTA", {
     target: "add_meeting_cta",
     meeting_link: repProfile?.calendar_link || '',
     timezone: workspaceProfile?.meeting_timezone || '',
   });
-  const handleAnswerWithKB = () => runOneClickAction("answer_questions", "Answer with KB", {
-    questions_list: "Answer any questions in the email thread using the knowledge base",
-    email_thread: threadEmails.map(e => `[${e.direction}] ${e.subject || ''}\n${e.body_text}`).join('\n---\n'),
-  });
-  
   const handleRewriteTone = (tone: string) => runOneClickAction("shorten_draft", `Rewrite ${tone}`, {
     target: "rewrite_tone",
     tone: tone,
@@ -928,27 +921,59 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
 
             {/* One-Click Action Bar */}
             <div className="flex flex-wrap gap-2 p-3 bg-muted/30 rounded-lg border">
-              <ActionButton
-                icon={<Wand2 className="h-3.5 w-3.5" />}
-                label="Fix grammar"
-                onClick={handleFixGrammar}
-                loading={actionLoading === "Fix grammar"}
-                disabled={isGenerating || !body}
-              />
-              <ActionButton
-                icon={<Scissors className="h-3.5 w-3.5" />}
-                label="Shorten"
-                onClick={handleShorten}
-                loading={actionLoading === "Shorten"}
-                disabled={isGenerating || !body}
-              />
-              <ActionButton
-                icon={<BookOpen className="h-3.5 w-3.5" />}
-                label="Answer with KB"
-                onClick={handleAnswerWithKB}
-                loading={actionLoading === "Answer with KB"}
-                disabled={isGenerating || !body}
-              />
+              {flags.admin_tuning && (
+                <>
+                  <Button
+                    variant={showReasoning ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => setShowReasoning(!showReasoning)}
+                    disabled={isGenerating || !body}
+                    className="gap-1.5 h-8 text-xs relative"
+                  >
+                    <Brain className="h-3.5 w-3.5" />
+                    Why this draft?
+                    {aiReasoning && !showReasoning && (
+                      <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-primary" />
+                    )}
+                  </Button>
+                  <Button
+                    variant={showCorrectionInput ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => setShowCorrectionInput(!showCorrectionInput)}
+                    disabled={isGenerating || !body}
+                    className="gap-1.5 h-8 text-xs"
+                  >
+                    <ThumbsDown className="h-3.5 w-3.5" />
+                    Correct AI
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isGenerating || !body}
+                        className="gap-1.5 h-8 text-xs"
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                        Lock sections
+                        {lockedSections.size > 0 && (
+                          <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">{lockedSections.size}</Badge>
+                        )}
+                        <ChevronDown className="h-3 w-3 ml-0.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {(['greeting', 'body', 'cta'] as const).map((section) => (
+                        <DropdownMenuItem key={section} onClick={() => toggleLockSection(section)} className="gap-2">
+                          {lockedSections.has(section) ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                          <span className="capitalize">{section}</span>
+                          {lockedSections.has(section) && <span className="ml-auto text-[10px] text-primary">Locked</span>}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              )}
               <ActionButton
                 icon={<Calendar className="h-3.5 w-3.5" />}
                 label="Add meeting CTA"
@@ -1001,28 +1026,9 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               )}
             </div>
 
-            {/* Email Body Editor with Section Locking */}
+            {/* Email Body Editor */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="body" className="sr-only">Message</Label>
-                {body && !isGenerating && (
-                  <div className="flex items-center gap-1">
-                    {(['greeting', 'body', 'cta'] as const).map((section) => (
-                      <Button
-                        key={section}
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleLockSection(section)}
-                        className={`gap-1 h-6 text-[10px] px-2 ${lockedSections.has(section) ? 'text-primary' : 'text-muted-foreground'}`}
-                        title={`${lockedSections.has(section) ? 'Unlock' : 'Lock'} ${section} — locked sections are preserved on regenerate`}
-                      >
-                        {lockedSections.has(section) ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-                        {section}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <Label htmlFor="body" className="sr-only">Message</Label>
               {isGenerating ? (
                 <div className="flex items-center justify-center h-[200px] border rounded-md bg-muted/20">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
@@ -1041,71 +1047,49 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               )}
             </div>
 
-            {/* AI Reasoning Panel */}
-            {aiReasoning && !isGenerating && (
-              <Collapsible open={showReasoning} onOpenChange={setShowReasoning}>
-                <CollapsibleTrigger asChild>
-                  <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground">
-                    <Brain className="h-4 w-4" />
-                    AI Reasoning
-                    {showReasoning ? <ChevronDown className="h-4 w-4 ml-auto" /> : <ChevronRight className="h-4 w-4 ml-auto" />}
+            {/* AI Reasoning Panel — admin only */}
+            {flags.admin_tuning && aiReasoning && !isGenerating && showReasoning && (
+              <div className="p-3 bg-muted/30 rounded-lg border">
+                <ScrollArea className="max-h-[200px]">
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground leading-relaxed">
+                    {aiReasoning}
+                  </pre>
+                </ScrollArea>
+              </div>
+            )}
+
+            {/* Correction Input — admin only */}
+            {flags.admin_tuning && showCorrectionInput && !isGenerating && (
+              <div className="space-y-2 p-3 bg-muted/30 rounded-lg border">
+                <Textarea
+                  value={correctionNote}
+                  onChange={(e) => setCorrectionNote(e.target.value)}
+                  placeholder="What was wrong? (e.g., 'We don't sell mugs', 'Wrong tone — too formal', 'Eldad prefers short emails')"
+                  className="min-h-[60px] text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={saveCorrection}
+                    disabled={!correctionNote.trim() || savingCorrection}
+                    className="gap-1 text-xs flex-1"
+                  >
+                    {savingCorrection ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                    Save Correction
                   </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="pt-2">
-                  <div className="space-y-3 p-3 bg-muted/30 rounded-lg border">
-                    <ScrollArea className="max-h-[200px]">
-                      <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground leading-relaxed">
-                        {aiReasoning}
-                      </pre>
-                    </ScrollArea>
-                    
-                    {/* Correction Feedback */}
-                    <Separator />
-                    {!showCorrectionInput ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowCorrectionInput(true)}
-                        className="gap-1.5 text-xs w-full"
-                      >
-                        <ThumbsDown className="h-3.5 w-3.5" />
-                        Something wrong? Leave a correction
-                      </Button>
-                    ) : (
-                      <div className="space-y-2">
-                        <Textarea
-                          value={correctionNote}
-                          onChange={(e) => setCorrectionNote(e.target.value)}
-                          placeholder="What was wrong? (e.g., 'We don't sell mugs', 'Wrong tone — too formal', 'Eldad prefers short emails')"
-                          className="min-h-[60px] text-sm"
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            onClick={saveCorrection}
-                            disabled={!correctionNote.trim() || savingCorrection}
-                            className="gap-1 text-xs flex-1"
-                          >
-                            {savingCorrection ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                            Save Correction
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setShowCorrectionInput(false); setCorrectionNote(""); }}
-                            className="text-xs"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground">
-                          Corrections are saved per lead and used to improve future AI-generated emails for {lead.name}.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setShowCorrectionInput(false); setCorrectionNote(""); }}
+                    className="text-xs"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Corrections are saved per lead and used to improve future AI-generated emails for {lead.name}.
+                </p>
+              </div>
             )}
 
             {/* Signature Section */}

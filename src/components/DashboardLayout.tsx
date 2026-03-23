@@ -6,6 +6,7 @@ import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, R
 import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
+import { flags } from "@/lib/featureFlags";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import {
@@ -110,6 +111,12 @@ export default function DashboardLayout() {
           })}
         </nav>
         <div className="p-4 border-t border-border space-y-2">
+          {flags.admin_tuning && (
+            <div className="flex items-center gap-1.5 px-2 py-1 mb-1 rounded bg-amber-500/10 border border-amber-500/30">
+              <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-[10px] font-semibold text-amber-600 tracking-wider uppercase">Tuning Mode</span>
+            </div>
+          )}
           <div className="text-xs text-muted-foreground mb-2 truncate">
             {user?.email}
           </div>
