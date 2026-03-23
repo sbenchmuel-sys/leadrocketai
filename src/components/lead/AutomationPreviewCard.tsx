@@ -340,9 +340,20 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
         <div className="space-y-2">
           {steps.map((step, i) => (
             <div key={step.key} className="space-y-0.5">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                {i === 0 ? "Next" : "Following"}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                  {i === 0 ? "Next" : "Following"}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPreviewStep({ key: step.key, label: step.label })}
+                  className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  <Eye className="h-3 w-3 mr-0.5" />
+                  Preview
+                </Button>
+              </div>
               <p className="text-sm font-semibold text-foreground">{step.label}</p>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Clock className="h-3 w-3" />
