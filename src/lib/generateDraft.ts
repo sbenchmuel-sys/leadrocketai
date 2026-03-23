@@ -582,6 +582,14 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
     // Resolve placeholders on full text
     fullText = resolveEmailPlaceholders(fullText, resolvedContext.rep_profile?.full_name || null);
+
+    // Strip leaked reasoning from streamed output
+    const [cleanText, reasoning] = stripReasoningClient(fullText);
+    if (reasoning) {
+      console.log("[streamDraft] Stripped leaked reasoning:", reasoning.substring(0, 200) + "...");
+      fullText = cleanText;
+      partialResult.ai_reasoning = reasoning;
+    }
   } catch (err) {
     console.error("[streamDraft] Streaming failed:", err);
   }
