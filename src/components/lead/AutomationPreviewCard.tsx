@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  Zap, Pause, Play, Loader2, ShieldCheck, Clock, Square, Ban,
+  Zap, Pause, Play, Loader2, ShieldCheck, Clock, Square, Ban, Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays } from "date-fns";
@@ -11,6 +11,7 @@ import type { LeadDetail } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
+import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
