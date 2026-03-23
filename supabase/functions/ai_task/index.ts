@@ -743,6 +743,11 @@ serve(async (req) => {
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
+    // Inject per-lead corrections for learning
+    if (enhancedPayload.lead_corrections) {
+      promptParts.push(`=== LEAD-SPECIFIC CORRECTIONS (from user feedback) ===\nThe user has flagged these issues with previous emails to this lead. RESPECT these corrections:\n${String(enhancedPayload.lead_corrections)}`);
+      console.log("[ai_task] [7/CORRECTIONS] Injected lead corrections");
+    }
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");
 

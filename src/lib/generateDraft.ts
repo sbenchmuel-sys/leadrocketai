@@ -62,10 +62,70 @@ export interface DraftPipelineResult {
   sequence_step: string;
   draft_text: string | null;
   suggested_subject: string | null;
+  ai_reasoning: string | null;
   // Complexity + model
   complexity_score: number;
   model_used: AIModel;
   scoring_factors: { label: string; points: number }[];
+}
+
+// ============================================
+// CLIENT-SIDE REASONING STRIPPER
+// ============================================
+
+/**
+ * Strips leaked internal reasoning from LLM output.
+ * Returns [cleanText, reasoning] tuple.
+ */
+function stripReasoningClient(text: string): [string, string | null] {
+  if (!text) return [text, null];
+
+  const reasoningHeaderPattern = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS)\s*:?\s*\n/i;
+
+  if (reasoningHeaderPattern.test(text)) {
+    // Find where the actual email starts — look for greeting patterns
+    const greetingPatterns = [
+      /\n((?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\s*[^\n]*)/i,
+      /\n([A-Z][a-z]{1,20},\s*\n)/, // Name-comma pattern like "Eldad,"
+    ];
+
+    for (const pattern of greetingPatterns) {
+      const match = text.match(pattern);
+      if (match && match.index !== undefined) {
+        const beforeMatch = text.substring(0, match.index);
+        if (beforeMatch.length > 200) {
+          const reasoning = beforeMatch.trim();
+          const clean = text.substring(match.index).trim();
+          return [clean, reasoning];
+        }
+      }
+    }
+
+    // Fallback: line-by-line search
+    const lines = text.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:)\b/i.test(line) ||
+          /^[A-Z][a-z]{1,20},\s*$/.test(line)) {
+        const beforeLines = lines.slice(0, i).join('\n');
+        if (beforeLines.length > 200 && reasoningHeaderPattern.test(beforeLines)) {
+          return [lines.slice(i).join('\n').trim(), beforeLines.trim()];
+        }
+      }
+    }
+  }
+
+  // Check for extended chain-of-thought without headers
+  const cotPattern = /^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's|I will|I need to|Looking at|Given the|The goal|Since the)[^\n]*\n)+[\s\S]*?\n\n/im;
+  const cotMatch = text.match(cotPattern);
+  if (cotMatch && cotMatch[0].length > 200) {
+    const remainder = text.substring(cotMatch[0].length).trim();
+    if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:|[A-Z][a-z]{1,20},)/i.test(remainder)) {
+      return [remainder, cotMatch[0].trim()];
+    }
+  }
+
+  return [text.trim(), null];
 }
 
 // ============================================
@@ -373,6 +433,21 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
+  // Step 5b: Fetch per-lead corrections for learning
+  try {
+    const { data: corrections } = await supabase
+      .from("lead_ai_corrections")
+      .select("correction_text, correction_type, context_json")
+      .eq("lead_id", lead_id)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    if (corrections && corrections.length > 0) {
+      aiPayload.lead_corrections = corrections.map((c: any) =>
+        `[${c.correction_type}] ${c.correction_text}`
+      ).join("\n");
+    }
+  } catch { /* non-blocking */ }
+
   // Derive subject immediately (no AI needed)
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
   onSubject(suggestedSubject);
@@ -385,6 +460,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     recommended_playbook: playbook.recommended_playbook,
     sequence_step: playbook.next_sequence_step,
     suggested_subject: suggestedSubject,
+    ai_reasoning: null,
     complexity_score: complexity.complexity_score,
     model_used: complexity.model_used,
     scoring_factors: complexity.scoring_factors,
@@ -521,6 +597,14 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
     // Resolve placeholders on full text
     fullText = resolveEmailPlaceholders(fullText, resolvedContext.rep_profile?.full_name || null);
+
+    // Strip leaked reasoning from streamed output
+    const [cleanText, reasoning] = stripReasoningClient(fullText);
+    if (reasoning) {
+      console.log("[streamDraft] Stripped leaked reasoning:", reasoning.substring(0, 200) + "...");
+      fullText = cleanText;
+      partialResult.ai_reasoning = reasoning;
+    }
   } catch (err) {
     console.error("[streamDraft] Streaming failed:", err);
   }
@@ -602,6 +686,16 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   // Step 7: Derive subject
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
 
+  // Strip reasoning from non-streamed draft
+  let aiReasoning: string | null = null;
+  if (draftText) {
+    const [cleanText, reasoning] = stripReasoningClient(draftText);
+    if (reasoning) {
+      draftText = cleanText;
+      aiReasoning = reasoning;
+    }
+  }
+
   const result: DraftPipelineResult = {
     resolved_context: resolvedContext,
     playbook,
@@ -610,6 +704,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     sequence_step: playbook.next_sequence_step,
     draft_text: draftText,
     suggested_subject: suggestedSubject,
+    ai_reasoning: aiReasoning,
     complexity_score: complexity.complexity_score,
     model_used: complexity.model_used,
     scoring_factors: complexity.scoring_factors,
