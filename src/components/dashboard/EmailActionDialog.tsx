@@ -57,6 +57,7 @@ import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@
 import { toast } from "sonner";
 import { EnrichedLead, getActionType, Motion, MOTION_LABELS } from "@/lib/dashboardUtils";
 import { generateDraft, streamDraft, resolveEmailPlaceholders, clearDraftCache } from "@/lib/generateDraft";
+import { flags } from "@/lib/featureFlags";
 import type { DraftPipelineResult } from "@/lib/generateDraft";
 import { playbookResolver } from "@/lib/playbookResolver";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
