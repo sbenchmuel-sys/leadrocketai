@@ -645,11 +645,6 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     meeting_link: repProfile?.calendar_link || '',
     timezone: workspaceProfile?.meeting_timezone || '',
   });
-  const handleAnswerWithKB = () => runOneClickAction("answer_questions", "Answer with KB", {
-    questions_list: "Answer any questions in the email thread using the knowledge base",
-    email_thread: threadEmails.map(e => `[${e.direction}] ${e.subject || ''}\n${e.body_text}`).join('\n---\n'),
-  });
-  
   const handleRewriteTone = (tone: string) => runOneClickAction("shorten_draft", `Rewrite ${tone}`, {
     target: "rewrite_tone",
     tone: tone,
