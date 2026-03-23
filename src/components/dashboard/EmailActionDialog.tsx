@@ -35,7 +35,11 @@ import {
   Calendar,
   MessageSquare,
   Undo2,
-  Palette
+  Palette,
+  Brain,
+  ThumbsDown,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import {
   DropdownMenu,
