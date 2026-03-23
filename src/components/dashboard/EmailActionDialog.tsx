@@ -640,9 +640,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
   }
 
   // Action handlers
-  const handleFixGrammar = () => runOneClickAction("shorten_draft", "Fix grammar", { target: "fix_grammar" });
-  const handleShorten = () => runOneClickAction("shorten_draft", "Shorten", { target: "shorten_30" });
-  const handleAddMeetingCTA = () => runOneClickAction("shorten_draft", "Add CTA", { 
+  const handleAddMeetingCTA = () => runOneClickAction("shorten_draft", "Add CTA", {
     target: "add_meeting_cta",
     meeting_link: repProfile?.calendar_link || '',
     timezone: workspaceProfile?.meeting_timezone || '',
