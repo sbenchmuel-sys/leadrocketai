@@ -475,12 +475,100 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
       } else if (!pipelineResult.draft_text) {
         toast.error("Failed to generate email");
       }
+      // Capture AI reasoning if available
+      if (pipelineResult.ai_reasoning) {
+        setAiReasoning(pipelineResult.ai_reasoning);
+      }
     } catch (err) {
       console.error("Error generating email:", err);
       toast.error("Failed to generate email");
     } finally {
       setIsGenerating(false);
     }
+  }
+
+  // Save correction feedback for per-lead learning
+  async function saveCorrection() {
+    if (!correctionNote.trim()) return;
+    setSavingCorrection(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      // Get workspace_id from workspace context
+      const { data: membership } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", session?.user?.id || "")
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.workspace_id && session?.user?.id) {
+        await supabase.from("lead_ai_corrections").insert({
+          lead_id: lead.id,
+          user_id: session.user.id,
+          workspace_id: membership.workspace_id,
+          correction_type: "content",
+          correction_text: correctionNote.trim(),
+          original_draft: body,
+          ai_reasoning: aiReasoning,
+          context_json: {
+            task: resolvedIntent,
+            step: resolvedStep,
+            motion: selectedMotion,
+          },
+        });
+        toast.success("Correction saved — AI will learn from this for future emails to this lead");
+        setShowCorrectionInput(false);
+        setCorrectionNote("");
+      }
+    } catch (err) {
+      console.error("Failed to save correction:", err);
+      toast.error("Failed to save correction");
+    } finally {
+      setSavingCorrection(false);
+    }
+  }
+
+  // Section splitting for lock/regenerate
+  function splitEmailSections(text: string): { greeting: string; body: string; cta: string } {
+    const lines = text.split('\n');
+    let greetingEnd = 0;
+    let ctaStart = lines.length;
+
+    // Find greeting (first 1-2 lines typically)
+    for (let i = 0; i < Math.min(lines.length, 3); i++) {
+      if (/^(Hi|Hey|Hello|Dear|Thanks|Thank you)\b/i.test(lines[i].trim()) || /^[A-Z][a-z]{1,20},\s*$/i.test(lines[i].trim())) {
+        greetingEnd = i + 1;
+        // Skip blank line after greeting
+        if (greetingEnd < lines.length && lines[greetingEnd].trim() === '') greetingEnd++;
+        break;
+      }
+    }
+
+    // Find CTA/signoff (last lines starting with Best/Regards/Thanks/Cheers or the name)
+    for (let i = lines.length - 1; i >= greetingEnd; i--) {
+      const trimmed = lines[i].trim();
+      if (/^(Best|Regards|Cheers|Thanks|Thank you|Sincerely|Talk soon|Looking forward)/i.test(trimmed) ||
+          trimmed === '' && i > ctaStart - 2) {
+        ctaStart = i;
+      } else if (ctaStart < lines.length) {
+        break;
+      }
+    }
+
+    return {
+      greeting: lines.slice(0, greetingEnd).join('\n'),
+      body: lines.slice(greetingEnd, ctaStart).join('\n'),
+      cta: lines.slice(ctaStart).join('\n'),
+    };
+  }
+
+  function toggleLockSection(section: 'greeting' | 'body' | 'cta') {
+    setLockedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
   }
 
   // ========== ONE-CLICK ACTIONS ==========
