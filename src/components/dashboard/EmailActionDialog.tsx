@@ -29,7 +29,6 @@ import {
   Paperclip,
   Lightbulb,
   PenLine,
-  Wand2,
   Scissors,
   Sparkles,
   Calendar,
