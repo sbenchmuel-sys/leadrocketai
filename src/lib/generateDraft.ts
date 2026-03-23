@@ -445,6 +445,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     recommended_playbook: playbook.recommended_playbook,
     sequence_step: playbook.next_sequence_step,
     suggested_subject: suggestedSubject,
+    ai_reasoning: null,
     complexity_score: complexity.complexity_score,
     model_used: complexity.model_used,
     scoring_factors: complexity.scoring_factors,
