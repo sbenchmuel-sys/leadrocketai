@@ -433,6 +433,21 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
+  // Step 5b: Fetch per-lead corrections for learning
+  try {
+    const { data: corrections } = await supabase
+      .from("lead_ai_corrections")
+      .select("correction_text, correction_type, context_json")
+      .eq("lead_id", lead_id)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    if (corrections && corrections.length > 0) {
+      aiPayload.lead_corrections = corrections.map((c: any) =>
+        `[${c.correction_type}] ${c.correction_text}`
+      ).join("\n");
+    }
+  } catch { /* non-blocking */ }
+
   // Derive subject immediately (no AI needed)
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
   onSubject(suggestedSubject);
