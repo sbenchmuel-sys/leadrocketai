@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  Zap, Pause, Play, Loader2, ShieldCheck, Clock, Square, Ban,
+  Zap, Pause, Play, Loader2, ShieldCheck, Clock, Square, Ban, Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays } from "date-fns";
@@ -11,6 +11,7 @@ import type { LeadDetail } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
+import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
@@ -136,6 +137,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const [isEnabling, setIsEnabling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [previewStep, setPreviewStep] = useState<{ key: string; label: string } | null>(null);
 
   const motion = lead.motion;
   const stage = lead.stage;
@@ -338,9 +340,20 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
         <div className="space-y-2">
           {steps.map((step, i) => (
             <div key={step.key} className="space-y-0.5">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                {i === 0 ? "Next" : "Following"}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                  {i === 0 ? "Next" : "Following"}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPreviewStep({ key: step.key, label: step.label })}
+                  className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  <Eye className="h-3 w-3 mr-0.5" />
+                  Preview
+                </Button>
+              </div>
               <p className="text-sm font-semibold text-foreground">{step.label}</p>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Clock className="h-3 w-3" />
@@ -571,6 +584,17 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
             Disable Automation
           </Button>
         </>
+      )}
+      {/* Draft Preview Dialog */}
+      {previewStep && (
+        <AutomationDraftPreviewDialog
+          open={!!previewStep}
+          onOpenChange={(open) => { if (!open) setPreviewStep(null); }}
+          lead={lead}
+          stepKey={previewStep.key}
+          stepLabel={previewStep.label}
+          onSaved={onUpdate}
+        />
       )}
     </div>
   );
