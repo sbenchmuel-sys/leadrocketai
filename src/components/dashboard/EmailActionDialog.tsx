@@ -260,6 +260,16 @@ export function EmailActionDialog({
   // One-click action loading states
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  // AI Reasoning state
+  const [aiReasoning, setAiReasoning] = useState<string | null>(null);
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [correctionNote, setCorrectionNote] = useState("");
+  const [showCorrectionInput, setShowCorrectionInput] = useState(false);
+  const [savingCorrection, setSavingCorrection] = useState(false);
+  
+  // Section locking state
+  const [lockedSections, setLockedSections] = useState<Set<'greeting' | 'body' | 'cta'>>(new Set());
+
   // Playbook recommendation state (logged in header)
   const [resolvedIntent, setResolvedIntent] = useState<string | null>(null);
   const [resolvedStep, setResolvedStep] = useState<string | null>(null);
