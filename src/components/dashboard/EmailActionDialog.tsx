@@ -1034,28 +1034,9 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               )}
             </div>
 
-            {/* Email Body Editor with Section Locking */}
+            {/* Email Body Editor */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="body" className="sr-only">Message</Label>
-                {body && !isGenerating && (
-                  <div className="flex items-center gap-1">
-                    {(['greeting', 'body', 'cta'] as const).map((section) => (
-                      <Button
-                        key={section}
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleLockSection(section)}
-                        className={`gap-1 h-6 text-[10px] px-2 ${lockedSections.has(section) ? 'text-primary' : 'text-muted-foreground'}`}
-                        title={`${lockedSections.has(section) ? 'Unlock' : 'Lock'} ${section} — locked sections are preserved on regenerate`}
-                      >
-                        {lockedSections.has(section) ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-                        {section}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <Label htmlFor="body" className="sr-only">Message</Label>
               {isGenerating ? (
                 <div className="flex items-center justify-center h-[200px] border rounded-md bg-muted/20">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
