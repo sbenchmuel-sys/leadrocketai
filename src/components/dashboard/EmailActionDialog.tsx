@@ -1001,9 +1001,28 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               )}
             </div>
 
-            {/* Email Body Editor */}
+            {/* Email Body Editor with Section Locking */}
             <div className="space-y-2">
-              <Label htmlFor="body" className="sr-only">Message</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="body" className="sr-only">Message</Label>
+                {body && !isGenerating && (
+                  <div className="flex items-center gap-1">
+                    {(['greeting', 'body', 'cta'] as const).map((section) => (
+                      <Button
+                        key={section}
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => toggleLockSection(section)}
+                        className={`gap-1 h-6 text-[10px] px-2 ${lockedSections.has(section) ? 'text-primary' : 'text-muted-foreground'}`}
+                        title={`${lockedSections.has(section) ? 'Unlock' : 'Lock'} ${section} — locked sections are preserved on regenerate`}
+                      >
+                        {lockedSections.has(section) ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+                        {section}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {isGenerating ? (
                 <div className="flex items-center justify-center h-[200px] border rounded-md bg-muted/20">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
@@ -1021,6 +1040,73 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
                 />
               )}
             </div>
+
+            {/* AI Reasoning Panel */}
+            {aiReasoning && !isGenerating && (
+              <Collapsible open={showReasoning} onOpenChange={setShowReasoning}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground">
+                    <Brain className="h-4 w-4" />
+                    AI Reasoning
+                    {showReasoning ? <ChevronDown className="h-4 w-4 ml-auto" /> : <ChevronRight className="h-4 w-4 ml-auto" />}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-2">
+                  <div className="space-y-3 p-3 bg-muted/30 rounded-lg border">
+                    <ScrollArea className="max-h-[200px]">
+                      <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground leading-relaxed">
+                        {aiReasoning}
+                      </pre>
+                    </ScrollArea>
+                    
+                    {/* Correction Feedback */}
+                    <Separator />
+                    {!showCorrectionInput ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowCorrectionInput(true)}
+                        className="gap-1.5 text-xs w-full"
+                      >
+                        <ThumbsDown className="h-3.5 w-3.5" />
+                        Something wrong? Leave a correction
+                      </Button>
+                    ) : (
+                      <div className="space-y-2">
+                        <Textarea
+                          value={correctionNote}
+                          onChange={(e) => setCorrectionNote(e.target.value)}
+                          placeholder="What was wrong? (e.g., 'We don't sell mugs', 'Wrong tone — too formal', 'Eldad prefers short emails')"
+                          className="min-h-[60px] text-sm"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={saveCorrection}
+                            disabled={!correctionNote.trim() || savingCorrection}
+                            className="gap-1 text-xs flex-1"
+                          >
+                            {savingCorrection ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                            Save Correction
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => { setShowCorrectionInput(false); setCorrectionNote(""); }}
+                            className="text-xs"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          Corrections are saved per lead and used to improve future AI-generated emails for {lead.name}.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
 
             {/* Signature Section */}
             <Collapsible open={showSignature} onOpenChange={setShowSignature}>
