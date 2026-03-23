@@ -929,27 +929,59 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
 
             {/* One-Click Action Bar */}
             <div className="flex flex-wrap gap-2 p-3 bg-muted/30 rounded-lg border">
-              <ActionButton
-                icon={<Wand2 className="h-3.5 w-3.5" />}
-                label="Fix grammar"
-                onClick={handleFixGrammar}
-                loading={actionLoading === "Fix grammar"}
-                disabled={isGenerating || !body}
-              />
-              <ActionButton
-                icon={<Scissors className="h-3.5 w-3.5" />}
-                label="Shorten"
-                onClick={handleShorten}
-                loading={actionLoading === "Shorten"}
-                disabled={isGenerating || !body}
-              />
-              <ActionButton
-                icon={<BookOpen className="h-3.5 w-3.5" />}
-                label="Answer with KB"
-                onClick={handleAnswerWithKB}
-                loading={actionLoading === "Answer with KB"}
-                disabled={isGenerating || !body}
-              />
+              {flags.admin_tuning && (
+                <>
+                  <Button
+                    variant={showReasoning ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => setShowReasoning(!showReasoning)}
+                    disabled={isGenerating || !body}
+                    className="gap-1.5 h-8 text-xs relative"
+                  >
+                    <Brain className="h-3.5 w-3.5" />
+                    Why this draft?
+                    {aiReasoning && !showReasoning && (
+                      <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-primary" />
+                    )}
+                  </Button>
+                  <Button
+                    variant={showCorrectionInput ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => setShowCorrectionInput(!showCorrectionInput)}
+                    disabled={isGenerating || !body}
+                    className="gap-1.5 h-8 text-xs"
+                  >
+                    <ThumbsDown className="h-3.5 w-3.5" />
+                    Correct AI
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isGenerating || !body}
+                        className="gap-1.5 h-8 text-xs"
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                        Lock sections
+                        {lockedSections.size > 0 && (
+                          <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">{lockedSections.size}</Badge>
+                        )}
+                        <ChevronDown className="h-3 w-3 ml-0.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {(['greeting', 'body', 'cta'] as const).map((section) => (
+                        <DropdownMenuItem key={section} onClick={() => toggleLockSection(section)} className="gap-2">
+                          {lockedSections.has(section) ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                          <span className="capitalize">{section}</span>
+                          {lockedSections.has(section) && <span className="ml-auto text-[10px] text-primary">Locked</span>}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              )}
               <ActionButton
                 icon={<Calendar className="h-3.5 w-3.5" />}
                 label="Add meeting CTA"
