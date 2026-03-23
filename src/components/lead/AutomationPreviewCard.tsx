@@ -585,6 +585,17 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           </Button>
         </>
       )}
+      {/* Draft Preview Dialog */}
+      {previewStep && (
+        <AutomationDraftPreviewDialog
+          open={!!previewStep}
+          onOpenChange={(open) => { if (!open) setPreviewStep(null); }}
+          lead={lead}
+          stepKey={previewStep.key}
+          stepLabel={previewStep.label}
+          onSaved={onUpdate}
+        />
+      )}
     </div>
   );
 }

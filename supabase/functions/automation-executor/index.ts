@@ -671,26 +671,46 @@ serve(async (req) => {
         }
 
         // --- STRATEGY 1: Draft Caching ---
-        // Check for an existing pending draft for this lead+step before calling AI
-        const { data: cachedDraft } = await supabase
+        // Priority 1: Check for user-approved drafts (no time limit — user explicitly saved these)
+        const { data: approvedDraft } = await supabase
           .from("drafts")
-          .select("body_text, subject")
+          .select("id, body_text, subject")
           .eq("lead_id", lead.id)
           .eq("step_key", actionKey)
-          .eq("status", "pending")
-          .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .eq("status", "approved")
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
+
+        // Priority 2: Fall back to pending (AI-generated) drafts within 24h
+        let cachedDraft = approvedDraft;
+        if (!cachedDraft?.body_text) {
+          const { data: pendingDraft } = await supabase
+            .from("drafts")
+            .select("id, body_text, subject")
+            .eq("lead_id", lead.id)
+            .eq("step_key", actionKey)
+            .eq("status", "pending")
+            .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          cachedDraft = pendingDraft;
+        }
 
         let draftBody: string;
         let subject: string;
         const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
-          console.log(`[automation-executor] ♻️ Reusing cached draft for lead ${lead.id}, step ${actionKey}`);
+          const draftType = approvedDraft?.body_text ? "approved" : "pending";
+          console.log(`[automation-executor] ♻️ Reusing ${draftType} draft for lead ${lead.id}, step ${actionKey}`);
           draftBody = cachedDraft.body_text;
           subject = cachedDraft.subject || `Following up - ${lead.name.split(" ")[0]}`;
+          // Mark the draft as sent
+          if (cachedDraft.id) {
+            await supabase.from("drafts").update({ status: "sent" }).eq("id", cachedDraft.id);
+          }
         } else {
           // Generate draft via ai_task
           const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
