@@ -137,6 +137,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const [isEnabling, setIsEnabling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [previewStep, setPreviewStep] = useState<{ key: string; label: string } | null>(null);
 
   const motion = lead.motion;
   const stage = lead.stage;
