@@ -62,10 +62,70 @@ export interface DraftPipelineResult {
   sequence_step: string;
   draft_text: string | null;
   suggested_subject: string | null;
+  ai_reasoning: string | null;
   // Complexity + model
   complexity_score: number;
   model_used: AIModel;
   scoring_factors: { label: string; points: number }[];
+}
+
+// ============================================
+// CLIENT-SIDE REASONING STRIPPER
+// ============================================
+
+/**
+ * Strips leaked internal reasoning from LLM output.
+ * Returns [cleanText, reasoning] tuple.
+ */
+function stripReasoningClient(text: string): [string, string | null] {
+  if (!text) return [text, null];
+
+  const reasoningHeaderPattern = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS)\s*:?\s*\n/i;
+
+  if (reasoningHeaderPattern.test(text)) {
+    // Find where the actual email starts — look for greeting patterns
+    const greetingPatterns = [
+      /\n((?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\s*[^\n]*)/i,
+      /\n([A-Z][a-z]{1,20},\s*\n)/, // Name-comma pattern like "Eldad,"
+    ];
+
+    for (const pattern of greetingPatterns) {
+      const match = text.match(pattern);
+      if (match && match.index !== undefined) {
+        const beforeMatch = text.substring(0, match.index);
+        if (beforeMatch.length > 200) {
+          const reasoning = beforeMatch.trim();
+          const clean = text.substring(match.index).trim();
+          return [clean, reasoning];
+        }
+      }
+    }
+
+    // Fallback: line-by-line search
+    const lines = text.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:)\b/i.test(line) ||
+          /^[A-Z][a-z]{1,20},\s*$/.test(line)) {
+        const beforeLines = lines.slice(0, i).join('\n');
+        if (beforeLines.length > 200 && reasoningHeaderPattern.test(beforeLines)) {
+          return [lines.slice(i).join('\n').trim(), beforeLines.trim()];
+        }
+      }
+    }
+  }
+
+  // Check for extended chain-of-thought without headers
+  const cotPattern = /^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's|I will|I need to|Looking at|Given the|The goal|Since the)[^\n]*\n)+[\s\S]*?\n\n/im;
+  const cotMatch = text.match(cotPattern);
+  if (cotMatch && cotMatch[0].length > 200) {
+    const remainder = text.substring(cotMatch[0].length).trim();
+    if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:|[A-Z][a-z]{1,20},)/i.test(remainder)) {
+      return [remainder, cotMatch[0].trim()];
+    }
+  }
+
+  return [text.trim(), null];
 }
 
 // ============================================
