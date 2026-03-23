@@ -1055,71 +1055,49 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               )}
             </div>
 
-            {/* AI Reasoning Panel */}
-            {aiReasoning && !isGenerating && (
-              <Collapsible open={showReasoning} onOpenChange={setShowReasoning}>
-                <CollapsibleTrigger asChild>
-                  <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground">
-                    <Brain className="h-4 w-4" />
-                    AI Reasoning
-                    {showReasoning ? <ChevronDown className="h-4 w-4 ml-auto" /> : <ChevronRight className="h-4 w-4 ml-auto" />}
+            {/* AI Reasoning Panel — admin only */}
+            {flags.admin_tuning && aiReasoning && !isGenerating && showReasoning && (
+              <div className="p-3 bg-muted/30 rounded-lg border">
+                <ScrollArea className="max-h-[200px]">
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground leading-relaxed">
+                    {aiReasoning}
+                  </pre>
+                </ScrollArea>
+              </div>
+            )}
+
+            {/* Correction Input — admin only */}
+            {flags.admin_tuning && showCorrectionInput && !isGenerating && (
+              <div className="space-y-2 p-3 bg-muted/30 rounded-lg border">
+                <Textarea
+                  value={correctionNote}
+                  onChange={(e) => setCorrectionNote(e.target.value)}
+                  placeholder="What was wrong? (e.g., 'We don't sell mugs', 'Wrong tone — too formal', 'Eldad prefers short emails')"
+                  className="min-h-[60px] text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={saveCorrection}
+                    disabled={!correctionNote.trim() || savingCorrection}
+                    className="gap-1 text-xs flex-1"
+                  >
+                    {savingCorrection ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                    Save Correction
                   </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="pt-2">
-                  <div className="space-y-3 p-3 bg-muted/30 rounded-lg border">
-                    <ScrollArea className="max-h-[200px]">
-                      <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground leading-relaxed">
-                        {aiReasoning}
-                      </pre>
-                    </ScrollArea>
-                    
-                    {/* Correction Feedback */}
-                    <Separator />
-                    {!showCorrectionInput ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowCorrectionInput(true)}
-                        className="gap-1.5 text-xs w-full"
-                      >
-                        <ThumbsDown className="h-3.5 w-3.5" />
-                        Something wrong? Leave a correction
-                      </Button>
-                    ) : (
-                      <div className="space-y-2">
-                        <Textarea
-                          value={correctionNote}
-                          onChange={(e) => setCorrectionNote(e.target.value)}
-                          placeholder="What was wrong? (e.g., 'We don't sell mugs', 'Wrong tone — too formal', 'Eldad prefers short emails')"
-                          className="min-h-[60px] text-sm"
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            onClick={saveCorrection}
-                            disabled={!correctionNote.trim() || savingCorrection}
-                            className="gap-1 text-xs flex-1"
-                          >
-                            {savingCorrection ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                            Save Correction
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setShowCorrectionInput(false); setCorrectionNote(""); }}
-                            className="text-xs"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground">
-                          Corrections are saved per lead and used to improve future AI-generated emails for {lead.name}.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setShowCorrectionInput(false); setCorrectionNote(""); }}
+                    className="text-xs"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Corrections are saved per lead and used to improve future AI-generated emails for {lead.name}.
+                </p>
+              </div>
             )}
 
             {/* Signature Section */}
