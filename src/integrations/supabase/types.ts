@@ -1281,7 +1281,7 @@ export type Database = {
           wa_opted_in: boolean
           website: string | null
           whatsapp_number: string | null
-          workspace_id: string
+          workspace_id: string | null
         }
         Insert: {
           acceleration_until?: string | null
@@ -1346,7 +1346,7 @@ export type Database = {
           wa_opted_in?: boolean
           website?: string | null
           whatsapp_number?: string | null
-          workspace_id: string
+          workspace_id?: string | null
         }
         Update: {
           acceleration_until?: string | null
@@ -1411,7 +1411,7 @@ export type Database = {
           wa_opted_in?: boolean
           website?: string | null
           whatsapp_number?: string | null
-          workspace_id?: string
+          workspace_id?: string | null
         }
         Relationships: [
           {
