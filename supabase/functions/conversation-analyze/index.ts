@@ -3,6 +3,7 @@ import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
 import { assertConversationAccess, isInternalCaller } from "../_shared/authz.ts";
+import { queueRecompute } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

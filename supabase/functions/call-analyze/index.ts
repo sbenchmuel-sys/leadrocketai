@@ -526,7 +526,7 @@ Deno.serve(async (req) => {
           subject: `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`,
           metadata_json: { call_session_id: callSessionId, duration_sec: session.duration_sec, analysis_id: analysisId },
           dedupe_key: callDedupeKey(callSessionId),
-        }).catch(e => logger.warn("analyze_timeline_projection_failed", { error: String(e) }));
+        }, { triggerRecompute: true }).catch(e => logger.warn("analyze_timeline_projection_failed", { error: String(e) }));
       }
       logger.info("analyze_bridged_to_interactions", { leadId: session.lead_id });
     }
