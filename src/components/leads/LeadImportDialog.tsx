@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { SOURCE_PRESETS, SOURCE_TYPE_COLORS } from "@/lib/dashboardUtils";
 import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type ImportStep = "upload" | "source" | "confirm";
 
