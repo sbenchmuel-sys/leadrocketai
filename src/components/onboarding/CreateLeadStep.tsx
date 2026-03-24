@@ -23,6 +23,7 @@ type InputMode = "choose" | "manual" | "upload";
 export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) {
   const { workspaceId } = useWorkspace();
   const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState<InputMode>("choose");
   const [formData, setFormData] = useState({
     name: "",
     company: "",
