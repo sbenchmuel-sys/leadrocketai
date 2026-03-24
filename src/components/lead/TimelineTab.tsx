@@ -554,18 +554,47 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
     if (!replyText.trim()) return;
     setIsSavingReply(true);
     try {
-      await supabase.from("interactions").insert({
+      // Write to legacy interactions (bridge path — kept until interactions table is removed)
+      const occurredAt = new Date().toISOString();
+      const { data: interactionRow } = await supabase.from("interactions").insert({
         lead_id: leadId,
         type: "whatsapp_inbound",
         source: "manual",
         body_text: replyText.trim(),
         direction: "inbound",
-        occurred_at: new Date().toISOString(),
-      });
+        occurred_at: occurredAt,
+      }).select("id").single();
+
+      // Also project to canonical lead_timeline_items ledger
+      if (interactionRow) {
+        // Get lead's workspace_id for the timeline item
+        const { data: leadData } = await supabase
+          .from("leads")
+          .select("workspace_id")
+          .eq("id", leadId)
+          .single();
+
+        if (leadData?.workspace_id) {
+          const dedupeKey = `wa:inbound:manual:${interactionRow.id}`;
+          await supabase.from("lead_timeline_items").upsert({
+            workspace_id: leadData.workspace_id,
+            lead_id: leadId,
+            channel: "whatsapp",
+            provider: "manual",
+            direction: "inbound",
+            event_type: "whatsapp_inbound",
+            occurred_at: occurredAt,
+            source_table: "interactions",
+            source_id: interactionRow.id,
+            snippet_text: replyText.trim().substring(0, 500),
+            dedupe_key: dedupeKey,
+          }, { onConflict: "lead_id,dedupe_key" });
+        }
+      }
 
       await supabase.from("leads").update({
-        last_inbound_at: new Date().toISOString(),
-        last_activity_at: new Date().toISOString(),
+        last_inbound_at: occurredAt,
+        last_activity_at: occurredAt,
         stage: "engaged",
         motion: "engaged",
         needs_action: true,

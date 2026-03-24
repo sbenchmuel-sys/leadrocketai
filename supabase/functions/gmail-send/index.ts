@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
-import { isInternalCaller } from "../_shared/authz.ts";
+import { isInternalCaller, assertLeadAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 
 // Dynamic CORS based on allowed origins
@@ -158,26 +158,13 @@ serve(async (req) => {
       });
     }
 
-    // Verify lead ownership before proceeding
-    if (leadId) {
+    // Verify lead access using canonical workspace-safe helper
+    if (leadId && !isInternal) {
       const serviceCheckClient = createClient(supabaseUrl, supabaseServiceKey);
-      const { data: leadOwner, error: leadOwnerErr } = await serviceCheckClient
-        .from("leads")
-        .select("owner_user_id")
-        .eq("id", leadId)
-        .single();
-
-      if (leadOwnerErr || !leadOwner) {
-        console.error(`[gmail-send] Lead not found for ownership check: leadId=${leadId}, userId=${userId}`);
-        return new Response(JSON.stringify({ ok: false, error: "Lead not found" }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      if (leadOwner.owner_user_id !== userId) {
-        console.error(`[gmail-send] Lead ownership mismatch: leadId=${leadId}, requestUserId=${userId}, actualOwnerId=${leadOwner.owner_user_id}`);
-        return new Response(JSON.stringify({ ok: false, error: "Lead ownership mismatch" }), {
+      const authzCheck = await assertLeadAccess(serviceCheckClient, leadId, userId);
+      if (!authzCheck.ok) {
+        console.error(`[gmail-send] Lead access denied: leadId=${leadId}, userId=${userId}, reason=${authzCheck.error}`);
+        return new Response(JSON.stringify({ ok: false, error: authzCheck.error || "Lead access denied" }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });

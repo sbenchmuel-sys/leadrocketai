@@ -569,36 +569,10 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                     }}
                   />
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      const { data: { user } } = await supabase.auth.getUser();
-                      await supabase.from("interactions").insert({
-                        lead_id: lead.id,
-                        type: "whatsapp_outbound",
-                        source: "manual",
-                        body_text: generatedContent,
-                        direction: "outbound",
-                        from_email: user?.email || null,
-                        to_email: lead.email,
-                        occurred_at: new Date().toISOString(),
-                      });
-                      const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
-                      await updateSequenceState(lead.id, intentUsed, null, null, "whatsapp");
-                      toast.success("WhatsApp message logged & sequence updated");
-                      setGeneratedContent("");
-                      onUpdate();
-                    } catch (err) {
-                      console.error("[DraftsTab] WhatsApp log error:", err);
-                      toast.error("Failed to log WhatsApp message");
-                    }
-                  }}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                  Log as Sent
-                </Button>
+                {/* "Log as Sent" removed — whatsapp-send edge function already projects
+                    to both interactions and lead_timeline_items. Manual logging here
+                    would create duplicate timeline rows. Use "Send via WhatsApp" or
+                    "Open in WhatsApp" instead. */}
               </div>
             )}
           </CardContent>

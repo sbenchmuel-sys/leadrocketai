@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Json } from "@/integrations/supabase/types";
-import { LeadDetail, updateLeadMilestoneStatus } from "@/lib/supabaseQueries";
+import { LeadDetail, updateLeadMilestoneStatus, getLeadIntelligence } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +21,8 @@ interface Milestone {
   status: "completed" | "pending";
   date: string | null;
   evidence: string;
+  evidence_ids?: string[];
+  source_types?: string[];
   completedAt?: string;
 }
 
@@ -28,6 +30,8 @@ interface Risk {
   issue: string;
   level: "low" | "medium" | "high";
   evidence: string;
+  evidence_ids?: string[];
+  source_types?: string[];
 }
 
 interface DealFactors {
@@ -52,9 +56,26 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
   const [isCleaning, setIsCleaning] = useState(false);
   const { runTask } = useAITask();
 
-  const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
-  const risks: Risk[] = lead.risks_json ? (lead.risks_json as unknown as Risk[]) : [];
-  const dealFactors: DealFactors | null = lead.deal_factors_json ? (lead.deal_factors_json as unknown as DealFactors) : null;
+  // Canonical intelligence source
+  const [intelligence, setIntelligence] = useState<any>(null);
+  useEffect(() => {
+    getLeadIntelligence(lead.id).then(setIntelligence).catch(console.error);
+  }, [lead.id]);
+
+  const hasCanonical = intelligence !== null;
+
+  // Prefer canonical intelligence, fall back to legacy lead fields
+  const milestones: Milestone[] = hasCanonical
+    ? (intelligence.milestones_json as unknown as Milestone[] ?? [])
+    : (lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : []);
+
+  const risks: Risk[] = hasCanonical
+    ? (intelligence.risks_json as unknown as Risk[] ?? [])
+    : (lead.risks_json ? (lead.risks_json as unknown as Risk[]) : []);
+
+  const dealFactors: DealFactors | null = hasCanonical
+    ? (intelligence.deal_factors_json as unknown as DealFactors ?? null)
+    : (lead.deal_factors_json ? (lead.deal_factors_json as unknown as DealFactors) : null);
 
   const getRiskColor = (level: string) => {
     switch (level) {
