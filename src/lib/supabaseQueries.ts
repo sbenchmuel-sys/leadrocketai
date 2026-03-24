@@ -326,6 +326,7 @@ export interface TimelineItem {
   dedupe_key: string;
   contact_id: string | null;
   conversation_id: string | null;
+  hidden: boolean;
 }
 
 export async function getLeadTimeline(
@@ -335,7 +336,6 @@ export async function getLeadTimeline(
   if (!leadId) throw new Error('Missing leadId');
 
   if (isDemoMode()) {
-    // Fallback: convert demo interactions to timeline shape
     const demoInteractions = getDemoInteractions(leadId) as unknown as InteractionItem[];
     return demoInteractions.map(i => ({
       id: i.id,
@@ -349,24 +349,24 @@ export async function getLeadTimeline(
       source_id: i.id,
       snippet_text: i.body_text,
       subject: i.subject || null,
-      status_json: { hidden: i.hidden, ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
+      status_json: { ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
       metadata_json: { gmail_message_id: i.gmail_message_id, from_email: i.from_email, to_email: i.to_email, ai_summary: i.ai_summary },
       dedupe_key: i.id,
       contact_id: null,
       conversation_id: null,
+      hidden: i.hidden ?? false,
     }));
   }
 
   let query = supabase
     .from('lead_timeline_items')
-    .select('id, lead_id, channel, provider, direction, event_type, occurred_at, source_table, source_id, snippet_text, subject, status_json, metadata_json, dedupe_key, contact_id, conversation_id')
+    .select('id, lead_id, channel, provider, direction, event_type, occurred_at, source_table, source_id, snippet_text, subject, status_json, metadata_json, dedupe_key, contact_id, conversation_id, hidden')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false })
     .limit(options?.limit ?? 200);
 
   if (!options?.includeHidden) {
-    // Filter out hidden items using the status_json field
-    query = query.not('status_json->>hidden', 'eq', 'true');
+    query = query.eq('hidden', false);
   }
 
   if (options?.channel) {
@@ -380,16 +380,14 @@ export async function getLeadTimeline(
 
 export async function hideTimelineItem(itemId: string): Promise<void> {
   if (isDemoMode()) return;
-  // Update both the timeline item and the source interaction
   const { data: item } = await supabase
     .from('lead_timeline_items')
-    .select('source_table, source_id, status_json')
+    .select('source_table, source_id')
     .eq('id', itemId)
     .single();
 
   if (item) {
-    const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: true };
-    await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
+    await supabase.from('lead_timeline_items').update({ hidden: true }).eq('id', itemId);
     if (item.source_table === 'interactions') {
       try { await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }
@@ -400,13 +398,12 @@ export async function unhideTimelineItem(itemId: string): Promise<void> {
   if (isDemoMode()) return;
   const { data: item } = await supabase
     .from('lead_timeline_items')
-    .select('source_table, source_id, status_json')
+    .select('source_table, source_id')
     .eq('id', itemId)
     .single();
 
   if (item) {
-    const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: false };
-    await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
+    await supabase.from('lead_timeline_items').update({ hidden: false }).eq('id', itemId);
     if (item.source_table === 'interactions') {
       try { await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }

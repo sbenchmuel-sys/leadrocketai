@@ -16,6 +16,7 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
+import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -142,7 +143,7 @@ serve(async (req) => {
     // Get current lead data
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
       .eq("id", leadId)
       .single();
 
@@ -434,6 +435,26 @@ serve(async (req) => {
         } else {
           synced++;
           existingMessageIds.add(messageId);
+
+          // Project into unified timeline ledger
+          if (leadData?.workspace_id) {
+            projectTimelineItem(serviceSupabase, {
+              workspace_id: leadData.workspace_id,
+              lead_id: leadId,
+              channel: "email",
+              provider: "outlook",
+              direction,
+              event_type: type,
+              occurred_at: occurredAt,
+              source_table: "interactions",
+              source_id: messageId,
+              snippet_text: bodyText.substring(0, 500),
+              subject,
+              status_json: {},
+              metadata_json: { provider_message_id: messageId, conversation_id: msg.conversationId, from_email: msg.from?.emailAddress?.address },
+              dedupe_key: emailDedupeKey("outlook", messageId, messageId),
+            });
+          }
         }
       } catch (err) {
         errors.push(`Error processing message ${msg.id}: ${err instanceof Error ? err.message : "Unknown"}`);

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { projectTimelineItem, meetingDedupeKey } from "../_shared/timelineProjector.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -330,7 +331,7 @@ serve(async (req) => {
     // Get all leads for this user for matching
     const { data: leads } = await serviceSupabase
       .from("leads")
-      .select("id, name, company, email, last_activity_at, last_inbound_at, last_outbound_at")
+      .select("id, name, company, email, last_activity_at, last_inbound_at, last_outbound_at, workspace_id")
       .eq("owner_user_id", requestUserId);
 
     // Get existing gmail_message_ids to avoid duplicates
@@ -657,6 +658,27 @@ serve(async (req) => {
 
         processed++;
         existingMessageIds.add(msg.gmail_message_id);
+
+        // Project into unified timeline ledger
+        const matchedLead = leads?.find(l => l.id === matchedLeadId);
+        if (matchedLead?.workspace_id && insertedSummary) {
+          projectTimelineItem(serviceSupabase, {
+            workspace_id: matchedLead.workspace_id,
+            lead_id: matchedLeadId,
+            channel: "meeting",
+            provider: "zoom",
+            direction: null,
+            event_type: "meeting",
+            occurred_at: msg.sent_at,
+            source_table: "meeting_summaries",
+            source_id: insertedSummary.id,
+            snippet_text: summaryText.substring(0, 500),
+            subject: meetingTitle,
+            status_json: {},
+            metadata_json: { summary_text: summaryText.substring(0, 1000), participants: participantEmails, match_reason: matchReason },
+            dedupe_key: meetingDedupeKey(insertedSummary.id),
+          });
+        }
 
         // Trigger auto-generation if enabled
         if (autoGenerateFollowups && insertedSummary) {

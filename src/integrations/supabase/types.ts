@@ -1226,6 +1226,7 @@ export type Database = {
           dedupe_key: string
           direction: string | null
           event_type: string
+          hidden: boolean
           id: string
           lead_id: string
           metadata_json: Json | null
@@ -1247,6 +1248,7 @@ export type Database = {
           dedupe_key: string
           direction?: string | null
           event_type: string
+          hidden?: boolean
           id?: string
           lead_id: string
           metadata_json?: Json | null
@@ -1268,6 +1270,7 @@ export type Database = {
           dedupe_key?: string
           direction?: string | null
           event_type?: string
+          hidden?: boolean
           id?: string
           lead_id?: string
           metadata_json?: Json | null
