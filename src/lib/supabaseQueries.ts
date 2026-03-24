@@ -177,25 +177,36 @@ export interface CreateLeadInput {
   workspace_id?: string;
 }
 
+/**
+ * Resolves workspace_id deterministically:
+ * - If provided, use it
+ * - If user has exactly 1 workspace, use it
+ * - If user has 0 or 2+ workspaces and none provided, throw
+ */
+async function resolveWorkspaceId(userId: string, explicit?: string): Promise<string> {
+  if (explicit) return explicit;
+
+  const { data: memberships } = await supabase
+    .from('workspace_members')
+    .select('workspace_id')
+    .eq('user_id', userId);
+
+  if (!memberships || memberships.length === 0) {
+    throw new Error('No workspace found for user');
+  }
+  if (memberships.length > 1) {
+    throw new Error('Multiple workspaces found — please select a workspace before creating leads');
+  }
+  return memberships[0].workspace_id;
+}
+
 export async function createLead(form: CreateLeadInput): Promise<{ id: string }> {
   if (isDemoMode()) return { id: 'demo-blocked' };
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) throw new Error('Not logged in');
 
-  // Resolve workspace_id: use provided or fetch from workspace_members
-  let workspaceId = form.workspace_id;
-  if (!workspaceId) {
-    const { data: member } = await supabase
-      .from('workspace_members')
-      .select('workspace_id')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    workspaceId = member?.workspace_id;
-  }
-  if (!workspaceId) throw new Error('No workspace found for user');
+  const workspaceId = await resolveWorkspaceId(user.id, form.workspace_id);
 
   const payload = {
     name: form.name?.trim(),

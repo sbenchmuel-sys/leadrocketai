@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Loader2, ArrowLeft, Upload, FileSpreadsheet, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface CreateLeadStepProps {
   onNext: () => void;
@@ -20,6 +21,7 @@ interface CreateLeadStepProps {
 type InputMode = "choose" | "manual" | "upload";
 
 export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) {
+  const { workspaceId } = useWorkspace();
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<InputMode>("choose");
   const [formData, setFormData] = useState({
@@ -46,6 +48,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         company: formData.company,
         email: formData.email,
         motion: formData.motion,
+        workspace_id: workspaceId ?? undefined,
       });
       await setOnboardingStep(4);
       toast.success("Lead created successfully!");
@@ -80,24 +83,19 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
 
   const handleFileImport = async () => {
     if (parsedLeads.length === 0) return;
+    if (!workspaceId) {
+      toast.error("No active workspace. Please select a workspace first.");
+      return;
+    }
     setIsLoading(true);
     try {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
 
-      const { data: member } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (!member) throw new Error("No workspace found");
-
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
-        workspace_id: member.workspace_id,
+        workspace_id: workspaceId,
         source_type: "csv_import",
         motion: "outbound_prospecting",
         strategy: "fast" as const,
