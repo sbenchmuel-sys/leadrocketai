@@ -712,6 +712,45 @@ serve(async (req) => {
             await supabase.from("drafts").update({ status: "sent" }).eq("id", cachedDraft.id);
           }
         } else {
+          // --- Fetch last outbound body for follow-up context ---
+          let lastOutboundBody = "";
+          let previousEmailSummary = "";
+          const isFollowUpTask = ["pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup"].includes(aiTask);
+
+          if (isFollowUpTask) {
+            try {
+              const { data: lastOutbound } = await supabase
+                .from("interactions")
+                .select("body_text, subject, occurred_at")
+                .eq("lead_id", lead.id)
+                .eq("direction", "outbound")
+                .eq("type", "email_outbound")
+                .order("occurred_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (lastOutbound?.body_text) {
+                // Strip signature and unsubscribe footer for context
+                const bodyClean = lastOutbound.body_text
+                  .split("\n\n---\n")[0]  // remove unsubscribe footer
+                  .slice(0, 500);         // cap length
+                lastOutboundBody = bodyClean;
+                previousEmailSummary = lastOutbound.subject
+                  ? `Last email subject: "${lastOutbound.subject}" sent ${lastOutbound.occurred_at}`
+                  : `Last email sent ${lastOutbound.occurred_at}`;
+                console.log(`[automation-executor] ✅ Loaded last outbound for follow-up context (${bodyClean.length} chars)`);
+              }
+            } catch (err) {
+              console.error(`[automation-executor] Failed to load last outbound for lead ${lead.id}:`, err);
+            }
+          }
+
+          // Resolve custom instructions
+          const resolvedInstructions = buildStepInstructions(lead.action_instructions, lead.next_action_key);
+          if (resolvedInstructions) {
+            console.log(`[automation-executor] ✅ Campaign instructions resolved for lead ${lead.id}, step ${lead.next_action_key}: "${resolvedInstructions.slice(0, 120)}..."`);
+          }
+
           // Generate draft via ai_task
           const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
             method: "POST",
@@ -727,7 +766,10 @@ serve(async (req) => {
                 outbound_tone: (lead as any).outbound_tone || "direct",
                 lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
-                custom_instructions: buildStepInstructions(lead.action_instructions, lead.next_action_key),
+                meeting_link: repProfile?.calendar_link || "",
+                custom_instructions: resolvedInstructions,
+                last_outbound_body: lastOutboundBody || undefined,
+                previous_email_summary: previousEmailSummary || undefined,
               },
             }),
           });
