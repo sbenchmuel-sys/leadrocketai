@@ -826,6 +826,7 @@ serve(async (req) => {
             headers: {
               "Content-Type": "application/json",
               "Authorization": `Bearer ${supabaseServiceKey}`,
+              "X-Internal-Secret": Deno.env.get("INTERNAL_API_SECRET") ?? "",
             },
             body: JSON.stringify({
               mail_account_id: mailAccountId,
@@ -843,6 +844,7 @@ serve(async (req) => {
             headers: {
               "Content-Type": "application/json",
               "Authorization": `Bearer ${supabaseServiceKey}`,
+              "X-Internal-Secret": Deno.env.get("INTERNAL_API_SECRET") ?? "",
             },
             body: JSON.stringify({
               to: lead.email,
