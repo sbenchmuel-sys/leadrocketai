@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
-import { assertConversationAccess } from "../_shared/authz.ts";
+import { assertConversationAccess, isInternalCaller } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -49,17 +49,16 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
 
-  // Auth: require a valid user JWT or the service role key
+  // Auth: require a valid user JWT or an internal caller header
   const authHeader = req.headers.get("Authorization") ?? "";
-  const token = authHeader.replace("Bearer ", "");
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-  const isServiceRole = token === serviceRoleKey;
+  const isInternal = isInternalCaller(req);
   let callerUserId: string | null = null;
 
-  if (!isServiceRole) {
+  if (!isInternal) {
     // Validate as user JWT
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
@@ -96,7 +95,7 @@ Deno.serve(async (req) => {
   }
 
   // Authz: verify caller can access the conversation (includes workspace membership check)
-  if (!isServiceRole && callerUserId) {
+  if (!isInternal && callerUserId) {
     const convoCheck = await assertConversationAccess(supabase, conversation_id, callerUserId);
     if (!convoCheck.ok) {
       return new Response(JSON.stringify({ error: convoCheck.error }), {
