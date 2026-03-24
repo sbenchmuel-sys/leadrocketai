@@ -1172,6 +1172,7 @@ export type Database = {
       }
       lead_intelligence: {
         Row: {
+          buying_signals_json: Json
           channel_recommendations_json: Json
           created_at: string
           deal_factors_json: Json
@@ -1193,6 +1194,7 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          buying_signals_json?: Json
           channel_recommendations_json?: Json
           created_at?: string
           deal_factors_json?: Json
@@ -1214,6 +1216,7 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          buying_signals_json?: Json
           channel_recommendations_json?: Json
           created_at?: string
           deal_factors_json?: Json

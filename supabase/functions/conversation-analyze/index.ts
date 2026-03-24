@@ -3,6 +3,7 @@ import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
 import { assertConversationAccess, isInternalCaller } from "../_shared/authz.ts";
+import { queueRecompute } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -408,7 +409,14 @@ Analyze this conversation and extract the structured sales intelligence.`;
       conversation_id
     );
 
-    // ── 9. Ingest conversation signals into lead_signals ──
+    // ── 9. Queue intelligence recompute if lead-linked ──
+    if (contact?.lead_id) {
+      queueRecompute(supabase, contact.lead_id).catch(err => {
+        console.warn("[conversation-analyze] Recompute queue failed:", err.message);
+      });
+    }
+
+    // ── 10. Ingest conversation signals into lead_signals ──
     if (contact?.lead_id) {
       const conversationSignals: SignalInput[] = [];
 

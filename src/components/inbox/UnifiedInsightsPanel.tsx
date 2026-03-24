@@ -4,7 +4,7 @@ import { Separator } from "@/components/ui/separator";
 import { AlertTriangle, Target, TrendingUp, Shield, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getLeadIntelligence } from "@/lib/supabaseQueries";
-import type { LeadIntelligence } from "@/lib/supabaseQueries";
+import type { LeadIntelligence, NormalizedRisk, NormalizedMilestone, NormalizedObjection, NormalizedBuyingSignal } from "@/lib/supabaseQueries";
 import type { ConversationAnalysis } from "@/lib/inboxQueries";
 import type { LeadSnapshot } from "./LeadContextPanel";
 
@@ -17,7 +17,6 @@ type Props = {
 export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
   const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
 
-  // Load canonical intelligence when lead is linked
   const loadIntelligence = useCallback(async () => {
     if (!lead?.id) return;
     const data = await getLeadIntelligence(lead.id);
@@ -28,30 +27,45 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
     loadIntelligence();
   }, [loadIntelligence]);
 
-  // Use canonical intelligence if available, fall back to conversation-level data
-  const objections = intelligence?.objections_json?.length
-    ? intelligence.objections_json
+  const hasCanonical = intelligence !== null;
+
+  // When canonical intelligence exists, use it exclusively.
+  // Only fall back to conversation-level data when no canonical row exists.
+  const objections: NormalizedObjection[] = hasCanonical
+    ? (intelligence.objections_json ?? [])
     : [...new Set(allAnalysis.flatMap((a) => {
         const f = (a.extracted_features ?? {}) as Record<string, any>;
-        return f?.objections ?? [];
-      }))];
+        return (f?.objections ?? []) as string[];
+      }))].map(text => ({ text, evidence_ids: [], source_types: ["conversation_analysis"] }));
 
-  const buyingSignals = intelligence?.engagement_signals_json?.channel_activity
-    ? [] // buying signals are within engagement_signals_json for canonical
+  const buyingSignals: NormalizedBuyingSignal[] = hasCanonical
+    ? (intelligence.buying_signals_json ?? [])
     : [...new Set(allAnalysis.flatMap((a) => {
         const f = (a.extracted_features ?? {}) as Record<string, any>;
-        return f?.buying_signals ?? [];
-      }))];
+        return (f?.buying_signals ?? []) as string[];
+      }))].map(text => ({ text, evidence_ids: [], source_types: ["conversation_analysis"] }));
 
-  const risks = intelligence?.risks_json?.length
-    ? intelligence.risks_json
-    : (lead?.risks_json as any[]) ?? [];
+  const risks: NormalizedRisk[] = hasCanonical
+    ? (intelligence.risks_json ?? [])
+    : (lead?.risks_json as any[] ?? []).map((r: any) => ({
+        issue: r.issue || r,
+        level: r.level || "medium",
+        evidence_ids: [],
+        source_types: ["legacy"],
+      }));
 
-  const milestones = intelligence?.milestones_json?.length
-    ? intelligence.milestones_json
-    : (lead?.milestones_json as any[]) ?? [];
+  const milestones: NormalizedMilestone[] = hasCanonical
+    ? (intelligence.milestones_json ?? [])
+    : (lead?.milestones_json as any[] ?? []).map((m: any) => ({
+        description: m.description || m,
+        status: m.status || "pending",
+        date: m.date || null,
+        evidence_ids: [],
+        source_types: ["legacy"],
+      }));
 
-  const summaryText = intelligence?.summary_text || analysis?.summary_text;
+  // Summary: canonical > conversation-level
+  const summaryText = hasCanonical ? intelligence.summary_text : analysis?.summary_text;
 
   const hasContent = objections.length > 0 || buyingSignals.length > 0 || risks.length > 0 || milestones.length > 0 || summaryText;
 
@@ -75,8 +89,8 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
         </div>
       )}
 
-      {/* Next Step (from canonical intelligence) */}
-      {intelligence?.recommended_next_step && (
+      {/* Next Step (from canonical intelligence only) */}
+      {hasCanonical && intelligence.recommended_next_step && (
         <>
           <Separator />
           <div>
@@ -98,9 +112,9 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
               <AlertTriangle className="h-3 w-3" /> Risks ({risks.length})
             </span>
             <div className="space-y-1 mt-1.5">
-              {risks.slice(0, 5).map((r: any, i: number) => (
+              {risks.slice(0, 5).map((r, i) => (
                 <p key={i} className="text-xs text-foreground bg-destructive/5 rounded px-2 py-1">
-                  {typeof r === "string" ? r : r.issue ?? r.label ?? r.description ?? JSON.stringify(r)}
+                  {r.issue}
                 </p>
               ))}
             </div>
@@ -117,9 +131,9 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
               <Target className="h-3 w-3" /> Milestones ({milestones.length})
             </span>
             <div className="space-y-1 mt-1.5">
-              {milestones.slice(0, 5).map((m: any, i: number) => (
+              {milestones.slice(0, 5).map((m, i) => (
                 <p key={i} className="text-xs text-foreground bg-primary/5 rounded px-2 py-1">
-                  {typeof m === "string" ? m : m.description ?? m.label ?? JSON.stringify(m)}
+                  {m.description}
                 </p>
               ))}
             </div>
@@ -136,9 +150,9 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
               <Shield className="h-3 w-3" /> Objections ({objections.length})
             </span>
             <div className="space-y-1 mt-1.5">
-              {objections.map((obj: any, i: number) => (
+              {objections.map((obj, i) => (
                 <p key={i} className="text-xs text-foreground bg-destructive/5 rounded px-2 py-1">
-                  {typeof obj === "string" ? obj : JSON.stringify(obj)}
+                  {obj.text}
                 </p>
               ))}
             </div>
@@ -146,7 +160,7 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
         </>
       )}
 
-      {/* Buying Signals (fallback from conversation analysis) */}
+      {/* Buying Signals */}
       {buyingSignals.length > 0 && (
         <>
           <Separator />
@@ -155,9 +169,9 @@ export function UnifiedInsightsPanel({ analysis, lead, allAnalysis }: Props) {
               <TrendingUp className="h-3 w-3" /> Buying Signals ({buyingSignals.length})
             </span>
             <div className="space-y-1 mt-1.5">
-              {buyingSignals.map((sig: any, i: number) => (
+              {buyingSignals.map((sig, i) => (
                 <p key={i} className="text-xs text-foreground bg-[hsl(var(--success)/0.05)] rounded px-2 py-1">
-                  {sig}
+                  {sig.text}
                 </p>
               ))}
             </div>

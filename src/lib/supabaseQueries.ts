@@ -1106,6 +1106,62 @@ export async function bulkUpdateLeadStage(leadIds: string[], stage: string): Pro
 // LEAD INTELLIGENCE QUERIES
 // ============================================
 
+// ── Normalized evidence-linked types ──
+
+export interface EvidenceRef {
+  id: string;
+  source_type: string;
+  source_id: string;
+  snippet: string;
+  channel?: string;
+  occurred_at?: string;
+}
+
+export interface NormalizedRisk {
+  issue: string;
+  level: "low" | "medium" | "high";
+  evidence_ids: string[];
+  source_types: string[];
+}
+
+export interface NormalizedMilestone {
+  description: string;
+  status: "completed" | "pending";
+  date: string | null;
+  evidence_ids: string[];
+  source_types: string[];
+}
+
+export interface NormalizedObjection {
+  text: string;
+  evidence_ids: string[];
+  source_types: string[];
+}
+
+export interface NormalizedBuyingSignal {
+  text: string;
+  evidence_ids: string[];
+  source_types: string[];
+}
+
+export interface EngagementSignals {
+  engagement_score: number;
+  total_timeline_events: number;
+  inbound_count: number;
+  outbound_count: number;
+  response_rate_pct: number;
+  channel_activity: Record<string, number>;
+  sentiment_score: number;
+  sentiment_breakdown: { positive: number; negative: number; neutral: number };
+  urgency_breakdown: { high: number; medium: number };
+}
+
+export interface ChannelRecommendations {
+  recommended_channel: string | null;
+  vote_counts: Record<string, number>;
+  total_analyses: number;
+}
+
 export interface LeadIntelligence {
   id: string;
   lead_id: string;
@@ -1113,12 +1169,13 @@ export interface LeadIntelligence {
   summary_text: string | null;
   recommended_next_step: string | null;
   next_step_reason: string | null;
-  milestones_json: any[];
-  risks_json: any[];
-  objections_json: string[];
-  engagement_signals_json: Record<string, any>;
-  channel_recommendations_json: Record<string, any>;
-  evidence_json: any[];
+  milestones_json: NormalizedMilestone[];
+  risks_json: NormalizedRisk[];
+  objections_json: NormalizedObjection[];
+  buying_signals_json: NormalizedBuyingSignal[];
+  engagement_signals_json: EngagementSignals;
+  channel_recommendations_json: ChannelRecommendations;
+  evidence_json: EvidenceRef[];
   deal_factors_json: Record<string, any>;
   last_computed_at: string;
   version: number;
@@ -1137,7 +1194,7 @@ export async function getLeadIntelligence(leadId: string): Promise<LeadIntellige
     console.error('[getLeadIntelligence] Error:', error);
     return null;
   }
-  return data as LeadIntelligence | null;
+  return data as unknown as LeadIntelligence | null;
 }
 
 export async function triggerIntelligenceRecompute(leadId: string): Promise<{ ok: boolean; error?: string }> {

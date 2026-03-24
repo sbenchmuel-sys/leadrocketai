@@ -1,5 +1,6 @@
 // ============================================================
 // Timeline Projector — Idempotent writer for lead_timeline_items
+// + async recompute trigger
 // ============================================================
 
 import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -26,10 +27,12 @@ export interface TimelineItemInput {
 /**
  * Upsert a timeline item idempotently.
  * Uses ON CONFLICT (lead_id, dedupe_key) DO UPDATE for safe re-runs.
+ * Optionally queues an async intelligence recompute.
  */
 export async function projectTimelineItem(
   supabase: SupabaseClient,
   item: TimelineItemInput,
+  options?: { triggerRecompute?: boolean },
 ): Promise<void> {
   const row = {
     workspace_id: item.workspace_id,
@@ -56,6 +59,54 @@ export async function projectTimelineItem(
 
   if (error) {
     console.warn("[timelineProjector] Upsert failed:", error.message, { dedupe_key: item.dedupe_key });
+    return;
+  }
+
+  // Fire-and-forget recompute if requested
+  if (options?.triggerRecompute && item.lead_id) {
+    queueRecompute(supabase, item.lead_id).catch((err) => {
+      console.warn("[timelineProjector] Recompute queue failed:", err.message);
+    });
+  }
+}
+
+/**
+ * Queue an async intelligence recompute for a lead.
+ * Uses internal secret header to bypass user auth.
+ * Fire-and-forget — failures are logged but don't block the caller.
+ */
+export async function queueRecompute(
+  _supabase: SupabaseClient,
+  leadId: string,
+): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
+
+  if (!supabaseUrl || !internalSecret) {
+    console.warn("[timelineProjector] Cannot queue recompute: missing env vars");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${supabaseUrl}/functions/v1/recompute-lead-intelligence`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": internalSecret,
+      },
+      body: JSON.stringify({ lead_id: leadId }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn(`[timelineProjector] Recompute returned ${res.status}: ${body.substring(0, 200)}`);
+    } else {
+      // Consume body to free connection
+      await res.text();
+      console.log(`[timelineProjector] Recompute queued for lead ${leadId}`);
+    }
+  } catch (err: any) {
+    console.warn("[timelineProjector] Recompute fetch error:", err.message);
   }
 }
 
