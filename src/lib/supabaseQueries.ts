@@ -391,7 +391,7 @@ export async function hideTimelineItem(itemId: string): Promise<void> {
     const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: true };
     await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
     if (item.source_table === 'interactions') {
-      await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id).then(() => {}).catch(() => {});
+      try { await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }
   }
 }
@@ -408,7 +408,7 @@ export async function unhideTimelineItem(itemId: string): Promise<void> {
     const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: false };
     await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
     if (item.source_table === 'interactions') {
-      await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id).then(() => {}).catch(() => {});
+      try { await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }
   }
 }
