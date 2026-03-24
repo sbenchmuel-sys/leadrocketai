@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
-import { assertWorkspaceMembership, assertConversationAccess } from "../_shared/authz.ts";
+import { assertConversationAccess } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -95,19 +95,19 @@ Deno.serve(async (req) => {
     );
   }
 
-  // Authz: verify caller belongs to the workspace and can access the conversation
+  // Authz: verify caller can access the conversation (includes workspace membership check)
   if (!isServiceRole && callerUserId) {
-    const wsCheck = await assertWorkspaceMembership(supabase, workspace_id, callerUserId);
-    if (!wsCheck.ok) {
-      return new Response(JSON.stringify({ error: wsCheck.error }), {
-        status: wsCheck.status || 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
     const convoCheck = await assertConversationAccess(supabase, conversation_id, callerUserId);
     if (!convoCheck.ok) {
       return new Response(JSON.stringify({ error: convoCheck.error }), {
         status: convoCheck.status || 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // Verify the workspace_id in the request body matches the conversation's actual workspace
+    if (convoCheck.workspaceId && convoCheck.workspaceId !== workspace_id) {
+      return new Response(JSON.stringify({ error: "workspace_id does not match conversation" }), {
+        status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
