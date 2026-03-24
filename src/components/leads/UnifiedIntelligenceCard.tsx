@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { Json } from "@/integrations/supabase/types";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { getLeadIntelligence, triggerIntelligenceRecompute } from "@/lib/supabaseQueries";
-import type { LeadIntelligence } from "@/lib/supabaseQueries";
+import type { LeadIntelligence, NormalizedRisk, NormalizedMilestone, NormalizedObjection, NormalizedBuyingSignal } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,19 +14,6 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────
-
-interface Milestone {
-  description: string;
-  status: "completed" | "pending";
-  date: string | null;
-  evidence?: string;
-}
-
-interface Risk {
-  issue: string;
-  level: "low" | "medium" | "high";
-  evidence?: string;
-}
 
 interface EnrichmentSignal {
   signal: string;
@@ -102,28 +89,46 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
 
   const isCompact = mode === "compact";
   const maxItems = isCompact ? 3 : 10;
+  const hasCanonical = intelligence !== null;
 
-  // Use intelligence data if available, fall back to lead fields
-  const milestones: Milestone[] = intelligence?.milestones_json?.length
-    ? (intelligence.milestones_json as Milestone[])
+  // When canonical intelligence exists, use it exclusively.
+  // Only fall back to legacy lead fields when no canonical row exists.
+  const milestones: NormalizedMilestone[] = hasCanonical
+    ? (intelligence.milestones_json ?? [])
     : lead.milestones_json
-      ? (lead.milestones_json as unknown as Milestone[])
+      ? (lead.milestones_json as unknown as any[]).map(m => ({
+          description: m.description || "",
+          status: m.status || "pending",
+          date: m.date || null,
+          evidence_ids: [],
+          source_types: ["legacy"],
+        }))
       : [];
 
-  const risks: Risk[] = intelligence?.risks_json?.length
-    ? (intelligence.risks_json as Risk[])
+  const risks: NormalizedRisk[] = hasCanonical
+    ? (intelligence.risks_json ?? [])
     : lead.risks_json
-      ? (lead.risks_json as unknown as Risk[])
+      ? (lead.risks_json as unknown as any[]).map(r => ({
+          issue: r.issue || "",
+          level: r.level || "medium",
+          evidence_ids: [],
+          source_types: ["legacy"],
+        }))
       : [];
 
-  const objections: string[] = intelligence?.objections_json?.length
-    ? intelligence.objections_json
-    : (lead as any).objections_json ?? [];
+  const objections: NormalizedObjection[] = hasCanonical
+    ? (intelligence.objections_json ?? [])
+    : [];
 
-  const nextStep = intelligence?.recommended_next_step || lead.next_step;
-  const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
-  const summaryText = intelligence?.summary_text || null;
-  const lastComputedAt = intelligence?.last_computed_at || lead.last_ai_run_at;
+  const buyingSignals: NormalizedBuyingSignal[] = hasCanonical
+    ? (intelligence.buying_signals_json ?? [])
+    : [];
+
+  const nextStep = hasCanonical ? intelligence.recommended_next_step : lead.next_step;
+  const nextStepReason = hasCanonical ? intelligence.next_step_reason : lead.next_step_reason;
+  const summaryText = hasCanonical ? intelligence.summary_text : null;
+  const lastComputedAt = hasCanonical ? intelligence.last_computed_at : lead.last_ai_run_at;
+  const sourceCounts = hasCanonical ? intelligence.source_counts_json : null;
 
   // ── Load intelligence ──
   const loadIntelligence = useCallback(async () => {
@@ -239,6 +244,11 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                   {formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}
                 </span>
               )}
+              {sourceCounts && (
+                <span className="text-[10px] text-muted-foreground">
+                  ({sourceCounts.timeline_items || 0} events)
+                </span>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -284,8 +294,10 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                     </Badge>
                     <div className="min-w-0">
                       <p className="text-xs text-foreground">{r.issue}</p>
-                      {!isCompact && r.evidence && (
-                        <p className="text-[10px] text-muted-foreground">{r.evidence}</p>
+                      {!isCompact && r.source_types.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Sources: {r.source_types.join(", ")} · {r.evidence_ids.length} evidence
+                        </p>
                       )}
                     </div>
                   </div>
@@ -310,9 +322,16 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                 {milestones.slice(0, maxItems).map((m, i) => (
                   <div key={i} className="flex items-start gap-2">
                     <CheckCircle className={cn("h-3.5 w-3.5 mt-0.5 shrink-0", m.status === "completed" ? "text-[hsl(var(--success))]" : "text-muted-foreground")} />
-                    <p className={cn("text-xs", m.status === "completed" ? "line-through text-muted-foreground" : "text-foreground")}>
-                      {m.description}
-                    </p>
+                    <div className="min-w-0">
+                      <p className={cn("text-xs", m.status === "completed" ? "line-through text-muted-foreground" : "text-foreground")}>
+                        {m.description}
+                      </p>
+                      {!isCompact && m.source_types.length > 0 && m.source_types[0] !== "legacy" && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Sources: {m.source_types.join(", ")}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {milestones.length > maxItems && (
@@ -333,8 +352,32 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
               </span>
               <div className="space-y-1 mt-1">
                 {objections.slice(0, maxItems).map((obj, i) => (
-                  <p key={i} className="text-xs text-foreground bg-destructive/5 rounded px-2 py-1">
-                    {typeof obj === "string" ? obj : JSON.stringify(obj)}
+                  <div key={i} className="text-xs text-foreground bg-destructive/5 rounded px-2 py-1">
+                    <p>{obj.text}</p>
+                    {!isCompact && obj.source_types.length > 0 && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Sources: {obj.source_types.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Buying Signals */}
+        {buyingSignals.length > 0 && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                <TrendingUp className="h-3 w-3" /> Buying Signals ({buyingSignals.length})
+              </span>
+              <div className="space-y-1 mt-1">
+                {buyingSignals.slice(0, maxItems).map((sig, i) => (
+                  <p key={i} className="text-xs text-foreground bg-[hsl(var(--success)/0.05)] rounded px-2 py-1">
+                    {sig.text}
                   </p>
                 ))}
               </div>

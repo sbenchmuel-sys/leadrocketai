@@ -96,10 +96,14 @@ export function LeadContextPanel({ leadId }: Props) {
 
   const stageLabel = STAGE_LABELS[lead.stage as DealStage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
+  const hasCanonical = intelligence !== null;
 
-  // Use canonical intelligence when available
-  const nextStep = intelligence?.recommended_next_step || lead.next_step;
-  const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
+  // When canonical intelligence exists, use it exclusively — do not blend legacy fields.
+  const nextStep = hasCanonical ? intelligence.recommended_next_step : lead.next_step;
+  const nextStepReason = hasCanonical ? intelligence.next_step_reason : lead.next_step_reason;
+  const engagementScore = hasCanonical
+    ? (intelligence.engagement_signals_json?.engagement_score ?? lead.engagement_score)
+    : lead.engagement_score;
 
   return (
     <div className="p-4 space-y-4">
@@ -132,14 +136,14 @@ export function LeadContextPanel({ leadId }: Props) {
             <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
               <div
                 className="h-full bg-primary rounded-full transition-all"
-                style={{ width: `${Math.min(lead.engagement_score, 100)}%` }}
+                style={{ width: `${Math.min(engagementScore, 100)}%` }}
               />
             </div>
-            <span className="text-xs text-muted-foreground font-medium">{lead.engagement_score}</span>
+            <span className="text-xs text-muted-foreground font-medium">{engagementScore}</span>
           </div>
         </div>
 
-        {/* Next step from canonical intelligence */}
+        {/* Next step — canonical takes priority */}
         {nextStep && (
           <div>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5 flex items-center gap-1">
