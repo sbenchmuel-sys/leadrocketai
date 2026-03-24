@@ -1194,7 +1194,7 @@ export async function getLeadIntelligence(leadId: string): Promise<LeadIntellige
     console.error('[getLeadIntelligence] Error:', error);
     return null;
   }
-  return data as LeadIntelligence | null;
+  return data as unknown as LeadIntelligence | null;
 }
 
 export async function triggerIntelligenceRecompute(leadId: string): Promise<{ ok: boolean; error?: string }> {
