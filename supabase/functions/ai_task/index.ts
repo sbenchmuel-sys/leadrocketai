@@ -684,12 +684,53 @@ serve(async (req) => {
       }
     }
 
-    // === INSTRUCTION PRIORITY: bump word limits when custom instructions exist ===
+    // === INSTRUCTION PRIORITY: inject dynamic template blocks based on custom instructions ===
     const hasCustomInstructions = !!(enhancedPayload.custom_instructions && String(enhancedPayload.custom_instructions).trim().length > 0);
-    if (hasCustomInstructions && COLD_OUTBOUND_TASKS.has(task)) {
-      const instructionOverride = `\n\n=== MANDATORY CUSTOM INSTRUCTIONS (HIGHEST PRIORITY) ===\nThe user has set specific instructions for this email. You MUST follow them.\nThese instructions OVERRIDE default word limits. You may exceed the default word target by up to 40 words to fulfill these instructions.\nIf the instructions say "offer starter kit" → you MUST mention the starter kit.\nIf the instructions say "include meeting CTA" → you MUST include a meeting link.\nFulfilling these instructions is MORE important than brevity.\n=== END PRIORITY BLOCK ===\n\nUser Instructions:\n`;
-      enhancedPayload.custom_instructions = instructionOverride + String(enhancedPayload.custom_instructions);
-      console.log(`[ai_task] ✅ Instruction priority override injected for ${task}`);
+    const customInstructionsText = hasCustomInstructions ? String(enhancedPayload.custom_instructions).trim() : "";
+
+    // Default word limits per task (no instructions)
+    const DEFAULT_LENGTHS: Record<string, string> = {
+      pre_email_1_intro: "40–75 words. Target 55 words. If you write more than 75 words, start over.",
+      pre_email_2_followup: "Under 50 words. Count them.",
+      pre_email_3_followup: "Under 60 words.",
+      pre_email_4_breakup: "Under 40 words. Seriously — 40 words max.",
+    };
+    // Expanded word limits when custom instructions exist
+    const INSTRUCTION_LENGTHS: Record<string, string> = {
+      pre_email_1_intro: "60–120 words. You have custom instructions to fulfill — prioritize them over default brevity.",
+      pre_email_2_followup: "50–90 words. You have custom instructions to fulfill — prioritize them over default brevity.",
+      pre_email_3_followup: "60–100 words. You have custom instructions to fulfill — prioritize them over default brevity.",
+      pre_email_4_breakup: "40–70 words. You have custom instructions to fulfill — prioritize them over default brevity.",
+    };
+
+    if (COLD_OUTBOUND_TASKS.has(task)) {
+      // Inject the dynamic LENGTH_OVERRIDE
+      enhancedPayload.LENGTH_OVERRIDE = hasCustomInstructions
+        ? (INSTRUCTION_LENGTHS[task] || DEFAULT_LENGTHS[task] || "Under 75 words.")
+        : (DEFAULT_LENGTHS[task] || "Under 75 words.");
+
+      // Inject INSTRUCTIONS_PRIORITY_BLOCK — appears BEFORE length in the prompt
+      if (hasCustomInstructions) {
+        enhancedPayload.INSTRUCTIONS_PRIORITY_BLOCK = `=== MANDATORY CUSTOM INSTRUCTIONS (READ BEFORE LENGTH) ===
+You MUST fulfill ALL of the following instructions. They take priority over word count targets.
+If an instruction says "offer starter kit" → the email MUST mention the starter kit.
+If an instruction says "include meeting CTA" → the email MUST include a meeting/calendar link.
+If an instruction says "mention X" → the email MUST mention X.
+Do NOT drop any instruction to save words. Instead, use the expanded word limit below.
+
+Instructions:
+${customInstructionsText}
+=== END MANDATORY INSTRUCTIONS ===`;
+        
+        enhancedPayload.INSTRUCTION_CTA_NOTE = "\nNote: If custom instructions specify a particular CTA or offer, use that INSTEAD of a generic question.";
+        console.log(`[ai_task] ✅ Instructions injected as priority block for ${task}: "${customInstructionsText.slice(0, 80)}..."`);
+      } else {
+        enhancedPayload.INSTRUCTIONS_PRIORITY_BLOCK = "";
+        enhancedPayload.INSTRUCTION_CTA_NOTE = "";
+      }
+
+      // Remove old custom_instructions to avoid duplication — it's now in INSTRUCTIONS_PRIORITY_BLOCK
+      delete enhancedPayload.custom_instructions;
     }
 
     const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
