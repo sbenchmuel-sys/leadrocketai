@@ -1281,6 +1281,7 @@ export type Database = {
           wa_opted_in: boolean
           website: string | null
           whatsapp_number: string | null
+          workspace_id: string
         }
         Insert: {
           acceleration_until?: string | null
@@ -1345,6 +1346,7 @@ export type Database = {
           wa_opted_in?: boolean
           website?: string | null
           whatsapp_number?: string | null
+          workspace_id: string
         }
         Update: {
           acceleration_until?: string | null
@@ -1409,8 +1411,17 @@ export type Database = {
           wa_opted_in?: boolean
           website?: string | null
           whatsapp_number?: string | null
+          workspace_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "leads_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       mail_accounts: {
         Row: {
