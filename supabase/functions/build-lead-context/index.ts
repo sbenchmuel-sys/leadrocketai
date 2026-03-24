@@ -100,8 +100,8 @@ serve(async (req) => {
 
     console.log(`[build-lead-context] Building context for lead ${lead_id}`);
 
-    // Step 1-4: Fetch all data in parallel
-    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult] = await Promise.all([
+    // Step 1-5: Fetch all data in parallel, including canonical intelligence
+    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult, intelligenceResult] = await Promise.all([
       // 1. Lead profile
       adminClient.from("leads").select("*").eq("id", lead_id).maybeSingle(),
       // 2. Signals
@@ -110,10 +110,11 @@ serve(async (req) => {
         .eq("lead_id", lead_id)
         .order("detected_at", { ascending: false })
         .limit(10),
-      // 3. Interactions (most recent)
-      adminClient.from("interactions")
-        .select("type, subject, body_text, direction, occurred_at, ai_summary")
+      // 3. Timeline items (replaces raw interactions)
+      adminClient.from("lead_timeline_items")
+        .select("channel, direction, event_type, subject, snippet_text, occurred_at")
         .eq("lead_id", lead_id)
+        .eq("hidden", false)
         .order("occurred_at", { ascending: false })
         .limit(20),
       // 4. Enrichment data
@@ -130,6 +131,11 @@ serve(async (req) => {
         .eq("allowed_customer_facing", true)
         .in("content_type", ["strategy", "industry", "knowledge"])
         .limit(4),
+      // 6. Canonical lead intelligence
+      adminClient.from("lead_intelligence")
+        .select("summary_text, recommended_next_step, risks_json, milestones_json, objections_json, last_computed_at")
+        .eq("lead_id", lead_id)
+        .maybeSingle(),
     ]);
 
     const lead = leadResult.data;
@@ -147,15 +153,26 @@ serve(async (req) => {
       source: s.source_url || "",
     }));
 
-    // Build interactions summary
-    const interactions = interactionsResult.data || [];
-    const interactionLines = interactions.slice(0, 10).map((i: any) => {
-      const dir = i.direction === "inbound" ? "IN" : "OUT";
-      const summary = i.ai_summary || i.body_text?.slice(0, 150) || "";
-      return `[${dir}] ${i.subject || i.type}: ${summary}`;
+    // Build timeline summary (uses lead_timeline_items instead of raw interactions)
+    const timelineItems = interactionsResult.data || [];
+    const interactionLines = timelineItems.slice(0, 10).map((t: any) => {
+      const dir = t.direction === "inbound" ? "IN" : t.direction === "outbound" ? "OUT" : "";
+      return `[${dir}] [${t.channel}] ${t.subject || t.event_type}: ${(t.snippet_text || "").slice(0, 150)}`;
     });
     const previousInteractionsSummary = interactionLines.join("\n") || "No interactions recorded yet.";
 
+    // Augment with canonical intelligence if available
+    const intel = intelligenceResult.data;
+    if (intel?.summary_text) {
+      // Prefix canonical summary for richer context
+      const intelContext = [
+        intel.summary_text ? `Intelligence summary: ${intel.summary_text}` : null,
+        intel.recommended_next_step ? `Recommended next step: ${intel.recommended_next_step}` : null,
+      ].filter(Boolean).join("\n");
+      if (intelContext) {
+        interactionLines.unshift(`=== Canonical Intelligence ===\n${intelContext}\n===`);
+      }
+    }
     // Build enrichment-based company summary
     const enrichment = enrichmentResult.data;
     let companySummary = `${lead.company}`;
