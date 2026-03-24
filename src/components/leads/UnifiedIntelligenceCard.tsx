@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp, RefreshCw } from "lucide-react";
+import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp, RefreshCw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 
@@ -193,7 +193,13 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           "Content-Type": "application/json",
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
-        body: JSON.stringify({ lead_id: lead.id, company: lead.company, force }),
+        body: JSON.stringify({
+          lead_id: lead.id,
+          company: lead.company,
+          force,
+          industry: lead.industry || undefined,
+          city: lead.city || undefined,
+        }),
       });
 
       if (!res.ok) {
@@ -206,6 +212,26 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
       toast.error(err.message || "Enrichment failed");
     } finally {
       setIsEnriching(false);
+    }
+  };
+
+  // ── Delete enrichment handler ──
+  const handleDeleteEnrichment = async () => {
+    if (!enrichment) return;
+    try {
+      await supabase.from("entity_enrichment").delete().eq("id", enrichment.id);
+      // Also remove lead_signals from google_search source for this lead
+      await supabase
+        .from("lead_signals")
+        .delete()
+        .eq("lead_id", lead.id)
+        .eq("signal_source", "google_search");
+      setEnrichment(null);
+      setLeadSignals(prev => prev.filter(s => s.signal_description !== "google_search"));
+      toast.success("Enrichment data cleared");
+      await loadLeadSignals();
+    } catch {
+      toast.error("Failed to clear enrichment");
     }
   };
 
@@ -449,16 +475,26 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                 <span className="text-[10px] text-muted-foreground">
                   {enrichment ? `Updated ${formatDistanceToNow(new Date(enrichment.created_at), { addSuffix: true })}` : ""}
                 </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => handleEnrich(true)}
-                  disabled={isEnriching}
-                >
-                  {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-                  {isEnriching ? "Refreshing…" : "Wrong company? Retry"}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={handleDeleteEnrichment}
+                  >
+                    <Trash2 className="h-3 w-3" /> Clear
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => handleEnrich(true)}
+                    disabled={isEnriching}
+                  >
+                    {isEnriching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    {isEnriching ? "Refreshing…" : "Wrong company? Retry"}
+                  </Button>
+                </div>
               </div>
             </div>
           </>
