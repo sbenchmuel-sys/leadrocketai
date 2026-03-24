@@ -1,8 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
-import { Send, Paperclip, X, Pencil, Check, Loader2, Sparkles } from "lucide-react";
+import { Send, X, Pencil, Check, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -38,7 +37,7 @@ type Props = {
 };
 
 export function ReplyComposer({ conversation, recommendedChannel, suggestions, leadId, onSent }: Props) {
-  // Derive available channels
+  // Derive available channels — only email and whatsapp are implemented
   const [leadFields, setLeadFields] = useState<{
     email?: string | null;
     phone?: string | null;
@@ -82,7 +81,8 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
       lastInboundCanonical: convoCanonical,
     });
 
-    return available.filter((a) => a.channel === "email" || a.channel === "whatsapp" || a.channel === "sms");
+    // Only keep channels that have actual send implementations
+    return available.filter((a) => a.channel === "email" || a.channel === "whatsapp");
   }, [leadFields, conversation.channel]);
 
   const defaultChannel = useMemo<CanonicalChannel>(() => {
@@ -93,11 +93,9 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
   const [channel, setChannel] = useState<CanonicalChannel>(defaultChannel);
   const [body, setBody] = useState("");
-  const [attachments, setAttachments] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editedSuggestions, setEditedSuggestions] = useState<Record<number, string>>({});
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
 
   // Personalized suggestions state
@@ -111,25 +109,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
   const handleSuggestionClick = (text: string) => {
     setBody(text);
-  };
-
-  const handleAttach = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    const valid = files.filter((f) => {
-      const isValid = f.type.startsWith("image/") || f.type === "application/pdf";
-      const sizeOk = f.size <= 10 * 1024 * 1024;
-      return isValid && sizeOk;
-    });
-    setAttachments((prev) => [...prev, ...valid]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const removeAttachment = (index: number) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   // ── Personalize handler ──
@@ -265,13 +244,13 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
         toast({ title: "Email sent", description: "Email delivered successfully." });
       } else {
+        // Unreachable since we filter to email/whatsapp only, but defensive
         toast({ title: "Not yet supported", description: `${canonicalLabel(channel)} sending is coming soon.` });
         return;
       }
 
       // Clear after successful send
       setBody("");
-      setAttachments([]);
       setPersonalizedSuggestions([]);
 
       // Best-effort post-send hooks
@@ -391,23 +370,9 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
         </div>
       )}
 
-      {/* Attachments */}
-      {attachments.length > 0 && (
-        <div className="flex gap-2 flex-wrap">
-          {attachments.map((file, i) => (
-            <Badge key={i} variant="secondary" className="text-xs gap-1 pr-1">
-              📎 {file.name.slice(0, 20)}
-              <button onClick={() => removeAttachment(i)} className="ml-1 hover:text-destructive">
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
-        </div>
-      )}
-
       {/* Composer row */}
       <div className="flex items-end gap-2">
-        {/* Channel selector */}
+        {/* Channel selector — only implemented channels */}
         <Select value={channel} onValueChange={(v) => setChannel(v as CanonicalChannel)}>
           <SelectTrigger className="w-[120px] h-9 text-xs shrink-0">
             <SelectValue />
@@ -458,19 +423,6 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
             )}
           </Button>
         )}
-
-        {/* Attachment */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,application/pdf"
-          multiple
-          className="hidden"
-          onChange={handleFileChange}
-        />
-        <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={handleAttach}>
-          <Paperclip className="h-4 w-4" />
-        </Button>
 
         {/* Send */}
         <Button
