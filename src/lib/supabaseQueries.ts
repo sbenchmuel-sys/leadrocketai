@@ -1101,3 +1101,63 @@ export async function bulkUpdateLeadStage(leadIds: string[], stage: string): Pro
 
   if (error) throw error;
 }
+
+// ============================================
+// LEAD INTELLIGENCE QUERIES
+// ============================================
+
+export interface LeadIntelligence {
+  id: string;
+  lead_id: string;
+  workspace_id: string;
+  summary_text: string | null;
+  recommended_next_step: string | null;
+  next_step_reason: string | null;
+  milestones_json: any[];
+  risks_json: any[];
+  objections_json: string[];
+  engagement_signals_json: Record<string, any>;
+  channel_recommendations_json: Record<string, any>;
+  evidence_json: any[];
+  deal_factors_json: Record<string, any>;
+  last_computed_at: string;
+  version: number;
+  model_used: string | null;
+  source_counts_json: Record<string, number>;
+}
+
+export async function getLeadIntelligence(leadId: string): Promise<LeadIntelligence | null> {
+  const { data, error } = await supabase
+    .from('lead_intelligence')
+    .select('*')
+    .eq('lead_id', leadId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[getLeadIntelligence] Error:', error);
+    return null;
+  }
+  return data as LeadIntelligence | null;
+}
+
+export async function triggerIntelligenceRecompute(leadId: string): Promise<{ ok: boolean; error?: string }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) return { ok: false, error: 'Not authenticated' };
+
+  const res = await fetch(`${supabaseUrl}/functions/v1/recompute-lead-intelligence`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    },
+    body: JSON.stringify({ lead_id: leadId }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    return { ok: false, error: err.error || `Recompute failed (${res.status})` };
+  }
+  return { ok: true };
+}
