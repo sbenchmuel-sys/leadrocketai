@@ -19,6 +19,64 @@ function respond(body: unknown, status = 200) {
   });
 }
 
+// ── Evidence Registry ──────────────────────────────────────────
+interface EvidenceRef {
+  id: string;           // auto-generated ordinal key e.g. "ev-1"
+  source_type: string;  // "timeline_item" | "conversation_analysis" | "call_analysis" | "meeting_summary"
+  source_id: string;    // actual row ID from source table
+  snippet: string;      // short human-readable excerpt
+  channel?: string;
+  occurred_at?: string;
+}
+
+let evidenceCounter = 0;
+const evidenceRegistry: EvidenceRef[] = [];
+
+function registerEvidence(
+  sourceType: string,
+  sourceId: string,
+  snippet: string,
+  channel?: string,
+  occurredAt?: string,
+): string {
+  evidenceCounter++;
+  const id = `ev-${evidenceCounter}`;
+  evidenceRegistry.push({
+    id,
+    source_type: sourceType,
+    source_id: sourceId,
+    snippet: snippet.substring(0, 200),
+    channel,
+    occurred_at: occurredAt,
+  });
+  return id;
+}
+
+// ── Normalized types ───────────────────────────────────────────
+interface NormalizedRisk {
+  issue: string;
+  level: "low" | "medium" | "high";
+  evidence_ids: string[];
+  source_types: string[];
+}
+interface NormalizedMilestone {
+  description: string;
+  status: "completed" | "pending";
+  date: string | null;
+  evidence_ids: string[];
+  source_types: string[];
+}
+interface NormalizedObjection {
+  text: string;
+  evidence_ids: string[];
+  source_types: string[];
+}
+interface NormalizedBuyingSignal {
+  text: string;
+  evidence_ids: string[];
+  source_types: string[];
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -64,17 +122,19 @@ Deno.serve(async (req) => {
     const workspaceId = lead.workspace_id;
     if (!workspaceId) return respond({ ok: false, error: "Lead has no workspace" }, 400);
 
+    // Reset evidence registry for this run
+    evidenceCounter = 0;
+    evidenceRegistry.length = 0;
+
     // ── 2. Parallel fetch all evidence sources ──
     const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes] = await Promise.all([
-      // Timeline items (last 30)
       admin.from("lead_timeline_items")
-        .select("channel, direction, event_type, occurred_at, snippet_text, subject, metadata_json, source_table, source_id")
+        .select("id, channel, direction, event_type, occurred_at, snippet_text, subject, metadata_json, source_table, source_id")
         .eq("lead_id", lead_id)
         .eq("hidden", false)
         .order("occurred_at", { ascending: false })
         .limit(30),
 
-      // Conversation analysis from all linked contacts
       admin.from("contacts")
         .select("id")
         .eq("lead_id", lead_id)
@@ -83,14 +143,13 @@ Deno.serve(async (req) => {
           if (!contacts || contacts.length === 0) return { data: [] };
           const contactIds = contacts.map((c: any) => c.id);
           return admin.from("conversation_analysis")
-            .select("summary_text, summary_short, sentiment, urgency, topics, extracted_features, recommended_reply_channel, created_at")
+            .select("id, summary_text, summary_short, sentiment, urgency, topics, extracted_features, recommended_reply_channel, created_at")
             .in("contact_id", contactIds)
             .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false })
             .limit(10);
         }),
 
-      // Call analyses from linked sessions
       admin.from("call_sessions")
         .select("id")
         .eq("lead_id", lead_id)
@@ -99,16 +158,15 @@ Deno.serve(async (req) => {
           if (!sessions || sessions.length === 0) return { data: [] };
           const sessionIds = sessions.map((s: any) => s.id);
           return admin.from("call_analyses")
-            .select("summary_short, summary_long, signals_json, recommended_next_steps_json, status, created_at")
+            .select("id, summary_short, summary_long, signals_json, recommended_next_steps_json, status, created_at, call_session_id")
             .in("call_session_id", sessionIds)
             .eq("status", "completed")
             .order("created_at", { ascending: false })
             .limit(5);
         }),
 
-      // Meeting summaries
       admin.from("meeting_summaries")
-        .select("meeting_title, summary_text, participants_emails, sent_at")
+        .select("id, meeting_title, summary_text, participants_emails, sent_at")
         .eq("lead_id", lead_id)
         .order("sent_at", { ascending: false })
         .limit(5),
@@ -119,110 +177,241 @@ Deno.serve(async (req) => {
     const callAnalyses = callAnalysisRes.data ?? [];
     const meetings = meetingRes.data ?? [];
 
-    // ── 3. Aggregate across all sources ──
+    // ── 3. Build evidence-linked aggregation ──
 
-    // Collect all objections
-    const allObjections = new Set<string>();
-    const allBuyingSignals = new Set<string>();
-    const allRisks: any[] = [];
-    const allMilestones: any[] = [];
-    const evidenceRefs: any[] = [];
+    const risksMap = new Map<string, NormalizedRisk>();
+    const milestonesMap = new Map<string, NormalizedMilestone>();
+    const objectionsMap = new Map<string, NormalizedObjection>();
+    const buyingSignalsMap = new Map<string, NormalizedBuyingSignal>();
     const channelActivity: Record<string, number> = {};
+    const channelSentiment: Record<string, { positive: number; negative: number; neutral: number }> = {};
+    const channelRecommendations: Record<string, number> = {}; // aggregate votes
+    const nextStepEvidence: string[] = [];
 
-    // From conversation analyses
-    for (const ca of convoAnalyses) {
-      const features = (ca.extracted_features ?? {}) as Record<string, any>;
-      if (Array.isArray(features.objections)) {
-        features.objections.forEach((o: string) => allObjections.add(o));
-      }
-      if (Array.isArray(features.buying_signals)) {
-        features.buying_signals.forEach((s: string) => allBuyingSignals.add(s));
-      }
-      if (Array.isArray(features.key_facts)) {
-        features.key_facts.forEach((f: string) => {
-          evidenceRefs.push({ source: "conversation_analysis", fact: f, timestamp: ca.created_at });
-        });
+    // Helper to add/merge into maps
+    function addRisk(issue: string, level: string, evidenceId: string, sourceType: string) {
+      const key = issue.toLowerCase().trim();
+      const existing = risksMap.get(key);
+      if (existing) {
+        existing.evidence_ids.push(evidenceId);
+        if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
+        // Escalate level
+        const levels = ["low", "medium", "high"];
+        if (levels.indexOf(level) > levels.indexOf(existing.level)) existing.level = level as any;
+      } else {
+        risksMap.set(key, { issue, level: (level || "medium") as any, evidence_ids: [evidenceId], source_types: [sourceType] });
       }
     }
 
-    // From call analyses
+    function addMilestone(desc: string, status: string, date: string | null, evidenceId: string, sourceType: string) {
+      const key = desc.toLowerCase().trim();
+      const existing = milestonesMap.get(key);
+      if (existing) {
+        existing.evidence_ids.push(evidenceId);
+        if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
+      } else {
+        milestonesMap.set(key, { description: desc, status: (status || "pending") as any, date, evidence_ids: [evidenceId], source_types: [sourceType] });
+      }
+    }
+
+    function addObjection(text: string, evidenceId: string, sourceType: string) {
+      const key = text.toLowerCase().trim();
+      const existing = objectionsMap.get(key);
+      if (existing) {
+        existing.evidence_ids.push(evidenceId);
+        if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
+      } else {
+        objectionsMap.set(key, { text, evidence_ids: [evidenceId], source_types: [sourceType] });
+      }
+    }
+
+    function addBuyingSignal(text: string, evidenceId: string, sourceType: string) {
+      const key = text.toLowerCase().trim();
+      const existing = buyingSignalsMap.get(key);
+      if (existing) {
+        existing.evidence_ids.push(evidenceId);
+        if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
+      } else {
+        buyingSignalsMap.set(key, { text, evidence_ids: [evidenceId], source_types: [sourceType] });
+      }
+    }
+
+    // ── From ALL conversation analyses (not just latest) ──
+    for (const ca of convoAnalyses) {
+      const features = (ca.extracted_features ?? {}) as Record<string, any>;
+      const evId = registerEvidence(
+        "conversation_analysis", ca.id,
+        ca.summary_short || ca.summary_text || "Conversation analysis",
+        undefined, ca.created_at,
+      );
+
+      if (Array.isArray(features.objections)) {
+        for (const o of features.objections) addObjection(typeof o === "string" ? o : String(o), evId, "conversation_analysis");
+      }
+      if (Array.isArray(features.buying_signals)) {
+        for (const s of features.buying_signals) addBuyingSignal(typeof s === "string" ? s : String(s), evId, "conversation_analysis");
+      }
+      if (Array.isArray(features.key_facts)) {
+        for (const f of features.key_facts) {
+          registerEvidence("conversation_analysis", ca.id, typeof f === "string" ? f : String(f), undefined, ca.created_at);
+        }
+      }
+
+      // Aggregate channel recommendations from ALL analyses
+      if (ca.recommended_reply_channel) {
+        channelRecommendations[ca.recommended_reply_channel] = (channelRecommendations[ca.recommended_reply_channel] || 0) + 1;
+      }
+
+      // Aggregate sentiment per analysis
+      if (ca.sentiment) {
+        const sentKey = ca.sentiment.toLowerCase();
+        if (!channelSentiment["conversation"]) channelSentiment["conversation"] = { positive: 0, negative: 0, neutral: 0 };
+        if (sentKey in channelSentiment["conversation"]) {
+          (channelSentiment["conversation"] as any)[sentKey]++;
+        }
+      }
+    }
+
+    // ── From ALL call analyses ──
     for (const ca of callAnalyses) {
       const signals = (ca.signals_json ?? {}) as Record<string, any>;
+      const evId = registerEvidence(
+        "call_analysis", ca.id,
+        ca.summary_short || "Call analysis",
+        "voice", ca.created_at,
+      );
+
       if (Array.isArray(signals.objections)) {
         for (const obj of signals.objections) {
-          allObjections.add(typeof obj === "string" ? obj : obj.type || JSON.stringify(obj));
+          const text = typeof obj === "string" ? obj : obj.type || JSON.stringify(obj);
+          addObjection(text, evId, "call_analysis");
         }
       }
       if (Array.isArray(signals.risks)) {
         for (const risk of signals.risks) {
-          allRisks.push({
-            issue: risk.type || risk.text || "Unknown risk",
-            level: risk.severity || "medium",
-            evidence: risk.evidence?.[0]?.quote || ca.summary_short || "",
-            source: "call_analysis",
-          });
+          const riskEvId = registerEvidence(
+            "call_analysis", ca.id,
+            risk.evidence?.[0]?.quote || ca.summary_short || "Risk from call",
+            "voice", ca.created_at,
+          );
+          addRisk(
+            risk.type || risk.text || "Unknown risk",
+            risk.severity || "medium",
+            riskEvId, "call_analysis",
+          );
         }
       }
       if (Array.isArray(signals.commitments)) {
         for (const c of signals.commitments) {
-          allMilestones.push({
-            description: c.text || "Commitment",
-            status: c.dueDate && new Date(c.dueDate) < new Date() ? "completed" : "pending",
-            date: c.dueDate || null,
-            evidence: c.evidence?.[0]?.quote || "",
-            source: "call_analysis",
-          });
+          const mEvId = registerEvidence(
+            "call_analysis", ca.id,
+            c.evidence?.[0]?.quote || c.text || "Commitment from call",
+            "voice", ca.created_at,
+          );
+          addMilestone(
+            c.text || "Commitment",
+            c.dueDate && new Date(c.dueDate) < new Date() ? "completed" : "pending",
+            c.dueDate || null,
+            mEvId, "call_analysis",
+          );
         }
       }
       if (Array.isArray(ca.recommended_next_steps_json)) {
         for (const step of ca.recommended_next_steps_json as any[]) {
-          evidenceRefs.push({ source: "call_analysis", recommendation: step.text, confidence: step.confidence });
+          const nsEvId = registerEvidence("call_analysis", ca.id, step.text || "Next step from call", "voice", ca.created_at);
+          nextStepEvidence.push(nsEvId);
         }
       }
     }
 
-    // From lead's existing milestones/risks (from prior deep analysis)
+    // ── From meeting summaries ──
+    for (const m of meetings) {
+      registerEvidence(
+        "meeting_summary", m.id,
+        `Meeting "${m.meeting_title || "Untitled"}": ${(m.summary_text || "").substring(0, 150)}`,
+        "meeting", m.sent_at,
+      );
+    }
+
+    // ── From lead's existing milestones/risks ──
     const leadMilestones = Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]) : [];
     const leadRisks = Array.isArray(lead.risks_json) ? (lead.risks_json as any[]) : [];
 
     for (const m of leadMilestones) {
-      if (!allMilestones.some((am: any) => am.description === m.description)) {
-        allMilestones.push({ ...m, source: "lead_analysis" });
+      if (m.description && !milestonesMap.has(m.description.toLowerCase().trim())) {
+        const evId = registerEvidence("lead_analysis", lead.id, m.evidence || m.description, undefined);
+        addMilestone(m.description, m.status || "pending", m.date || null, evId, "lead_analysis");
       }
     }
     for (const r of leadRisks) {
-      if (!allRisks.some((ar: any) => ar.issue === r.issue)) {
-        allRisks.push({ ...r, source: "lead_analysis" });
+      if (r.issue && !risksMap.has(r.issue.toLowerCase().trim())) {
+        const evId = registerEvidence("lead_analysis", lead.id, r.evidence || r.issue, undefined);
+        addRisk(r.issue, r.level || "medium", evId, "lead_analysis");
       }
     }
 
-    // Channel activity counts
+    // ── Channel activity counts from timeline ──
     for (const item of timelineItems) {
       channelActivity[item.channel] = (channelActivity[item.channel] || 0) + 1;
+      // Register timeline evidence
+      registerEvidence("timeline_item", item.id, item.snippet_text || item.subject || item.event_type, item.channel, item.occurred_at);
     }
 
-    // Engagement signals
-    const engagementSignals: Record<string, any> = {
+    // ── Engagement signals (normalized scores, not just counts) ──
+    const totalEvents = timelineItems.length;
+    const inboundCount = timelineItems.filter(t => t.direction === "inbound").length;
+    const outboundCount = timelineItems.filter(t => t.direction === "outbound").length;
+    const responseRate = outboundCount > 0 ? Math.round((inboundCount / outboundCount) * 100) : 0;
+
+    // Sentiment aggregation across ALL analyses
+    let positiveCount = 0, negativeCount = 0, neutralCount = 0;
+    for (const ca of convoAnalyses) {
+      const s = (ca.sentiment || "").toLowerCase();
+      if (s === "positive") positiveCount++;
+      else if (s === "negative") negativeCount++;
+      else neutralCount++;
+    }
+    const totalSentiment = positiveCount + negativeCount + neutralCount;
+    const sentimentScore = totalSentiment > 0
+      ? Math.round(((positiveCount - negativeCount) / totalSentiment) * 100)
+      : 0;
+
+    // Urgency aggregation
+    let highUrgency = 0, mediumUrgency = 0;
+    for (const ca of convoAnalyses) {
+      const u = (ca.urgency || "").toLowerCase();
+      if (u === "high") highUrgency++;
+      else if (u === "medium") mediumUrgency++;
+    }
+
+    const engagementSignals = {
       engagement_score: lead.engagement_score,
+      total_timeline_events: totalEvents,
+      inbound_count: inboundCount,
+      outbound_count: outboundCount,
+      response_rate_pct: responseRate,
       channel_activity: channelActivity,
-      total_timeline_events: timelineItems.length,
-      latest_sentiment: convoAnalyses[0]?.sentiment || null,
-      latest_urgency: convoAnalyses[0]?.urgency || null,
+      sentiment_score: sentimentScore,
+      sentiment_breakdown: { positive: positiveCount, negative: negativeCount, neutral: neutralCount },
+      urgency_breakdown: { high: highUrgency, medium: mediumUrgency },
     };
 
-    // Channel recommendation (from most recent conversation analysis)
-    const channelRecs: Record<string, any> = {};
-    if (convoAnalyses[0]?.recommended_reply_channel) {
-      channelRecs.recommended_channel = convoAnalyses[0].recommended_reply_channel;
-      const features = (convoAnalyses[0].extracted_features ?? {}) as Record<string, any>;
-      channelRecs.channel_reason = features.channel_reason || null;
-    }
+    // ── Channel recommendations (aggregated votes, not just latest) ──
+    const topChannel = Object.entries(channelRecommendations)
+      .sort(([, a], [, b]) => b - a)[0];
+
+    const channelRecs = {
+      recommended_channel: topChannel?.[0] || null,
+      vote_counts: channelRecommendations,
+      total_analyses: convoAnalyses.length,
+    };
 
     // ── 4. Build summary via LLM ──
     let summaryText = lead.next_step ? `Next: ${lead.next_step}` : null;
     let recommendedNextStep = lead.next_step || null;
     let nextStepReason = lead.next_step_reason || null;
     let modelUsed: string | null = null;
+    let nextStepEvidenceIds: string[] = [...nextStepEvidence];
 
     if (lovableKey && (timelineItems.length > 0 || convoAnalyses.length > 0 || callAnalyses.length > 0)) {
       try {
@@ -230,47 +419,49 @@ Deno.serve(async (req) => {
           `[${t.channel}/${t.direction || ""}] ${t.subject || ""}: ${(t.snippet_text || "").substring(0, 150)}`
         ).join("\n");
 
-        const convoSummaries = convoAnalyses.slice(0, 3).map(ca =>
-          `Conversation: ${ca.summary_short || ca.summary_text || "N/A"} (sentiment: ${ca.sentiment || "?"})`
+        const convoSummaries = convoAnalyses.map(ca =>
+          `Conversation (${ca.id}): ${ca.summary_short || ca.summary_text || "N/A"} (sentiment: ${ca.sentiment || "?"})`
         ).join("\n");
 
-        const callSummaries = callAnalyses.slice(0, 2).map(ca =>
-          `Call: ${ca.summary_short || "N/A"}`
+        const callSummaries = callAnalyses.map(ca =>
+          `Call (${ca.id}): ${ca.summary_short || "N/A"}`
         ).join("\n");
 
-        const meetingSummaries = meetings.slice(0, 2).map(m =>
-          `Meeting "${m.meeting_title || "Untitled"}": ${(m.summary_text || "").substring(0, 200)}`
+        const meetingSummaries = meetings.map(m =>
+          `Meeting "${m.meeting_title || "Untitled"}" (${m.id}): ${(m.summary_text || "").substring(0, 200)}`
         ).join("\n");
 
         const prompt = `You are a sales intelligence engine. Synthesize the following multi-channel evidence for a B2B lead and return JSON ONLY.
 
 Lead: ${lead.name} at ${lead.company} | Stage: ${lead.stage} | Motion: ${lead.motion}
 
-Timeline (recent):
+Timeline (recent ${timelineItems.length} events):
 ${timelineSummary || "No timeline events"}
 
-Conversation analyses:
+Conversation analyses (${convoAnalyses.length} total):
 ${convoSummaries || "None"}
 
-Call analyses:
+Call analyses (${callAnalyses.length} total):
 ${callSummaries || "None"}
 
-Meetings:
+Meetings (${meetings.length} total):
 ${meetingSummaries || "None"}
 
-Existing milestones: ${allMilestones.length}
-Existing risks: ${allRisks.length}
-Existing objections: ${allObjections.size}
+Existing aggregated risks: ${risksMap.size}
+Existing aggregated milestones: ${milestonesMap.size}
+Existing aggregated objections: ${objectionsMap.size}
+Existing buying signals: ${buyingSignalsMap.size}
 
 Return:
 {
-  "summary": "2-3 sentence deal summary covering current state and momentum",
+  "summary": "2-3 sentence deal summary covering current state and momentum across ALL channels",
   "recommended_next_step": "specific actionable next step",
   "next_step_reason": "1 sentence why this step matters now"
 }
 
 Rules:
 - Be specific to this lead, not generic
+- Synthesize across ALL conversation analyses, not just the most recent
 - Reference evidence from the data provided
 - If insufficient data, say "Insufficient evidence" for summary
 - Return valid JSON only, no markdown`;
@@ -308,6 +499,11 @@ Rules:
     }
 
     // ── 5. Upsert into lead_intelligence ──
+    const allRisks = [...risksMap.values()];
+    const allMilestones = [...milestonesMap.values()];
+    const allObjections = [...objectionsMap.values()];
+    const allBuyingSignals = [...buyingSignalsMap.values()];
+
     const intelligenceRow = {
       lead_id,
       workspace_id: workspaceId,
@@ -316,11 +512,15 @@ Rules:
       next_step_reason: nextStepReason,
       milestones_json: allMilestones,
       risks_json: allRisks,
-      objections_json: [...allObjections],
+      objections_json: allObjections,
+      buying_signals_json: allBuyingSignals,
       engagement_signals_json: engagementSignals,
       channel_recommendations_json: channelRecs,
-      evidence_json: evidenceRefs.slice(0, 50),
-      deal_factors_json: lead.deal_factors_json || {},
+      evidence_json: evidenceRegistry.slice(0, 100),
+      deal_factors_json: {
+        ...(lead.deal_factors_json || {}),
+        next_step_evidence_ids: nextStepEvidenceIds,
+      },
       last_computed_at: new Date().toISOString(),
       model_used: modelUsed,
       source_counts_json: {
@@ -349,7 +549,7 @@ Rules:
       last_ai_run_at: new Date().toISOString(),
     }).eq("id", lead_id);
 
-    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings`);
+    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings, ${evidenceRegistry.length} evidence refs`);
 
     return respond({
       ok: true,
