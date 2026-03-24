@@ -441,6 +441,42 @@ Length: 60–100 words.`;
   return "";
 }
 
+export function buildToneBlock(tone: string): string {
+  switch (tone) {
+    case "conversational":
+      return `=== LEAD TONE OVERRIDE: CONVERSATIONAL ===
+Adjustment:
+- Write like you're chatting over coffee — warm, relaxed, curious
+- Use contractions freely, shorter sentences
+- Slight humor or personality is OK
+- Still be specific and relevant — just friendlier
+- One personal touch per email (reference their world, not yours)`;
+
+    case "assertive":
+      return `=== LEAD TONE OVERRIDE: ASSERTIVE / SALESY ===
+Adjustment:
+- Be confident and direct about the value you bring
+- Lead with a bold claim or strong opinion about their situation
+- Include a specific offer, incentive, or resource (e.g. starter kit, free trial, ROI data)
+- Create urgency without being pushy — reference timing, competitors, or market shifts
+- CTA should be action-oriented ("grab your starter kit", "lock in your spot")
+- It's OK to mention your product/service — briefly and with confidence`;
+
+    case "consultative":
+      return `=== LEAD TONE OVERRIDE: CONSULTATIVE ===
+Adjustment:
+- Position yourself as a trusted advisor, not a seller
+- Ask thoughtful, diagnostic questions about their situation
+- Reference industry trends or benchmarks relevant to them
+- Offer insights before asking for anything
+- CTA should be expertise-driven ("happy to share how others handle this")`;
+
+    case "direct":
+    default:
+      return "";  // default — no override, use standard pipeline tone
+  }
+}
+
 export function buildStyleModifier({ motion, first_touch, outbound_style }: { motion: string; first_touch: boolean; outbound_style: string }): string {
   if (motion !== "outbound_prospecting" || !first_touch) {
     return "";

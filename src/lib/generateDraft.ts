@@ -190,6 +190,7 @@ function buildAIPayload(
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
     custom_instructions: instructions || undefined,
+    outbound_tone: (lead as any).outbound_tone || "direct",
     // Metadata flags for edge function prompt assembly
     playbook_id: playbookId,
     motion,

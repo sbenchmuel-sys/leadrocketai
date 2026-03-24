@@ -1,0 +1,2 @@
+ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS outbound_tone text NOT NULL DEFAULT 'direct';
+COMMENT ON COLUMN public.leads.outbound_tone IS 'Per-lead email tone: direct, conversational, assertive, consultative';

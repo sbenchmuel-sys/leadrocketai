@@ -8,7 +8,7 @@ import {
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
   COLD_OUTREACH_STYLE_BLOCK, getColdOutreachBlock, REPLY_PATTERNS_BLOCK, BREAKUP_CLOSERS,
   type EmailFramework, selectEmailFramework, getEmailFrameworkBlock,
-  buildMotionBlock, buildStyleModifier,
+  buildMotionBlock, buildStyleModifier, buildToneBlock,
 } from "../_shared/frameworks.ts";
 
 // ============================================
@@ -687,7 +687,7 @@ serve(async (req) => {
     // === INSTRUCTION PRIORITY: bump word limits when custom instructions exist ===
     const hasCustomInstructions = !!(enhancedPayload.custom_instructions && String(enhancedPayload.custom_instructions).trim().length > 0);
     if (hasCustomInstructions && COLD_OUTBOUND_TASKS.has(task)) {
-      const instructionOverride = `\n\n=== CUSTOM INSTRUCTION PRIORITY ===\nCUSTOM INSTRUCTIONS OVERRIDE DEFAULT WORD LIMITS. If Custom Instructions request something specific (e.g. "include meeting CTA", "mention starter kit", "offer discount"), you MUST include it even if it means exceeding the default word target by up to 30 words. Fulfilling user instructions is MORE important than hitting an exact word count. Aim for the original target but never sacrifice an explicit instruction to save words.\n`;
+      const instructionOverride = `\n\n=== MANDATORY CUSTOM INSTRUCTIONS (HIGHEST PRIORITY) ===\nThe user has set specific instructions for this email. You MUST follow them.\nThese instructions OVERRIDE default word limits. You may exceed the default word target by up to 40 words to fulfill these instructions.\nIf the instructions say "offer starter kit" → you MUST mention the starter kit.\nIf the instructions say "include meeting CTA" → you MUST include a meeting link.\nFulfilling these instructions is MORE important than brevity.\n=== END PRIORITY BLOCK ===\n\nUser Instructions:\n`;
       enhancedPayload.custom_instructions = instructionOverride + String(enhancedPayload.custom_instructions);
       console.log(`[ai_task] ✅ Instruction priority override injected for ${task}`);
     }
@@ -744,8 +744,14 @@ serve(async (req) => {
       console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
     }
 
+    // Build tone block from per-lead outbound_tone
+    const leadTone = String(enhancedPayload.outbound_tone || "direct");
+    const toneBlock = buildToneBlock(leadTone);
+    if (toneBlock) console.log(`[ai_task] [7/TONE] Lead tone override: ${leadTone}`);
+
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
+    if (toneBlock) promptParts.push(toneBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
