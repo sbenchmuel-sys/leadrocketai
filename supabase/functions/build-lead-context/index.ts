@@ -202,7 +202,7 @@ serve(async (req) => {
 
     // Step 5: Generate recommended angles via LLM
     let recommendedAngles: string[] = [];
-    if (LOVABLE_API_KEY && (signals.length > 0 || interactions.length > 0)) {
+    if (LOVABLE_API_KEY && (signals.length > 0 || timelineItems.length > 0)) {
       try {
         const anglePrompt = `Based on the following lead context, suggest 3-5 short recommended outreach angles (one sentence each).
 
@@ -243,15 +243,14 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       }
     }
 
-    // Resolve workspace_id from lead ownership
-    const { data: membership } = await adminClient
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", lead.owner_user_id)
-      .limit(1)
-      .maybeSingle();
-
-    const workspaceId = membership?.workspace_id;
+    // Resolve workspace_id from lead directly (canonical field added in Phase 2)
+    const workspaceId = lead.workspace_id;
+    if (!workspaceId) {
+      return new Response(JSON.stringify({ ok: false, error: "Lead has no workspace_id" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     if (!workspaceId) {
       return new Response(JSON.stringify({ ok: false, error: "Could not resolve workspace" }), {
         status: 400,
@@ -287,7 +286,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] Upsert error:", upsertError);
     }
 
-    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${interactions.length} interactions, ${recommendedAngles.length} angles`);
+    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles`);
 
     return new Response(JSON.stringify({ ok: true, context: contextJson, cached: false }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
