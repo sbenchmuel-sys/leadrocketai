@@ -435,7 +435,7 @@ function FilterDrawer({
           <div>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Waiting On</span>
             <div className="flex flex-wrap gap-1.5">
-              {(["us", "them", "nobody"] as const).map((w) => (
+              {(["me", "lead", "automation"] as const).map((w) => (
                 <button
                   key={w}
                   onClick={() => onChange(() => setInboxWaitingOn(inboxState.waitingOn === w ? null : w))}
