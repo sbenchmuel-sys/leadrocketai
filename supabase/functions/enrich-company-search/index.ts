@@ -137,11 +137,13 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { lead_id, company, purpose, force } = body as {
+    const { lead_id, company, purpose, force, industry, city } = body as {
       lead_id?: string;
       company?: string;
       purpose?: string;
       force?: boolean;
+      industry?: string;
+      city?: string;
     };
 
     if (!company) {
@@ -211,11 +213,16 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Run 3 searches
+    // Build precise search queries using lead context for disambiguation
+    const industry = body.industry || "";
+    const city = body.city || "";
+    const qualifier = [industry, city].filter(Boolean).join(" ");
+    const companyQuery = qualifier ? `"${company}" ${qualifier}` : `"${company}"`;
+
     const queries = [
-      `${company} funding`,
-      `${company} hiring`,
-      `${company} news`,
+      `${companyQuery} funding OR investment OR raised`,
+      `${companyQuery} hiring OR careers OR jobs`,
+      `${companyQuery} news OR announcement OR launch`,
     ];
 
     const allResults: SearchResult[] = [];
