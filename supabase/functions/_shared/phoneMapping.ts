@@ -35,9 +35,14 @@ export async function resolvePhoneMapping(
     leadId: null,
   };
 
-  // Normalize numbers (strip whitespace)
-  const from = fromNumber.trim();
-  const to = toNumber.trim();
+  // Normalize numbers: strip whitespace, ensure + prefix for E.164
+  const normalizeE164 = (n: string): string => {
+    const stripped = n.trim().replace(/[\s\-()]/g, "");
+    return stripped.startsWith("+") ? stripped : "+" + stripped;
+  };
+
+  const from = normalizeE164(fromNumber);
+  const to = normalizeE164(toNumber);
 
   // The "customer" number is from (inbound) or to (outbound)
   const customerNumber = direction === "inbound" ? from : to;
@@ -54,9 +59,9 @@ export async function resolvePhoneMapping(
       .not("default_twilio_number", "is", null);
 
     if (settings && settings.length > 0) {
-      // Try exact match on the agent-side number
+      // Normalize stored numbers before comparison
       const exactMatch = settings.find(
-        (s: any) => s.default_twilio_number === agentNumber,
+        (s: any) => normalizeE164(s.default_twilio_number) === agentNumber,
       );
       if (exactMatch) {
         result.workspaceId = exactMatch.workspace_id;
