@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { assertLeadAccess } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,6 +41,12 @@ Deno.serve(async (req) => {
     if (!lead_id || !channel) return json({ suggestions: [] }, 400);
 
     const admin = createClient(supabaseUrl, serviceKey);
+
+    // Authz: verify caller can access this lead
+    const authzCheck = await assertLeadAccess(admin, lead_id, user.id);
+    if (!authzCheck.ok) {
+      return json({ error: authzCheck.error }, authzCheck.status || 403);
+    }
 
     // ── 1) Load lead intelligence ──
     const { data: lead } = await admin
