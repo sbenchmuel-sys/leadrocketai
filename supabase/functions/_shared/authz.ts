@@ -11,20 +11,28 @@ export interface AuthzResult {
   ok: boolean;
   error?: string;
   status?: number;
+  workspaceId?: string;
 }
 
 /**
- * Verify the caller owns or has workspace access to a lead.
- * Rules:
- *  - Lead must exist
- *  - userId must equal lead.owner_user_id, OR
- *  - userId must be a member of any workspace the lead owner belongs to
+ * Verify the caller can access a lead.
+ *
+ * Conservative rules (until leads gain workspace_id in Phase 2):
+ *  1. Allow if lead.owner_user_id === userId  (direct ownership)
+ *  2. Allow if a `contacts` row with contacts.lead_id = leadId exists
+ *     in a workspace the caller belongs to  (explicit workspace link)
+ *  3. Deny otherwise
+ *
+ * This intentionally does NOT allow access just because the caller
+ * shares "any" workspace with the lead owner — that would over-authorize
+ * when a user belongs to multiple workspaces.
  */
 export async function assertLeadAccess(
   admin: SupabaseClient,
   leadId: string,
   userId: string,
 ): Promise<AuthzResult> {
+  // Step 1: Fetch lead
   const { data: lead, error } = await admin
     .from("leads")
     .select("owner_user_id")
@@ -36,27 +44,29 @@ export async function assertLeadAccess(
     return { ok: false, error: "Lead not found", status: 404 };
   }
 
+  // Rule 1: Direct ownership
   if (lead.owner_user_id === userId) {
     return { ok: true };
   }
 
-  // Check if both users share a workspace
-  const { data: ownerWs } = await admin
-    .from("workspace_members")
+  // Rule 2: Lead is linked to a contact in a workspace the caller belongs to
+  const { data: linkedContacts } = await admin
+    .from("contacts")
     .select("workspace_id")
-    .eq("user_id", lead.owner_user_id);
+    .eq("lead_id", leadId)
+    .limit(10);
 
-  if (ownerWs && ownerWs.length > 0) {
-    const wsIds = ownerWs.map((w: any) => w.workspace_id);
-    const { data: shared } = await admin
+  if (linkedContacts && linkedContacts.length > 0) {
+    const wsIds = [...new Set(linkedContacts.map((c: any) => c.workspace_id))];
+    const { data: membership } = await admin
       .from("workspace_members")
       .select("workspace_id")
       .eq("user_id", userId)
       .in("workspace_id", wsIds)
       .limit(1);
 
-    if (shared && shared.length > 0) {
-      return { ok: true };
+    if (membership && membership.length > 0) {
+      return { ok: true, workspaceId: membership[0].workspace_id };
     }
   }
 
@@ -85,20 +95,25 @@ export async function assertWorkspaceMembership(
     return { ok: false, error: "Not a member of this workspace", status: 403 };
   }
 
-  return { ok: true };
+  return { ok: true, workspaceId };
 }
 
 /**
  * Verify the caller can access a conversation.
+ *
  * Rules:
  *  - Conversation must exist
  *  - userId must be a member of the conversation's workspace
+ *
+ * Returns the resolved workspaceId on success for downstream use.
+ * This is the single authoritative check — callers should NOT also
+ * call assertWorkspaceMembership separately.
  */
 export async function assertConversationAccess(
   admin: SupabaseClient,
   conversationId: string,
   userId: string,
-): Promise<AuthzResult & { workspaceId?: string }> {
+): Promise<AuthzResult> {
   const { data: convo, error } = await admin
     .from("conversations")
     .select("workspace_id, owner_user_id")
