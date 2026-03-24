@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Loader2, ArrowLeft, Upload, FileSpreadsheet, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface CreateLeadStepProps {
   onNext: () => void;
@@ -20,8 +21,8 @@ interface CreateLeadStepProps {
 type InputMode = "choose" | "manual" | "upload";
 
 export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) {
+  const { workspaceId } = useWorkspace();
   const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<InputMode>("choose");
   const [formData, setFormData] = useState({
     name: "",
     company: "",
@@ -46,6 +47,7 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         company: formData.company,
         email: formData.email,
         motion: formData.motion,
+        workspace_id: workspaceId ?? undefined,
       });
       await setOnboardingStep(4);
       toast.success("Lead created successfully!");
