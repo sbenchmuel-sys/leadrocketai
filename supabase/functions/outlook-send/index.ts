@@ -13,6 +13,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { isInternalCaller } from "../_shared/authz.ts";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
+import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 
 function corsHeaders(origin: string): Record<string, string> {
   const allowed =
@@ -293,21 +294,43 @@ serve(async (req) => {
       try {
         if (leadId) {
           const bodyPlainText = htmlToPlainText(bodyHtml);
+          const interactionOccurredAt = new Date().toISOString();
 
           // Create interaction record
-          await serviceClient
+          const { data: interactionRow } = await serviceClient
             .from("interactions")
             .insert({
               lead_id: leadId,
               type: "email_outbound",
               source: "outlook",
-              occurred_at: new Date().toISOString(),
+              occurred_at: interactionOccurredAt,
               subject,
               from_email: accountEmail,
               to_email: to,
               body_text: bodyPlainText.substring(0, 10000),
               direction: "outbound",
-            });
+            })
+            .select("id")
+            .single();
+
+          // Project to unified timeline
+          if (interactionRow) {
+            projectTimelineItem(serviceClient, {
+              workspace_id: accountData.workspace_id,
+              lead_id: leadId,
+              channel: "email",
+              provider: "outlook",
+              direction: "outbound",
+              event_type: "email_outbound",
+              occurred_at: interactionOccurredAt,
+              source_table: "interactions",
+              source_id: interactionRow.id,
+              snippet_text: bodyPlainText?.substring(0, 500),
+              subject,
+              metadata_json: { from_email: accountEmail, to_email: to },
+              dedupe_key: emailDedupeKey("outlook", null, interactionRow.id),
+            }).catch(e => logger.warn("mail.outlook.timeline_projection_failed", { error: String(e) }));
+          }
 
           // Get current lead data
           const { data: leadData, error: leadError } = await serviceClient

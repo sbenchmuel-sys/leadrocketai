@@ -5,6 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { WhatsAppService } from "../_shared/whatsapp/service.ts";
+import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -185,7 +186,7 @@ Deno.serve(async (req) => {
     }
 
     if (bridgeLeadId) {
-      await supabase.from("interactions").insert({
+      const { data: waInteraction } = await supabase.from("interactions").insert({
         lead_id: bridgeLeadId,
         type: "whatsapp_outbound",
         source: "whatsapp",
@@ -193,7 +194,27 @@ Deno.serve(async (req) => {
         occurred_at: now,
         direction: "outbound",
         from_email: `+${normalizedTo}`,
-      });
+      }).select("id").single();
+
+      // Project to unified timeline
+      if (waInteraction) {
+        projectTimelineItem(supabase, {
+          workspace_id: convo.workspace_id,
+          lead_id: bridgeLeadId,
+          channel: "whatsapp",
+          provider: svc.providerType,
+          direction: "outbound",
+          event_type: "whatsapp_outbound",
+          occurred_at: now,
+          source_table: "interactions",
+          source_id: waInteraction.id,
+          snippet_text: message_text?.substring(0, 500),
+          conversation_id: conversation_id,
+          contact_id: convo.contact_id,
+          metadata_json: { provider_message_id: providerMessageId, to: `+${normalizedTo}` },
+          dedupe_key: whatsappDedupeKey("outbound", providerMessageId, waInteraction.id),
+        }).catch(e => console.warn("[whatsapp-send] Timeline projection failed:", e));
+      }
     }
   } catch (bridgeErr: any) {
     console.warn("[whatsapp-send] Non-blocking interaction bridge failed:", bridgeErr.message);

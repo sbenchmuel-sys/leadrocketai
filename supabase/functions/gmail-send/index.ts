@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isInternalCaller } from "../_shared/authz.ts";
+import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -305,20 +306,44 @@ serve(async (req) => {
       try {
         // Create interaction record if leadId provided
         if (leadId) {
-          await serviceSupabase
+          const interactionOccurredAt = new Date().toISOString();
+          const { data: interactionRow } = await serviceSupabase
             .from("interactions")
             .insert({
               lead_id: leadId,
               type: "email_outbound",
               source: "gmail",
-              occurred_at: new Date().toISOString(),
+              occurred_at: interactionOccurredAt,
               subject,
               from_email: connection.gmail_email,
               to_email: to,
               body_text: body,
               gmail_message_id: sendData.id,
               gmail_thread_id: sendData.threadId || threadId || null,
-            });
+            })
+            .select("id")
+            .single();
+
+          // Project to unified timeline
+          const { data: leadWs } = await serviceSupabase
+            .from("leads").select("workspace_id").eq("id", leadId).single();
+          if (leadWs?.workspace_id && interactionRow) {
+            projectTimelineItem(serviceSupabase, {
+              workspace_id: leadWs.workspace_id,
+              lead_id: leadId,
+              channel: "email",
+              provider: "gmail",
+              direction: "outbound",
+              event_type: "email_outbound",
+              occurred_at: interactionOccurredAt,
+              source_table: "interactions",
+              source_id: interactionRow.id,
+              snippet_text: body?.substring(0, 500),
+              subject,
+              metadata_json: { gmail_message_id: sendData.id, from_email: connection.gmail_email, to_email: to },
+              dedupe_key: emailDedupeKey("gmail", sendData.id, interactionRow.id),
+            }).catch(e => console.warn("[gmail-send] Timeline projection failed:", e));
+          }
 
           // Get current lead data for AI analysis
           const { data: leadData, error: leadError } = await serviceSupabase
