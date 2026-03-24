@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { safeDecryptToken } from "../_shared/encryption.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
+import { assertWorkspaceMembership, assertConversationAccess } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -56,6 +57,7 @@ Deno.serve(async (req) => {
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
   const isServiceRole = token === serviceRoleKey;
+  let callerUserId: string | null = null;
 
   if (!isServiceRole) {
     // Validate as user JWT
@@ -69,6 +71,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    callerUserId = data.user.id;
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
@@ -90,6 +93,24 @@ Deno.serve(async (req) => {
       JSON.stringify({ error: "conversation_id and workspace_id required" }),
       { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+  }
+
+  // Authz: verify caller belongs to the workspace and can access the conversation
+  if (!isServiceRole && callerUserId) {
+    const wsCheck = await assertWorkspaceMembership(supabase, workspace_id, callerUserId);
+    if (!wsCheck.ok) {
+      return new Response(JSON.stringify({ error: wsCheck.error }), {
+        status: wsCheck.status || 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const convoCheck = await assertConversationAccess(supabase, conversation_id, callerUserId);
+    if (!convoCheck.ok) {
+      return new Response(JSON.stringify({ error: convoCheck.error }), {
+        status: convoCheck.status || 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
   }
 
   try {

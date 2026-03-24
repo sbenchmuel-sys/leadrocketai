@@ -43,23 +43,27 @@ export async function resolvePhoneMapping(
   const customerNumber = direction === "inbound" ? from : to;
 
   try {
-    // 1. Find workspace — try call_settings first, then fall back to first workspace
+    // 1. Find workspace — deterministic resolution via call_settings or phone number match
+    //    NEVER fall back to "first workspace" — that is a multi-tenant leak.
+    const agentNumber = direction === "inbound" ? to : from;
+
+    // Strategy A: Match via call_settings with a configured Twilio number
     const { data: settings } = await supabase
       .from("call_settings")
-      .select("workspace_id")
-      .limit(1)
-      .maybeSingle();
+      .select("workspace_id, default_twilio_number")
+      .not("default_twilio_number", "is", null);
 
-    if (settings) {
-      result.workspaceId = settings.workspace_id;
-    } else {
-      // Fallback: use first workspace
-      const { data: ws } = await supabase
-        .from("workspaces")
-        .select("id")
-        .limit(1)
-        .maybeSingle();
-      result.workspaceId = ws?.id ?? null;
+    if (settings && settings.length > 0) {
+      // Try exact match on the agent-side number
+      const exactMatch = settings.find(
+        (s: any) => s.default_twilio_number === agentNumber,
+      );
+      if (exactMatch) {
+        result.workspaceId = exactMatch.workspace_id;
+      } else if (settings.length === 1) {
+        // Single workspace with call_settings — safe to use
+        result.workspaceId = settings[0].workspace_id;
+      }
     }
 
     if (!result.workspaceId) {

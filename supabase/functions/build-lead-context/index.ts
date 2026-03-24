@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { assertLeadAccess } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -64,6 +65,17 @@ serve(async (req) => {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Authz: verify caller can access this lead (skip for service-role)
+    if (!isServiceRole) {
+      const authzCheck = await assertLeadAccess(adminClient, lead_id, userId);
+      if (!authzCheck.ok) {
+        return new Response(JSON.stringify({ ok: false, error: authzCheck.error }), {
+          status: authzCheck.status || 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Check existing cache (skip if force=true)
