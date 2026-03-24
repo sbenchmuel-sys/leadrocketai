@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Brain } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { getLeadIntelligence } from "@/lib/supabaseQueries";
+import type { LeadIntelligence } from "@/lib/supabaseQueries";
 import { STAGE_LABELS, MOTION_LABELS } from "@/lib/dashboardUtils";
 import type { DealStage, Motion } from "@/lib/dashboardUtils";
 
@@ -45,19 +47,33 @@ type Props = {
 
 export function LeadContextPanel({ leadId }: Props) {
   const [lead, setLead] = useState<LeadSnapshot | null>(null);
+  const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
+  const loadData = useCallback(async () => {
     if (!leadId) {
       setLead(null);
+      setIntelligence(null);
       return;
     }
     setIsLoading(true);
-    fetchLeadSnapshot(leadId)
-      .then(setLead)
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+    try {
+      const [snapshot, intel] = await Promise.all([
+        fetchLeadSnapshot(leadId),
+        getLeadIntelligence(leadId),
+      ]);
+      setLead(snapshot);
+      setIntelligence(intel);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
   }, [leadId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   if (!leadId) {
     return (
@@ -80,6 +96,10 @@ export function LeadContextPanel({ leadId }: Props) {
 
   const stageLabel = STAGE_LABELS[lead.stage as DealStage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
+
+  // Use canonical intelligence when available
+  const nextStep = intelligence?.recommended_next_step || lead.next_step;
+  const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
 
   return (
     <div className="p-4 space-y-4">
@@ -118,6 +138,19 @@ export function LeadContextPanel({ leadId }: Props) {
             <span className="text-xs text-muted-foreground font-medium">{lead.engagement_score}</span>
           </div>
         </div>
+
+        {/* Next step from canonical intelligence */}
+        {nextStep && (
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5 flex items-center gap-1">
+              <Brain className="h-2.5 w-2.5" /> Next Step
+            </span>
+            <p className="text-xs text-foreground">{nextStep}</p>
+            {nextStepReason && (
+              <p className="text-[10px] text-muted-foreground mt-0.5">{nextStepReason}</p>
+            )}
+          </div>
+        )}
 
         <div>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Nurture</span>

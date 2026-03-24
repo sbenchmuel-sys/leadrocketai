@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Json } from "@/integrations/supabase/types";
-import { getLeadInteractions } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
-import { useAITask } from "@/hooks/useAITask";
+import { getLeadIntelligence, triggerIntelligenceRecompute } from "@/lib/supabaseQueries";
+import type { LeadIntelligence } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,14 +19,13 @@ interface Milestone {
   description: string;
   status: "completed" | "pending";
   date: string | null;
-  evidence: string;
-  completedAt?: string;
+  evidence?: string;
 }
 
 interface Risk {
   issue: string;
   level: "low" | "medium" | "high";
-  evidence: string;
+  evidence?: string;
 }
 
 interface EnrichmentSignal {
@@ -60,29 +59,6 @@ interface UnifiedIntelligenceCardProps {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-
-function extractJsonFromAIContent(content: string): string {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  return (fenced?.[1] ?? trimmed).trim();
-}
-
-function cleanEmailBody(body: string): string {
-  return body
-    .split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0]
-    .slice(0, 300)
-    .trim();
-}
-
-function buildInteractionsText(
-  interactions: { type: string; subject: string | null; body_text: string }[],
-  limit = 15
-): string {
-  return interactions
-    .slice(0, limit)
-    .map((i) => `[${i.type}] ${i.subject || ""}: ${cleanEmailBody(i.body_text)}`)
-    .join("\n---\n");
-}
 
 const RISK_COLORS: Record<string, string> = {
   high: "bg-destructive/10 text-destructive",
@@ -120,21 +96,42 @@ const SIGNAL_TYPE_COLORS: Record<string, string> = {
 export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: UnifiedIntelligenceCardProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
-  const [isRefreshingContext, setIsRefreshingContext] = useState(false);
-  const [contextCacheAge, setContextCacheAge] = useState<string | null>(null);
+  const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined);
   const [leadSignals, setLeadSignals] = useState<LeadSignal[]>([]);
-  const { runTask } = useAITask();
 
-  const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
-  const risks: Risk[] = lead.risks_json ? (lead.risks_json as unknown as Risk[]) : [];
-  const objections: string[] = (lead as any).objections_json
-    ? ((lead as any).objections_json as string[])
-    : [];
   const isCompact = mode === "compact";
   const maxItems = isCompact ? 3 : 10;
 
-  // ── Load enrichment signals (once per lead) ──
+  // Use intelligence data if available, fall back to lead fields
+  const milestones: Milestone[] = intelligence?.milestones_json?.length
+    ? (intelligence.milestones_json as Milestone[])
+    : lead.milestones_json
+      ? (lead.milestones_json as unknown as Milestone[])
+      : [];
+
+  const risks: Risk[] = intelligence?.risks_json?.length
+    ? (intelligence.risks_json as Risk[])
+    : lead.risks_json
+      ? (lead.risks_json as unknown as Risk[])
+      : [];
+
+  const objections: string[] = intelligence?.objections_json?.length
+    ? intelligence.objections_json
+    : (lead as any).objections_json ?? [];
+
+  const nextStep = intelligence?.recommended_next_step || lead.next_step;
+  const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
+  const summaryText = intelligence?.summary_text || null;
+  const lastComputedAt = intelligence?.last_computed_at || lead.last_ai_run_at;
+
+  // ── Load intelligence ──
+  const loadIntelligence = useCallback(async () => {
+    const data = await getLeadIntelligence(lead.id);
+    setIntelligence(data);
+  }, [lead.id]);
+
+  // ── Load enrichment signals ──
   const loadEnrichment = useCallback(async () => {
     try {
       const { data } = await supabase
@@ -145,7 +142,6 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-
       setEnrichment(data as unknown as EnrichmentRow | null);
     } catch {
       setEnrichment(null);
@@ -161,73 +157,17 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
         .eq("lead_id", lead.id)
         .order("detected_at", { ascending: false })
         .limit(10);
-
       setLeadSignals((data as LeadSignal[]) ?? []);
     } catch {
       setLeadSignals([]);
     }
   }, [lead.id]);
 
-  // ── Load context cache age ──
-  const loadContextCacheAge = useCallback(async () => {
-    try {
-      const { data } = await supabase
-        .from("lead_context_cache")
-        .select("last_generated_at")
-        .eq("lead_id", lead.id)
-        .maybeSingle();
-
-      if (data?.last_generated_at) {
-        setContextCacheAge(formatDistanceToNow(new Date(data.last_generated_at), { addSuffix: true }));
-      } else {
-        setContextCacheAge(null);
-      }
-    } catch {
-      setContextCacheAge(null);
-    }
-  }, [lead.id]);
-
-  // ── Refresh context cache ──
-  const handleRefreshContext = async () => {
-    setIsRefreshingContext(true);
-    try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const session = (await supabase.auth.getSession()).data.session;
-      if (!session) {
-        toast.error("Please log in first.");
-        return;
-      }
-
-      const res = await fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
-        body: JSON.stringify({ lead_id: lead.id, force: true }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Context refresh failed (${res.status})`);
-      }
-
-      toast.success("Intelligence context refreshed");
-      await loadContextCacheAge();
-    } catch (err: any) {
-      console.error("[UnifiedIntelligenceCard] Context refresh error:", err);
-      toast.error(err.message || "Context refresh failed");
-    } finally {
-      setIsRefreshingContext(false);
-    }
-  };
-
   useEffect(() => {
+    loadIntelligence();
     loadEnrichment();
     loadLeadSignals();
-    loadContextCacheAge();
-  }, [loadEnrichment, loadLeadSignals, loadContextCacheAge]);
+  }, [loadIntelligence, loadEnrichment, loadLeadSignals]);
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
@@ -239,10 +179,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const session = (await supabase.auth.getSession()).data.session;
-      if (!session) {
-        toast.error("Please log in to enrich.");
-        return;
-      }
+      if (!session) { toast.error("Please log in to enrich."); return; }
 
       const res = await fetch(`${supabaseUrl}/functions/v1/enrich-company-search`, {
         method: "POST",
@@ -258,95 +195,30 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `Enrichment failed (${res.status})`);
       }
-
       toast.success("Company signals updated");
       await loadEnrichment();
     } catch (err: any) {
-      console.error("[UnifiedIntelligenceCard] Enrich error:", err);
       toast.error(err.message || "Enrichment failed");
     } finally {
       setIsEnriching(false);
     }
   };
 
-  // ── Analyze handler ──
-  const analyzeDeal = async () => {
+  // ── Recompute intelligence handler ──
+  const handleRecompute = async () => {
     setIsAnalyzing(true);
     try {
-      const interactions = await getLeadInteractions(lead.id);
-      if (interactions.length === 0) {
-        toast.warning("No interactions found. Add emails or notes before analyzing.");
-        return;
-      }
-
-      const interactionsText = buildInteractionsText(interactions, 15);
-      toast.info("Running deep analysis...");
-
-      const deepResult = await runTask("lead_deep_analysis", {
-        lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nStrategy: ${lead.strategy}\nStatus: ${lead.status}\n${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`,
-        interactions_text: interactionsText,
-        lead_id: lead.id,
-      });
-
-      if (!deepResult.ok || !deepResult.content) {
-        toast.error(deepResult.error || "Failed to run analysis");
-        return;
-      }
-
-      const extracted = extractJsonFromAIContent(deepResult.content);
-      const parsed = JSON.parse(extracted);
-
-      const newMilestones = parsed.milestones || [];
-      const newRisks = parsed.risks || [];
-      const bestNextStep = parsed.best_next_step || null;
-      const dealFactors = parsed.deal_factors || null;
-
-      // Merge milestones with dedupe
-      let mergedMilestones = [...milestones, ...newMilestones];
-      if (mergedMilestones.length > 1) {
-        const dedupeResult = await runTask("dedupe_milestones", {
-          milestones_json: JSON.stringify(mergedMilestones),
-        });
-        if (dedupeResult.ok && dedupeResult.content) {
-          try {
-            const deduped = JSON.parse(extractJsonFromAIContent(dedupeResult.content));
-            if (deduped.unique_milestones?.length > 0) {
-              mergedMilestones = deduped.unique_milestones;
-            }
-          } catch (_) { /* fallback to simple merge */ }
-        }
-      }
-
-      // Merge risks by issue
-      const mergedRisks = [...risks];
-      for (const r of newRisks) {
-        if (!mergedRisks.some((x) => x.issue.toLowerCase() === r.issue.toLowerCase())) {
-          mergedRisks.push(r);
-        }
-      }
-
-      const { error: updateError } = await supabase
-        .from("leads")
-        .update({
-          milestones_json: mergedMilestones as unknown as Json,
-          risks_json: mergedRisks as unknown as Json,
-          deal_factors_json: dealFactors as unknown as Json,
-          next_step: bestNextStep?.title || null,
-          next_step_reason: bestNextStep?.why || null,
-          deal_outlook: dealFactors?.overall_outlook || null,
-          last_ai_run_at: new Date().toISOString(),
-        })
-        .eq("id", lead.id);
-
-      if (updateError) {
-        toast.error("Failed to save analysis results");
+      toast.info("Running intelligence recompute...");
+      const result = await triggerIntelligenceRecompute(lead.id);
+      if (!result.ok) {
+        toast.error(result.error || "Recompute failed");
       } else {
-        toast.success("Analysis complete!");
+        toast.success("Intelligence updated!");
+        await loadIntelligence();
         onUpdated?.();
       }
-    } catch (err) {
-      console.error("[UnifiedIntelligenceCard] Analysis error:", err);
-      toast.error("Analysis failed");
+    } catch (err: any) {
+      toast.error(err.message || "Recompute failed");
     } finally {
       setIsAnalyzing(false);
     }
@@ -362,42 +234,36 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
               Intelligence
             </CardTitle>
             <div className="flex items-center gap-2">
-              {contextCacheAge && (
+              {lastComputedAt && (
                 <span className="text-[10px] text-muted-foreground">
-                  Context: {contextCacheAge}
+                  {formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}
                 </span>
               )}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={handleRefreshContext}
-                disabled={isRefreshingContext}
-                title="Refresh intelligence context"
-              >
-                {isRefreshingContext ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3 w-3" />
-                )}
-              </Button>
             </div>
           </div>
         </CardHeader>
       )}
 
       <CardContent className={cn(isCompact ? "p-0" : "", "space-y-4")}>
+        {/* Summary */}
+        {summaryText && (
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">Summary</span>
+            <p className="text-xs text-foreground leading-relaxed">{summaryText}</p>
+          </div>
+        )}
+
         {/* Next Step */}
-        {lead.next_step && (
+        {nextStep && (
           <div>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               Best Next Step
             </span>
             <p className={cn("font-medium text-foreground", isCompact ? "text-sm" : "text-base")}>
-              {lead.next_step}
+              {nextStep}
             </p>
-            {lead.next_step_reason && (
-              <p className="text-xs text-muted-foreground mt-1">{lead.next_step_reason}</p>
+            {nextStepReason && (
+              <p className="text-xs text-muted-foreground mt-1">{nextStepReason}</p>
             )}
           </div>
         )}
@@ -457,7 +323,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Objections — only if field exists */}
+        {/* Objections */}
         {objections.length > 0 && (
           <>
             <Separator />
@@ -516,7 +382,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Signals summary — only if enrichment exists with signals */}
+        {/* Company Signals */}
         {signals.length > 0 && (
           <>
             <Separator />
@@ -555,7 +421,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Enrich button — only when no signals at all */}
+        {/* Enrich button */}
         {signals.length === 0 && showEnrichButton && enrichment !== undefined && (
           <>
             <Separator />
@@ -577,19 +443,19 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Footer: Last run + Analyze button */}
+        {/* Footer: Last run + Recompute button */}
         <Separator />
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] text-muted-foreground">
-            {lead.last_ai_run_at
-              ? `Analyzed ${formatDistanceToNow(new Date(lead.last_ai_run_at), { addSuffix: true })}`
+            {lastComputedAt
+              ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
               : "Never analyzed"}
           </span>
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-xs gap-1"
-            onClick={analyzeDeal}
+            onClick={handleRecompute}
             disabled={isAnalyzing}
           >
             {isAnalyzing ? (
