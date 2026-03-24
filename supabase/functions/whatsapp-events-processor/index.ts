@@ -447,7 +447,7 @@ async function processInboundMessage(
   // ── Bridge to lead interactions timeline ──────────────────
   if (matchedLead) {
     try {
-      await supabase.from("interactions").insert({
+      const { data: waInboundInteraction } = await supabase.from("interactions").insert({
         lead_id: matchedLead.id,
         type: "whatsapp_inbound",
         source: "whatsapp",
@@ -455,7 +455,27 @@ async function processInboundMessage(
         occurred_at: timestamp,
         direction: "inbound",
         from_email: `+${normalizedPhone}`,
-      });
+      }).select("id").single();
+
+      // Project to unified timeline
+      if (waInboundInteraction && workspaceId) {
+        projectTimelineItem(supabase, {
+          workspace_id: workspaceId,
+          lead_id: matchedLead.id,
+          contact_id: contactId,
+          conversation_id: conversationId,
+          channel: "whatsapp",
+          provider: (norm as any).provider || "meta",
+          direction: "inbound",
+          event_type: "whatsapp_inbound",
+          occurred_at: timestamp,
+          source_table: "interactions",
+          source_id: waInboundInteraction.id,
+          snippet_text: bodyText?.substring(0, 500),
+          metadata_json: { from_phone: `+${normalizedPhone}`, provider_message_id: providerMessageId },
+          dedupe_key: whatsappDedupeKey("inbound", providerMessageId, waInboundInteraction.id),
+        }).catch(e => console.warn("[processor] Timeline projection failed:", e));
+      }
     } catch (err: any) {
       console.warn("[whatsapp-events-processor] Non-blocking interaction insert failed:", err.message);
     }
