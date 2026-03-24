@@ -790,7 +790,22 @@ ${customInstructionsText}
     const toneBlock = buildToneBlock(leadTone);
     if (toneBlock) console.log(`[ai_task] [7/TONE] Lead tone override: ${leadTone}`);
 
+    // === CRITICAL: Instructions go FIRST in prompt assembly ===
+    // When custom instructions exist, inject them as the FIRST block so the LLM
+    // sees them before any competing constraints (motion, tone, frameworks, etc.)
+    const topLevelInstructionBlock = hasCustomInstructions
+      ? `=== TOP PRIORITY: CAMPAIGN INSTRUCTIONS ===
+The user has provided specific campaign instructions that MUST be fulfilled.
+These instructions override default behavior and word limits.
+You will see them again in the task prompt below. Do NOT ignore them.
+
+Instructions to fulfill:
+${customInstructionsText}
+=== END TOP PRIORITY ===`
+      : "";
+
     const promptParts: string[] = [];
+    if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
     if (toneBlock) promptParts.push(toneBlock);
     if (styleModifier) promptParts.push(styleModifier);
@@ -801,6 +816,7 @@ ${customInstructionsText}
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");
 
+    if (topLevelInstructionBlock) console.log(`[ai_task] [0/INSTRUCTIONS] Campaign instructions injected at TOP of prompt`);
     if (motionBlock) console.log(`[ai_task] [1/MOTION] ${motion}${isFirstTouch ? " (first_touch)" : ""}`);
     if (styleModifier) console.log(`[ai_task] [2/STYLE] ${styleParts.length} block(s)`);
     if (playbookContext) console.log("[ai_task] [3/PLAYBOOK] Playbook context");
@@ -817,10 +833,16 @@ ${customInstructionsText}
 
     const streamRequested = payload?.stream === true;
 
+    // Build system prompt — append instruction reminder when present
+    let systemPrompt = `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}`;
+    if (hasCustomInstructions) {
+      systemPrompt += `\n\nIMPORTANT SYSTEM OVERRIDE: The user has provided mandatory campaign instructions. You MUST fulfill every instruction. Do NOT drop them for brevity. Instructions: ${customInstructionsText}`;
+    }
+
     const aiRequestBody: Record<string, unknown> = {
       model,
       messages: [
-        { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       max_tokens: hasCustomInstructions ? 4096 : 2048,
