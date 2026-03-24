@@ -172,8 +172,9 @@ export interface CreateLeadInput {
   name: string;
   company: string;
   email: string;
-  source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry';
+  source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry' | 'whatsapp_inbound';
   motion?: string;
+  workspace_id?: string;
 }
 
 export async function createLead(form: CreateLeadInput): Promise<{ id: string }> {
@@ -182,14 +183,29 @@ export async function createLead(form: CreateLeadInput): Promise<{ id: string }>
   if (authErr) throw authErr;
   if (!user) throw new Error('Not logged in');
 
+  // Resolve workspace_id: use provided or fetch from workspace_members
+  let workspaceId = form.workspace_id;
+  if (!workspaceId) {
+    const { data: member } = await supabase
+      .from('workspace_members')
+      .select('workspace_id')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    workspaceId = member?.workspace_id;
+  }
+  if (!workspaceId) throw new Error('No workspace found for user');
+
   const payload = {
     name: form.name?.trim(),
     company: form.company?.trim(),
     email: form.email?.trim().toLowerCase(),
-    strategy: 'fast' as const, // kept for DB column compatibility, no longer used for logic
+    strategy: 'fast' as const,
     motion: form.motion || 'outbound_prospecting',
     source_type: form.source_type || 'manual_entry',
     owner_user_id: user.id,
+    workspace_id: workspaceId,
     last_activity_at: new Date().toISOString(),
   };
 

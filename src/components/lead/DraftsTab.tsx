@@ -793,16 +793,8 @@ function SendWhatsAppButton({ phone, messageText, leadId, selectedIntent, onSent
         throw new Error(result.error || result.details || "WhatsApp send failed");
       }
 
-      // Also log as interaction on the lead
-      await supabase.from("interactions").insert({
-        lead_id: leadId,
-        type: "whatsapp_outbound",
-        source: "whatsapp_api",
-        body_text: messageText,
-        direction: "outbound",
-        occurred_at: new Date().toISOString(),
-      });
-
+      // whatsapp-send edge function already logs the interaction on the lead timeline,
+      // so we only update the sequence state here to avoid duplicate timeline rows.
       const intentUsed = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || "pre_email_2_followup";
       await updateSequenceState(leadId, intentUsed, null, null, "whatsapp");
 

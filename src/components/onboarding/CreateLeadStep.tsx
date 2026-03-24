@@ -84,9 +84,20 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
     try {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
+
+      const { data: member } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (!member) throw new Error("No workspace found");
+
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
+        workspace_id: member.workspace_id,
         source_type: "csv_import",
         motion: "outbound_prospecting",
         strategy: "fast" as const,
