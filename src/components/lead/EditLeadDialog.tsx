@@ -347,6 +347,42 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
 
             <Separator />
 
+            {/* AI Email Tone */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Pencil className="h-4 w-4 text-primary" />
+                AI Email Tone
+              </div>
+              <FormField
+                control={form.control}
+                name="outbound_tone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Outbound Email Style</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="direct">Direct &amp; Blunt</SelectItem>
+                        <SelectItem value="conversational">Conversational</SelectItem>
+                        <SelectItem value="assertive">Assertive / Salesy</SelectItem>
+                        <SelectItem value="consultative">Consultative</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Controls the AI tone for all generated emails to this lead.
+                    </p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <Separator />
+
             {/* WhatsApp Automation Section */}
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
