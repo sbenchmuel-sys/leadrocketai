@@ -684,6 +684,14 @@ serve(async (req) => {
       }
     }
 
+    // === INSTRUCTION PRIORITY: bump word limits when custom instructions exist ===
+    const hasCustomInstructions = !!(enhancedPayload.custom_instructions && String(enhancedPayload.custom_instructions).trim().length > 0);
+    if (hasCustomInstructions && COLD_OUTBOUND_TASKS.has(task)) {
+      const instructionOverride = `\n\n=== CUSTOM INSTRUCTION PRIORITY ===\nCUSTOM INSTRUCTIONS OVERRIDE DEFAULT WORD LIMITS. If Custom Instructions request something specific (e.g. "include meeting CTA", "mention starter kit", "offer discount"), you MUST include it even if it means exceeding the default word target by up to 30 words. Fulfilling user instructions is MORE important than hitting an exact word count. Aim for the original target but never sacrifice an explicit instruction to save words.\n`;
+      enhancedPayload.custom_instructions = instructionOverride + String(enhancedPayload.custom_instructions);
+      console.log(`[ai_task] ✅ Instruction priority override injected for ${task}`);
+    }
+
     const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
 
     const isOutboundMotion = motion === "outbound_prospecting";
@@ -768,6 +776,7 @@ serve(async (req) => {
         { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
         { role: "user", content: userPrompt },
       ],
+      max_tokens: hasCustomInstructions ? 4096 : 2048,
     };
 
     if (streamRequested) aiRequestBody.stream = true;
