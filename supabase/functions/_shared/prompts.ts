@@ -466,8 +466,10 @@ You are writing Email 1 in a cold outbound sequence.
 GOAL
 Get a reply. That's it. Not to pitch, not to educate, not to impress.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 LENGTH
-40–75 words. Target 55 words. If you write more than 75 words, start over.
+{{LENGTH_OVERRIDE}}
 
 STRUCTURE (2 short paragraphs):
 
@@ -476,6 +478,7 @@ One sentence that proves you know who they are. Reference their company, role, o
 
 Paragraph 2:
 One question. Simple enough to answer in 10 seconds. This is your CTA.
+{{INSTRUCTION_CTA_NOTE}}
 
 === CONTEXT SEPARATION (READ CAREFULLY) ===
 
@@ -557,9 +560,6 @@ Rep Context:
 Meeting Link:
 {{MEETING_LINK}}
 
-Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}
-
 GREETING: "Hi" + prospect's first name from Lead Context (Section B)
 SIGN-OFF: "Best," + rep's FIRST NAME ONLY on next line
 CRITICAL: Use ACTUAL names. NEVER output bracketed placeholders.
@@ -577,8 +577,10 @@ They didn't reply to Email 1. That's normal. Don't make it weird.
 GOAL
 Give them a new reason to reply. NOT a reminder that you emailed before.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 LENGTH
-Under 50 words. Count them.
+{{LENGTH_OVERRIDE}}
 
 FEW-SHOT EXAMPLES:
 
@@ -627,9 +629,6 @@ Your last email said:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
-Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}
-
 CONSTRAINTS
 - GREETING: "Hi" + first name
 - SIGN-OFF: "Best," + rep's first name
@@ -647,8 +646,10 @@ They haven't replied to 2 previous emails. Time to add value, not pressure.
 GOAL
 Share one concrete insight or result relevant to their world. Then ask one question.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 LENGTH
-Under 60 words.
+{{LENGTH_OVERRIDE}}
 
 FEW-SHOT EXAMPLE:
 
@@ -690,9 +691,6 @@ Your last email said:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
-Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}
-
 CONSTRAINTS
 - GREETING: "Hi" + first name
 - SIGN-OFF: "Best," + rep's first name
@@ -708,8 +706,10 @@ Final email in the sequence. The breakup.
 GOAL
 Close the loop cleanly. Make it easy for them to reply "yes" or "no."
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 LENGTH
-Under 40 words. Seriously — 40 words max.
+{{LENGTH_OVERRIDE}}
 
 FEW-SHOT EXAMPLE:
 
@@ -734,9 +734,6 @@ Lead Context:
 
 Rep Context:
 {{REP_CONTEXT}}
-
-Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
 - GREETING: "Hi" + first name
