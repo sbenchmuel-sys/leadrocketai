@@ -32,6 +32,7 @@ interface LeadImportDialogProps {
 }
 
 export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
+  const { workspaceId } = useWorkspace();
   const [isOpen, setIsOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [parsedLeads, setParsedLeads] = useState<ParsedLead[]>([]);
@@ -69,6 +70,10 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
   const handleImport = async () => {
     if (parsedLeads.length === 0) return;
+    if (!workspaceId) {
+      toast.error("No active workspace selected. Please select a workspace first.");
+      return;
+    }
 
     setIsImporting(true);
 
@@ -76,20 +81,10 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
 
-      // Resolve workspace_id
-      const { data: member } = await supabase
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (!member) throw new Error("No workspace found");
-
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
-        workspace_id: member.workspace_id,
+        workspace_id: workspaceId,
         source_type: preset.source_type,
         motion: preset.motion,
         strategy: 'fast' as const,
