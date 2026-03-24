@@ -14,6 +14,30 @@ export interface AuthzResult {
   workspaceId?: string;
 }
 
+// ── Internal caller verification ────────────────────────────
+// Used by edge functions that are called by other edge functions
+// (e.g. automation-executor → gmail-send).
+// Callers pass: X-Internal-Secret: <value of INTERNAL_API_SECRET>
+// This replaces the old pattern of comparing Bearer token to SUPABASE_SERVICE_ROLE_KEY.
+
+export function isInternalCaller(req: Request): boolean {
+  const secret = req.headers.get("X-Internal-Secret");
+  if (!secret) return false;
+  const expected = Deno.env.get("INTERNAL_API_SECRET");
+  if (!expected) {
+    logger.warn("authz_internal_secret_not_configured");
+    return false;
+  }
+  // Constant-time-ish comparison (good enough for edge functions;
+  // Deno doesn't expose crypto.timingSafeEqual for strings)
+  if (secret.length !== expected.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < secret.length; i++) {
+    mismatch |= secret.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
 /**
  * Verify the caller can access a lead.
  *

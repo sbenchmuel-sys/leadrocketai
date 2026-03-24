@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { assertLeadAccess } from "../_shared/authz.ts";
+import { assertLeadAccess, isInternalCaller } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,12 +39,12 @@ serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const isServiceRole = token === supabaseServiceKey;
+    const isInternal = isInternalCaller(req);
     const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
     let userId: string;
-    if (isServiceRole) {
-      userId = "service-role";
+    if (isInternal) {
+      userId = "internal";
     } else {
       const anonClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
         global: { headers: { Authorization: authHeader } },
@@ -67,8 +67,8 @@ serve(async (req) => {
       });
     }
 
-    // Authz: verify caller can access this lead (skip for service-role)
-    if (!isServiceRole) {
+    // Authz: verify caller can access this lead (skip for internal callers)
+    if (!isInternal) {
       const authzCheck = await assertLeadAccess(adminClient, lead_id, userId);
       if (!authzCheck.ok) {
         return new Response(JSON.stringify({ ok: false, error: authzCheck.error }), {

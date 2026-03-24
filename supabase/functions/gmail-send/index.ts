@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
+import { isInternalCaller } from "../_shared/authz.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -115,18 +116,17 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     
-    // Check if this is a service-role call (from automation-executor)
-    const token = authHeader.replace("Bearer ", "");
-    const isServiceRole = token === supabaseServiceKey;
+    // Check if this is an internal call (from automation-executor via X-Internal-Secret header)
+    const isInternal = isInternalCaller(req);
     
     let userId: string;
     
-    if (isServiceRole) {
-      // For service-role calls, parse body first to get ownerUserId
+    if (isInternal) {
+      // For internal calls, parse body first to get ownerUserId
       const bodyText = await req.text();
       const bodyJson = JSON.parse(bodyText);
       if (!bodyJson.ownerUserId) {
-        return new Response(JSON.stringify({ ok: false, error: "Service role calls require ownerUserId" }), {
+        return new Response(JSON.stringify({ ok: false, error: "Internal calls require ownerUserId" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });

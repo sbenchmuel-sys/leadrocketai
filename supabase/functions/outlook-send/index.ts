@@ -10,6 +10,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { isInternalCaller } from "../_shared/authz.ts";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 
@@ -66,8 +67,7 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const token = authHeader.replace("Bearer ", "");
-    const isServiceRole = token === supabaseServiceKey;
+    const isInternal = isInternalCaller(req);
 
     // Parse body first (req.json() can only be called once)
     const body = await req.json();
@@ -75,9 +75,9 @@ serve(async (req) => {
 
     // Auth check
     let userId: string;
-    if (isServiceRole) {
+    if (isInternal) {
       if (!ownerUserId) {
-        return new Response(JSON.stringify({ ok: false, error: "Service role calls require ownerUserId" }), {
+        return new Response(JSON.stringify({ ok: false, error: "Internal calls require ownerUserId" }), {
           status: 400,
           headers: { ...cors, "Content-Type": "application/json" },
         });
