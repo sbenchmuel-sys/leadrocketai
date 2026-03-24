@@ -1170,6 +1170,87 @@ export type Database = {
           },
         ]
       }
+      lead_intelligence: {
+        Row: {
+          channel_recommendations_json: Json
+          created_at: string
+          deal_factors_json: Json
+          engagement_signals_json: Json
+          evidence_json: Json
+          id: string
+          last_computed_at: string
+          lead_id: string
+          milestones_json: Json
+          model_used: string | null
+          next_step_reason: string | null
+          objections_json: Json
+          recommended_next_step: string | null
+          risks_json: Json
+          source_counts_json: Json
+          summary_text: string | null
+          updated_at: string
+          version: number
+          workspace_id: string
+        }
+        Insert: {
+          channel_recommendations_json?: Json
+          created_at?: string
+          deal_factors_json?: Json
+          engagement_signals_json?: Json
+          evidence_json?: Json
+          id?: string
+          last_computed_at?: string
+          lead_id: string
+          milestones_json?: Json
+          model_used?: string | null
+          next_step_reason?: string | null
+          objections_json?: Json
+          recommended_next_step?: string | null
+          risks_json?: Json
+          source_counts_json?: Json
+          summary_text?: string | null
+          updated_at?: string
+          version?: number
+          workspace_id: string
+        }
+        Update: {
+          channel_recommendations_json?: Json
+          created_at?: string
+          deal_factors_json?: Json
+          engagement_signals_json?: Json
+          evidence_json?: Json
+          id?: string
+          last_computed_at?: string
+          lead_id?: string
+          milestones_json?: Json
+          model_used?: string | null
+          next_step_reason?: string | null
+          objections_json?: Json
+          recommended_next_step?: string | null
+          risks_json?: Json
+          source_counts_json?: Json
+          summary_text?: string | null
+          updated_at?: string
+          version?: number
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_intelligence_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: true
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_intelligence_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_signals: {
         Row: {
           confidence_score: number | null
