@@ -48,17 +48,23 @@ Deno.serve(async (req) => {
       return json({ error: authzCheck.error }, authzCheck.status || 403);
     }
 
-    // ── 1) Load lead intelligence ──
+    // ── 1) Load canonical intelligence first ──
+    const { data: intelligence } = await admin
+      .from("lead_intelligence")
+      .select("summary_text, recommended_next_step, next_step_reason, risks_json, milestones_json, objections_json, engagement_signals_json, channel_recommendations_json")
+      .eq("lead_id", lead_id)
+      .maybeSingle();
+
+    // ── 2) Load lead basics ──
     const { data: lead } = await admin
       .from("leads")
-      .select("name, company, email, strategy, stage, next_step, next_step_reason, risks_json, milestones_json, personal_notes")
+      .select("name, company, email, strategy, stage, next_step, next_step_reason, personal_notes")
       .eq("id", lead_id)
       .single();
 
     if (!lead) return json({ suggestions: [] });
 
-    // ── 2) Load enrichment signals (defensive) ──
-    // Resolve workspace for the user
+    // ── 3) Load enrichment signals (defensive) ──
     const { data: membership } = await admin
       .from("workspace_members")
       .select("workspace_id")
@@ -83,31 +89,23 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 3) Load recent interactions ──
-    const { data: interactions } = await admin
-      .from("interactions")
-      .select("type, subject, ai_summary, direction, occurred_at")
-      .eq("lead_id", lead_id)
-      .order("occurred_at", { ascending: false })
-      .limit(10);
-
-    const recentContext = (interactions ?? [])
-      .map((i) => `[${i.type}] ${i.direction ?? ""} ${i.subject ?? ""}: ${i.ai_summary ?? ""}`.trim())
-      .join("\n");
-
-    // ── 4) Build deterministic context ──
-    const risks = Array.isArray(lead.risks_json) ? (lead.risks_json as any[]).slice(0, 2) : [];
-    const milestones = Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]).slice(0, 2) : [];
+    // ── 4) Build context from canonical intelligence + lead data ──
+    const nextStep = intelligence?.recommended_next_step || lead.next_step;
+    const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
+    const risks = intelligence?.risks_json?.length ? (intelligence.risks_json as any[]).slice(0, 2) : [];
+    const milestones = intelligence?.milestones_json?.length ? (intelligence.milestones_json as any[]).slice(0, 2) : [];
+    const objections = intelligence?.objections_json?.length ? (intelligence.objections_json as string[]).slice(0, 2) : [];
 
     const contextBlock = [
       `Lead: ${lead.name} at ${lead.company}`,
       `Stage: ${lead.stage}`,
-      lead.next_step ? `Next step: ${lead.next_step}` : null,
-      lead.next_step_reason ? `Why: ${lead.next_step_reason}` : null,
+      intelligence?.summary_text ? `Intelligence: ${intelligence.summary_text}` : null,
+      nextStep ? `Next step: ${nextStep}` : null,
+      nextStepReason ? `Why: ${nextStepReason}` : null,
       risks.length > 0 ? `Risks: ${risks.map((r: any) => r.issue).join("; ")}` : null,
       milestones.length > 0 ? `Milestones: ${milestones.map((m: any) => m.description).join("; ")}` : null,
+      objections.length > 0 ? `Objections: ${objections.join("; ")}` : null,
       topSignals.length > 0 ? `Company signals: ${topSignals.map((s) => s.signal).join(", ")}` : null,
-      recentContext ? `Recent interactions:\n${recentContext}` : null,
       user_draft ? `User's current draft: ${user_draft}` : null,
     ].filter(Boolean).join("\n");
 
