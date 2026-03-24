@@ -261,37 +261,47 @@ async function processInboundMessage(
 
   // Auto-create minimal lead if none found
   if (!matchedLead) {
-    const accelerationUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const { data: newLead, error: newLeadErr } = await supabase
-      .from("leads")
-      .insert({
-        name: "WhatsApp Lead",
-        email: `wa_${normalizedPhone}@auto.leadrocket`,
-        company: "Unknown",
-        strategy: "reply",
-        whatsapp_number: normalizedPhone,
-        source_type: "whatsapp_inbound",
-        stage: "new",
-        auto_created: true,
-        engagement_score: 5,
-        acceleration_until: accelerationUntil,
-        owner_user_id: ownerUserId,
-        wa_opted_in: true,
-      } as any)
-      .select(leadSelectCols)
-      .single();
-
-    if (newLeadErr || !newLead) {
-      console.error("[processor] Failed to auto-create lead:", newLeadErr);
-    } else {
-      matchedLead = newLead;
+    if (!workspaceId) {
+      console.warn("[processor] Cannot auto-create lead: no workspace_id on event");
       await supabase.from("automation_logs").insert({
-        workspace_id: workspaceId,
-        lead_id: newLead.id,
-        decision: "auto_created_from_whatsapp",
-        reason: `phone:${normalizedPhone}`,
+        workspace_id: workspaceId || "00000000-0000-0000-0000-000000000000",
+        decision: "lead_creation_skipped",
+        reason: `no_workspace_id for phone:${normalizedPhone}`,
       } as any);
-      console.log("[processor] Auto-created lead:", newLead.id);
+    } else {
+      const accelerationUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const { data: newLead, error: newLeadErr } = await supabase
+        .from("leads")
+        .insert({
+          name: "WhatsApp Lead",
+          email: `wa_${normalizedPhone}@auto.leadrocket`,
+          company: "Unknown",
+          strategy: "fast",
+          whatsapp_number: normalizedPhone,
+          source_type: "whatsapp_inbound",
+          stage: "new",
+          auto_created: true,
+          engagement_score: 5,
+          acceleration_until: accelerationUntil,
+          owner_user_id: ownerUserId,
+          workspace_id: workspaceId,
+          wa_opted_in: true,
+        } as any)
+        .select(leadSelectCols)
+        .single();
+
+      if (newLeadErr || !newLead) {
+        console.error("[processor] Failed to auto-create lead:", newLeadErr);
+      } else {
+        matchedLead = newLead;
+        await supabase.from("automation_logs").insert({
+          workspace_id: workspaceId,
+          lead_id: newLead.id,
+          decision: "auto_created_from_whatsapp",
+          reason: `phone:${normalizedPhone}`,
+        } as any);
+        console.log("[processor] Auto-created lead:", newLead.id);
+      }
     }
   }
 

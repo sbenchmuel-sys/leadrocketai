@@ -75,12 +75,23 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
 
+      // Resolve workspace_id
+      const { data: member } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (!member) throw new Error("No workspace found");
+
       const leadsToInsert = parsedLeads.map((lead) => ({
         ...lead,
         owner_user_id: user.id,
+        workspace_id: member.workspace_id,
         source_type: preset.source_type,
         motion: preset.motion,
-        strategy: 'fast' as const, // kept for DB compatibility
+        strategy: 'fast' as const,
         last_activity_at: new Date().toISOString(),
       }));
 

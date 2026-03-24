@@ -240,9 +240,9 @@ export function useGmailSync() {
             updates.first_outbound_at = new Date().toISOString();
           }
 
-          // Move from "new" to "outreach" stage
+          // Move from "new" to "contacted" stage
           if (leadData.stage === "new") {
-            updates.stage = "outreach";
+            updates.stage = "contacted";
             updates.next_action_key = "wait_reply";
             updates.next_action_label = "Waiting for reply";
           }
