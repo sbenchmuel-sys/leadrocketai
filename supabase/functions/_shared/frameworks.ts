@@ -76,25 +76,25 @@ const EMAIL_SEQUENCE: Record<number, SequenceStepFramework> = {
     structure: `1. One line that shows you know their business — reference their role, company, or industry specifically
 2. One direct question about a problem they likely face`,
     goal: "Get a reply by being specific and human",
-    constraints: "40–75 words. One CTA. No fluff. No calendar links. No features.",
+    constraints: "One CTA. No fluff. No calendar links. No features.",
   },
   2: {
     structure: `1. One-line callback to your previous email (not "just following up")
 2. One new angle: a stat, trend, or specific challenge relevant to their role`,
     goal: "Add a reason to reply that wasn't in email 1",
-    constraints: "Under 60 words. Different angle than email 1. One question.",
+    constraints: "Different angle than email 1. One question.",
   },
   3: {
     structure: `1. Share one concrete result or example relevant to their situation
 2. Ask if it's worth a conversation`,
     goal: "Give them proof, make it easy to say yes",
-    constraints: "Under 70 words. One proof point. One soft CTA.",
+    constraints: "One proof point. One soft CTA.",
   },
   4: {
     structure: `1. Acknowledge you've been reaching out
 2. Ask if you should close the loop or if timing is just off`,
     goal: "Respectful exit that gets a response",
-    constraints: "Under 55 words. No guilt. No fake urgency.",
+    constraints: "No guilt. No fake urgency.",
   },
 };
 
