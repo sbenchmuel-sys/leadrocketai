@@ -211,7 +211,7 @@ serve(async (req) => {
     // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
     const { data: leadData } = await supabase
       .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
       .eq("id", leadId)
       .single();
 
@@ -608,6 +608,26 @@ serve(async (req) => {
         } else {
           synced++;
           existingMessageIds.add(gmailMessageId);
+
+          // Project into unified timeline ledger
+          if (leadData?.workspace_id) {
+            projectTimelineItem(serviceSupabase, {
+              workspace_id: leadData.workspace_id,
+              lead_id: leadId,
+              channel: "email",
+              provider: "gmail",
+              direction,
+              event_type: type,
+              occurred_at: occurredAt,
+              source_table: "interactions",
+              source_id: gmailMessageId,
+              snippet_text: bodyText.substring(0, 500),
+              subject,
+              status_json: {},
+              metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
+              dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
+            });
+          }
         }
       } catch (err) {
         errors.push(`Error processing message ${gmailMessageId}: ${err instanceof Error ? err.message : "Unknown"}`);

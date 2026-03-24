@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { projectTimelineItem, meetingDedupeKey } from "../_shared/timelineProjector.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -330,7 +331,7 @@ serve(async (req) => {
     // Get all leads for this user for matching
     const { data: leads } = await serviceSupabase
       .from("leads")
-      .select("id, name, company, email, last_activity_at, last_inbound_at, last_outbound_at")
+      .select("id, name, company, email, last_activity_at, last_inbound_at, last_outbound_at, workspace_id")
       .eq("owner_user_id", requestUserId);
 
     // Get existing gmail_message_ids to avoid duplicates
