@@ -34,6 +34,7 @@ const editLeadSchema = z.object({
   initial_message: z.string().trim().max(5000).optional().or(z.literal("")),
   wa_opted_in: z.boolean(),
   automation_mode: z.enum(["manual", "suggest_only", "hybrid", "full_auto"]).nullable(),
+  outbound_tone: z.enum(["direct", "conversational", "assertive", "consultative"]),
 });
 
 type EditLeadFormData = z.infer<typeof editLeadSchema>;
@@ -68,6 +69,7 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
       initial_message: lead.initial_message || "",
       wa_opted_in: lead.wa_opted_in ?? false,
       automation_mode: (lead.automation_mode as "manual" | "suggest_only" | "hybrid" | "full_auto" | null) ?? null,
+      outbound_tone: ((lead as any).outbound_tone as "direct" | "conversational" | "assertive" | "consultative") || "direct",
     },
   });
 
@@ -95,7 +97,8 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
           initial_message: data.initial_message || null,
           wa_opted_in: data.wa_opted_in,
           automation_mode: data.automation_mode,
-        })
+          outbound_tone: data.outbound_tone,
+        } as any)
         .eq("id", lead.id);
 
       if (error) throw error;
