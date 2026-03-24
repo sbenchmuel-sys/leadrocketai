@@ -16,6 +16,7 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
+import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
