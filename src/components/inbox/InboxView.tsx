@@ -8,6 +8,8 @@ import { UnifiedInsightsPanel } from "./UnifiedInsightsPanel";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import type { ConversationListItem, ConversationAnalysis, ReplySuggestion } from "@/lib/inboxQueries";
 import { fetchAllContactAnalysis } from "@/lib/inboxQueries";
+import { getLeadIntelligence } from "@/lib/supabaseQueries";
+import type { LeadIntelligence } from "@/lib/supabaseQueries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +18,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Sheet,
@@ -29,6 +30,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowRight, Lightbulb, BarChart3, User, Search, SlidersHorizontal,
   ArrowUpDown, Bookmark, X, Flame, Clock, AlertTriangle, Inbox, MessageSquare,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { flags } from "@/lib/featureFlags";
@@ -56,8 +58,6 @@ type RightTab = "next" | "insights" | "lead";
 const QUICK_CHIPS: { key: QuickChip; label: string; icon: React.ReactNode }[] = [
   { key: "needs_action", label: "Needs action", icon: <AlertTriangle className="h-3 w-3" /> },
   { key: "new_inbound", label: "New inbound", icon: <Inbox className="h-3 w-3" /> },
-  { key: "unreplied", label: "Unreplied", icon: <MessageSquare className="h-3 w-3" /> },
-  { key: "hot", label: "Hot", icon: <Flame className="h-3 w-3" /> },
   { key: "overdue", label: "Overdue", icon: <Clock className="h-3 w-3" /> },
 ];
 
@@ -68,11 +68,10 @@ const SORT_OPTIONS: { key: InboxSort; label: string }[] = [
   { key: "new_inbound", label: "New Inbound" },
 ];
 
+// Only show channels that are actually implemented
 const CHANNEL_OPTIONS: { key: CanonicalChannel; label: string }[] = [
   { key: "email", label: "Email" },
   { key: "whatsapp", label: "WhatsApp" },
-  { key: "sms", label: "SMS" },
-  { key: "voice", label: "Voice" },
 ];
 
 // ── Main component ─────────────────────────────────────────────────────
@@ -84,6 +83,7 @@ export function InboxView() {
   const [replySuggestions, setReplySuggestions] = useState<ReplySuggestion[]>([]);
   const [recommendedChannel, setRecommendedChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [leadSnapshot, setLeadSnapshot] = useState<LeadSnapshot | null>(null);
+  const [leadIntelligence, setLeadIntelligence] = useState<LeadIntelligence | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("next");
   const [threadReloadKey, setThreadReloadKey] = useState(0);
 
@@ -113,6 +113,7 @@ export function InboxView() {
   const handleConvoSelect = useCallback((convo: ConversationListItem) => {
     setSelectedConvo(convo);
     setLeadSnapshot(null);
+    setLeadIntelligence(null);
     setAllAnalysis([]);
     setRightTab("next");
   }, []);
@@ -130,13 +131,16 @@ export function InboxView() {
     }
   }, []);
 
-  // Fetch lead snapshot when conversation changes
+  // Fetch lead snapshot + canonical intelligence when conversation changes
   useEffect(() => {
     if (!selectedConvo?.lead_id) {
       setLeadSnapshot(null);
+      setLeadIntelligence(null);
       return;
     }
-    fetchLeadSnapshot(selectedConvo.lead_id).then(setLeadSnapshot).catch(console.error);
+    const leadId = selectedConvo.lead_id;
+    fetchLeadSnapshot(leadId).then(setLeadSnapshot).catch(console.error);
+    getLeadIntelligence(leadId).then(setLeadIntelligence).catch(console.error);
   }, [selectedConvo?.lead_id]);
 
   // Fetch all contact analysis for insights
@@ -232,7 +236,7 @@ export function InboxView() {
                     />
                   </div>
 
-                  {/* Quick chips */}
+                  {/* Quick chips — only show chips backed by reliable data */}
                   <div className="flex gap-1 overflow-x-auto pb-0.5">
                     {QUICK_CHIPS.map((chip) => (
                       <button
@@ -333,7 +337,7 @@ export function InboxView() {
                   {/* Tab content */}
                   <div className="flex-1 overflow-y-auto">
                     {rightTab === "next" && (
-                      <NextStepPanel lead={leadSnapshot} analysis={analysis} />
+                      <NextStepPanel lead={leadSnapshot} intelligence={leadIntelligence} analysis={analysis} />
                     )}
                     {rightTab === "insights" && (
                       <UnifiedInsightsPanel
@@ -381,7 +385,7 @@ function FilterDrawer({
         </SheetHeader>
 
         <div className="mt-4 space-y-5">
-          {/* Channels */}
+          {/* Channels — only implemented ones */}
           <div>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Channels</span>
             <div className="space-y-2">
@@ -415,7 +419,7 @@ function FilterDrawer({
                   key={rs}
                   onClick={() => onChange(() => setInboxRevenueState(inboxState.revenueState === rs ? null : rs))}
                   className={cn(
-                    "px-2 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                    "text-[11px] px-2 py-1 rounded-full border transition-colors capitalize",
                     inboxState.revenueState === rs
                       ? "bg-primary text-primary-foreground border-primary"
                       : "border-border text-muted-foreground hover:text-foreground"
@@ -430,34 +434,23 @@ function FilterDrawer({
           {/* Waiting On */}
           <div>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">Waiting On</span>
-            <div className="flex gap-1.5">
-              {([["me", "Me"], ["lead", "Lead"], ["automation", "Automation"]] as const).map(([key, label]) => (
+            <div className="flex flex-wrap gap-1.5">
+              {(["me", "lead", "automation"] as const).map((w) => (
                 <button
-                  key={key}
-                  onClick={() => onChange(() => setInboxWaitingOn(inboxState.waitingOn === key ? null : key))}
+                  key={w}
+                  onClick={() => onChange(() => setInboxWaitingOn(inboxState.waitingOn === w ? null : w))}
                   className={cn(
-                    "px-2 py-1 rounded-full text-[11px] font-medium border transition-colors",
-                    inboxState.waitingOn === key
+                    "text-[11px] px-2 py-1 rounded-full border transition-colors capitalize",
+                    inboxState.waitingOn === w
                       ? "bg-primary text-primary-foreground border-primary"
                       : "border-border text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  {label}
+                  {w}
                 </button>
               ))}
             </div>
           </div>
-
-          {/* Clear all */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full text-xs"
-            onClick={() => onChange(() => clearInboxFilters())}
-          >
-            <X className="h-3 w-3 mr-1" />
-            Clear all filters
-          </Button>
         </div>
       </SheetContent>
     </Sheet>
@@ -493,17 +486,25 @@ function RightTabButton({
   );
 }
 
-// ── Next Step panel ────────────────────────────────────────────────────
+// ── Next Step panel — reads from canonical lead_intelligence ───────────
 
 function NextStepPanel({
   lead,
+  intelligence,
   analysis,
 }: {
   lead: LeadSnapshot | null;
+  intelligence: LeadIntelligence | null;
   analysis: ConversationAnalysis | null;
 }) {
-  const nextAction = lead?.next_action_label || lead?.next_step || null;
-  const reason = lead?.next_step_reason || null;
+  // Canonical intelligence takes priority over legacy lead fields
+  const hasCanonical = intelligence !== null;
+  const nextAction = hasCanonical
+    ? intelligence.recommended_next_step
+    : (lead?.next_action_label || lead?.next_step || null);
+  const reason = hasCanonical
+    ? intelligence.next_step_reason
+    : lead?.next_step_reason;
   const sentiment = analysis?.sentiment;
   const urgency = analysis?.urgency;
 
@@ -518,6 +519,14 @@ function NextStepPanel({
 
   return (
     <div className="p-4 space-y-4">
+      {/* Source indicator */}
+      {hasCanonical && (
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          <Brain className="h-2.5 w-2.5" />
+          <span>From lead intelligence</span>
+        </div>
+      )}
+
       {/* Best next step */}
       <div>
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
@@ -531,21 +540,23 @@ function NextStepPanel({
         )}
       </div>
 
-      {/* Quick signals */}
-      <div className="grid grid-cols-2 gap-3">
-        {sentiment && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Sentiment</span>
-            <span className="text-xs font-medium text-foreground capitalize">{sentiment}</span>
-          </div>
-        )}
-        {urgency && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Urgency</span>
-            <span className="text-xs font-medium text-foreground capitalize">{urgency}</span>
-          </div>
-        )}
-      </div>
+      {/* Quick signals from conversation */}
+      {(sentiment || urgency) && (
+        <div className="grid grid-cols-2 gap-3">
+          {sentiment && (
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Sentiment</span>
+              <span className="text-xs font-medium text-foreground capitalize">{sentiment}</span>
+            </div>
+          )}
+          {urgency && (
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Urgency</span>
+              <span className="text-xs font-medium text-foreground capitalize">{urgency}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* CTA */}
       {lead && (

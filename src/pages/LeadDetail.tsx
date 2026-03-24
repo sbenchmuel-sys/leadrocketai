@@ -12,6 +12,7 @@ import MeetingsTab from "@/components/lead/MeetingsTab";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
+import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
@@ -30,7 +31,6 @@ export default function LeadDetail() {
   const handleActionComplete = async () => {
     await loadLead();
     setRefreshKey(prev => prev + 1);
-    // Navigate back to origin after successful primary action
     navigate(backRoute);
   };
 
@@ -105,14 +105,17 @@ export default function LeadDetail() {
       {/* Split layout: Main content + Side panel */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main content — 2/3 */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 space-y-6">
+          {/* Canonical Intelligence — always visible above tabs */}
+          <UnifiedIntelligenceCard lead={lead} mode="compact" onUpdated={handleUpdate} />
+
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="w-full justify-start">
               <TabsTrigger value="timeline">Timeline</TabsTrigger>
               <TabsTrigger value="drafts">Drafts</TabsTrigger>
               <TabsTrigger value="meetings">Meetings</TabsTrigger>
               <TabsTrigger value="upload">Upload</TabsTrigger>
-              <TabsTrigger value="recommendations">Analysis</TabsTrigger>
+              <TabsTrigger value="analysis">Deep Analysis</TabsTrigger>
             </TabsList>
 
             <TabsContent value="timeline" className="mt-6">
@@ -127,7 +130,7 @@ export default function LeadDetail() {
             <TabsContent value="upload" className="mt-6">
               <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
             </TabsContent>
-            <TabsContent value="recommendations" className="mt-6">
+            <TabsContent value="analysis" className="mt-6">
               <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
             </TabsContent>
           </Tabs>
