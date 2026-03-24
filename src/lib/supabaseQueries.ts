@@ -305,6 +305,114 @@ export async function getLeadInteractions(leadId: string, includeHidden = false)
   return data ?? [];
 }
 
+// ============================================
+// UNIFIED TIMELINE QUERIES (lead_timeline_items)
+// ============================================
+
+export interface TimelineItem {
+  id: string;
+  lead_id: string;
+  channel: string;
+  provider: string | null;
+  direction: string | null;
+  event_type: string;
+  occurred_at: string;
+  source_table: string;
+  source_id: string;
+  snippet_text: string | null;
+  subject: string | null;
+  status_json: Record<string, unknown>;
+  metadata_json: Record<string, unknown>;
+  dedupe_key: string;
+  contact_id: string | null;
+  conversation_id: string | null;
+}
+
+export async function getLeadTimeline(
+  leadId: string,
+  options?: { includeHidden?: boolean; channel?: string; limit?: number }
+): Promise<TimelineItem[]> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  if (isDemoMode()) {
+    // Fallback: convert demo interactions to timeline shape
+    const demoInteractions = getDemoInteractions(leadId) as unknown as InteractionItem[];
+    return demoInteractions.map(i => ({
+      id: i.id,
+      lead_id: i.lead_id,
+      channel: i.type.includes('email') ? 'email' : i.type.includes('whatsapp') ? 'whatsapp' : 'system',
+      provider: i.source || null,
+      direction: i.type.includes('inbound') ? 'inbound' : i.type.includes('outbound') ? 'outbound' : null,
+      event_type: i.type,
+      occurred_at: i.occurred_at,
+      source_table: 'interactions',
+      source_id: i.id,
+      snippet_text: i.body_text,
+      subject: i.subject || null,
+      status_json: { hidden: i.hidden, ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
+      metadata_json: { gmail_message_id: i.gmail_message_id, from_email: i.from_email, to_email: i.to_email, ai_summary: i.ai_summary },
+      dedupe_key: i.id,
+      contact_id: null,
+      conversation_id: null,
+    }));
+  }
+
+  let query = supabase
+    .from('lead_timeline_items')
+    .select('id, lead_id, channel, provider, direction, event_type, occurred_at, source_table, source_id, snippet_text, subject, status_json, metadata_json, dedupe_key, contact_id, conversation_id')
+    .eq('lead_id', leadId)
+    .order('occurred_at', { ascending: false })
+    .limit(options?.limit ?? 200);
+
+  if (!options?.includeHidden) {
+    // Filter out hidden items using the status_json field
+    query = query.not('status_json->>hidden', 'eq', 'true');
+  }
+
+  if (options?.channel) {
+    query = query.eq('channel', options.channel);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as TimelineItem[];
+}
+
+export async function hideTimelineItem(itemId: string): Promise<void> {
+  if (isDemoMode()) return;
+  // Update both the timeline item and the source interaction
+  const { data: item } = await supabase
+    .from('lead_timeline_items')
+    .select('source_table, source_id, status_json')
+    .eq('id', itemId)
+    .single();
+
+  if (item) {
+    const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: true };
+    await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
+    if (item.source_table === 'interactions') {
+      try { await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id); } catch { /* non-blocking */ }
+    }
+  }
+}
+
+export async function unhideTimelineItem(itemId: string): Promise<void> {
+  if (isDemoMode()) return;
+  const { data: item } = await supabase
+    .from('lead_timeline_items')
+    .select('source_table, source_id, status_json')
+    .eq('id', itemId)
+    .single();
+
+  if (item) {
+    const newStatus = { ...(item.status_json as Record<string, unknown>), hidden: false };
+    await supabase.from('lead_timeline_items').update({ status_json: newStatus }).eq('id', itemId);
+    if (item.source_table === 'interactions') {
+      try { await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id); } catch { /* non-blocking */ }
+    }
+  }
+}
+
 export async function hideInteraction(interactionId: string): Promise<void> {
   if (isDemoMode()) return;
   const { error } = await supabase

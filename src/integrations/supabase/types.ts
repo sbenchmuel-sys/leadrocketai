@@ -1217,6 +1217,108 @@ export type Database = {
           },
         ]
       }
+      lead_timeline_items: {
+        Row: {
+          channel: string
+          contact_id: string | null
+          conversation_id: string | null
+          created_at: string
+          dedupe_key: string
+          direction: string | null
+          event_type: string
+          id: string
+          lead_id: string
+          metadata_json: Json | null
+          occurred_at: string
+          provider: string | null
+          snippet_text: string | null
+          source_id: string
+          source_table: string
+          status_json: Json | null
+          subject: string | null
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          channel?: string
+          contact_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          dedupe_key: string
+          direction?: string | null
+          event_type: string
+          id?: string
+          lead_id: string
+          metadata_json?: Json | null
+          occurred_at?: string
+          provider?: string | null
+          snippet_text?: string | null
+          source_id: string
+          source_table: string
+          status_json?: Json | null
+          subject?: string | null
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          channel?: string
+          contact_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          dedupe_key?: string
+          direction?: string | null
+          event_type?: string
+          id?: string
+          lead_id?: string
+          metadata_json?: Json | null
+          occurred_at?: string
+          provider?: string | null
+          snippet_text?: string | null
+          source_id?: string
+          source_table?: string
+          status_json?: Json | null
+          subject?: string | null
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_timeline_items_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_timeline_items_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_timeline_items_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "manager_conversation_metrics"
+            referencedColumns: ["conversation_id"]
+          },
+          {
+            foreignKeyName: "lead_timeline_items_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_timeline_items_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           acceleration_until: string | null

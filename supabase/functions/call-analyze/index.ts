@@ -8,6 +8,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { CALL_DEFAULTS } from "../_shared/callConfig.ts";
+import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -498,15 +499,35 @@ Deno.serve(async (req) => {
     // Bridge to interactions table if lead is linked
     if (session.lead_id) {
       const summary = (normalized.summaryShort as string) || "Phone call completed";
-      await supabase.from("interactions").insert({
+      const callOccurredAt = new Date().toISOString();
+      const { data: callInteraction } = await supabase.from("interactions").insert({
         lead_id: session.lead_id,
         type: "phone_call",
         source: "twilio",
         direction: session.direction ?? "inbound",
         body_text: summary,
         subject: `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`,
-        occurred_at: new Date().toISOString(),
-      });
+        occurred_at: callOccurredAt,
+      }).select("id").single();
+
+      // Project to unified timeline
+      if (callInteraction) {
+        projectTimelineItem(supabase, {
+          workspace_id: session.workspace_id,
+          lead_id: session.lead_id,
+          channel: "voice",
+          provider: "twilio",
+          direction: session.direction ?? "inbound",
+          event_type: "phone_call",
+          occurred_at: session.started_at || callOccurredAt,
+          source_table: "call_sessions",
+          source_id: callSessionId,
+          snippet_text: summary?.substring(0, 500),
+          subject: `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`,
+          metadata_json: { call_session_id: callSessionId, duration_sec: session.duration_sec, analysis_id: analysisId },
+          dedupe_key: callDedupeKey(callSessionId),
+        }).catch(e => logger.warn("analyze_timeline_projection_failed", { error: String(e) }));
+      }
       logger.info("analyze_bridged_to_interactions", { leadId: session.lead_id });
     }
 
