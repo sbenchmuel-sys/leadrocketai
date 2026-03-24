@@ -5,6 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { WhatsAppService } from "../_shared/whatsapp/service.ts";
+import { assertConversationAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
@@ -65,7 +66,14 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  // ── Load conversation ─────────────────────────────
+  // ── Workspace-safe conversation access ─────────
+  const authzCheck = await assertConversationAccess(supabase, conversation_id, userId);
+  if (!authzCheck.ok) {
+    return new Response(JSON.stringify({ error: authzCheck.error }), {
+      status: authzCheck.status || 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   const { data: convo, error: convoErr } = await supabase
     .from("conversations")
     .select("id, workspace_id, integration_id, contact_id, owner_user_id")
@@ -75,11 +83,6 @@ Deno.serve(async (req) => {
   if (convoErr || !convo) {
     return new Response(JSON.stringify({ error: "Conversation not found" }), {
       status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-  if (convo.owner_user_id !== userId) {
-    return new Response(JSON.stringify({ error: "Forbidden" }), {
-      status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
   if (!convo.integration_id) {

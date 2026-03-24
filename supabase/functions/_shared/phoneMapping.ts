@@ -97,15 +97,29 @@ export async function resolvePhoneMapping(
       result.customerContactId = identities[0].contact_id;
     }
 
-    // 3. Find lead by phone number
-    const { data: leads } = await supabase
-      .from("leads")
-      .select("id")
-      .in("phone", normalizedNumbers)
-      .limit(1);
+    // 3. Find lead by phone number — workspace-scoped when possible
+    if (result.workspaceId) {
+      const { data: leads } = await supabase
+        .from("leads")
+        .select("id")
+        .eq("workspace_id", result.workspaceId)
+        .in("phone", normalizedNumbers)
+        .limit(1);
 
-    if (leads && leads.length > 0) {
-      result.leadId = leads[0].id;
+      if (leads && leads.length > 0) {
+        result.leadId = leads[0].id;
+      }
+    } else {
+      // Fallback: unscoped (should rarely reach here since we return early if no workspace)
+      const { data: leads } = await supabase
+        .from("leads")
+        .select("id")
+        .in("phone", normalizedNumbers)
+        .limit(1);
+
+      if (leads && leads.length > 0) {
+        result.leadId = leads[0].id;
+      }
     }
 
     logger.info("phone_mapping_resolved", {
