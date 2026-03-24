@@ -880,12 +880,34 @@ ${customInstructionsText}
       });
     }
 
-    const aiResult = await response.json();
+    let aiResult = await response.json();
     let content = aiResult.choices?.[0]?.message?.content || "";
+
+    // Log raw response details for debugging empty responses
+    if (!content) {
+      const finishReason = aiResult.choices?.[0]?.finish_reason || "unknown";
+      const refusal = aiResult.choices?.[0]?.message?.refusal || null;
+      console.error(`[ai_task] Empty content from primary model. finish_reason=${finishReason}, refusal=${refusal}, choices_count=${aiResult.choices?.length || 0}`);
+      console.error(`[ai_task] Raw response keys: ${JSON.stringify(Object.keys(aiResult))}`);
+
+      // Retry once with a different model
+      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite...");
+      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite" };
+      const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify(retryBody),
+      });
+      if (retryResponse.ok) {
+        aiResult = await retryResponse.json();
+        content = aiResult.choices?.[0]?.message?.content || "";
+      }
+    }
+
     content = stripLeakedReasoning(content);
 
     if (!content) {
-      console.error("[ai_task] Empty response from AI gateway");
+      console.error("[ai_task] Empty response after retry");
       return new Response(JSON.stringify({ ok: false, error: "AI returned empty response" }), {
         status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
