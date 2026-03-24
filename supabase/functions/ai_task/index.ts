@@ -744,8 +744,14 @@ serve(async (req) => {
       console.log(`[ai_task] [6/FRAMEWORK] Selected: ${selectedFramework} (signals: ${leadSignals.length})`);
     }
 
+    // Build tone block from per-lead outbound_tone
+    const leadTone = String(enhancedPayload.outbound_tone || "direct");
+    const toneBlock = buildToneBlock(leadTone);
+    if (toneBlock) console.log(`[ai_task] [7/TONE] Lead tone override: ${leadTone}`);
+
     const promptParts: string[] = [];
     if (motionBlock) promptParts.push(motionBlock);
+    if (toneBlock) promptParts.push(toneBlock);
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
