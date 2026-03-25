@@ -318,6 +318,39 @@ export function resolveEmailPlaceholders(text: string, repName: string | null): 
     .replace(/\[First\s*Name\]/gi, firstName);
 }
 
+function sanitizeDraftContent(text: string): string {
+  let cleaned = (text || "").trim();
+
+  // Strip markdown fences if a model wraps output
+  cleaned = cleaned
+    .replace(/^```(?:text|markdown)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  // Strip label-only prefixes like "Email body:" or "Body:"
+  cleaned = cleaned.replace(/^(?:email\s*body|body)\s*:\s*/i, "").trim();
+
+  // Guard against leaked reasoning blocks if model slips through
+  if (/(?:INTERNAL\s+(?:REASONING|REFLECTION|ANALYSIS)|^Reasoning\s*:)/im.test(cleaned)) {
+    const lines = cleaned.split("\n");
+    const emailStart = lines.findIndex((line) => {
+      const t = line.trim();
+      return (
+        /^(?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\b/i.test(t) ||
+        /^[A-Z][a-z]{1,20},\s*$/.test(t)
+      );
+    });
+    if (emailStart > 0) {
+      cleaned = lines.slice(emailStart).join("\n").trim();
+    }
+  }
+
+  // If model only returns the label, treat as empty
+  if (/^email\s*body\.?$/i.test(cleaned)) return "";
+
+  return cleaned;
+}
+
 // ============================================
 // STREAMING DRAFT GENERATOR
 // ============================================
@@ -434,7 +467,8 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     }
   } catch { /* ignore cache check failures */ }
 
-  // Step 7: Stream AI response via SSE
+  // Step 7: Request finalized AI content (non-stream) for reliable post-processing
+  // then emit it in UI-sized chunks for a streaming-like experience.
   let fullText = "";
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -451,77 +485,39 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
         "Authorization": `Bearer ${authToken}`,
         "apikey": supabaseKey,
       },
-      body: JSON.stringify({ task: finalIntent, payload: { ...aiPayload, stream: true, model_hint: complexity.model_used } }),
+      body: JSON.stringify({
+        task: finalIntent,
+        payload: { ...aiPayload, model_hint: complexity.model_used },
+      }),
     });
 
-    if (!resp.ok || !resp.body) {
-      // Try to read error
+    if (!resp.ok) {
       const errText = await resp.text();
-      console.error("[streamDraft] SSE request failed:", resp.status, errText);
-      throw new Error(`Stream request failed: ${resp.status}`);
+      console.error("[streamDraft] ai_task request failed:", resp.status, errText);
+      throw new Error(`ai_task request failed: ${resp.status}`);
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let textBuffer = "";
-    let streamDone = false;
-
-    while (!streamDone) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      textBuffer += decoder.decode(value, { stream: true });
-
-      let newlineIndex: number;
-      while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
-        let line = textBuffer.slice(0, newlineIndex);
-        textBuffer = textBuffer.slice(newlineIndex + 1);
-
-        if (line.endsWith("\r")) line = line.slice(0, -1);
-        if (line.startsWith(":") || line.trim() === "") continue;
-        if (!line.startsWith("data: ")) continue;
-
-        const jsonStr = line.slice(6).trim();
-        if (jsonStr === "[DONE]") {
-          streamDone = true;
-          break;
-        }
-
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-          if (content) {
-            fullText += content;
-            onToken(content);
-          }
-        } catch {
-          textBuffer = line + "\n" + textBuffer;
-          break;
-        }
-      }
+    const aiData = await resp.json();
+    if (!aiData?.ok || typeof aiData?.content !== "string") {
+      console.error("[streamDraft] ai_task returned invalid payload:", aiData);
+      throw new Error(aiData?.error || "ai_task returned invalid payload");
     }
 
-    // Final flush
-    if (textBuffer.trim()) {
-      for (let raw of textBuffer.split("\n")) {
-        if (!raw) continue;
-        if (raw.endsWith("\r")) raw = raw.slice(0, -1);
-        if (raw.startsWith(":") || raw.trim() === "") continue;
-        if (!raw.startsWith("data: ")) continue;
-        const jsonStr = raw.slice(6).trim();
-        if (jsonStr === "[DONE]") continue;
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-          if (content) {
-            fullText += content;
-            onToken(content);
-          }
-        } catch { /* ignore partial leftovers */ }
-      }
+    // Final cleanup pass to prevent "Email body" label-only and leaked reasoning artifacts
+    fullText = sanitizeDraftContent(
+      resolveEmailPlaceholders(aiData.content, resolvedContext.rep_profile?.full_name || null)
+    );
+
+    if (!fullText) {
+      throw new Error("AI returned empty content after cleanup");
     }
 
-    // Resolve placeholders on full text
-    fullText = resolveEmailPlaceholders(fullText, resolvedContext.rep_profile?.full_name || null);
+    // Emit in chunks to keep progressive UX without relying on flaky SSE parsing
+    const chunkSize = 50;
+    for (let i = 0; i < fullText.length; i += chunkSize) {
+      onToken(fullText.slice(i, i + chunkSize));
+      await new Promise((r) => setTimeout(r, 0));
+    }
   } catch (err) {
     console.error("[streamDraft] Streaming failed:", err);
   }
