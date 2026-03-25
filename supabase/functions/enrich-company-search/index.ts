@@ -214,9 +214,7 @@ Deno.serve(async (req) => {
     }
 
     // Build precise search queries using lead context for disambiguation
-    const industry = body.industry || "";
-    const city = body.city || "";
-    const qualifier = [industry, city].filter(Boolean).join(" ");
+    const qualifier = [industry || "", city || ""].filter(Boolean).join(" ");
     const companyQuery = qualifier ? `"${company}" ${qualifier}` : `"${company}"`;
 
     const queries = [

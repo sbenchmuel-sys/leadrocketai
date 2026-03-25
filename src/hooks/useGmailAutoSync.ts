@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useGmailConnection } from "./useGmailConnection";
 
 const AUTO_SYNC_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
+const BULK_SYNC_BATCH_SIZE = 15;
 
 interface LeadToSync {
   id: string;
@@ -41,35 +42,45 @@ export function useGmailAutoSync() {
       }
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const leadIds = leads.map((l: LeadToSync) => l.id);
+      let totalSynced = 0;
+      let totalProcessed = 0;
 
-      // Call bulk sync endpoint with leadIds array
-      const response = await fetch(`${supabaseUrl}/functions/v1/gmail-bulk-sync`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          leadIds: leads.map((l: LeadToSync) => l.id),
-          maxResults: 10,
-        }),
-      });
+      for (let i = 0; i < leadIds.length; i += BULK_SYNC_BATCH_SIZE) {
+        const batchIds = leadIds.slice(i, i + BULK_SYNC_BATCH_SIZE);
 
-      const result = await response.json();
-      
-      if (result.needsReconnect) {
-        // Gmail access revoked - silently stop auto-sync (user will see error when they manually sync)
-        console.warn("[AutoSync] Gmail needs reconnection - stopping auto-sync");
-        return;
+        const response = await fetch(`${supabaseUrl}/functions/v1/gmail-bulk-sync`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            leadIds: batchIds,
+            maxResults: 10,
+          }),
+        });
+
+        const rawBody = await response.text();
+        const result = rawBody ? JSON.parse(rawBody) : {};
+
+        if (result.needsReconnect) {
+          // Gmail access revoked - silently stop auto-sync (user will see error when they manually sync)
+          console.warn("[AutoSync] Gmail needs reconnection - stopping auto-sync");
+          return;
+        }
+
+        if (!response.ok || !result.ok) {
+          console.error("[AutoSync] Bulk sync batch failed:", response.status, result.error);
+          continue;
+        }
+
+        totalSynced += Number(result.totalSynced ?? 0);
+        totalProcessed += Number(result.leadsProcessed ?? batchIds.length);
       }
 
-      if (!response.ok) {
-        console.error("[AutoSync] Bulk sync failed:", response.status, result.error);
-        return;
-      }
-
-      if (result.ok && result.totalSynced > 0) {
-        console.log(`[AutoSync] Synced ${result.totalSynced} emails across ${result.leadsProcessed} leads`);
+      if (totalSynced > 0) {
+        console.log(`[AutoSync] Synced ${totalSynced} emails across ${totalProcessed} leads`);
       }
     } catch (err) {
       console.error("[AutoSync] Error:", err);
