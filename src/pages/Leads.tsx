@@ -134,49 +134,83 @@ export default function Leads() {
 
   const handleBulkSync = async () => {
     if (selectedIds.size === 0) return;
-    
+
     // Check Gmail connection before attempting sync
     if (!isGmailConnected) {
       setShowReconnectPrompt(true);
-      toast.error("Gmail not connected", { 
-        description: "Please connect your Gmail account to sync emails" 
+      toast.error("Gmail not connected", {
+        description: "Please connect your Gmail account to sync emails"
       });
       return;
     }
-    
+
     setIsSyncing(true);
     setShowReconnectPrompt(false);
+    const BATCH_SIZE = 15;
+    const leadIds = Array.from(selectedIds);
+    let totalSynced = 0;
+    let totalProcessed = 0;
+    let firstError: string | null = null;
+
     try {
-      const { data, error } = await supabase.functions.invoke("gmail-bulk-sync", {
-        body: { leadIds: Array.from(selectedIds) },
-      });
+      for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
+        const batchIds = leadIds.slice(i, i + BATCH_SIZE);
+        const { data, error } = await supabase.functions.invoke("gmail-bulk-sync", {
+          body: { leadIds: batchIds },
+        });
 
-      if (error) throw error;
+        if (error) {
+          const errorMsg = error.message || "Failed to sync emails";
+          if (isReconnectError(errorMsg)) {
+            setShowReconnectPrompt(true);
+            toast.error("Gmail needs reconnection", {
+              description: "Go to Settings to reconnect your Gmail account"
+            });
+            return;
+          }
+          firstError ||= errorMsg;
+          continue;
+        }
 
-      if (data?.ok) {
-        const msg = data.totalSynced > 0
-          ? `Synced ${data.totalSynced} new email${data.totalSynced > 1 ? "s" : ""} for ${data.leadsProcessed} lead(s)`
-          : `Inbox is up to date for ${data.leadsProcessed} lead(s)`;
-        toast.success(msg);
-        setSelectedIds(new Set());
-        loadLeads();
-      } else {
-        const errorMsg = data?.error || "Sync failed";
-        if (isReconnectError(errorMsg)) {
+        if (data?.needsReconnect || isReconnectError(data?.error || "")) {
           setShowReconnectPrompt(true);
-          toast.error("Gmail needs reconnection", { 
-            description: "Go to Settings to reconnect your Gmail account" 
+          toast.error("Gmail needs reconnection", {
+            description: "Go to Settings to reconnect your Gmail account"
           });
+          return;
+        }
+
+        if (data?.ok) {
+          totalSynced += Number(data.totalSynced ?? 0);
+          totalProcessed += Number(data.leadsProcessed ?? batchIds.length);
         } else {
-          toast.error(errorMsg);
+          firstError ||= data?.error || "Sync failed";
         }
       }
+
+      if (firstError && totalProcessed === 0) {
+        toast.error(firstError);
+        return;
+      }
+
+      const processedCount = totalProcessed || leadIds.length;
+      const msg = totalSynced > 0
+        ? `Synced ${totalSynced} new email${totalSynced > 1 ? "s" : ""} for ${processedCount} lead(s)`
+        : `Inbox is up to date for ${processedCount} lead(s)`;
+      toast.success(msg);
+
+      if (firstError) {
+        toast.warning(`Some leads could not be synced: ${firstError}`);
+      }
+
+      setSelectedIds(new Set());
+      loadLeads();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Failed to sync emails";
       if (isReconnectError(errorMsg)) {
         setShowReconnectPrompt(true);
-        toast.error("Gmail needs reconnection", { 
-          description: "Go to Settings to reconnect your Gmail account" 
+        toast.error("Gmail needs reconnection", {
+          description: "Go to Settings to reconnect your Gmail account"
         });
       } else {
         toast.error(errorMsg);
