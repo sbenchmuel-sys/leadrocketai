@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
+import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
 
 /** @deprecated — Use resolveCampaignInstruction() instead for new code.
  *  Kept temporarily for any edge case not yet migrated to the resolver. */
@@ -782,20 +783,31 @@ serve(async (req) => {
 
           // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
           // Uses the canonical resolver instead of ad-hoc text parsing.
-          // The resolver produces a structured instruction object that
-          // both automation and manual send paths consume identically.
+          // Prefers structured campaign steps from DB when available,
+          // falls back to legacy text parsing from action_instructions.
+          let structuredCampaign = null;
+          try {
+            structuredCampaign = await loadCampaignForLead(lead.id, supabase);
+            if (structuredCampaign) {
+              console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
+            }
+          } catch (err) {
+            console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
+          }
+
           const campaignInput: CampaignResolverInput = {
             lead_id: lead.id,
             action_key: lead.next_action_key,
             motion: lead.motion,
             outbound_tone: (lead as any).outbound_tone || "direct",
             action_instructions: lead.action_instructions,
-            prior_steps_sent: undefined, // could be enriched from automation_log count
+            structured_campaign: structuredCampaign,
+            prior_steps_sent: undefined,
             has_reply: !!freshLead.last_inbound_at,
             meeting_booked: freshLead.has_future_meeting,
-            include_meeting_cta: false, // determined by campaign instructions
+            include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
             calendar_link: repProfile?.calendar_link || null,
-            playbook_id: undefined, // loaded by ai_task from workspace_profiles
+            playbook_id: undefined,
           };
           const resolvedInstruction = resolveCampaignInstruction(campaignInput);
           const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);

@@ -452,6 +452,121 @@ export type Database = {
         }
         Relationships: []
       }
+      campaign_steps: {
+        Row: {
+          active: boolean
+          campaign_id: string
+          channel: string
+          created_at: string
+          cta_type: string
+          custom_instructions: string | null
+          delay_days: number
+          framework: string | null
+          generation_hints: Json
+          hard_rules: Json
+          id: string
+          max_word_count: number | null
+          objective: string | null
+          step_number: number
+          step_type: Database["public"]["Enums"]["campaign_step_type"]
+          updated_at: string
+          variant_group: string | null
+        }
+        Insert: {
+          active?: boolean
+          campaign_id: string
+          channel?: string
+          created_at?: string
+          cta_type?: string
+          custom_instructions?: string | null
+          delay_days?: number
+          framework?: string | null
+          generation_hints?: Json
+          hard_rules?: Json
+          id?: string
+          max_word_count?: number | null
+          objective?: string | null
+          step_number: number
+          step_type?: Database["public"]["Enums"]["campaign_step_type"]
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Update: {
+          active?: boolean
+          campaign_id?: string
+          channel?: string
+          created_at?: string
+          cta_type?: string
+          custom_instructions?: string | null
+          delay_days?: number
+          framework?: string | null
+          generation_hints?: Json
+          hard_rules?: Json
+          id?: string
+          max_word_count?: number | null
+          objective?: string | null
+          step_number?: number
+          step_type?: Database["public"]["Enums"]["campaign_step_type"]
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_steps_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaigns: {
+        Row: {
+          created_at: string
+          default_channel: string
+          global_instructions: string | null
+          id: string
+          include_meeting_cta: boolean
+          is_default: boolean
+          motion: Database["public"]["Enums"]["campaign_motion"]
+          name: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          default_channel?: string
+          global_instructions?: string | null
+          id?: string
+          include_meeting_cta?: boolean
+          is_default?: boolean
+          motion?: Database["public"]["Enums"]["campaign_motion"]
+          name: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          default_channel?: string
+          global_instructions?: string | null
+          id?: string
+          include_meeting_cta?: boolean
+          is_default?: boolean
+          motion?: Database["public"]["Enums"]["campaign_motion"]
+          name?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaigns_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       channel_events: {
         Row: {
           attempts: number
@@ -1469,6 +1584,7 @@ export type Database = {
           auto_created: boolean
           auto_nurture_eligible: boolean | null
           automation_mode: string | null
+          campaign_id: string | null
           city: string | null
           company: string
           company_linkedin_url: string | null
@@ -1535,6 +1651,7 @@ export type Database = {
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
+          campaign_id?: string | null
           city?: string | null
           company: string
           company_linkedin_url?: string | null
@@ -1601,6 +1718,7 @@ export type Database = {
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
+          campaign_id?: string | null
           city?: string | null
           company?: string
           company_linkedin_url?: string | null
@@ -1660,6 +1778,13 @@ export type Database = {
           workspace_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "leads_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "leads_workspace_id_fkey"
             columns: ["workspace_id"]
@@ -2898,6 +3023,20 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "sales"
+      campaign_motion:
+        | "outbound_prospecting"
+        | "nurture"
+        | "inbound_response"
+        | "post_meeting"
+        | "closing"
+        | "re_engagement"
+      campaign_step_type:
+        | "intro"
+        | "followup"
+        | "value_add"
+        | "breakup"
+        | "nurture"
+        | "re_engagement"
       contact_status: "unclassified" | "lead" | "customer" | "blocked"
       identity_type: "phone" | "email" | "whatsapp"
       integration_type: "gmail" | "whatsapp"
@@ -3031,6 +3170,22 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "sales"],
+      campaign_motion: [
+        "outbound_prospecting",
+        "nurture",
+        "inbound_response",
+        "post_meeting",
+        "closing",
+        "re_engagement",
+      ],
+      campaign_step_type: [
+        "intro",
+        "followup",
+        "value_add",
+        "breakup",
+        "nurture",
+        "re_engagement",
+      ],
       contact_status: ["unclassified", "lead", "customer", "blocked"],
       identity_type: ["phone", "email", "whatsapp"],
       integration_type: ["gmail", "whatsapp"],

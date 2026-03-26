@@ -15,6 +15,8 @@ import {
   type SequenceContext,
   type ResolvedInstruction,
 } from "./campaignTypes.ts";
+import type { LoadedCampaign } from "./campaignStepLoader.ts";
+import { getStructuredStepConfig } from "./campaignStepLoader.ts";
 
 // ── Input: everything the resolver needs ────────────────────────────
 
@@ -28,6 +30,9 @@ export interface CampaignResolverInput {
 
   // Campaign / step raw instructions (legacy compat)
   action_instructions?: string | null;  // raw text from leads.action_instructions
+
+  // NEW: structured campaign data (from DB)
+  structured_campaign?: LoadedCampaign | null;
 
   // Sequence context signals
   prior_steps_sent?: number;       // how many outbound steps already sent
@@ -236,9 +241,51 @@ function buildHardRules(
 export function resolveCampaignInstruction(input: CampaignResolverInput): ResolvedInstruction {
   const stepNumber = resolveStepNumber(input.action_key);
   const channel = resolveChannel(input.action_key, input.channel);
+  const hasSignals = (input.recent_signals?.length ?? 0) > 0;
+
+  // ── NEW: Prefer structured campaign step from DB ──────────────────
+  const structuredStep = input.structured_campaign
+    ? getStructuredStepConfig(input.structured_campaign, stepNumber)
+    : null;
+
+  if (structuredStep) {
+    // Structured path: all step data comes from DB, no text parsing
+    const stepChannel = structuredStep.channel || channel;
+    const sequenceContext = buildSequenceContext(input, stepNumber);
+    const customInstr = input.structured_campaign?.steps
+      ?.find(s => s.step_number === stepNumber)?.custom_instructions || null;
+    const globalInstr = input.structured_campaign?.global_instructions || null;
+    const rawCustom = [globalInstr, customInstr].filter(Boolean).join("\n") || null;
+
+    const hints: string[] = [
+      ...(input.structured_campaign?.steps?.find(s => s.step_number === stepNumber)?.generation_hints || []) as string[],
+    ];
+    if (input.outbound_tone === "conversational") hints.push("Warm, relaxed, use contractions");
+    if (input.outbound_tone === "assertive") hints.push("Confident, include specific offers");
+    if (input.outbound_tone === "consultative") hints.push("Trusted advisor positioning");
+
+    return {
+      channel: stepChannel,
+      framework: structuredStep.framework,
+      objective: structuredStep.objective,
+      hard_rules: structuredStep.hard_rules,
+      generation_hints: hints,
+      sequence_context: sequenceContext,
+      personalization_context: {
+        tone: input.outbound_tone || "direct",
+        playbook_id: input.playbook_id || "general_sales",
+        include_meeting_cta: input.structured_campaign?.include_meeting_cta ?? input.include_meeting_cta ?? false,
+        calendar_link: input.calendar_link || null,
+      },
+      max_word_count: structuredStep.max_words,
+      cta_type: structuredStep.cta_type,
+      raw_custom_instructions: rawCustom,
+    };
+  }
+
+  // ── Legacy path: parse from raw text ──────────────────────────────
   const legacy = parseLegacyInstructions(input.action_instructions);
   const hasCustomInstructions = legacy.global_rules.length > 0 || Object.keys(legacy.step_instructions).length > 0;
-  const hasSignals = (input.recent_signals?.length ?? 0) > 0;
 
   const framework = resolveFramework(channel, stepNumber, input.motion, hasSignals);
   const objective = deriveObjective(channel, stepNumber, input.motion);
@@ -280,7 +327,6 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
     },
     max_word_count: maxWordCount,
     cta_type: ctaType,
-    // Legacy: pass through raw custom instructions for backward compat
     raw_custom_instructions: hasCustomInstructions
       ? [...legacy.global_rules, ...Object.values(legacy.step_instructions)].join("\n")
       : null,
