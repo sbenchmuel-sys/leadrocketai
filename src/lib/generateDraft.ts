@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { AITaskType } from "@/hooks/useAITask";
 import type { Motion } from "@/lib/dashboardUtils";
 import { contextResolver, type ResolvedContext } from "@/lib/contextResolver";
+import { buildCampaignPayloadFields } from "@/lib/campaignResolver";
 import { playbookResolver, type PlaybookRecommendation } from "@/lib/playbookResolver";
 import { scoreAndSelectModel, type AIModel } from "@/lib/complexityScorer";
 import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
@@ -120,8 +121,8 @@ function getAuthUserName(): string | null {
 // INSTRUCTION MERGE HELPER
 // ============================================
 
-/** Merge user-provided instructions with lead's saved action_instructions.
- *  User instructions take priority; lead instructions are appended. */
+/** @deprecated — Prefer buildCampaignPayloadFields() which uses the canonical resolver.
+ *  Kept only for edge cases where no action_key context is available. */
 function mergeInstructions(userInstructions: string | null, leadInstructions: string | null): string | null {
   if (!userInstructions && !leadInstructions) return null;
   if (!leadInstructions) return userInstructions;
