@@ -564,27 +564,25 @@ async function syncLeadEmails(
         }
       }
 
-      const { error: insertError } = await serviceSupabase
-        .from("interactions")
-        .insert({
-          lead_id: leadId,
-          type,
-          source: "gmail",
-          occurred_at: occurredAt,
-          subject,
-          from_email: from,
-          to_email: to,
-          body_text: bodyText.substring(0, 10000),
-          gmail_message_id: gmailMessageId,
-          gmail_thread_id: threadId,
-          direction,
-        });
+      const canonResult = await createCanonicalInteraction(serviceSupabase, {
+        lead_id: leadId,
+        type,
+        source: "gmail",
+        body_text: bodyText.substring(0, 10000),
+        occurred_at: occurredAt,
+        direction,
+        subject,
+        from_email: from,
+        to_email: to,
+        gmail_message_id: gmailMessageId,
+        gmail_thread_id: threadId,
+        provider: "gmail",
+        dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
+      });
 
-      if (insertError) {
-        if (!insertError.message.includes("duplicate")) {
-          errors.push(`Failed to insert message ${gmailMessageId}: ${insertError.message}`);
-        }
-      } else {
+      if (canonResult.error && canonResult.error !== "duplicate") {
+        errors.push(`Failed to insert message ${gmailMessageId}: ${canonResult.error}`);
+      } else if (!canonResult.error) {
         synced++;
         existingMessageIds.add(gmailMessageId);
       }
