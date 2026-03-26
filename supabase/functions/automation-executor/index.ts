@@ -863,6 +863,26 @@ serve(async (req) => {
           created_by: lead.owner_user_id,
         });
 
+        // ── PRE-SEND CLAIM ──────────────────────────────────────
+        // Insert a "claiming" reservation BEFORE calling the provider.
+        // The unique index (automation_log_claim_unique) blocks concurrent
+        // executor runs from both claiming the same lead+action+day.
+        const claimDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        logEntry.status = "claiming";
+        (logEntry as Record<string, unknown>).claim_date = claimDate;
+        const { error: claimError } = await supabase.from("automation_log").insert(logEntry).select("id").single();
+
+        if (claimError) {
+          const isDuplicate = claimError.code === "23505";
+          if (isDuplicate) {
+            console.warn(`[automation-executor] Pre-send claim blocked (duplicate) for lead ${lead.id}, action ${actionKey}: ${claimError.message}`);
+          } else {
+            console.error(`[automation-executor] Pre-send claim failed for lead ${lead.id}: ${claimError.message}`);
+          }
+          skipped++;
+          continue;
+        }
+
         // Send via appropriate mail provider
         let sendResponse: Response;
         if (mailProvider === "outlook" && mailAccountId) {
@@ -911,24 +931,21 @@ serve(async (req) => {
           const sendErr = sendResult.error || "Unknown send error";
           console.error(`[automation-executor] Send failed for lead ${lead.id}:`, sendErr);
 
+          // Upgrade claim to "failed"
+          await supabase.from("automation_log")
+            .update({ status: "failed", error_message: `${mailProvider} send failed: ${String(sendErr).substring(0, 200)}`, completed_at: new Date().toISOString() })
+            .eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "claiming").eq("claim_date", claimDate);
+
           if (sendResult.needsReconnect) {
             console.warn(`[automation-executor] ${mailProvider} needs reconnect for user ${lead.owner_user_id}`);
             await supabase.from("leads").update({
               needs_action: false,
               eligible_at: null,
             }).eq("id", lead.id);
-            logEntry.status = "failed";
-            logEntry.error_message = "Gmail needs reconnection";
-            logEntry.completed_at = new Date().toISOString();
-            await supabase.from("automation_log").insert(logEntry);
             skipped++;
             continue;
           }
 
-          logEntry.status = "failed";
-          logEntry.error_message = `${mailProvider} send failed: ${String(sendErr).substring(0, 200)}`;
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
           // Retry: push eligible_at forward 15 min
           await supabase.from("leads").update({
             eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
@@ -940,36 +957,15 @@ serve(async (req) => {
         const gmailMessageId = sendResult.messageId || null;
         console.log(`[automation-executor] Email sent for lead ${lead.id}: ${gmailMessageId}`);
 
-        // Log as email_outbound (not system_note) so it appears in timeline/inbox
-        await supabase.from("interactions").insert({
-          lead_id: lead.id,
-          type: "email_outbound",
-          source: "automation",
-          body_text: draftBody,
-          subject,
-          direction: "outbound",
-          from_email: repProfile?.email || null,
-          to_email: lead.email,
-          gmail_message_id: gmailMessageId,
-          occurred_at: new Date().toISOString(),
-        });
+        // ── UPGRADE CLAIM TO SENT ───────────────────────────────
+        // The interaction + timeline records are created by gmail-send / outlook-send
+        // (the sole writers for outbound email). We only update the automation_log here.
+        const { error: upgradeError } = await supabase.from("automation_log")
+          .update({ status: "sent", gmail_message_id: gmailMessageId, completed_at: new Date().toISOString() })
+          .eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "claiming").eq("claim_date", claimDate);
 
-        // ATOMIC LOG INSERT: The unique index (automation_log_one_per_day_unique) enforces
-        // at most one 'sent' record per (lead_id, action_key, day). If a concurrent executor
-        // run already committed a 'sent' record for this lead+action today, the plain insert
-        // will fail with a unique violation (23505) — blocking the duplicate at the DB level.
-        logEntry.status = "sent";
-        logEntry.gmail_message_id = gmailMessageId;
-        logEntry.completed_at = new Date().toISOString();
-        const { error: logInsertError } = await supabase.from("automation_log").insert(logEntry);
-
-        if (logInsertError) {
-          const isDuplicate = logInsertError.code === "23505";
-          if (isDuplicate) {
-            console.warn(`[automation-executor] Duplicate blocked by DB for lead ${lead.id}, action ${actionKey}: ${logInsertError.message}`);
-          } else {
-            console.error(`[automation-executor] Log insert failed for lead ${lead.id}: ${logInsertError.message}`);
-          }
+        if (upgradeError) {
+          console.error(`[automation-executor] Claim upgrade failed for lead ${lead.id}: ${upgradeError.message}`);
           skipped++;
           continue;
         }

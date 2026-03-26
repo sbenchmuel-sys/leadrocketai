@@ -90,6 +90,35 @@ export const smokeTests: SmokeTest[] = [
     if (resp.status >= 500) return { status: "fail", detail: `Server error: ${resp.status}` };
     return { status: "pass", detail: `Endpoint responded with ${resp.status} (reachable)` };
   }),
+
+  // 6) Outlook send reachable (no actual send)
+  timed("Outlook send reachable (dry)", async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return { status: "fail", detail: "Not authenticated" };
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/outlook-send`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dryRun: true }),
+    });
+    await resp.text();
+    if (resp.status >= 500) return { status: "fail", detail: `Server error: ${resp.status}` };
+    return { status: "pass", detail: `Endpoint responded with ${resp.status} (reachable)` };
+  }),
+
+  // 7) Automation claim uniqueness (idempotency check)
+  timed("Automation claim_date column exists", async () => {
+    const { data, error } = await supabase
+      .from("automation_log")
+      .select("id, claim_date")
+      .limit(1);
+    if (error) return { status: "fail", detail: `Query error: ${error.message}` };
+    return { status: "pass", detail: "automation_log.claim_date column accessible" };
+  }),
 ];
 
 export async function runAllSmokeTests(): Promise<SmokeResult[]> {
