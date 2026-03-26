@@ -91,6 +91,18 @@ export interface ClientCampaignResolverInput {
   meeting_booked?: boolean;
   include_meeting_cta?: boolean;
   calendar_link?: string | null;
+  /** NEW: structured campaign step override from DB */
+  structured_step?: {
+    channel: CanonicalChannel;
+    framework: string;
+    objective: string;
+    cta_type: string;
+    max_word_count: number;
+    hard_rules: string[];
+    generation_hints: string[];
+    custom_instructions?: string | null;
+    step_type: StepType;
+  } | null;
 }
 
 // ── Internal helpers ────────────────────────────────────────────────
