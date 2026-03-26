@@ -4,6 +4,16 @@ import type { AITaskType } from "@/hooks/useAITask";
 import { calculateClosingPower } from "@/lib/closingPowerUtils";
 import { getLeadDetail } from "@/lib/supabaseQueries";
 import { addDays } from "date-fns";
+import { fetchCampaignForLead } from "@/lib/campaignQueries";
+import {
+  getCadenceSettings,
+  type CadenceSettingsV1,
+} from "@/lib/workspaceProfileQueries";
+import {
+  getDeterministicJitter,
+  isBusinessDay as isBusinessDayFn,
+  calculateEligibleAt,
+} from "@/lib/cadenceSettingsTypes";
 
 // ============================================
 // TYPES
