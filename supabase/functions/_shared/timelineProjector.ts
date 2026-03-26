@@ -113,10 +113,27 @@ export async function queueRecompute(
 /**
  * Build a standard dedupe key for email events (Gmail/Outlook).
  * Uses provider message ID when available for idempotency.
+ *
+ * IMPORTANT: The dedupe key must be stable across sync paths.
+ * Gmail uses its message ID; Outlook uses its internet message ID.
+ * This ensures gmail-sync and gmail-bulk-sync (or outlook-sync and
+ * outlook-webhook) produce the same key for the same message.
  */
 export function emailDedupeKey(provider: string, messageId: string | null, interactionId: string): string {
   if (messageId) return `${provider}:${messageId}`;
   return `${provider}:interaction:${interactionId}`;
+}
+
+/**
+ * Build a stable dedupe key for Outlook emails.
+ * Prefers internet_message_id (RFC 2822 Message-ID) which is
+ * consistent between outlook-sync and outlook-webhook.
+ * Falls back to the Outlook graph message ID if unavailable.
+ */
+export function outlookEmailDedupeKey(internetMessageId: string | null, graphMessageId: string | null, interactionId: string): string {
+  if (internetMessageId) return `outlook:${internetMessageId}`;
+  if (graphMessageId) return `outlook:graph:${graphMessageId}`;
+  return `outlook:interaction:${interactionId}`;
 }
 
 /**
