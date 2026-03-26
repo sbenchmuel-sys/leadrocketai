@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 
 /** Extract step-specific + global campaign instructions from action_instructions.
  *  Format: CAMPAIGN RULES at top, then STEP N INSTRUCTIONS blocks.
@@ -57,18 +58,16 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Allow service-role, anon-key (cron), and user-auth calls
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const token = authHeader.replace("Bearer ", "");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-    const isServiceRole = token === supabaseServiceKey || token === supabaseAnonKey;
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    // ── AUTH: Only internal-secret or service-role callers are allowed.
+    // The anon key is NOT treated as privileged — it would let any
+    // unauthenticated caller trigger sends.
+    const privileged = isInternalCaller(req) || isServiceRoleToken(req);
 
     let ownerFilter: string | null = null;
 
-    if (!isServiceRole) {
-      // User-auth: resolve user and scope to their leads
+    if (!privileged) {
+      // Fall back to user-auth: resolve the user and scope to their leads
+      const authHeader = req.headers.get("Authorization") ?? "";
       const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
         global: { headers: { Authorization: authHeader } },
       });
@@ -81,6 +80,8 @@ serve(async (req) => {
       }
       ownerFilter = user.id;
     }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const now = new Date().toISOString();
 
