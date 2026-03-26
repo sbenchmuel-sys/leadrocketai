@@ -261,14 +261,8 @@ serve(async (req) => {
       const cached = dailyCapCache.get(ownerId);
       if (cached !== undefined) return cached;
 
-      const { data: wpProfile } = await supabase
-        .from("workspace_profiles")
-        .select("cadence_settings")
-        .eq("user_id", ownerId)
-        .single();
-
-      const cadence = (wpProfile?.cadence_settings as any) ?? {};
-      const cap = cadence?.guardrails?.max_sends_per_day_per_mailbox ?? 40;
+      const execSettings = await loadExecutionSettings(ownerId, supabase);
+      const cap = execSettings.guardrails.max_sends_per_day_per_mailbox;
       dailyCapCache.set(ownerId, cap);
       return cap;
     }
