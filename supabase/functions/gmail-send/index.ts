@@ -278,21 +278,22 @@ serve(async (req) => {
       if ((req as any)._retryData) {
         // Fall through — sendData will be assigned below
       } else {
-
-      return new Response(JSON.stringify({ 
-        ok: false, 
-        error: needsReconnect
-          ? "Gmail permissions need updating - please reauthorize Gmail in Settings"
-          : gmailErrorMessage,
-        needsReconnect,
-      }), {
-        // Always return 200 so the JSON error body is readable by the frontend
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+        return new Response(JSON.stringify({ 
+          ok: false, 
+          error: needsReconnect
+            ? "Gmail permissions need updating - please reauthorize Gmail in Settings"
+            : gmailErrorMessage,
+          needsReconnect,
+        }), {
+          // Always return 200 so the JSON error body is readable by the frontend
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
-    const sendData = await sendResponse.json();
+    // Use retry data if 404 retry succeeded, otherwise parse normal response
+    const sendData = (req as any)._retryData || await sendResponse.json();
     console.log(`[gmail-send] Email sent successfully, message ID: ${sendData.id}`);
 
     // Run post-send tasks in background so user gets immediate response
