@@ -585,9 +585,11 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     if (error) {
       console.error("[generateDraft] AI task error:", error);
     } else if (data?.ok && data?.content) {
-      draftText = resolveEmailPlaceholders(
-        data.content,
-        resolvedContext.rep_profile?.full_name || null
+      draftText = sanitizeDraftContent(
+        resolveEmailPlaceholders(
+          data.content,
+          resolvedContext.rep_profile?.full_name || null
+        )
       );
     } else {
       console.warn("[generateDraft] AI task returned no content:", data);
