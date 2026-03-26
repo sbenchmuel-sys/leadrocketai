@@ -120,16 +120,24 @@ Deno.serve(async (req) => {
   );
 
   // ── Fire-and-forget: trigger async processor ───────────
+  // Uses X-Internal-Secret when available for consistency,
+  // falls back to anon key (processor is idempotent).
   if (stored > 0) {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (internalSecret) {
+      headers["X-Internal-Secret"] = internalSecret;
+    } else {
+      headers["Authorization"] = `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")!}`;
+    }
 
     fetch(`${supabaseUrl}/functions/v1/whatsapp-events-processor`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${anonKey}`,
-      },
+      headers,
       body: JSON.stringify({ trigger: "twilio-webhook", stored }),
     }).catch((err) => {
       console.warn("[whatsapp-webhook-twilio] Failed to trigger processor:", err.message);

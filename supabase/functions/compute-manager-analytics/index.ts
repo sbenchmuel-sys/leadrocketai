@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  // AUTH: Only cron-dispatcher / service-role callers
+  const auth = requireScheduledCaller(req, corsHeaders);
+  if (auth instanceof Response) return auth;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,

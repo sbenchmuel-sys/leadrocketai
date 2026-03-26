@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,6 +11,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  // AUTH: Only cron-dispatcher / service-role callers
+  const auth = requireScheduledCaller(req, corsHeaders);
+  if (auth instanceof Response) return auth;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -38,8 +43,20 @@ Deno.serve(async (req) => {
     const purgedCount = data?.length ?? 0;
     console.log(`[message-cleanup] Purged ${purgedCount} expired message bodies`);
 
+    // Also clean up old cron_run_log entries (>30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: oldLogs } = await supabase
+      .from("cron_run_log")
+      .delete()
+      .lt("started_at", thirtyDaysAgo)
+      .select("id");
+    const logsPurged = oldLogs?.length ?? 0;
+    if (logsPurged > 0) {
+      console.log(`[message-cleanup] Purged ${logsPurged} old cron_run_log entries`);
+    }
+
     return new Response(
-      JSON.stringify({ ok: true, purged: purgedCount }),
+      JSON.stringify({ ok: true, purged: purgedCount, cron_logs_purged: logsPurged }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

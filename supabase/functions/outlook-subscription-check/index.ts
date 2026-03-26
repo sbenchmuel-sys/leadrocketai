@@ -15,12 +15,22 @@ import {
   SUBSCRIPTION_LIFETIME_MS,
 } from "../_shared/outlookSubscription.ts";
 import { logger } from "../_shared/logger.ts";
+import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 // Renew when subscription expires within 24 hours
 const RENEWAL_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+
+  // AUTH: Only cron-dispatcher / service-role callers
+  const auth = requireScheduledCaller(req, corsHeaders);
+  if (auth instanceof Response) return auth;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
