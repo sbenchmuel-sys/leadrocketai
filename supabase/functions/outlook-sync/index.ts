@@ -282,10 +282,14 @@ serve(async (req) => {
             nurture_status: "inactive",
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
-            lead_id: leadId, type: "system_note", source: "automation",
+          await createCanonicalInteraction(serviceSupabase, {
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: leadData?.workspace_id ?? null,
+            provider: "automation",
           });
         }
 
@@ -306,12 +310,16 @@ serve(async (req) => {
               next_action_key: null, next_action_label: null, action_reason_code: null,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). Returning ${returnDateStr}. Automation paused.`,
               occurred_at: occurredAt,
               gmail_message_id: messageId,
               gmail_thread_id: msg.conversationId,
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             existingMessageIds.add(messageId);
@@ -343,10 +351,14 @@ serve(async (req) => {
               personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
@@ -361,12 +373,14 @@ serve(async (req) => {
               needs_action: false,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Capture last outbound as winning interaction
@@ -404,10 +418,14 @@ serve(async (req) => {
               nurture_status: "inactive",
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: "Lead requested to unsubscribe — automation stopped permanently.",
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
