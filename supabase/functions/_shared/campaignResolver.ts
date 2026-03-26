@@ -31,6 +31,9 @@ export interface CampaignResolverInput {
   // Campaign / step raw instructions (legacy compat)
   action_instructions?: string | null;  // raw text from leads.action_instructions
 
+  // NEW: structured campaign data (from DB)
+  structured_campaign?: LoadedCampaign | null;
+
   // Sequence context signals
   prior_steps_sent?: number;       // how many outbound steps already sent
   prior_channels_used?: CanonicalChannel[];
