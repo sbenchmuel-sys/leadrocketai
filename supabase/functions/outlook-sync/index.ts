@@ -17,6 +17,7 @@ import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_sha
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,

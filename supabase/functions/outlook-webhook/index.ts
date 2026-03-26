@@ -21,6 +21,7 @@ import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
 // Strip HTML tags for plain-text body_text
 function htmlToPlainText(html: string): string {

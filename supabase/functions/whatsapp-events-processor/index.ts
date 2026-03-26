@@ -16,6 +16,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { WhatsAppService } from "../_shared/whatsapp/service.ts";
 import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

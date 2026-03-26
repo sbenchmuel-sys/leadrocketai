@@ -6,6 +6,7 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import {
   type CadenceSettingsV1,
   type LeadMetrics,
