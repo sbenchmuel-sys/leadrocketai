@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           action_key: string | null
           ai_task: string | null
+          claim_date: string | null
           completed_at: string | null
           created_at: string
           error_message: string | null
@@ -32,6 +33,7 @@ export type Database = {
         Insert: {
           action_key?: string | null
           ai_task?: string | null
+          claim_date?: string | null
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
@@ -46,6 +48,7 @@ export type Database = {
         Update: {
           action_key?: string | null
           ai_task?: string | null
+          claim_date?: string | null
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
