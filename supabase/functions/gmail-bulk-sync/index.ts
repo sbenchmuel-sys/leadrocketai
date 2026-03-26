@@ -462,13 +462,14 @@ async function syncLeadEmails(
           nurture_status: "inactive",
         }).eq("id", leadId);
 
-        await serviceSupabase.from("interactions").insert({
-          lead_id: leadId,
-          type: "system_note",
-          source: "automation",
-          body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
-          occurred_at: new Date().toISOString(),
-        });
+          await createCanonicalInteraction(serviceSupabase, {
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
+            body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
+            occurred_at: new Date().toISOString(),
+            provider: "automation",
+          });
       }
 
       // OOO / Auto-reply detection — must run BEFORE counting as real inbound
@@ -491,7 +492,7 @@ async function syncLeadEmails(
             action_reason_code: null,
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
+          await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId,
             type: "system_note",
             source: "automation",
@@ -499,6 +500,7 @@ async function syncLeadEmails(
             occurred_at: occurredAt,
             gmail_message_id: gmailMessageId,
             gmail_thread_id: threadId,
+            provider: "automation",
           });
 
           existingMessageIds.add(gmailMessageId);
@@ -530,10 +532,13 @@ async function syncLeadEmails(
             personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
-            lead_id: leadId, type: "system_note", source: "automation",
+          await createCanonicalInteraction(serviceSupabase, {
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
             body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
             occurred_at: new Date().toISOString(),
+            provider: "automation",
           });
         }
       }
@@ -548,12 +553,13 @@ async function syncLeadEmails(
             needs_action: false,
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
+          await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId,
             type: "system_note",
             source: "automation",
             body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
             occurred_at: new Date().toISOString(),
+            provider: "automation",
           });
         }
       }
