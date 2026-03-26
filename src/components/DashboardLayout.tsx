@@ -3,7 +3,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical } from "lucide-react";
-import { useGmailAutoSync } from "@/hooks/useGmailAutoSync";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
@@ -43,8 +42,8 @@ export default function DashboardLayout() {
   const [isManagerOrAdmin, setIsManagerOrAdmin] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
-  // Initialize background Gmail auto-sync (every 20 minutes)
-  useGmailAutoSync();
+  // Gmail sync is now server-side via pg_cron. Manual sync available from Settings.
+  // useGmailAutoSync() removed — no longer auto-polls from browser.
 
   useEffect(() => {
     if (!user) return;

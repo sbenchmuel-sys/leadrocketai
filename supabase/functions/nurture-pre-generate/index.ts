@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,18 +11,15 @@ const corsHeaders = {
  * Pre-generates nurture email drafts 24 hours before scheduled send
  * for leads in "review" nurture mode.
  * 
- * Called on a daily cron schedule.
+ * Called on a daily cron schedule via cron-dispatcher.
  */
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Guard: only allow calls authenticated with the service role key
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const token = authHeader.replace("Bearer ", "");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  if (token !== serviceRoleKey) {
+  // Guard: only allow internal-secret or service-role callers
+  if (!isInternalCaller(req) && !isServiceRoleToken(req)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

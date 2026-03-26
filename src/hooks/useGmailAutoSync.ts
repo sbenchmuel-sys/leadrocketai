@@ -1,8 +1,7 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useGmailConnection } from "./useGmailConnection";
 
-const AUTO_SYNC_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
 const BULK_SYNC_BATCH_SIZE = 15;
 
 interface LeadToSync {
@@ -10,41 +9,40 @@ interface LeadToSync {
   email: string;
 }
 
+/**
+ * Gmail auto-sync hook — MANUAL TRIGGER ONLY.
+ *
+ * The primary recurring sync is handled server-side by pg_cron
+ * (cron-dispatcher → gmail-bulk-sync every 20 min). This hook
+ * exposes a manual `runBulkSync` for the UI "Sync now" button.
+ */
 export function useGmailAutoSync() {
-  const { isConnected, isLoading } = useGmailConnection();
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isSyncingRef = useRef(false);
+  const { isConnected } = useGmailConnection();
 
   const runBulkSync = useCallback(async () => {
-    // Skip if already syncing or not connected
-    if (isSyncingRef.current || !isConnected) return;
+    if (!isConnected) return;
 
     try {
-      isSyncingRef.current = true;
-
-      // Get the user's leads that have email addresses
       const { data: leads, error: leadsError } = await supabase
         .from("leads")
         .select("id, email")
         .not("email", "is", null);
 
       if (leadsError || !leads || leads.length === 0) {
-        console.log("[AutoSync] No leads to sync or error:", leadsError?.message);
+        console.log("[GmailSync] No leads to sync or error:", leadsError?.message);
         return;
       }
 
-      // Get auth token
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
       if (!accessToken) {
-        console.log("[AutoSync] No auth token, skipping");
+        console.log("[GmailSync] No auth token, skipping");
         return;
       }
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const leadIds = leads.map((l: LeadToSync) => l.id);
       let totalSynced = 0;
-      let totalProcessed = 0;
 
       for (let i = 0; i < leadIds.length; i += BULK_SYNC_BATCH_SIZE) {
         const batchIds = leadIds.slice(i, i + BULK_SYNC_BATCH_SIZE);
@@ -65,56 +63,25 @@ export function useGmailAutoSync() {
         const result = rawBody ? JSON.parse(rawBody) : {};
 
         if (result.needsReconnect) {
-          // Gmail access revoked - silently stop auto-sync (user will see error when they manually sync)
-          console.warn("[AutoSync] Gmail needs reconnection - stopping auto-sync");
+          console.warn("[GmailSync] Gmail needs reconnection");
           return;
         }
 
         if (!response.ok || !result.ok) {
-          console.error("[AutoSync] Bulk sync batch failed:", response.status, result.error);
+          console.error("[GmailSync] Bulk sync batch failed:", response.status, result.error);
           continue;
         }
 
         totalSynced += Number(result.totalSynced ?? 0);
-        totalProcessed += Number(result.leadsProcessed ?? batchIds.length);
       }
 
       if (totalSynced > 0) {
-        console.log(`[AutoSync] Synced ${totalSynced} emails across ${totalProcessed} leads`);
+        console.log(`[GmailSync] Manual sync: ${totalSynced} emails synced`);
       }
     } catch (err) {
-      console.error("[AutoSync] Error:", err);
-    } finally {
-      isSyncingRef.current = false;
+      console.error("[GmailSync] Error:", err);
     }
   }, [isConnected]);
-
-  useEffect(() => {
-    // Don't start until we know connection status
-    if (isLoading) return;
-
-    // Only run if Gmail is connected
-    if (!isConnected) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      return;
-    }
-
-    // Run immediately on mount/connection
-    runBulkSync();
-
-    // Set up interval for periodic sync
-    intervalRef.current = setInterval(runBulkSync, AUTO_SYNC_INTERVAL_MS);
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [isConnected, isLoading, runBulkSync]);
 
   return { runBulkSync };
 }
