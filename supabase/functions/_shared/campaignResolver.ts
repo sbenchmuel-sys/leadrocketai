@@ -15,6 +15,8 @@ import {
   type SequenceContext,
   type ResolvedInstruction,
 } from "./campaignTypes.ts";
+import type { LoadedCampaign } from "./campaignStepLoader.ts";
+import { getStructuredStepConfig } from "./campaignStepLoader.ts";
 
 // ── Input: everything the resolver needs ────────────────────────────
 
