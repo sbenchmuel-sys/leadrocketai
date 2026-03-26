@@ -2,10 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 
-/** Extract step-specific + global campaign instructions from action_instructions.
- *  Format: CAMPAIGN RULES at top, then STEP N INSTRUCTIONS blocks.
- *  Returns combined instructions relevant to the current step. */
+/** @deprecated — Use resolveCampaignInstruction() instead for new code.
+ *  Kept temporarily for any edge case not yet migrated to the resolver. */
 function buildStepInstructions(actionInstructions: string | null | undefined, nextActionKey: string | null | undefined): string | null {
   if (!actionInstructions) return null;
 
@@ -26,7 +26,6 @@ function buildStepInstructions(actionInstructions: string | null | undefined, ne
     }
   }
 
-  // Determine which step number we're on from the action key (e.g. "send_pre_2" → "2", "nurture_3" → "3")
   let stepNum: string | null = null;
   if (nextActionKey) {
     const match = nextActionKey.match(/(\d+)/);
