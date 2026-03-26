@@ -428,7 +428,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     const campaignFields = buildCampaignPayloadFields({
       action_key: inferActionKey(finalIntent, resolvedContext),
       motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
-      channel,
+      channel: channel === "linkedin" ? "email" : channel,
       outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
       action_instructions: leadInstructions,
       has_reply: !!resolvedContext.last_inbound_email,
