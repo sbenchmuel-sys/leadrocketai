@@ -16,9 +16,9 @@ export interface AuthzResult {
 
 // ── Internal caller verification ────────────────────────────
 // Used by edge functions that are called by other edge functions
-// (e.g. automation-executor → gmail-send).
+// (e.g. automation-executor → gmail-send) or by pg_cron triggers.
 // Callers pass: X-Internal-Secret: <value of INTERNAL_API_SECRET>
-// This replaces the old pattern of comparing Bearer token to SUPABASE_SERVICE_ROLE_KEY.
+// This is the ONLY privileged bypass — anon key is NOT privileged.
 
 export function isInternalCaller(req: Request): boolean {
   const secret = req.headers.get("X-Internal-Secret");
@@ -28,14 +28,105 @@ export function isInternalCaller(req: Request): boolean {
     logger.warn("authz_internal_secret_not_configured");
     return false;
   }
-  // Constant-time-ish comparison (good enough for edge functions;
-  // Deno doesn't expose crypto.timingSafeEqual for strings)
+  // Constant-time-ish comparison
   if (secret.length !== expected.length) return false;
   let mismatch = 0;
   for (let i = 0; i < secret.length; i++) {
     mismatch |= secret.charCodeAt(i) ^ expected.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+/**
+ * Check if the Bearer token is the service-role key.
+ * Use sparingly — prefer isInternalCaller for edge-to-edge calls.
+ */
+export function isServiceRoleToken(req: Request): boolean {
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.replace("Bearer ", "");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  return !!token && token === serviceKey;
+}
+
+/**
+ * Resolve the authenticated user from the request's Authorization header.
+ * Returns null if no valid user session is present.
+ * Does NOT treat anon key as privileged.
+ */
+export async function resolveUser(req: Request): Promise<{ userId: string } | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+
+  const { data, error } = await userClient.auth.getUser();
+  if (error || !data?.user) return null;
+  return { userId: data.user.id };
+}
+
+/**
+ * Require either internal-secret or service-role authentication.
+ * Returns a standard 401/403 response on failure, or null on success.
+ * Use for system-only endpoints (automation-executor, cron jobs).
+ */
+export function requirePrivilegedCaller(req: Request, corsHeaders: Record<string, string>): Response | null {
+  if (isInternalCaller(req) || isServiceRoleToken(req)) return null;
+  return new Response(JSON.stringify({ error: "Forbidden — requires internal or service-role auth" }), {
+    status: 403,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+/**
+ * Require user auth OR internal/service-role auth.
+ * Returns { userId, isPrivileged } on success or a Response on failure.
+ */
+export async function requireAuth(
+  req: Request,
+  corsHeaders: Record<string, string>,
+): Promise<{ userId: string | null; isPrivileged: boolean } | Response> {
+  // Internal/service-role callers are privileged (no user scoping)
+  if (isInternalCaller(req) || isServiceRoleToken(req)) {
+    return { userId: null, isPrivileged: true };
+  }
+
+  // Otherwise require a valid user JWT
+  const user = await resolveUser(req);
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  return { userId: user.userId, isPrivileged: false };
+}
+
+/**
+ * Assert workspace membership for a call session.
+ * Returns the workspace_id on success.
+ */
+export async function assertCallSessionAccess(
+  admin: SupabaseClient,
+  sessionId: string,
+  userId: string,
+): Promise<AuthzResult> {
+  const { data: session, error } = await admin
+    .from("call_sessions")
+    .select("workspace_id")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (error || !session) {
+    return { ok: false, error: "Call session not found", status: 404 };
+  }
+
+  return assertWorkspaceMembership(admin, session.workspace_id, userId);
 }
 
 /**

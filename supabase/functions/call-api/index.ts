@@ -1,10 +1,20 @@
 // ============================================================
 // Call API — CRUD/read endpoints for call data
-// GET /call-api?callSid=... or ?callSessionId=...
+// GET /call-api?callSid=... or ?callSessionId=... or ?leadId=...
 // Returns session + recordings + transcript + analysis
+//
+// AUTH: Requires a valid user JWT. All queries are scoped to
+// workspaces the caller belongs to via assertCallSessionAccess
+// or assertWorkspaceMembership. Internal callers (X-Internal-Secret)
+// bypass user checks but still use service-role queries.
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
+import {
+  requireAuth,
+  assertCallSessionAccess,
+  assertLeadAccess,
+} from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,124 +28,116 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-  // Auth: validate user token
-  const authHeader = req.headers.get("Authorization");
-  const token = authHeader?.replace("Bearer ", "");
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // Verify the calling user
-  if (token && token !== serviceKey) {
-    const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY") ?? serviceKey);
-    const { data: { user }, error: authErr } = await userClient.auth.getUser(token);
-    if (authErr || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-  }
+  // ── Auth gate ──────────────────────────────────────────────
+  const authResult = await requireAuth(req, corsHeaders);
+  if (authResult instanceof Response) return authResult;
+
+  const { userId, isPrivileged } = authResult;
 
   const url = new URL(req.url);
 
   try {
-    if (req.method === "GET") {
-      const callSid = url.searchParams.get("callSid");
-      const callSessionId = url.searchParams.get("callSessionId");
-      const leadId = url.searchParams.get("leadId");
-      const recent = url.searchParams.get("recent");
-
-      // Fetch by callSid
-      if (callSid) {
-        return await fetchByCallSid(supabase, callSid);
-      }
-
-      // Fetch by session ID
-      if (callSessionId) {
-        return await fetchBySessionId(supabase, callSessionId);
-      }
-
-      // Fetch by lead ID
-      if (leadId) {
-        return await fetchByLeadId(supabase, leadId);
-      }
-
-      // Fetch recent webhook deliveries
-      if (recent === "webhooks") {
-        const { data } = await supabase
-          .from("call_webhook_log")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(50);
-
-        return new Response(JSON.stringify({ ok: true, webhooks: data ?? [] }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      return new Response(JSON.stringify({ ok: false, error: "Provide callSid, callSessionId, or leadId" }), {
-        status: 400,
+    if (req.method !== "GET") {
+      return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
+        status: 405,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    const callSid = url.searchParams.get("callSid");
+    const callSessionId = url.searchParams.get("callSessionId");
+    const leadId = url.searchParams.get("leadId");
+    const recent = url.searchParams.get("recent");
+
+    // ── Fetch by callSid ──────────────────────────────────
+    if (callSid) {
+      const { data: session } = await supabase
+        .from("call_sessions")
+        .select("*")
+        .eq("call_sid", callSid)
+        .maybeSingle();
+
+      if (!session) {
+        return jsonResp({ ok: false, error: "Not found" }, 404);
+      }
+
+      // Ownership check
+      if (!isPrivileged && userId) {
+        const check = await assertCallSessionAccess(supabase, session.id, userId);
+        if (!check.ok) return jsonResp({ ok: false, error: check.error }, check.status ?? 403);
+      }
+
+      return fetchFullSession(supabase, session);
+    }
+
+    // ── Fetch by session ID ───────────────────────────────
+    if (callSessionId) {
+      const { data: session } = await supabase
+        .from("call_sessions")
+        .select("*")
+        .eq("id", callSessionId)
+        .maybeSingle();
+
+      if (!session) {
+        return jsonResp({ ok: false, error: "Not found" }, 404);
+      }
+
+      if (!isPrivileged && userId) {
+        const check = await assertCallSessionAccess(supabase, session.id, userId);
+        if (!check.ok) return jsonResp({ ok: false, error: check.error }, check.status ?? 403);
+      }
+
+      return fetchFullSession(supabase, session);
+    }
+
+    // ── Fetch by lead ID ──────────────────────────────────
+    if (leadId) {
+      if (!isPrivileged && userId) {
+        const check = await assertLeadAccess(supabase, leadId, userId);
+        if (!check.ok) return jsonResp({ ok: false, error: check.error }, check.status ?? 403);
+      }
+
+      const { data: sessions } = await supabase
+        .from("call_sessions")
+        .select("*")
+        .eq("lead_id", leadId)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      return jsonResp({ ok: true, sessions: sessions ?? [] });
+    }
+
+    // ── Recent webhook logs ───────────────────────────────
+    // Only available to privileged callers (internal/service-role)
+    if (recent === "webhooks") {
+      if (!isPrivileged) {
+        return jsonResp({ ok: false, error: "Forbidden — webhook logs require service-role access" }, 403);
+      }
+
+      const { data } = await supabase
+        .from("call_webhook_log")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      return jsonResp({ ok: true, webhooks: data ?? [] });
+    }
+
+    return jsonResp({ ok: false, error: "Provide callSid, callSessionId, or leadId" }, 400);
   } catch (err) {
     logger.error("call_api_error", { error: err instanceof Error ? err.message : String(err) });
-    return new Response(JSON.stringify({ ok: false, error: "Internal error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResp({ ok: false, error: "Internal error" }, 500);
   }
 });
 
-async function fetchByCallSid(supabase: ReturnType<typeof createClient>, callSid: string) {
-  const { data: session } = await supabase
-    .from("call_sessions")
-    .select("*")
-    .eq("call_sid", callSid)
-    .maybeSingle();
+// ── Helpers ─────────────────────────────────────────────────
 
-  if (!session) {
-    return new Response(JSON.stringify({ ok: false, error: "Not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-    });
-  }
-
-  return fetchFullSession(supabase, session);
-}
-
-async function fetchBySessionId(supabase: ReturnType<typeof createClient>, id: string) {
-  const { data: session } = await supabase
-    .from("call_sessions")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (!session) {
-    return new Response(JSON.stringify({ ok: false, error: "Not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-    });
-  }
-
-  return fetchFullSession(supabase, session);
-}
-
-async function fetchByLeadId(supabase: ReturnType<typeof createClient>, leadId: string) {
-  const { data: sessions } = await supabase
-    .from("call_sessions")
-    .select("*")
-    .eq("lead_id", leadId)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  return new Response(JSON.stringify({ ok: true, sessions: sessions ?? [] }), {
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+function jsonResp(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
@@ -148,13 +150,11 @@ async function fetchFullSession(supabase: ReturnType<typeof createClient>, sessi
     supabase.from("call_analyses").select("*").eq("call_session_id", sessionId),
   ]);
 
-  return new Response(JSON.stringify({
+  return jsonResp({
     ok: true,
     session,
     recordings: recordings.data ?? [],
     transcripts: transcripts.data ?? [],
     analyses: analyses.data ?? [],
-  }), {
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
   });
 }
