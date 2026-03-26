@@ -131,7 +131,23 @@ function mergeInstructions(userInstructions: string | null, leadInstructions: st
 }
 
 // ============================================
-// PAYLOAD BUILDER (raw data + metadata flags)
+// ACTION KEY INFERENCE (maps AI task type back to action_key for resolver)
+// ============================================
+
+function inferActionKey(taskType: AITaskType, ctx: ResolvedContext): string | null {
+  const TASK_TO_ACTION: Record<string, string> = {
+    pre_email_1_intro: "send_pre_1",
+    pre_email_2_followup: "send_pre_2",
+    pre_email_3_followup: "send_pre_3",
+    pre_email_4_breakup: "send_pre_4",
+    nurture_email_single: `nurture_${((ctx.lead as any).nurture_outbound_count || 0) + 1}`,
+    re_engagement_intro: "send_pre_1",
+    email_intro_fast: "send_pre_1",
+    email_intro_nurture: "nurture_1",
+    inbound_intro: "send_pre_1",
+  };
+  return TASK_TO_ACTION[taskType] || null;
+}
 // ============================================
 
 function buildAIPayload(
