@@ -190,6 +190,24 @@ function resolveStepType(motion: string, step: number): StepType {
 // ════════════════════════════════════════════
 
 export function resolveStepPreview(input: ClientCampaignResolverInput): ResolvedStepPreview {
+  // ── NEW: If structured step is provided from DB, use it directly ──
+  if (input.structured_step) {
+    const ss = input.structured_step;
+    const step = resolveStepNumber(input.action_key);
+    return {
+      step_number: step,
+      channel: ss.channel,
+      framework: ss.framework,
+      objective: ss.objective,
+      max_word_count: ss.max_word_count,
+      cta_type: ss.cta_type,
+      hard_rules: ss.hard_rules,
+      generation_hints: ss.generation_hints,
+      step_type: ss.step_type,
+    };
+  }
+
+  // ── Legacy path: derive from conventions ──────────────────────────
   const step = resolveStepNumber(input.action_key);
   const channel = resolveChannel(input.action_key, input.channel);
   const isNurture = input.motion === "nurture";
