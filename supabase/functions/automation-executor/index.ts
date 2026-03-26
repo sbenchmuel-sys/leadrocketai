@@ -85,6 +85,36 @@ serve(async (req) => {
     const now = new Date().toISOString();
 
     // -------------------------------------------------------
+    // STEP -1: STALE CLAIM RECOVERY
+    // Claims stuck in "claiming" past their expiry are marked
+    // "expired" so the unique index slot is freed and the lead
+    // can be retried on the next run. A claim expires when:
+    //   claim_expires_at < now AND status = 'claiming'
+    // This handles: executor crash, provider timeout, DB write
+    // failure after provider success (compensating log exists).
+    // -------------------------------------------------------
+    const { data: staleClaims } = await supabase
+      .from("automation_log")
+      .select("id, lead_id, action_key")
+      .eq("status", "claiming")
+      .lt("claim_expires_at", now)
+      .limit(50);
+
+    if (staleClaims && staleClaims.length > 0) {
+      console.warn(`[automation-executor] Recovering ${staleClaims.length} stale claims`);
+      for (const stale of staleClaims) {
+        await supabase.from("automation_log")
+          .update({
+            status: "expired",
+            error_message: "Stale claim expired — executor did not complete within TTL",
+            completed_at: now,
+          })
+          .eq("id", stale.id);
+        console.warn(`[automation-executor] Expired stale claim ${stale.id} for lead ${stale.lead_id}, action ${stale.action_key}`);
+      }
+    }
+
+    // -------------------------------------------------------
     // STEP 0: OOO RETURN DETECTION
     // Find leads where ooo_until has passed and eligible_at
     // has arrived — surface "Back in office" action without
