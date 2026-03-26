@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
+import CampaignStepPreview from "./CampaignStepPreview";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
@@ -585,6 +586,13 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           </Button>
         </>
       )}
+      {/* Sequence Step Preview (resolved from campaign model) */}
+      <CampaignStepPreview
+        motion={lead.motion}
+        channel="email"
+        actionInstructions={(lead as any).action_instructions}
+        outboundTone={(lead as any).outbound_tone}
+      />
       {/* Draft Preview Dialog */}
       {previewStep && (
         <AutomationDraftPreviewDialog
