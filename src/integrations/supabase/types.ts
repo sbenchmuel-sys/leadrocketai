@@ -752,6 +752,48 @@ export type Database = {
           },
         ]
       }
+      cron_run_log: {
+        Row: {
+          completed_at: string | null
+          dispatcher_target: string | null
+          duration_ms: number | null
+          error_message: string | null
+          id: string
+          job_name: string
+          metadata: Json | null
+          request_id: string
+          started_at: string
+          status: string
+          status_code: number | null
+        }
+        Insert: {
+          completed_at?: string | null
+          dispatcher_target?: string | null
+          duration_ms?: number | null
+          error_message?: string | null
+          id?: string
+          job_name: string
+          metadata?: Json | null
+          request_id: string
+          started_at?: string
+          status?: string
+          status_code?: number | null
+        }
+        Update: {
+          completed_at?: string | null
+          dispatcher_target?: string | null
+          duration_ms?: number | null
+          error_message?: string | null
+          id?: string
+          job_name?: string
+          metadata?: Json | null
+          request_id?: string
+          started_at?: string
+          status?: string
+          status_code?: number | null
+        }
+        Relationships: []
+      }
       drafts: {
         Row: {
           body_text: string
