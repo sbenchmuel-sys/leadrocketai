@@ -4,6 +4,17 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
+import {
+  loadExecutionSettings,
+  clearSettingsCache,
+  checkMinGap,
+  checkPerLeadCaps,
+  checkSendWindow,
+  checkStopConditions,
+  computeNextEligibleAt,
+  resolveStepDelay,
+  type ExecutionSettings,
+} from "../_shared/executionSettings.ts";
 
 /** @deprecated — Use resolveCampaignInstruction() instead for new code.
  *  Kept temporarily for any edge case not yet migrated to the resolver. */
