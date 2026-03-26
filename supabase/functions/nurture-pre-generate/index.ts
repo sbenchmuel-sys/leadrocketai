@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,6 +11,7 @@ const corsHeaders = {
  * Pre-generates nurture email drafts 24 hours before scheduled send
  * for leads in "review" nurture mode.
  * 
+ * AUTH: Requires X-Internal-Secret or service-role token.
  * Called on a daily cron schedule via cron-dispatcher.
  */
 serve(async (req) => {
@@ -18,13 +19,9 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Guard: only allow internal-secret or service-role callers
-  if (!isInternalCaller(req) && !isServiceRoleToken(req)) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  // Standardized scheduled caller auth
+  const auth = requireScheduledCaller(req, corsHeaders);
+  if (auth instanceof Response) return auth;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
