@@ -8,8 +8,10 @@
 //   1. The timeline source_id is the interaction UUID
 //   2. Exactly one timeline row per interaction
 //   3. System notes are also projected into the timeline
-//   4. Duplicate interactions are handled via Postgres error
-//      codes (23505), NOT fragile message-text matching.
+//   4. Duplicate interactions are blocked by the DB-level
+//      UNIQUE INDEX on dedupe_key (idx_interactions_dedupe_key_unique).
+//   5. dedupe_key is MANDATORY — callers must provide it or
+//      one is auto-generated from available fields.
 // ============================================================
 
 import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -43,7 +45,7 @@ export interface CanonicalInteractionInput {
   metadata_json?: Record<string, unknown>;
   status_json?: Record<string, unknown>;
 
-  // Dedupe key override — if not provided, auto-generated
+  // Dedupe key override — if not provided, auto-generated from available fields
   dedupe_key?: string;
 }
 
@@ -66,7 +68,10 @@ function deriveChannel(type: string): string {
 }
 
 /**
- * Build a dedupe key from available fields.
+ * Build a deterministic dedupe key from available fields.
+ *
+ * IMPORTANT: The key MUST be stable across retries. Never use
+ * random values or non-deterministic timestamps here.
  */
 function buildDedupeKey(input: CanonicalInteractionInput): string {
   // If explicitly provided, use it
@@ -85,8 +90,23 @@ function buildDedupeKey(input: CanonicalInteractionInput): string {
     return whatsappDedupeKey(input.direction || "unknown", provMsgId, `${input.lead_id}:${input.occurred_at}`);
   }
 
-  // System notes: use source + lead + timestamp to avoid collisions
-  return `${input.source}:${input.type}:${input.lead_id}:${input.occurred_at}`;
+  // System notes: use source + type + lead + a stable content hash
+  // to prevent duplicates on retry while allowing genuinely different notes
+  const contentFingerprint = stableHash(`${input.body_text?.substring(0, 100)}|${input.subject || ""}`);
+  return `${input.source}:${input.type}:${input.lead_id}:${contentFingerprint}`;
+}
+
+/**
+ * FNV-1a hash for stable, deterministic fingerprinting.
+ * NOT cryptographic — just for dedupe key generation.
+ */
+function stableHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 // Postgres unique_violation error code
@@ -94,27 +114,32 @@ const PG_UNIQUE_VIOLATION = "23505";
 
 /**
  * Check if a Supabase/PostgREST error is a unique constraint violation.
- * Handles both raw Postgres error objects (code: "23505") and
- * PostgREST HTTP wrappers (message containing "duplicate key").
  */
 function isUniqueViolation(err: { code?: string; message?: string }): boolean {
   if (err.code === PG_UNIQUE_VIOLATION) return true;
-  // PostgREST sometimes wraps the Postgres error; check both code formats
   if (err.code === "PGRST116") return false; // "not found" — not a duplicate
-  // Fallback: check message for unique violation indicators
   if (err.message && /duplicate key|unique.?constraint|unique.?violation|23505/i.test(err.message)) return true;
   return false;
 }
 
 /**
  * Resolve the existing interaction UUID when we know a duplicate exists.
- * Uses gmail_message_id for email, or (lead_id + type + occurred_at) for other types.
  */
 async function resolveExistingInteraction(
   supabase: SupabaseClient,
+  dedupeKey: string,
   input: CanonicalInteractionInput,
 ): Promise<string | null> {
-  // For emails with a provider message ID, look up by gmail_message_id
+  // Primary: look up by dedupe_key (fastest, most reliable)
+  const { data: byKey } = await supabase
+    .from("interactions")
+    .select("id")
+    .eq("dedupe_key", dedupeKey)
+    .limit(1)
+    .maybeSingle();
+  if (byKey?.id) return byKey.id as string;
+
+  // Fallback: for emails with provider message ID
   if (input.gmail_message_id) {
     const { data } = await supabase
       .from("interactions")
@@ -126,7 +151,7 @@ async function resolveExistingInteraction(
     if (data?.id) return data.id as string;
   }
 
-  // Generic fallback: match by lead + type + timestamp
+  // Last resort: match by lead + type + timestamp
   const { data } = await supabase
     .from("interactions")
     .select("id")
@@ -144,16 +169,20 @@ async function resolveExistingInteraction(
  * Returns the interaction UUID, whether timeline was projected,
  * and whether the interaction was a detected duplicate.
  *
- * On duplicate interaction:
- *   - Returns duplicate=true with the resolved interaction UUID
- *   - Still attempts timeline projection (idempotent via dedupe_key)
- *     so that historical rows missing from the timeline get filled.
+ * DEDUPLICATION:
+ *   - Primary: DB UNIQUE INDEX on dedupe_key blocks re-inserts
+ *   - Secondary: ON CONFLICT in timelineProjector for timeline rows
+ *   - On duplicate: returns duplicate=true with resolved interaction UUID
+ *     and still attempts timeline projection (idempotent) so historical
+ *     rows missing from the timeline get filled.
  */
 export async function createCanonicalInteraction(
   supabase: SupabaseClient,
   input: CanonicalInteractionInput,
 ): Promise<CanonicalInteractionResult> {
-  // 1. Insert the interaction and get back the UUID
+  const dedupeKey = buildDedupeKey(input);
+
+  // 1. Insert the interaction with dedupe_key
   const interactionRow: Record<string, unknown> = {
     lead_id: input.lead_id,
     type: input.type,
@@ -170,6 +199,7 @@ export async function createCanonicalInteraction(
     ai_summary: input.ai_summary ?? null,
     ai_reply_worthy: input.ai_reply_worthy ?? null,
     hidden: input.hidden ?? false,
+    dedupe_key: dedupeKey,
   };
 
   let interactionId: string | null = null;
@@ -185,13 +215,12 @@ export async function createCanonicalInteraction(
     if (isUniqueViolation(insertErr)) {
       // Duplicate — resolve the existing row's UUID
       isDuplicate = true;
-      interactionId = await resolveExistingInteraction(supabase, input);
+      interactionId = await resolveExistingInteraction(supabase, dedupeKey, input);
       if (!interactionId) {
-        // Could not resolve — log but don't block
-        console.warn(`[canonicalInteraction] Duplicate detected but could not resolve existing row for lead ${input.lead_id}`);
+        console.warn(`[canonicalInteraction] Duplicate skipped (dedupe_key=${dedupeKey}) but could not resolve existing row for lead ${input.lead_id}`);
         return { interaction_id: null, timeline_projected: false, duplicate: true, error: "duplicate_unresolved" };
       }
-      console.log(`[canonicalInteraction] Duplicate interaction resolved to ${interactionId}`);
+      console.log(`[canonicalInteraction] Duplicate skipped (dedupe_key=${dedupeKey}) → existing ${interactionId}`);
     } else {
       // Non-duplicate error — genuine failure
       return { interaction_id: null, timeline_projected: false, duplicate: false, error: insertErr.message };
@@ -201,12 +230,10 @@ export async function createCanonicalInteraction(
   }
 
   // 2. Project into lead_timeline_items (only if workspace_id is available)
-  //    This is idempotent via ON CONFLICT (lead_id, dedupe_key) in timelineProjector,
-  //    so it's safe to run even for duplicate interactions.
+  //    This is idempotent via ON CONFLICT (lead_id, dedupe_key) in timelineProjector.
   let timelineProjected = false;
   if (input.workspace_id && interactionId) {
     const channel = deriveChannel(input.type);
-    const dedupeKey = buildDedupeKey(input);
 
     try {
       await projectTimelineItem(supabase, {
@@ -220,13 +247,12 @@ export async function createCanonicalInteraction(
         event_type: input.type,
         occurred_at: input.occurred_at,
         source_table: "interactions",
-        source_id: interactionId,  // ← The actual interaction UUID, not provider message ID
+        source_id: interactionId,
         snippet_text: input.body_text?.substring(0, 500) ?? null,
         subject: input.subject ?? null,
         status_json: input.status_json ?? {},
         metadata_json: {
           ...(input.metadata_json ?? {}),
-          // Preserve provider message ID in metadata for traceability
           gmail_message_id: input.gmail_message_id ?? undefined,
           gmail_thread_id: input.gmail_thread_id ?? undefined,
           from_email: input.from_email ?? undefined,

@@ -159,6 +159,7 @@ serve(async (req) => {
           source: "automation",
           body_text: `${lead.name} is back in the office. Follow-up action surfaced.`,
           occurred_at: new Date().toISOString(),
+          dedupe_key: `automation:ooo_return:${lead.id}:${new Date().toISOString().slice(0, 10)}`,
         });
 
         console.log(`[automation-executor] OOO return surfaced for lead ${lead.id} (${lead.name})`);
@@ -460,6 +461,7 @@ serve(async (req) => {
                 source: "automation",
                 body_text: "Lead requested to unsubscribe — automation stopped permanently.",
                 occurred_at: new Date().toISOString(),
+                dedupe_key: `automation:unsubscribe:${lead.id}:${new Date().toISOString().slice(0, 10)}`,
               });
 
               logEntry.status = "skipped";
