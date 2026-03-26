@@ -586,49 +586,29 @@ serve(async (req) => {
           }
         }
 
-        const { error: insertError } = await serviceSupabase
-          .from("interactions")
-          .insert({
-            lead_id: leadId,
-            type,
-            source: "gmail",
-            occurred_at: occurredAt,
-            subject,
-            from_email: from,
-            to_email: to,
-            body_text: bodyText.substring(0, 10000),
-            gmail_message_id: gmailMessageId,
-            gmail_thread_id: threadId,
-            direction,
-          });
+        const canonResult = await createCanonicalInteraction(serviceSupabase, {
+          lead_id: leadId,
+          type,
+          source: "gmail",
+          body_text: bodyText.substring(0, 10000),
+          occurred_at: occurredAt,
+          direction,
+          subject,
+          from_email: from,
+          to_email: to,
+          gmail_message_id: gmailMessageId,
+          gmail_thread_id: threadId,
+          workspace_id: leadData?.workspace_id ?? null,
+          provider: "gmail",
+          metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
+          dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
+        });
 
-        if (insertError) {
-          if (!insertError.message.includes("duplicate")) {
-            errors.push(`Failed to insert message ${gmailMessageId}: ${insertError.message}`);
-          }
-        } else {
+        if (canonResult.error && canonResult.error !== "duplicate") {
+          errors.push(`Failed to insert message ${gmailMessageId}: ${canonResult.error}`);
+        } else if (!canonResult.error) {
           synced++;
           existingMessageIds.add(gmailMessageId);
-
-          // Project into unified timeline ledger
-          if (leadData?.workspace_id) {
-            projectTimelineItem(serviceSupabase, {
-              workspace_id: leadData.workspace_id,
-              lead_id: leadId,
-              channel: "email",
-              provider: "gmail",
-              direction,
-              event_type: type,
-              occurred_at: occurredAt,
-              source_table: "interactions",
-              source_id: gmailMessageId,
-              snippet_text: bodyText.substring(0, 500),
-              subject,
-              status_json: {},
-              metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
-              dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
-            });
-          }
         }
       } catch (err) {
         errors.push(`Error processing message ${gmailMessageId}: ${err instanceof Error ? err.message : "Unknown"}`);
