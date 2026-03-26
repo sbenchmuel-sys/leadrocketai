@@ -998,6 +998,7 @@ export type Database = {
           ai_reply_worthy: boolean | null
           ai_summary: string | null
           body_text: string
+          dedupe_key: string | null
           direction: string | null
           from_email: string | null
           gmail_message_id: string | null
@@ -1016,6 +1017,7 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text: string
+          dedupe_key?: string | null
           direction?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
@@ -1034,6 +1036,7 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text?: string
+          dedupe_key?: string | null
           direction?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
