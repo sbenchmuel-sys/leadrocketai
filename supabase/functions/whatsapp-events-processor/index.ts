@@ -649,9 +649,9 @@ Context:
       last_message_at: now,
     }).eq("id", conversationId);
 
-    // Bridge outbound to lead timeline
+    // Bridge outbound to lead timeline (with canonical projection)
     try {
-      await supabase.from("interactions").insert({
+      await createCanonicalInteraction(supabase, {
         lead_id: matchedLead.id,
         type: "whatsapp_outbound",
         source: "whatsapp",
@@ -660,9 +660,15 @@ Context:
         direction: "outbound",
         ai_intent: intent,
         ai_summary: `Auto-reply (${decision.reason})`,
+        workspace_id: workspaceId,
+        contact_id: contactId,
+        conversation_id: conversationId,
+        provider: (norm as any).provider || "meta",
+        metadata_json: { provider_message_id: replyMsgId, auto_sent: true, decision_reason: decision.reason },
+        dedupe_key: whatsappDedupeKey("outbound", replyMsgId, `${matchedLead.id}:${now}`),
       });
     } catch (err: any) {
-      console.warn("[whatsapp-events-processor] Non-blocking outbound interaction insert failed:", err.message);
+      console.warn("[whatsapp-events-processor] Non-blocking outbound canonical insert failed:", err.message);
     }
 
     // Update lead
