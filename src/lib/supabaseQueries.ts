@@ -420,13 +420,13 @@ export async function unhideTimelineItem(itemId: string): Promise<void> {
 async function syncInteractionHidden(sourceId: string, hidden: boolean): Promise<void> {
   try {
     // Try direct UUID match (new canonical rows)
-    const { count } = await supabase
+    const { data: updated } = await supabase
       .from('interactions')
       .update({ hidden })
       .eq('id', sourceId)
-      .select('id', { count: 'exact', head: true });
+      .select('id');
 
-    if ((count ?? 0) > 0) return;
+    if (updated && updated.length > 0) return;
 
     // Fallback: historical rows may have provider message ID as source_id
     // Try matching by gmail_message_id (covers Gmail historical data)
