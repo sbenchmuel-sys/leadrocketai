@@ -94,6 +94,9 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Clear per-invocation caches
+    clearSettingsCache();
+
     const now = new Date().toISOString();
 
     // -------------------------------------------------------
