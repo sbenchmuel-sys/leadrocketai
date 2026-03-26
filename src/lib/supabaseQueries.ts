@@ -388,9 +388,8 @@ export async function hideTimelineItem(itemId: string): Promise<void> {
 
   if (item) {
     await supabase.from('lead_timeline_items').update({ hidden: true }).eq('id', itemId);
-    // source_id is now always the interaction UUID — safe to use directly
     if (item.source_table === 'interactions' && item.source_id) {
-      try { await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id); } catch { /* non-blocking */ }
+      await syncInteractionHidden(item.source_id, true);
     }
   }
 }
@@ -405,10 +404,38 @@ export async function unhideTimelineItem(itemId: string): Promise<void> {
 
   if (item) {
     await supabase.from('lead_timeline_items').update({ hidden: false }).eq('id', itemId);
-    // source_id is now always the interaction UUID — safe to use directly
     if (item.source_table === 'interactions' && item.source_id) {
-      try { await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id); } catch { /* non-blocking */ }
+      await syncInteractionHidden(item.source_id, false);
     }
+  }
+}
+
+/**
+ * Sync the hidden flag to the interactions table.
+ * Handles both new rows (source_id = interaction UUID) and
+ * historical rows (source_id = provider message ID like gmail msg id).
+ *
+ * Strategy: try UUID match first; if no rows updated, try gmail_message_id fallback.
+ */
+async function syncInteractionHidden(sourceId: string, hidden: boolean): Promise<void> {
+  try {
+    // Try direct UUID match (new canonical rows)
+    const { data: updated } = await supabase
+      .from('interactions')
+      .update({ hidden })
+      .eq('id', sourceId)
+      .select('id');
+
+    if (updated && updated.length > 0) return;
+
+    // Fallback: historical rows may have provider message ID as source_id
+    // Try matching by gmail_message_id (covers Gmail historical data)
+    await supabase
+      .from('interactions')
+      .update({ hidden })
+      .eq('gmail_message_id', sourceId);
+  } catch {
+    // Non-blocking — timeline item is already updated
   }
 }
 

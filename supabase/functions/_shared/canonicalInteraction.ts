@@ -8,6 +8,8 @@
 //   1. The timeline source_id is the interaction UUID
 //   2. Exactly one timeline row per interaction
 //   3. System notes are also projected into the timeline
+//   4. Duplicate interactions are handled via Postgres error
+//      codes (23505), NOT fragile message-text matching.
 // ============================================================
 
 import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -48,6 +50,7 @@ export interface CanonicalInteractionInput {
 export interface CanonicalInteractionResult {
   interaction_id: string | null;
   timeline_projected: boolean;
+  duplicate: boolean;
   error?: string;
 }
 
@@ -71,7 +74,7 @@ function buildDedupeKey(input: CanonicalInteractionInput): string {
 
   const channel = deriveChannel(input.type);
 
-  // Email: use provider + message ID
+  // Email: use provider + message ID for stable cross-sync dedup
   if (channel === "email" && input.gmail_message_id) {
     return emailDedupeKey(input.source, input.gmail_message_id, input.gmail_message_id);
   }
@@ -86,9 +89,65 @@ function buildDedupeKey(input: CanonicalInteractionInput): string {
   return `${input.source}:${input.type}:${input.lead_id}:${input.occurred_at}`;
 }
 
+// Postgres unique_violation error code
+const PG_UNIQUE_VIOLATION = "23505";
+
+/**
+ * Check if a Supabase/PostgREST error is a unique constraint violation.
+ * Handles both raw Postgres error objects (code: "23505") and
+ * PostgREST HTTP wrappers (message containing "duplicate key").
+ */
+function isUniqueViolation(err: { code?: string; message?: string }): boolean {
+  if (err.code === PG_UNIQUE_VIOLATION) return true;
+  // PostgREST sometimes wraps the Postgres error; check both code formats
+  if (err.code === "PGRST116") return false; // "not found" — not a duplicate
+  // Fallback: check message for unique violation indicators
+  if (err.message && /duplicate key|unique.?constraint|unique.?violation|23505/i.test(err.message)) return true;
+  return false;
+}
+
+/**
+ * Resolve the existing interaction UUID when we know a duplicate exists.
+ * Uses gmail_message_id for email, or (lead_id + type + occurred_at) for other types.
+ */
+async function resolveExistingInteraction(
+  supabase: SupabaseClient,
+  input: CanonicalInteractionInput,
+): Promise<string | null> {
+  // For emails with a provider message ID, look up by gmail_message_id
+  if (input.gmail_message_id) {
+    const { data } = await supabase
+      .from("interactions")
+      .select("id")
+      .eq("lead_id", input.lead_id)
+      .eq("gmail_message_id", input.gmail_message_id)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+
+  // Generic fallback: match by lead + type + timestamp
+  const { data } = await supabase
+    .from("interactions")
+    .select("id")
+    .eq("lead_id", input.lead_id)
+    .eq("type", input.type)
+    .eq("occurred_at", input.occurred_at)
+    .limit(1)
+    .maybeSingle();
+
+  return (data?.id as string) ?? null;
+}
+
 /**
  * Insert an interaction and project a matching timeline item.
- * Returns the interaction UUID and whether timeline was projected.
+ * Returns the interaction UUID, whether timeline was projected,
+ * and whether the interaction was a detected duplicate.
+ *
+ * On duplicate interaction:
+ *   - Returns duplicate=true with the resolved interaction UUID
+ *   - Still attempts timeline projection (idempotent via dedupe_key)
+ *     so that historical rows missing from the timeline get filled.
  */
 export async function createCanonicalInteraction(
   supabase: SupabaseClient,
@@ -113,6 +172,9 @@ export async function createCanonicalInteraction(
     hidden: input.hidden ?? false,
   };
 
+  let interactionId: string | null = null;
+  let isDuplicate = false;
+
   const { data: inserted, error: insertErr } = await supabase
     .from("interactions")
     .insert(interactionRow)
@@ -120,18 +182,29 @@ export async function createCanonicalInteraction(
     .single();
 
   if (insertErr) {
-    // Duplicate insert is non-fatal (idempotency)
-    if (insertErr.message?.includes("duplicate")) {
-      return { interaction_id: null, timeline_projected: false, error: "duplicate" };
+    if (isUniqueViolation(insertErr)) {
+      // Duplicate — resolve the existing row's UUID
+      isDuplicate = true;
+      interactionId = await resolveExistingInteraction(supabase, input);
+      if (!interactionId) {
+        // Could not resolve — log but don't block
+        console.warn(`[canonicalInteraction] Duplicate detected but could not resolve existing row for lead ${input.lead_id}`);
+        return { interaction_id: null, timeline_projected: false, duplicate: true, error: "duplicate_unresolved" };
+      }
+      console.log(`[canonicalInteraction] Duplicate interaction resolved to ${interactionId}`);
+    } else {
+      // Non-duplicate error — genuine failure
+      return { interaction_id: null, timeline_projected: false, duplicate: false, error: insertErr.message };
     }
-    return { interaction_id: null, timeline_projected: false, error: insertErr.message };
+  } else {
+    interactionId = inserted?.id as string;
   }
 
-  const interactionId = inserted?.id as string;
-
   // 2. Project into lead_timeline_items (only if workspace_id is available)
+  //    This is idempotent via ON CONFLICT (lead_id, dedupe_key) in timelineProjector,
+  //    so it's safe to run even for duplicate interactions.
   let timelineProjected = false;
-  if (input.workspace_id) {
+  if (input.workspace_id && interactionId) {
     const channel = deriveChannel(input.type);
     const dedupeKey = buildDedupeKey(input);
 
@@ -170,5 +243,5 @@ export async function createCanonicalInteraction(
     }
   }
 
-  return { interaction_id: interactionId, timeline_projected: timelineProjected };
+  return { interaction_id: interactionId, timeline_projected: timelineProjected, duplicate: isDuplicate };
 }

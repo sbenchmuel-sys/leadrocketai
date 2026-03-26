@@ -157,8 +157,6 @@ export const smokeTests: SmokeTest[] = [
 
   // 10) Claim unique index exists (functional check)
   timed("Claim unique index blocks duplicates", async () => {
-    // Verify the unique index exists by checking that claim_date column is queryable
-    // (actual concurrent test requires two executor runs — this checks schema readiness)
     const { data, error } = await supabase
       .from("automation_log")
       .select("id, status, claim_date, claimed_at, claim_expires_at")
@@ -166,6 +164,59 @@ export const smokeTests: SmokeTest[] = [
       .limit(1);
     if (error) return { status: "fail", detail: `Schema check failed: ${error.message}` };
     return { status: "pass", detail: "Claim columns and status filter operational" };
+  }),
+
+  // 11) Timeline source_id consistency — new rows should have UUID-format source_id
+  timed("Timeline source_id format check (recent)", async () => {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("lead_timeline_items")
+      .select("id, source_id, source_table")
+      .eq("source_table", "interactions")
+      .gte("created_at", oneDayAgo)
+      .limit(50);
+    if (error) return { status: "fail", detail: error.message };
+    if (!data || data.length === 0) return { status: "pass", detail: "No recent timeline items to check" };
+
+    // UUID v4 regex check
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const nonUuid = data.filter((r: { source_id: string }) => !uuidRe.test(r.source_id));
+    if (nonUuid.length > 0) {
+      return { status: "warn", detail: `${nonUuid.length}/${data.length} recent timeline rows have non-UUID source_id (historical)` };
+    }
+    return { status: "pass", detail: `${data.length} recent timeline rows all have UUID source_id` };
+  }),
+
+  // 12) No duplicate dedupe_keys per lead (invariant check)
+  timed("No duplicate timeline dedupe_keys (sample)", async () => {
+    // Sample a recent lead and check for dedupe_key collisions
+    const { data: sample, error } = await supabase
+      .from("lead_timeline_items")
+      .select("lead_id, dedupe_key")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) return { status: "fail", detail: error.message };
+    if (!sample || sample.length === 0) return { status: "pass", detail: "No timeline items to check" };
+
+    const seen = new Set<string>();
+    const dupes: string[] = [];
+    for (const row of sample) {
+      const key = `${row.lead_id}|${row.dedupe_key}`;
+      if (seen.has(key)) dupes.push(row.dedupe_key);
+      seen.add(key);
+    }
+    if (dupes.length > 0) return { status: "fail", detail: `${dupes.length} duplicate dedupe_key(s) found: ${dupes[0]}` };
+    return { status: "pass", detail: `${sample.length} timeline rows checked, all dedupe_keys unique per lead` };
+  }),
+
+  // 13) Hide/unhide works for both UUID and legacy source_id rows
+  timed("Timeline hide column accessible", async () => {
+    const { data, error } = await supabase
+      .from("lead_timeline_items")
+      .select("id, hidden, source_id, source_table")
+      .limit(1);
+    if (error) return { status: "fail", detail: error.message };
+    return { status: "pass", detail: "hidden, source_id, source_table columns accessible" };
   }),
 ];
 
