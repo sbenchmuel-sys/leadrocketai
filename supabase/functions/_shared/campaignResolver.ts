@@ -332,9 +332,6 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
       : null,
   };
 }
-      : null,
-  };
-}
 
 // ── Format for AI prompt injection ──────────────────────────────────
 // Converts the structured instruction into a prompt block that
