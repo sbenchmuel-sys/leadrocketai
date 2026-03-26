@@ -86,7 +86,16 @@ function resolveFramework(channel: CanonicalChannel, step: number, motion: strin
 // ── Objective derivation ────────────────────────────────────────────
 
 function deriveObjective(channel: CanonicalChannel, step: number, motion: string): string {
-  if (motion === "nurture") return "Stay relevant with value — no pressure";
+  if (motion === "nurture") {
+    // Step-specific nurture objectives — mirrors client campaignResolver.ts
+    const nurtureObjectives: Record<number, string> = {
+      1: "Share a relevant industry insight — build credibility, no pitch",
+      2: "Provide a case study or proof point — show tangible results",
+      3: "Offer a value-add resource — be genuinely helpful",
+      4: "Re-engage with a fresh angle — soft check-in",
+    };
+    return nurtureObjectives[step] || nurtureObjectives[1];
+  }
   if (motion === "inbound_response") return "Convert interest into a scheduled conversation";
   if (motion === "post_meeting") return "Move the deal forward with a clear next step";
   if (motion === "closing") return "Drive to commitment on outstanding decisions";

@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { AITaskType } from "@/hooks/useAITask";
 import type { Motion } from "@/lib/dashboardUtils";
 import { contextResolver, type ResolvedContext } from "@/lib/contextResolver";
+import { buildCampaignPayloadFields } from "@/lib/campaignResolver";
 import { playbookResolver, type PlaybookRecommendation } from "@/lib/playbookResolver";
 import { scoreAndSelectModel, type AIModel } from "@/lib/complexityScorer";
 import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
@@ -120,8 +121,8 @@ function getAuthUserName(): string | null {
 // INSTRUCTION MERGE HELPER
 // ============================================
 
-/** Merge user-provided instructions with lead's saved action_instructions.
- *  User instructions take priority; lead instructions are appended. */
+/** @deprecated — Prefer buildCampaignPayloadFields() which uses the canonical resolver.
+ *  Kept only for edge cases where no action_key context is available. */
 function mergeInstructions(userInstructions: string | null, leadInstructions: string | null): string | null {
   if (!userInstructions && !leadInstructions) return null;
   if (!leadInstructions) return userInstructions;
@@ -130,7 +131,23 @@ function mergeInstructions(userInstructions: string | null, leadInstructions: st
 }
 
 // ============================================
-// PAYLOAD BUILDER (raw data + metadata flags)
+// ACTION KEY INFERENCE (maps AI task type back to action_key for resolver)
+// ============================================
+
+function inferActionKey(taskType: AITaskType, ctx: ResolvedContext): string | null {
+  const TASK_TO_ACTION: Record<string, string> = {
+    pre_email_1_intro: "send_pre_1",
+    pre_email_2_followup: "send_pre_2",
+    pre_email_3_followup: "send_pre_3",
+    pre_email_4_breakup: "send_pre_4",
+    nurture_email_single: `nurture_${((ctx.lead as any).nurture_outbound_count || 0) + 1}`,
+    re_engagement_intro: "send_pre_1",
+    email_intro_fast: "send_pre_1",
+    email_intro_nurture: "nurture_1",
+    inbound_intro: "send_pre_1",
+  };
+  return TASK_TO_ACTION[taskType] || null;
+}
 // ============================================
 
 function buildAIPayload(
@@ -402,10 +419,24 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   // Step 4: Complexity scoring + model selection
   const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
 
-  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
-  const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
-  const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
-  const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
+   // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+    const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
+    const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
+    const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
+
+    // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
+    const campaignFields = buildCampaignPayloadFields({
+      action_key: inferActionKey(finalIntent, resolvedContext),
+      motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+      channel: channel === "linkedin" ? "email" : channel,
+      outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
+      action_instructions: leadInstructions,
+      has_reply: !!resolvedContext.last_inbound_email,
+      meeting_booked: resolvedContext.lead.has_future_meeting,
+      calendar_link: resolvedContext.rep_profile?.calendar_link || null,
+    });
+    aiPayload.campaign_instruction = campaignFields.campaign_instruction;
+    aiPayload.campaign_meta = campaignFields.campaign_meta;
 
   // Derive subject immediately (no AI needed)
   const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
@@ -574,6 +605,20 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
   const mergedInstructions2 = mergeInstructions(instructions || null, leadInstructions2);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
+
+  // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
+  const campaignFields2 = buildCampaignPayloadFields({
+    action_key: inferActionKey(finalIntent, resolvedContext),
+    motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+    channel: channel === "linkedin" ? "email" : channel,
+    outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
+    action_instructions: leadInstructions2,
+    has_reply: !!resolvedContext.last_inbound_email,
+    meeting_booked: resolvedContext.lead.has_future_meeting,
+    calendar_link: resolvedContext.rep_profile?.calendar_link || null,
+  });
+  aiPayload.campaign_instruction = campaignFields2.campaign_instruction;
+  aiPayload.campaign_meta = campaignFields2.campaign_meta;
 
   // Step 6: Call AI edge function
   let draftText: string | null = null;
