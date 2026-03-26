@@ -19,6 +19,8 @@ export type Database = {
           action_key: string | null
           ai_task: string | null
           claim_date: string | null
+          claim_expires_at: string | null
+          claimed_at: string | null
           completed_at: string | null
           created_at: string
           error_message: string | null
@@ -34,6 +36,8 @@ export type Database = {
           action_key?: string | null
           ai_task?: string | null
           claim_date?: string | null
+          claim_expires_at?: string | null
+          claimed_at?: string | null
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
@@ -49,6 +53,8 @@ export type Database = {
           action_key?: string | null
           ai_task?: string | null
           claim_date?: string | null
+          claim_expires_at?: string | null
+          claimed_at?: string | null
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
