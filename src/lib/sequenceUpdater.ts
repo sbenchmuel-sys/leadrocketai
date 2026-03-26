@@ -269,16 +269,39 @@ export async function updateSequenceState(
       } else {
         const nextStep = getNextOutboundStep(intentUsed);
         if (nextStep) {
-          // Motion-based intervals: use cumulative offsets
-          const { getMotionIntervals } = await import("@/lib/cadenceSettingsTypes");
-          const intervals = getMotionIntervals(freshLead.motion || "outbound_prospecting");
-          const stepIdx = parseInt(nextStep.replace("send_pre_", ""), 10) - 1;
-          // Convert cumulative offsets to gap: intervals[stepIdx] - intervals[stepIdx-1]
-          const daysUntil = stepIdx > 0 && stepIdx < intervals.length
-            ? intervals[stepIdx] - intervals[stepIdx - 1]
-            : intervals[1] || 2;
-          const eligibleAt = addDays(new Date(), daysUntil);
-          eligibleAt.setHours(9, 30, 0, 0);
+          // Load structured campaign + cadence settings for proper scheduling
+          const [campaign, cadenceSettings] = await Promise.all([
+            fetchCampaignForLead(leadId).catch(() => null),
+            getCadenceSettings(),
+          ]);
+
+          let delayDays: number;
+          const nextStepNum = parseInt(nextStep.replace("send_pre_", ""), 10);
+
+          if (campaign?.steps?.length) {
+            // Priority 1: structured campaign step delay_days
+            const step = campaign.steps.find(s => s.step_number === nextStepNum && s.active);
+            delayDays = step?.delay_days ?? 2;
+          } else {
+            // Priority 2: legacy cumulative intervals → convert to gap
+            const intervals = cadenceSettings.motions[
+              (freshLead.motion === "inbound_response" ? "inbound" : "outbound") as "outbound" | "inbound"
+            ].email_intervals_days;
+            const stepIdx = nextStepNum - 1;
+            delayDays = stepIdx > 0 && stepIdx < intervals.length
+              ? intervals[stepIdx] - intervals[stepIdx - 1]
+              : intervals[1] || 2;
+          }
+
+          // Use calculateEligibleAt for jitter + send window + business day
+          const eligibleAt = calculateEligibleAt(
+            Date.now(),
+            delayDays * 86_400_000,
+            leadId,
+            nextStep,
+            cadenceSettings,
+            null,
+          );
 
           const STEP_LABELS: Record<string, string> = {
             send_pre_2: "Follow-up 1",
@@ -299,7 +322,9 @@ export async function updateSequenceState(
 
           console.log("[updateSequenceState] Automation: next step scheduled:", {
             nextStep,
+            delayDays,
             eligibleAt: eligibleAt.toISOString(),
+            source: campaign?.steps?.length ? "campaign_steps" : "legacy_intervals",
           });
         }
       }
