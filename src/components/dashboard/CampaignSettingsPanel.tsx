@@ -14,12 +14,15 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { ChevronDown, Calendar, MessageSquare, Layers } from "lucide-react";
+import {
+  serializeCampaignInstructions,
+  OUTBOUND_STEPS as OUTBOUND_STEP_META,
+  NURTURE_STEPS as NURTURE_STEP_META,
+  type LegacyCampaignSettings,
+} from "@/lib/campaignTypes";
 
-export interface CampaignSettings {
-  includeMeetingCTA: boolean;
-  globalInstructions: string;
-  stepInstructions: Record<string, string>; // step number → instructions
-}
+// Re-export for backward compatibility — consumers that import from here still work
+export type CampaignSettings = LegacyCampaignSettings;
 
 interface CampaignSettingsPanelProps {
   settings: CampaignSettings;
@@ -27,49 +30,15 @@ interface CampaignSettingsPanelProps {
   isNurture?: boolean;
 }
 
-const OUTBOUND_STEPS = [
-  { key: "1", label: "Step 1 — Intro Email" },
-  { key: "2", label: "Step 2 — Follow-up 1" },
-  { key: "3", label: "Step 3 — Follow-up 2" },
-  { key: "4", label: "Step 4 — Breakup Email" },
-];
+const OUTBOUND_STEPS = OUTBOUND_STEP_META.map(s => ({ key: s.key, label: s.label }));
+const NURTURE_STEPS = NURTURE_STEP_META.map(s => ({ key: s.key, label: s.label }));
 
-const NURTURE_STEPS = [
-  { key: "1", label: "Step 1 — First Nurture" },
-  { key: "2", label: "Step 2 — Second Nurture" },
-  { key: "3", label: "Step 3 — Third Nurture" },
-  { key: "4", label: "Step 4 — Fourth Nurture" },
-];
-
+/**
+ * Compose campaign instructions from settings into the canonical text format.
+ * Delegates to the centralized serializer in campaignTypes.ts.
+ */
 export function composeCampaignInstructions(settings: CampaignSettings): string | null {
-  const parts: string[] = [];
-
-  // Global / campaign rules
-  const globalRules: string[] = [];
-  if (settings.includeMeetingCTA) {
-    globalRules.push("- Always include a meeting booking CTA with the calendar link");
-  }
-  if (settings.globalInstructions.trim()) {
-    globalRules.push(
-      ...settings.globalInstructions
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => (l.startsWith("-") ? l : `- ${l}`))
-    );
-  }
-  if (globalRules.length > 0) {
-    parts.push(`CAMPAIGN RULES:\n${globalRules.join("\n")}`);
-  }
-
-  // Step-specific instructions
-  for (const [step, text] of Object.entries(settings.stepInstructions)) {
-    const trimmed = text.trim();
-    if (trimmed) {
-      parts.push(`STEP ${step} INSTRUCTIONS:\n${trimmed}`);
-    }
-  }
-
-  return parts.length > 0 ? parts.join("\n\n") : null;
+  return serializeCampaignInstructions(settings);
 }
 
 export function CampaignSettingsPanel({

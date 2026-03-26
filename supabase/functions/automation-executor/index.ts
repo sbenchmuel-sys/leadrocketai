@@ -2,10 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 
-/** Extract step-specific + global campaign instructions from action_instructions.
- *  Format: CAMPAIGN RULES at top, then STEP N INSTRUCTIONS blocks.
- *  Returns combined instructions relevant to the current step. */
+/** @deprecated — Use resolveCampaignInstruction() instead for new code.
+ *  Kept temporarily for any edge case not yet migrated to the resolver. */
 function buildStepInstructions(actionInstructions: string | null | undefined, nextActionKey: string | null | undefined): string | null {
   if (!actionInstructions) return null;
 
@@ -26,7 +26,6 @@ function buildStepInstructions(actionInstructions: string | null | undefined, ne
     }
   }
 
-  // Determine which step number we're on from the action key (e.g. "send_pre_2" → "2", "nurture_3" → "3")
   let stepNum: string | null = null;
   if (nextActionKey) {
     const match = nextActionKey.match(/(\d+)/);
@@ -781,11 +780,33 @@ serve(async (req) => {
             }
           }
 
-          // Resolve custom instructions
+          // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
+          // Uses the canonical resolver instead of ad-hoc text parsing.
+          // The resolver produces a structured instruction object that
+          // both automation and manual send paths consume identically.
+          const campaignInput: CampaignResolverInput = {
+            lead_id: lead.id,
+            action_key: lead.next_action_key,
+            motion: lead.motion,
+            outbound_tone: (lead as any).outbound_tone || "direct",
+            action_instructions: lead.action_instructions,
+            prior_steps_sent: undefined, // could be enriched from automation_log count
+            has_reply: !!freshLead.last_inbound_at,
+            meeting_booked: freshLead.has_future_meeting,
+            include_meeting_cta: false, // determined by campaign instructions
+            calendar_link: repProfile?.calendar_link || null,
+            playbook_id: undefined, // loaded by ai_task from workspace_profiles
+          };
+          const resolvedInstruction = resolveCampaignInstruction(campaignInput);
+          const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
+
+          // Legacy fallback: still pass custom_instructions for backward compat
+          // with the existing ai_task prompt injection pipeline
           const resolvedInstructions = buildStepInstructions(lead.action_instructions, lead.next_action_key);
           if (resolvedInstructions) {
             console.log(`[automation-executor] ✅ Campaign instructions resolved for lead ${lead.id}, step ${lead.next_action_key}: "${resolvedInstructions.slice(0, 120)}..."`);
           }
+          console.log(`[automation-executor] ✅ Structured instruction: ch=${resolvedInstruction.channel}, fw=${resolvedInstruction.framework}, step=${resolvedInstruction.sequence_context.step_number}, words=${resolvedInstruction.max_word_count}`);
 
           // Generate draft via ai_task
           const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
@@ -804,6 +825,16 @@ serve(async (req) => {
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
                 meeting_link: repProfile?.calendar_link || "",
                 custom_instructions: resolvedInstructions,
+                // NEW: structured campaign instruction block for deterministic prompt assembly
+                campaign_instruction: structuredInstructionBlock,
+                campaign_meta: {
+                  channel: resolvedInstruction.channel,
+                  framework: resolvedInstruction.framework,
+                  step_number: resolvedInstruction.sequence_context.step_number,
+                  max_word_count: resolvedInstruction.max_word_count,
+                  cta_type: resolvedInstruction.cta_type,
+                  has_custom_instructions: !!resolvedInstruction.raw_custom_instructions,
+                },
                 last_outbound_body: lastOutboundBody || undefined,
                 previous_email_summary: previousEmailSummary || undefined,
               },

@@ -804,6 +804,16 @@ ${customInstructionsText}
 === END TOP PRIORITY ===`
       : "";
 
+    // ── NEW: Structured campaign instruction from resolver ─────
+    // When automation-executor passes a campaign_instruction block,
+    // it takes precedence as the canonical instruction set.
+    const structuredCampaignBlock = enhancedPayload.campaign_instruction
+      ? String(enhancedPayload.campaign_instruction)
+      : "";
+    if (structuredCampaignBlock) {
+      console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -811,6 +821,7 @@ ${customInstructionsText}
     if (styleModifier) promptParts.push(styleModifier);
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
+    if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
