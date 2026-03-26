@@ -368,10 +368,29 @@ serve(async (req) => {
       };
 
       try {
+        // ── Load execution settings for this owner ──────────────────
+        const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase);
+
+        // ── SEND WINDOW CHECK ───────────────────────────────────────
+        // If we're outside the configured send window or on a weekend,
+        // push eligible_at forward rather than skipping permanently.
+        const windowCheck = checkSendWindow(execSettings);
+        if (!windowCheck.allowed) {
+          console.log(`[automation-executor] Lead ${lead.id}: ${windowCheck.reason} — deferring`);
+          const nextWindow = computeNextEligibleAt(0, lead.id, lead.next_action_key || "defer", execSettings);
+          await supabase.from("leads").update({ eligible_at: nextWindow.toISOString() }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = windowCheck.reason!;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
         // SAFETY RE-CHECK
         const { data: freshLead, error: freshErr } = await supabase
           .from("leads")
-          .select("last_inbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed")
+          .select("last_inbound_at, last_outbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed")
           .eq("id", lead.id)
           .single();
 
@@ -384,138 +403,78 @@ serve(async (req) => {
           continue;
         }
 
-        // Unsubscribed check
-        if (freshLead.unsubscribed) {
-          logEntry.status = "skipped";
-          logEntry.error_message = "Lead unsubscribed";
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
+        // ── DYNAMIC STOP CONDITIONS (from cadence settings) ─────────
+        const stopCheck = checkStopConditions(execSettings.stop_pause_rules, {
+          has_reply: freshLead.motion !== "nurture" && !!freshLead.last_inbound_at,
+          has_meeting: freshLead.has_future_meeting,
+          is_unsubscribed: freshLead.unsubscribed,
+        });
+
+        if (!stopCheck.allowed) {
+          console.log(`[automation-executor] Lead ${lead.id}: ${stopCheck.reason}`);
           await supabase.from("leads").update({
             needs_action: false,
             eligible_at: null,
             action_reason_code: null,
           }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = stopCheck.reason!;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
           skipped++;
           continue;
         }
 
-        // ── PART 6: WhatsApp automation safety guard ──────────────
-        // WA auto-sends are blocked unless BOTH conditions are true:
-        //   1. workspace cadence_settings.whatsapp.automation_enabled = true
-        //   2. lead.wa_opted_in = true
-        // Default for both is false — manual-send-only by default.
-        const isWaActionKey = (lead.next_action_key || "").startsWith("whatsapp_");
-        if (isWaActionKey) {
-          // Fetch wa_opted_in for this lead
-          const { data: waLead } = await supabase
-            .from("leads")
-            .select("wa_opted_in")
-            .eq("id", lead.id)
-            .single();
-
-          // Fetch workspace cadence to check automation_enabled
-          const { data: wpProfile } = await supabase
-            .from("workspace_profiles")
-            .select("cadence_settings")
-            .eq("user_id", lead.owner_user_id)
-            .single();
-
-          const cadence = (wpProfile?.cadence_settings as any) ?? {};
-          const waAutomationEnabled = cadence?.whatsapp?.automation_enabled === true;
-          const leadOptedIn = (waLead as any)?.wa_opted_in === true;
-
-          if (!waAutomationEnabled || !leadOptedIn) {
-            logEntry.status = "skipped";
-            logEntry.error_message = waAutomationEnabled
-              ? "Lead not opted in to WhatsApp automation"
-              : "WhatsApp automation disabled at workspace level";
-            logEntry.completed_at = new Date().toISOString();
-            await supabase.from("automation_log").insert(logEntry);
-            console.log(`[automation-executor] WA auto-send blocked for lead ${lead.id}: wa_automation=${waAutomationEnabled}, opted_in=${leadOptedIn}`);
-            skipped++;
-            continue;
-          }
+        // ── MIN GAP CHECK ───────────────────────────────────────────
+        const gapCheck = checkMinGap(
+          freshLead.last_outbound_at,
+          execSettings.guardrails.min_gap_hours_between_emails,
+        );
+        if (!gapCheck.allowed) {
+          console.log(`[automation-executor] Lead ${lead.id}: ${gapCheck.reason} — deferring`);
+          const deferMs = execSettings.guardrails.min_gap_hours_between_emails * 3_600_000;
+          const deferAt = new Date(new Date(freshLead.last_outbound_at!).getTime() + deferMs);
+          await supabase.from("leads").update({ eligible_at: deferAt.toISOString() }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = gapCheck.reason!;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
         }
 
-
-        // Check for unsubscribe keyword in last inbound
-        if (freshLead.last_inbound_at) {
-          const { data: lastInbound } = await supabase
-            .from("interactions")
-            .select("body_text")
-            .eq("lead_id", lead.id)
-            .eq("direction", "inbound")
-            .order("occurred_at", { ascending: false })
-            .limit(1)
-            .single();
-
-          if (lastInbound?.body_text) {
-            const bodyLower = lastInbound.body_text.toLowerCase();
-            if (isHumanUnsubscribeRequest(bodyLower)) {
-              console.log(`[automation-executor] Lead ${lead.id} requested unsubscribe`);
-              await supabase.from("leads").update({
-                unsubscribed: true,
-                needs_action: false,
-                eligible_at: null,
-                next_action_key: null,
-                next_action_label: null,
-                action_reason_code: null,
-                nurture_status: "inactive",
-              }).eq("id", lead.id);
-
-              await supabase.from("interactions").insert({
-                lead_id: lead.id,
-                type: "system_note",
-                source: "automation",
-                body_text: "Lead requested to unsubscribe — automation stopped permanently.",
-                occurred_at: new Date().toISOString(),
-                dedupe_key: `automation:unsubscribe:${lead.id}:${new Date().toISOString().slice(0, 10)}`,
-              });
-
-              logEntry.status = "skipped";
-              logEntry.error_message = "Unsubscribe detected in last inbound";
-              logEntry.completed_at = new Date().toISOString();
-              await supabase.from("automation_log").insert(logEntry);
-              skipped++;
-              continue;
-            }
-          }
+        // ── PER-LEAD CAPS CHECK (7d / 30d) ──────────────────────────
+        const capCheck = await checkPerLeadCaps(lead.id, execSettings.guardrails, supabase);
+        if (!capCheck.allowed) {
+          console.log(`[automation-executor] Lead ${lead.id}: ${capCheck.reason} — pausing automation`);
+          await supabase.from("leads").update({
+            needs_action: false,
+            eligible_at: null,
+          }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = capCheck.reason!;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
         }
 
-        // Safety checks
-        const hasReply = !!freshLead.last_inbound_at;
-        const hasMeeting = freshLead.has_future_meeting;
+        // ── HARD STATUS CHECKS (not configurable) ───────────────────
         const isClosed = freshLead.stage === "closed_won" || freshLead.stage === "closed_lost";
         const motionChanged = freshLead.motion !== "outbound_prospecting" && freshLead.motion !== "inbound_response" && freshLead.motion !== "nurture";
         const statusInactive = freshLead.status !== "active" && freshLead.status !== "new";
         const noLongerNeeded = !freshLead.needs_action || !freshLead.eligible_at;
 
-        // Stop-on-reply for non-nurture leads
-        if (freshLead.motion !== "nurture" && hasReply) {
-          console.log(`[automation-executor] Lead ${lead.id} has reply, pausing automation`);
-          await supabase.from("leads").update({
-            needs_action: false,
-            eligible_at: null,
-            action_reason_code: null,
-          }).eq("id", lead.id);
-          logEntry.status = "skipped";
-          logEntry.error_message = "Lead replied — safety pause";
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          skipped++;
-          continue;
-        }
-
-        if (hasMeeting || isClosed || motionChanged || statusInactive || noLongerNeeded) {
+        if (isClosed || motionChanged || statusInactive || noLongerNeeded) {
           console.log(`[automation-executor] Lead ${lead.id} safety block:`, {
-            hasMeeting, isClosed, motionChanged, statusInactive, noLongerNeeded,
+            isClosed, motionChanged, statusInactive, noLongerNeeded,
           });
           await supabase.from("leads").update({
             needs_action: false,
             eligible_at: null,
           }).eq("id", lead.id);
           logEntry.status = "skipped";
-          logEntry.error_message = `Safety block: ${hasMeeting ? "meeting" : isClosed ? "closed" : motionChanged ? "motion" : statusInactive ? "inactive" : "not needed"}`;
+          logEntry.error_message = `Safety block: ${isClosed ? "closed" : motionChanged ? "motion" : statusInactive ? "inactive" : "not needed"}`;
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
