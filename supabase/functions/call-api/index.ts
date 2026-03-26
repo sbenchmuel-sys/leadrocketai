@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
     if (callSid) {
       const { data: session } = await supabase
         .from("call_sessions")
-        .select("*")
+        .select(SESSION_FIELDS)
         .eq("call_sid", callSid)
         .maybeSingle();
 
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
         return jsonResp({ ok: false, error: "Not found" }, 404);
       }
 
-      // Ownership check
+      // Ownership check — always enforced for non-privileged callers
       if (!isPrivileged && userId) {
         const check = await assertCallSessionAccess(supabase, session.id, userId);
         if (!check.ok) return jsonResp({ ok: false, error: check.error }, check.status ?? 403);
@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
     if (callSessionId) {
       const { data: session } = await supabase
         .from("call_sessions")
-        .select("*")
+        .select(SESSION_FIELDS)
         .eq("id", callSessionId)
         .maybeSingle();
 
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
 
       const { data: sessions } = await supabase
         .from("call_sessions")
-        .select("*")
+        .select(SESSION_FIELDS)
         .eq("lead_id", leadId)
         .order("created_at", { ascending: false })
         .limit(20);
@@ -113,12 +113,12 @@ Deno.serve(async (req) => {
     // Only available to privileged callers (internal/service-role)
     if (recent === "webhooks") {
       if (!isPrivileged) {
-        return jsonResp({ ok: false, error: "Forbidden — webhook logs require service-role access" }, 403);
+        return jsonResp({ ok: false, error: "Forbidden — webhook logs require privileged access" }, 403);
       }
 
       const { data } = await supabase
         .from("call_webhook_log")
-        .select("*")
+        .select("id, event_type, call_sid, created_at, error_message")
         .order("created_at", { ascending: false })
         .limit(50);
 
@@ -141,13 +141,19 @@ function jsonResp(body: Record<string, unknown>, status = 200): Response {
   });
 }
 
+// Minimal field sets — only what the UI needs
+const SESSION_FIELDS = "id, call_sid, workspace_id, direction, status, from_number, to_number, started_at, answered_at, ended_at, duration_sec, lead_id, agent_user_id, created_at";
+const RECORDING_FIELDS = "id, recording_sid, status, duration_sec, channels, created_at";
+const TRANSCRIPT_FIELDS = "id, status, language, full_text, llm_formatted_text, confidence, created_at";
+const ANALYSIS_FIELDS = "id, status, summary_short, summary_long, action_items_json, recommended_next_steps_json, signals_json, created_at";
+
 async function fetchFullSession(supabase: ReturnType<typeof createClient>, session: Record<string, unknown>) {
   const sessionId = session.id as string;
 
   const [recordings, transcripts, analyses] = await Promise.all([
-    supabase.from("call_recordings").select("*").eq("call_session_id", sessionId),
-    supabase.from("call_transcripts").select("*").eq("call_session_id", sessionId),
-    supabase.from("call_analyses").select("*").eq("call_session_id", sessionId),
+    supabase.from("call_recordings").select(RECORDING_FIELDS).eq("call_session_id", sessionId),
+    supabase.from("call_transcripts").select(TRANSCRIPT_FIELDS).eq("call_session_id", sessionId),
+    supabase.from("call_analyses").select(ANALYSIS_FIELDS).eq("call_session_id", sessionId),
   ]);
 
   return jsonResp({

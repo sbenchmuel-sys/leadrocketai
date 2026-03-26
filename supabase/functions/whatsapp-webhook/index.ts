@@ -46,19 +46,22 @@ Deno.serve(async (req) => {
   // ── Read raw body for signature verification ────────────
   const rawBody = await req.text();
 
-  // ── Signature verification ──────────────────────────────
+  // ── Signature verification (MUST happen before any data access) ──
   const metaAppSecret = Deno.env.get("META_APP_SECRET");
-  if (metaAppSecret) {
-    const sigValid = await verifyMetaSignature(req, rawBody, metaAppSecret);
-    if (!sigValid) {
-      console.warn("[whatsapp-webhook] Invalid signature — rejecting");
-      return new Response(JSON.stringify({ error: "Invalid signature" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-  } else {
-    console.warn("[whatsapp-webhook] META_APP_SECRET not set — skipping signature verification");
+  if (!metaAppSecret) {
+    console.error("[whatsapp-webhook] META_APP_SECRET not configured — rejecting request");
+    return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+  const sigValid = await verifyMetaSignature(req, rawBody, metaAppSecret);
+  if (!sigValid) {
+    console.warn("[whatsapp-webhook] Invalid Meta signature — rejecting");
+    return new Response(JSON.stringify({ error: "Invalid signature" }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   // ── Parse JSON ──────────────────────────────────────────

@@ -1,6 +1,16 @@
 // ============================================================
 // Shared authorization helpers for edge functions
 // Deterministic access checks — no silent failures
+//
+// AUTH MODEL (for reference):
+// ┌─────────────────────────────┬─────────────────────────────────────┐
+// │ Endpoint type               │ Auth requirement                    │
+// ├─────────────────────────────┼─────────────────────────────────────┤
+// │ User-facing API             │ User JWT (workspace-scoped)         │
+// │ Internal edge-to-edge       │ X-Internal-Secret header            │
+// │ Provider webhooks           │ Provider signature (no JWT)         │
+// │ System/cron jobs            │ X-Internal-Secret or service-role   │
+// └─────────────────────────────┴─────────────────────────────────────┘
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "./logger.ts";
@@ -12,6 +22,16 @@ export interface AuthzResult {
   error?: string;
   status?: number;
   workspaceId?: string;
+}
+
+// ── Constant-time comparison utility ────────────────────────
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 // ── Internal caller verification ────────────────────────────
@@ -28,24 +48,26 @@ export function isInternalCaller(req: Request): boolean {
     logger.warn("authz_internal_secret_not_configured");
     return false;
   }
-  // Constant-time-ish comparison
-  if (secret.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < secret.length; i++) {
-    mismatch |= secret.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return mismatch === 0;
+  return constantTimeEqual(secret, expected);
 }
 
 /**
  * Check if the Bearer token is the service-role key.
- * Use sparingly — prefer isInternalCaller for edge-to-edge calls.
+ *
+ * WHEN TO USE: Only for pg_cron triggers or Supabase-internal calls
+ * where X-Internal-Secret is not available. All new edge-to-edge calls
+ * MUST use X-Internal-Secret instead.
+ *
+ * WHERE USED:
+ *  - automation-executor (pg_cron fallback)
+ *  - call-api (legacy system queries)
  */
 export function isServiceRoleToken(req: Request): boolean {
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  return !!token && token === serviceKey;
+  if (!token || !serviceKey) return false;
+  return constantTimeEqual(token, serviceKey);
 }
 
 /**

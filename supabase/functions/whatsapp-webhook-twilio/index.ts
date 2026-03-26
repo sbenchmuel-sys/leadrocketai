@@ -28,19 +28,22 @@ Deno.serve(async (req) => {
   // ── Read raw body (form-encoded) ───────────────────────
   const rawBody = await req.text();
 
-  // ── Signature verification ─────────────────────────────
+  // ── Signature verification (MUST happen before any data access) ──
   const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-  if (twilioAuthToken) {
-    const sigValid = await verifyTwilioSignature(req, rawBody, twilioAuthToken);
-    if (!sigValid) {
-      console.warn("[whatsapp-webhook-twilio] Invalid Twilio signature — rejecting");
-      return new Response(JSON.stringify({ error: "Invalid signature" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-  } else {
-    console.warn("[whatsapp-webhook-twilio] TWILIO_AUTH_TOKEN not set — skipping signature verification");
+  if (!twilioAuthToken) {
+    console.error("[whatsapp-webhook-twilio] TWILIO_AUTH_TOKEN not configured — rejecting");
+    return new Response("<Response></Response>", {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "text/xml" },
+    });
+  }
+  const sigValid = await verifyTwilioSignature(req, rawBody, twilioAuthToken);
+  if (!sigValid) {
+    console.warn("[whatsapp-webhook-twilio] Invalid Twilio signature — rejecting");
+    return new Response(JSON.stringify({ error: "Invalid signature" }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   // ── Parse form-encoded body ────────────────────────────

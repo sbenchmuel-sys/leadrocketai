@@ -218,6 +218,56 @@ export const smokeTests: SmokeTest[] = [
     if (error) return { status: "fail", detail: error.message };
     return { status: "pass", detail: "hidden, source_id, source_table columns accessible" };
   }),
+
+  // 14) call-api rejects unauthenticated requests
+  timed("call-api rejects unauthenticated", async () => {
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/call-api?callSid=test`;
+    const resp = await fetch(url, { method: "GET" });
+    const body = await resp.text();
+    if (resp.status === 401) return { status: "pass", detail: "Correctly returned 401 for unauthenticated request" };
+    return { status: "fail", detail: `Expected 401, got ${resp.status}: ${body.slice(0, 100)}` };
+  }),
+
+  // 15) call-api rejects cross-workspace access (non-existent session)
+  timed("call-api rejects missing session", async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return { status: "warn", detail: "Not authenticated — skipping" };
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/call-api?callSessionId=00000000-0000-0000-0000-000000000000`;
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const body = await resp.json();
+    if (resp.status === 404) return { status: "pass", detail: "Correctly returned 404 for non-existent session" };
+    return { status: "fail", detail: `Expected 404, got ${resp.status}: ${JSON.stringify(body).slice(0, 100)}` };
+  }),
+
+  // 16) automation-executor rejects anon-only auth (no internal secret)
+  timed("automation-executor rejects anon auth", async () => {
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/automation-executor`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const body = await resp.text();
+    if (resp.status === 401) return { status: "pass", detail: "Correctly returned 401 for unauthenticated request" };
+    return { status: "fail", detail: `Expected 401, got ${resp.status}: ${body.slice(0, 100)}` };
+  }),
+
+  // 17) call-api webhook logs require privileged access
+  timed("call-api webhook logs reject user JWT", async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return { status: "warn", detail: "Not authenticated — skipping" };
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/call-api?recent=webhooks`;
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const body = await resp.json();
+    if (resp.status === 403) return { status: "pass", detail: "Correctly returned 403 for non-privileged webhook log access" };
+    return { status: "fail", detail: `Expected 403, got ${resp.status}: ${JSON.stringify(body).slice(0, 100)}` };
+  }),
 ];
 
 export async function runAllSmokeTests(): Promise<SmokeResult[]> {
