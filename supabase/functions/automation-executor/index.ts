@@ -481,6 +481,74 @@ serve(async (req) => {
           continue;
         }
 
+        // ── WhatsApp automation safety guard ─────────────────────────
+        const isWaActionKey = (lead.next_action_key || "").startsWith("whatsapp_");
+        if (isWaActionKey) {
+          const waEnabled = execSettings.whatsapp.automation_enabled;
+          const { data: waLead } = await supabase
+            .from("leads")
+            .select("wa_opted_in")
+            .eq("id", lead.id)
+            .single();
+          const leadOptedIn = (waLead as any)?.wa_opted_in === true;
+
+          if (!waEnabled || !leadOptedIn) {
+            logEntry.status = "skipped";
+            logEntry.error_message = waEnabled
+              ? "Lead not opted in to WhatsApp automation"
+              : "WhatsApp automation disabled at workspace level";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            console.log(`[automation-executor] WA auto-send blocked for lead ${lead.id}: wa_automation=${waEnabled}, opted_in=${leadOptedIn}`);
+            skipped++;
+            continue;
+          }
+        }
+
+        // Check for unsubscribe keyword in last inbound
+        if (freshLead.last_inbound_at) {
+          const { data: lastInbound } = await supabase
+            .from("interactions")
+            .select("body_text")
+            .eq("lead_id", lead.id)
+            .eq("direction", "inbound")
+            .order("occurred_at", { ascending: false })
+            .limit(1)
+            .single();
+
+          if (lastInbound?.body_text) {
+            const bodyLower = lastInbound.body_text.toLowerCase();
+            if (isHumanUnsubscribeRequest(bodyLower)) {
+              console.log(`[automation-executor] Lead ${lead.id} requested unsubscribe`);
+              await supabase.from("leads").update({
+                unsubscribed: true,
+                needs_action: false,
+                eligible_at: null,
+                next_action_key: null,
+                next_action_label: null,
+                action_reason_code: null,
+                nurture_status: "inactive",
+              }).eq("id", lead.id);
+
+              await supabase.from("interactions").insert({
+                lead_id: lead.id,
+                type: "system_note",
+                source: "automation",
+                body_text: "Lead requested to unsubscribe — automation stopped permanently.",
+                occurred_at: new Date().toISOString(),
+                dedupe_key: `automation:unsubscribe:${lead.id}:${new Date().toISOString().slice(0, 10)}`,
+              });
+
+              logEntry.status = "skipped";
+              logEntry.error_message = "Unsubscribe detected in last inbound";
+              logEntry.completed_at = new Date().toISOString();
+              await supabase.from("automation_log").insert(logEntry);
+              skipped++;
+              continue;
+            }
+          }
+        }
+
         // Get connected mail account (Gmail or Outlook)
         let mailProvider: "gmail" | "outlook" = "gmail";
         let mailAccountId: string | null = null;
