@@ -650,22 +650,25 @@ serve(async (req) => {
           continue;
         }
 
-        // GUARD 2: Action-level dedup — this specific action was already sent successfully
-        // Prevents re-sending the same step (e.g. send_nurture_1) if eligible_at was reset by a bug
+        // GUARD 2: Action-level dedup — prevent re-sending the same step within
+        // 7 days. Scoped to a recent window so that leads can be re-enrolled in
+        // automation after completing a previous sequence.
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
         const { count: actionSentCount } = await supabase
           .from("automation_log")
           .select("id", { count: "exact", head: true })
           .eq("lead_id", lead.id)
           .eq("action_key", actionKey)
-          .eq("status", "sent");
+          .eq("status", "sent")
+          .gte("created_at", sevenDaysAgo);
 
         if ((actionSentCount || 0) >= 1) {
-          console.log(`[automation-executor] Lead ${lead.id}: Action ${actionKey} already sent — clearing and skipping duplicate`);
+          console.log(`[automation-executor] Lead ${lead.id}: Action ${actionKey} already sent within 7d — skipping duplicate`);
           logEntry.status = "skipped";
-          logEntry.error_message = "Action already sent — skipping duplicate";
+          logEntry.error_message = "Action already sent within 7 days — skipping duplicate";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
-          await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+          await supabase.from("leads").update({ needs_action: false, eligible_at: null, next_action_key: null, next_action_label: null }).eq("id", lead.id);
           skipped++;
           continue;
         }
@@ -1015,8 +1018,14 @@ serve(async (req) => {
               action_reason_code: "FOLLOWUP_DUE",
             });
           }
+        } else if (aiTask === "pre_email_4_breakup") {
+          // Breakup: explicitly clear sequence fields — no next step
+          Object.assign(postUpdate, {
+            next_action_key: null,
+            next_action_label: null,
+            action_reason_code: null,
+          });
         }
-        // pre_email_4_breakup: no next step, stays needs_action=false
 
         await supabase.from("leads").update(postUpdate).eq("id", lead.id);
         console.log(`[automation-executor] Post-send state updated for lead ${lead.id}:`, JSON.stringify(postUpdate));
