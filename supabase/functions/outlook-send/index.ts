@@ -88,7 +88,8 @@ serve(async (req) => {
       const userClient = createClient(supabaseUrl, supabaseAnonKey, {
         global: { headers: { Authorization: authHeader } },
       });
-      const { data: { user }, error: authError } = await userClient.auth.getUser(token);
+      // Fix: use getUser() without arguments — the JWT is already in the Authorization header
+      const { data: { user }, error: authError } = await userClient.auth.getUser();
       if (authError || !user) {
         return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
           status: 401,

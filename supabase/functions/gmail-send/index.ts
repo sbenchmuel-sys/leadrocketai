@@ -247,7 +247,9 @@ serve(async (req) => {
         }
       } catch { /* use default */ }
 
-      // For 404 (thread/message not found), strip threading and retry as a fresh email
+      // For 404 (thread/message not found), strip threading and retry as a fresh email.
+      // IMPORTANT: On success, fall through to the normal backgroundTasks path so that
+      // the interaction + timeline records are created (not returned early).
       if (sendResponse.status === 404 && threadId) {
         console.log("[gmail-send] Thread not found (404), retrying as fresh email without threadId");
         const retryPayload = { raw: encodedEmail }; // no threadId
@@ -261,16 +263,21 @@ serve(async (req) => {
         });
         if (retryResponse.ok) {
           const retryData = await retryResponse.json();
-          console.log(`[gmail-send] Retry succeeded, message ID: ${retryData.id}`);
-          // Continue with retryData as sendData — fall through by reassigning
-          return new Response(
-            JSON.stringify({ ok: true, messageId: retryData.id }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
+          console.log(`[gmail-send] 404 retry succeeded, message ID: ${retryData.id}`);
+          // Reassign sendResponse/sendData so the normal success path handles bookkeeping
+          // We create a synthetic "ok" response and break out of the error block
+          // by jumping to the success path below (sendData will be set after this block)
+          (req as any)._retryData = retryData;
+        } else {
+          const retryError = await retryResponse.text();
+          console.error("[gmail-send] Retry also failed:", retryResponse.status, retryError);
         }
-        const retryError = await retryResponse.text();
-        console.error("[gmail-send] Retry also failed:", retryResponse.status, retryError);
       }
+
+      // If 404 retry succeeded, skip the error return and use retry data
+      if ((req as any)._retryData) {
+        // Fall through — sendData will be assigned below
+      } else {
 
       return new Response(JSON.stringify({ 
         ok: false, 
