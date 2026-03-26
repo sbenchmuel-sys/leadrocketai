@@ -43,8 +43,8 @@ export default function DashboardLayout() {
   const [isManagerOrAdmin, setIsManagerOrAdmin] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
-  // Initialize background Gmail auto-sync (every 20 minutes)
-  useGmailAutoSync();
+  // Gmail sync is now server-side via pg_cron. Manual sync available from Settings.
+  // useGmailAutoSync() removed — no longer auto-polls from browser.
 
   useEffect(() => {
     if (!user) return;

@@ -3,7 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { refreshDashboard } from "@/lib/dashboardMetricsService";
 
-const POLL_INTERVAL_MS = 60_000; // 60 seconds
+// ── Client-side automation poller ────────────────────────────
+// This is a SECONDARY refresh helper — the primary scheduler is
+// pg_cron → cron-dispatcher → automation-executor (every 15 min).
+// This poller provides near-realtime toast notifications when
+// the user has the dashboard open.
+const POLL_INTERVAL_MS = 5 * 60_000; // 5 minutes (relaxed — cron is primary)
 
 export function useAutomationPoller() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -17,22 +22,23 @@ export function useAutomationPoller() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const res = await supabase.functions.invoke("automation-check", {});
-      const result = res.data;
+      // Only check for recent automation results — don't trigger execution
+      const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+      const { data: recentSends } = await supabase
+        .from("automation_log")
+        .select("lead_id, subject")
+        .eq("status", "sent")
+        .gte("completed_at", fiveMinAgo)
+        .order("completed_at", { ascending: false })
+        .limit(3);
 
-      if (result?.ok && result.processed > 0) {
-        const sentLeads = result.sentLeads || [];
-        if (sentLeads.length > 0) {
-          const first = sentLeads[0];
-          toast.success(`Auto-sent "${first.subject}" to ${first.leadName}`, {
-            duration: 5000,
-          });
-        }
-        // Refresh dashboard metrics
+      if (recentSends && recentSends.length > 0) {
+        toast.success(`${recentSends.length} auto-send(s) completed`, {
+          duration: 5000,
+        });
         refreshDashboard("automation_send");
       }
     } catch (err) {
-      // Silent fail — don't spam user with polling errors
       console.debug("[useAutomationPoller] Poll error:", err);
     } finally {
       isPollingRef.current = false;
@@ -40,8 +46,8 @@ export function useAutomationPoller() {
   }, []);
 
   useEffect(() => {
-    // Initial poll after 5s
-    const initialTimeout = setTimeout(poll, 5000);
+    // Initial check after 10s
+    const initialTimeout = setTimeout(poll, 10_000);
 
     timerRef.current = setInterval(poll, POLL_INTERVAL_MS);
 
