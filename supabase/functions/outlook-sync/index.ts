@@ -17,6 +17,7 @@ import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_sha
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -281,10 +282,14 @@ serve(async (req) => {
             nurture_status: "inactive",
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
-            lead_id: leadId, type: "system_note", source: "automation",
+          await createCanonicalInteraction(serviceSupabase, {
+            lead_id: leadId,
+            type: "system_note",
+            source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: leadData?.workspace_id ?? null,
+            provider: "automation",
           });
         }
 
@@ -305,12 +310,16 @@ serve(async (req) => {
               next_action_key: null, next_action_label: null, action_reason_code: null,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). Returning ${returnDateStr}. Automation paused.`,
               occurred_at: occurredAt,
               gmail_message_id: messageId,
               gmail_thread_id: msg.conversationId,
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             existingMessageIds.add(messageId);
@@ -342,10 +351,14 @@ serve(async (req) => {
               personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
@@ -360,12 +373,14 @@ serve(async (req) => {
               needs_action: false,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Capture last outbound as winning interaction
@@ -403,58 +418,41 @@ serve(async (req) => {
               nurture_status: "inactive",
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
-              lead_id: leadId, type: "system_note", source: "automation",
+            await createCanonicalInteraction(serviceSupabase, {
+              lead_id: leadId,
+              type: "system_note",
+              source: "automation",
               body_text: "Lead requested to unsubscribe — automation stopped permanently.",
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
 
-        // Insert interaction
-        const { error: insertError } = await serviceSupabase
-          .from("interactions")
-          .insert({
-            lead_id: leadId,
-            type,
-            source: "outlook",
-            occurred_at: occurredAt,
-            subject,
-            from_email: msg.from?.emailAddress?.address || "",
-            to_email: toEmails.join(", "),
-            body_text: bodyText.substring(0, 10000),
-            gmail_message_id: messageId,
-            gmail_thread_id: msg.conversationId,
-            direction,
-          });
+        const canonResult = await createCanonicalInteraction(serviceSupabase, {
+          lead_id: leadId,
+          type,
+          source: "outlook",
+          body_text: bodyText.substring(0, 10000),
+          occurred_at: occurredAt,
+          direction,
+          subject,
+          from_email: msg.from?.emailAddress?.address || "",
+          to_email: toEmails.join(", "),
+          gmail_message_id: messageId,
+          gmail_thread_id: msg.conversationId,
+          workspace_id: leadData?.workspace_id ?? null,
+          provider: "outlook",
+          metadata_json: { provider_message_id: messageId, conversation_id: msg.conversationId, from_email: msg.from?.emailAddress?.address },
+          dedupe_key: emailDedupeKey("outlook", messageId, messageId),
+        });
 
-        if (insertError) {
-          if (!insertError.message.includes("duplicate")) {
-            errors.push(`Failed to insert message ${msg.id}: ${insertError.message}`);
-          }
-        } else {
+        if (canonResult.error && canonResult.error !== "duplicate") {
+          errors.push(`Failed to insert message ${msg.id}: ${canonResult.error}`);
+        } else if (!canonResult.error) {
           synced++;
           existingMessageIds.add(messageId);
-
-          // Project into unified timeline ledger
-          if (leadData?.workspace_id) {
-            projectTimelineItem(serviceSupabase, {
-              workspace_id: leadData.workspace_id,
-              lead_id: leadId,
-              channel: "email",
-              provider: "outlook",
-              direction,
-              event_type: type,
-              occurred_at: occurredAt,
-              source_table: "interactions",
-              source_id: messageId,
-              snippet_text: bodyText.substring(0, 500),
-              subject,
-              status_json: {},
-              metadata_json: { provider_message_id: messageId, conversation_id: msg.conversationId, from_email: msg.from?.emailAddress?.address },
-              dedupe_key: emailDedupeKey("outlook", messageId, messageId),
-            });
-          }
         }
       } catch (err) {
         errors.push(`Error processing message ${msg.id}: ${err instanceof Error ? err.message : "Unknown"}`);

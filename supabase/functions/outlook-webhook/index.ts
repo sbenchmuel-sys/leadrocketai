@@ -21,6 +21,7 @@ import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
 // Strip HTML tags for plain-text body_text
 function htmlToPlainText(html: string): string {
@@ -265,12 +266,13 @@ async function processNotification(
           nurture_status: "inactive",
         }).eq("id", bounceLead.id);
 
-        await serviceClient.from("interactions").insert({
+        await createCanonicalInteraction(serviceClient, {
           lead_id: bounceLead.id,
           type: "system_note",
           source: "automation",
           body_text: `Email bounced/undeliverable (subject: "${messageSubject}") — automation stopped permanently. Please verify the email address.`,
           occurred_at: new Date().toISOString(),
+          provider: "automation",
         });
       }
     }
@@ -280,7 +282,7 @@ async function processNotification(
   // --- 7. Identify lead by sender email ---
   const { data: lead } = await serviceClient
     .from("leads")
-    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed")
+    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
     .eq("email", senderEmail)
     .maybeSingle();
 
@@ -324,12 +326,14 @@ async function processNotification(
       action_reason_code: null,
     }).eq("id", lead.id);
 
-    await serviceClient.from("interactions").insert({
+    await createCanonicalInteraction(serviceClient, {
       lead_id: lead.id,
       type: "system_note",
       source: "automation",
       body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${lead.name} is out of office — returning ${returnDateStr}. Automation paused until then.`,
       occurred_at: new Date().toISOString(),
+      workspace_id: lead.workspace_id ?? null,
+      provider: "automation",
     });
 
     // Pause any active automation
@@ -360,10 +364,14 @@ async function processNotification(
         personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
       }).eq("id", lead.id);
 
-      await serviceClient.from("interactions").insert({
-        lead_id: lead.id, type: "system_note", source: "automation",
+      await createCanonicalInteraction(serviceClient, {
+        lead_id: lead.id,
+        type: "system_note",
+        source: "automation",
         body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
         occurred_at: new Date().toISOString(),
+        workspace_id: lead.workspace_id ?? null,
+        provider: "automation",
       });
     }
   }
@@ -383,12 +391,14 @@ async function processNotification(
         needs_action: false,
       }).eq("id", lead.id);
 
-      await serviceClient.from("interactions").insert({
+      await createCanonicalInteraction(serviceClient, {
         lead_id: lead.id,
         type: "system_note",
         source: "automation",
         body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
         occurred_at: new Date().toISOString(),
+        workspace_id: lead.workspace_id ?? null,
+        provider: "automation",
       });
     }
   }
@@ -413,27 +423,33 @@ async function processNotification(
         nurture_status: "inactive",
       }).eq("id", lead.id);
 
-      await serviceClient.from("interactions").insert({
+      await createCanonicalInteraction(serviceClient, {
         lead_id: lead.id,
         type: "system_note",
         source: "automation",
         body_text: "Lead requested to unsubscribe — automation stopped permanently.",
         occurred_at: new Date().toISOString(),
+        workspace_id: lead.workspace_id ?? null,
+        provider: "automation",
       });
     }
   }
 
-  // --- 11. Create interaction record ---
-  await serviceClient.from("interactions").insert({
+  // --- 11. Create interaction record + timeline projection ---
+  await createCanonicalInteraction(serviceClient, {
     lead_id: lead.id,
     type: "email_inbound",
     source: "outlook",
+    body_text: bodyText.substring(0, 10000),
     occurred_at: new Date().toISOString(),
+    direction: "inbound",
     subject: messageSubject,
     from_email: senderEmail,
     to_email: repEmail,
-    body_text: bodyText.substring(0, 10000),
-    direction: "inbound",
+    workspace_id: lead.workspace_id ?? null,
+    provider: "outlook",
+    metadata_json: { provider_message_id: providerMessageId, conversation_id: conversationId },
+    dedupe_key: `outlook:webhook:${providerMessageId}`,
   });
 
   // --- 12. Update lead state ---

@@ -6,6 +6,7 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import {
   type CadenceSettingsV1,
   type LeadMetrics,
@@ -402,12 +403,14 @@ serve(async (req) => {
             nurture_status: "inactive",
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
+          await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId,
             type: "system_note",
             source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: leadData?.workspace_id ?? null,
+            provider: "automation",
           });
         }
 
@@ -435,7 +438,7 @@ serve(async (req) => {
             }).eq("id", leadId);
 
             // Log as system_note so it appears in timeline but doesn't affect metrics
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
@@ -443,6 +446,8 @@ serve(async (req) => {
               occurred_at: occurredAt,
               gmail_message_id: gmailMessageId,
               gmail_thread_id: threadId,
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Skip normal interaction insert — this is not a real inbound
@@ -502,12 +507,14 @@ serve(async (req) => {
             }).eq("id", leadId);
 
             // Log as system_note in timeline
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Still insert the actual email as an interaction (don't skip it)
@@ -524,12 +531,14 @@ serve(async (req) => {
               needs_action: false,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Capture last outbound as winning interaction
@@ -575,59 +584,41 @@ serve(async (req) => {
               nurture_status: "inactive",
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: "Lead requested to unsubscribe — automation stopped permanently.",
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
 
-        const { error: insertError } = await serviceSupabase
-          .from("interactions")
-          .insert({
-            lead_id: leadId,
-            type,
-            source: "gmail",
-            occurred_at: occurredAt,
-            subject,
-            from_email: from,
-            to_email: to,
-            body_text: bodyText.substring(0, 10000),
-            gmail_message_id: gmailMessageId,
-            gmail_thread_id: threadId,
-            direction,
-          });
+        const canonResult = await createCanonicalInteraction(serviceSupabase, {
+          lead_id: leadId,
+          type,
+          source: "gmail",
+          body_text: bodyText.substring(0, 10000),
+          occurred_at: occurredAt,
+          direction,
+          subject,
+          from_email: from,
+          to_email: to,
+          gmail_message_id: gmailMessageId,
+          gmail_thread_id: threadId,
+          workspace_id: leadData?.workspace_id ?? null,
+          provider: "gmail",
+          metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
+          dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
+        });
 
-        if (insertError) {
-          if (!insertError.message.includes("duplicate")) {
-            errors.push(`Failed to insert message ${gmailMessageId}: ${insertError.message}`);
-          }
-        } else {
+        if (canonResult.error && canonResult.error !== "duplicate") {
+          errors.push(`Failed to insert message ${gmailMessageId}: ${canonResult.error}`);
+        } else if (!canonResult.error) {
           synced++;
           existingMessageIds.add(gmailMessageId);
-
-          // Project into unified timeline ledger
-          if (leadData?.workspace_id) {
-            projectTimelineItem(serviceSupabase, {
-              workspace_id: leadData.workspace_id,
-              lead_id: leadId,
-              channel: "email",
-              provider: "gmail",
-              direction,
-              event_type: type,
-              occurred_at: occurredAt,
-              source_table: "interactions",
-              source_id: gmailMessageId,
-              snippet_text: bodyText.substring(0, 500),
-              subject,
-              status_json: {},
-              metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
-              dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
-            });
-          }
         }
       } catch (err) {
         errors.push(`Error processing message ${gmailMessageId}: ${err instanceof Error ? err.message : "Unknown"}`);

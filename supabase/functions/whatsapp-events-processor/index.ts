@@ -16,6 +16,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { WhatsAppService } from "../_shared/whatsapp/service.ts";
 import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -447,7 +448,7 @@ async function processInboundMessage(
   // ── Bridge to lead interactions timeline ──────────────────
   if (matchedLead) {
     try {
-      const { data: waInboundInteraction } = await supabase.from("interactions").insert({
+      const waResult = await createCanonicalInteraction(supabase, {
         lead_id: matchedLead.id,
         type: "whatsapp_inbound",
         source: "whatsapp",
@@ -455,26 +456,16 @@ async function processInboundMessage(
         occurred_at: timestamp,
         direction: "inbound",
         from_email: `+${normalizedPhone}`,
-      }).select("id").single();
+        workspace_id: workspaceId,
+        contact_id: contactId,
+        conversation_id: conversationId,
+        provider: (norm as any).provider || "meta",
+        metadata_json: { from_phone: `+${normalizedPhone}`, provider_message_id: providerMessageId },
+        dedupe_key: whatsappDedupeKey("inbound", providerMessageId, `${matchedLead.id}:${timestamp}`),
+      });
 
-      // Project to unified timeline
-      if (waInboundInteraction && workspaceId) {
-        projectTimelineItem(supabase, {
-          workspace_id: workspaceId,
-          lead_id: matchedLead.id,
-          contact_id: contactId,
-          conversation_id: conversationId,
-          channel: "whatsapp",
-          provider: (norm as any).provider || "meta",
-          direction: "inbound",
-          event_type: "whatsapp_inbound",
-          occurred_at: timestamp,
-          source_table: "interactions",
-          source_id: waInboundInteraction.id,
-          snippet_text: bodyText?.substring(0, 500),
-          metadata_json: { from_phone: `+${normalizedPhone}`, provider_message_id: providerMessageId },
-          dedupe_key: whatsappDedupeKey("inbound", providerMessageId, waInboundInteraction.id),
-        }).catch(e => console.warn("[processor] Timeline projection failed:", e));
+      if (waResult.error && waResult.error !== "duplicate") {
+        console.warn("[whatsapp-events-processor] Canonical interaction failed:", waResult.error);
       }
     } catch (err: any) {
       console.warn("[whatsapp-events-processor] Non-blocking interaction insert failed:", err.message);
@@ -658,9 +649,9 @@ Context:
       last_message_at: now,
     }).eq("id", conversationId);
 
-    // Bridge outbound to lead timeline
+    // Bridge outbound to lead timeline (with canonical projection)
     try {
-      await supabase.from("interactions").insert({
+      await createCanonicalInteraction(supabase, {
         lead_id: matchedLead.id,
         type: "whatsapp_outbound",
         source: "whatsapp",
@@ -669,9 +660,15 @@ Context:
         direction: "outbound",
         ai_intent: intent,
         ai_summary: `Auto-reply (${decision.reason})`,
+        workspace_id: workspaceId,
+        contact_id: contactId,
+        conversation_id: conversationId,
+        provider: (norm as any).provider || "meta",
+        metadata_json: { provider_message_id: replyMsgId, auto_sent: true, decision_reason: decision.reason },
+        dedupe_key: whatsappDedupeKey("outbound", replyMsgId, `${matchedLead.id}:${now}`),
       });
     } catch (err: any) {
-      console.warn("[whatsapp-events-processor] Non-blocking outbound interaction insert failed:", err.message);
+      console.warn("[whatsapp-events-processor] Non-blocking outbound canonical insert failed:", err.message);
     }
 
     // Update lead

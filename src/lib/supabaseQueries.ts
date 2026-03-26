@@ -388,7 +388,8 @@ export async function hideTimelineItem(itemId: string): Promise<void> {
 
   if (item) {
     await supabase.from('lead_timeline_items').update({ hidden: true }).eq('id', itemId);
-    if (item.source_table === 'interactions') {
+    // source_id is now always the interaction UUID — safe to use directly
+    if (item.source_table === 'interactions' && item.source_id) {
       try { await supabase.from('interactions').update({ hidden: true }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }
   }
@@ -404,7 +405,8 @@ export async function unhideTimelineItem(itemId: string): Promise<void> {
 
   if (item) {
     await supabase.from('lead_timeline_items').update({ hidden: false }).eq('id', itemId);
-    if (item.source_table === 'interactions') {
+    // source_id is now always the interaction UUID — safe to use directly
+    if (item.source_table === 'interactions' && item.source_id) {
       try { await supabase.from('interactions').update({ hidden: false }).eq('id', item.source_id); } catch { /* non-blocking */ }
     }
   }
