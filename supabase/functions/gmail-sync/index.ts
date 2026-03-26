@@ -403,12 +403,14 @@ serve(async (req) => {
             nurture_status: "inactive",
           }).eq("id", leadId);
 
-          await serviceSupabase.from("interactions").insert({
+          await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId,
             type: "system_note",
             source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: leadData?.workspace_id ?? null,
+            provider: "automation",
           });
         }
 
@@ -436,7 +438,7 @@ serve(async (req) => {
             }).eq("id", leadId);
 
             // Log as system_note so it appears in timeline but doesn't affect metrics
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
@@ -444,6 +446,8 @@ serve(async (req) => {
               occurred_at: occurredAt,
               gmail_message_id: gmailMessageId,
               gmail_thread_id: threadId,
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Skip normal interaction insert — this is not a real inbound
@@ -503,12 +507,14 @@ serve(async (req) => {
             }).eq("id", leadId);
 
             // Log as system_note in timeline
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Still insert the actual email as an interaction (don't skip it)
@@ -525,12 +531,14 @@ serve(async (req) => {
               needs_action: false,
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
 
             // Capture last outbound as winning interaction
@@ -576,12 +584,14 @@ serve(async (req) => {
               nurture_status: "inactive",
             }).eq("id", leadId);
 
-            await serviceSupabase.from("interactions").insert({
+            await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
               body_text: "Lead requested to unsubscribe — automation stopped permanently.",
               occurred_at: new Date().toISOString(),
+              workspace_id: leadData?.workspace_id ?? null,
+              provider: "automation",
             });
           }
         }
