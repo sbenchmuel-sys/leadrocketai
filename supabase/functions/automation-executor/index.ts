@@ -867,10 +867,18 @@ serve(async (req) => {
         // Insert a "claiming" reservation BEFORE calling the provider.
         // The unique index (automation_log_claim_unique) blocks concurrent
         // executor runs from both claiming the same lead+action+day.
+        // claimed_at / claim_expires_at enable stale-claim recovery:
+        // if a claim is older than CLAIM_TTL_MINUTES without being
+        // upgraded to sent/failed, recovery logic can expire it.
+        const CLAIM_TTL_MINUTES = 10;
         const claimDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        const claimedAt = new Date().toISOString();
+        const claimExpiresAt = new Date(Date.now() + CLAIM_TTL_MINUTES * 60 * 1000).toISOString();
         logEntry.status = "claiming";
         (logEntry as Record<string, unknown>).claim_date = claimDate;
-        const { error: claimError } = await supabase.from("automation_log").insert(logEntry).select("id").single();
+        (logEntry as Record<string, unknown>).claimed_at = claimedAt;
+        (logEntry as Record<string, unknown>).claim_expires_at = claimExpiresAt;
+        const { data: claimRow, error: claimError } = await supabase.from("automation_log").insert(logEntry).select("id").single();
 
         if (claimError) {
           const isDuplicate = claimError.code === "23505";
@@ -882,6 +890,7 @@ serve(async (req) => {
           skipped++;
           continue;
         }
+        const claimId = claimRow?.id;
 
         // Send via appropriate mail provider
         let sendResponse: Response;
@@ -931,10 +940,10 @@ serve(async (req) => {
           const sendErr = sendResult.error || "Unknown send error";
           console.error(`[automation-executor] Send failed for lead ${lead.id}:`, sendErr);
 
-          // Upgrade claim to "failed"
+          // Upgrade claim to "failed" — use claim ID for precision
           await supabase.from("automation_log")
             .update({ status: "failed", error_message: `${mailProvider} send failed: ${String(sendErr).substring(0, 200)}`, completed_at: new Date().toISOString() })
-            .eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "claiming").eq("claim_date", claimDate);
+            .eq("id", claimId);
 
           if (sendResult.needsReconnect) {
             console.warn(`[automation-executor] ${mailProvider} needs reconnect for user ${lead.owner_user_id}`);
@@ -960,14 +969,20 @@ serve(async (req) => {
         // ── UPGRADE CLAIM TO SENT ───────────────────────────────
         // The interaction + timeline records are created by gmail-send / outlook-send
         // (the sole writers for outbound email). We only update the automation_log here.
+        // Use claim ID for precision — avoids stale WHERE mismatches.
         const { error: upgradeError } = await supabase.from("automation_log")
           .update({ status: "sent", gmail_message_id: gmailMessageId, completed_at: new Date().toISOString() })
-          .eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "claiming").eq("claim_date", claimDate);
+          .eq("id", claimId);
 
         if (upgradeError) {
-          console.error(`[automation-executor] Claim upgrade failed for lead ${lead.id}: ${upgradeError.message}`);
-          skipped++;
-          continue;
+          // COMPENSATING LOG: The provider already sent the email.
+          // Log a hard warning so operators can reconcile manually.
+          console.error(
+            `[automation-executor] ⚠️ CRITICAL: Provider sent email for lead ${lead.id} ` +
+            `(messageId=${gmailMessageId}) but claim upgrade failed: ${upgradeError.message}. ` +
+            `ClaimId=${claimId}. Manual reconciliation may be needed.`
+          );
+          // Do NOT skip — the email was sent, so proceed with post-send state update
         }
 
         // --- POST-SEND STATE UPDATE ---
