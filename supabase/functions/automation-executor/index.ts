@@ -1036,13 +1036,26 @@ serve(async (req) => {
           last_activity_at: new Date().toISOString(),
         };
 
+        // Load structured campaign for delay resolution
+        let postSendCampaign = structuredCampaign;
+        if (!postSendCampaign) {
+          try { postSendCampaign = await loadCampaignForLead(lead.id, supabase); } catch (_) {}
+        }
+
         if (aiTask === "nurture_email_single") {
-          // Nurture: increment count and schedule next based on cadence
-          const cadenceDays = lead.nurture_cadence === "weekly" ? 7
-            : lead.nurture_cadence === "monthly" ? 30 : 14;
-          const nextEligible = new Date(Date.now() + cadenceDays * 86400000);
-          nextEligible.setHours(9, 30, 0, 0);
+          // Nurture: increment count and schedule next using campaign delay or lead cadence
           const nextCount = (lead.nurture_outbound_count || 0) + 1;
+          const nextStepNumber = nextCount + 1;
+          const nurtureDelay = resolveStepDelay(
+            nextStepNumber,
+            postSendCampaign?.steps?.map(s => ({ step_number: s.step_number, delay_days: s.delay_days, active: s.active })) || null,
+            null, // no legacy intervals for nurture — use lead cadence as fallback below
+          );
+          // If no structured step found, fall back to lead-level nurture cadence
+          const fallbackDays = lead.nurture_cadence === "weekly" ? 7
+            : lead.nurture_cadence === "monthly" ? 30 : 14;
+          const delayDays = nurtureDelay !== 2 ? nurtureDelay : fallbackDays; // 2 = hardcoded fallback means no step found
+          const nextEligible = computeNextEligibleAt(delayDays, lead.id, `send_nurture_${nextCount + 1}`, execSettings);
 
           Object.assign(postUpdate, {
             nurture_outbound_count: nextCount,
@@ -1054,16 +1067,23 @@ serve(async (req) => {
             action_reason_code: "NURTURE_DUE",
           });
         } else if (["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup"].includes(aiTask)) {
-          // Outbound sequence: schedule next step
-          const NEXT_STEP: Record<string, { key: string; label: string }> = {
-            pre_email_1_intro: { key: "send_pre_2", label: "Follow-up 1" },
-            pre_email_2_followup: { key: "send_pre_3", label: "Follow-up 2" },
-            pre_email_3_followup: { key: "send_pre_4", label: "Breakup Email" },
+          // Outbound sequence: schedule next step using structured campaign or legacy intervals
+          const NEXT_STEP: Record<string, { key: string; label: string; stepNum: number }> = {
+            pre_email_1_intro: { key: "send_pre_2", label: "Follow-up 1", stepNum: 2 },
+            pre_email_2_followup: { key: "send_pre_3", label: "Follow-up 2", stepNum: 3 },
+            pre_email_3_followup: { key: "send_pre_4", label: "Breakup Email", stepNum: 4 },
           };
           const nextStep = NEXT_STEP[aiTask];
           if (nextStep) {
-            const nextEligible = new Date(Date.now() + 2 * 86400000);
-            nextEligible.setHours(9, 30, 0, 0);
+            // Resolve delay: structured campaign > legacy intervals > 2-day fallback
+            const legacyIntervals = postSendCampaign ? null : [0, 2, 4, 7]; // only used if no campaign
+            const delayDays = resolveStepDelay(
+              nextStep.stepNum,
+              postSendCampaign?.steps?.map(s => ({ step_number: s.step_number, delay_days: s.delay_days, active: s.active })) || null,
+              legacyIntervals,
+            );
+            const nextEligible = computeNextEligibleAt(delayDays, lead.id, nextStep.key, execSettings);
+
             Object.assign(postUpdate, {
               next_action_key: nextStep.key,
               next_action_label: nextStep.label,
