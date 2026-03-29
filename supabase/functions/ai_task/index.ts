@@ -15,6 +15,10 @@ import {
   buildDedupeContext, checkOfferDedupe,
   type ClassifiedDecision, type DedupeContext,
 } from "../_shared/intentClassifier.ts";
+import {
+  resolveStagePolicy, formatStagePolicyBlock, adjustOfferScoreByStage,
+  type ResolvedPolicy,
+} from "../_shared/stagePolicy.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
