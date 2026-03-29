@@ -202,14 +202,20 @@ async function buildDiversityConstraints(
   return constraints;
 }
 
-function formatDiversityBlock(constraints: DiversityConstraints): string {
+function formatDiversityBlock(constraints: DiversityConstraints, isOfferRouted: boolean): string {
   const parts: string[] = [];
   parts.push("=== MESSAGE DIVERSITY CONSTRAINTS ===");
   parts.push("To ensure fresh, varied outreach, follow these constraints:");
   if (constraints.avoid_opening_types.length > 0) parts.push(`- DO NOT use these opening styles (recently used): ${constraints.avoid_opening_types.join(", ")}`);
   if (constraints.avoid_angles.length > 0) parts.push(`- DO NOT use these angles/themes (overused): ${constraints.avoid_angles.join(", ")}`);
-  if (constraints.avoid_cta_types.length > 0) parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
-  if (constraints.preferred_cta_types.length > 0) parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  // For OFFER_ROUTED_TASKS, CTA avoidance is handled by deal_memory (stateful),
+  // so diversity constraints only apply to cold outreach tasks.
+  if (!isOfferRouted && constraints.avoid_cta_types.length > 0) {
+    parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
+  }
+  if (!isOfferRouted && constraints.preferred_cta_types.length > 0) {
+    parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  }
   parts.push("- Maintain brand voice consistency while varying approach");
   parts.push("- Quality and relevance always take priority over forced variation");
   return parts.join("\n");
