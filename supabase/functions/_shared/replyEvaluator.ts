@@ -423,64 +423,120 @@ function checkContinuity(content: string, ctx: EvalContext): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
   const lower = content.toLowerCase();
 
-  // Repeated asset reuse
+  // ── 1. Repeated asset reuse (MEDIUM severity — escalates to HIGH with multiple) ──
+  const reusedAssets: string[] = [];
   for (const asset of ctx.deal_shared_assets) {
     const assetLower = asset.replace(/_/g, " ");
     if (lower.includes(assetLower)) {
-      violations.push({
-        rule: "repeated_asset_reuse",
-        severity: "medium",
-        detail: `Asset "${asset}" was already shared previously`,
-      });
+      reusedAssets.push(asset);
     }
   }
+  if (reusedAssets.length > 0) {
+    violations.push({
+      rule: "repeated_asset_reuse",
+      severity: reusedAssets.length >= 2 ? "high" : "medium",
+      detail: `Asset(s) already shared: ${reusedAssets.join(", ")}. Use different proof or reference the existing one briefly.`,
+    });
+  }
 
-  // Repeated offer reuse
+  // ── 2. Repeated offer reuse (MEDIUM severity) ──
+  const reusedOffers: string[] = [];
   for (const offer of ctx.deal_sent_offers) {
     const offerLower = offer.toLowerCase().replace(/_/g, " ");
     if (lower.includes(offerLower)) {
-      violations.push({
-        rule: "repeated_offer_reuse",
-        severity: "low",
-        detail: `Offer "${offer}" was already sent previously`,
-      });
+      reusedOffers.push(offer);
     }
   }
+  if (reusedOffers.length > 0) {
+    violations.push({
+      rule: "repeated_offer_reuse",
+      severity: "medium",
+      detail: `Offer(s) already sent: ${reusedOffers.join(", ")}. Recommend a different offer or reference the existing one.`,
+    });
+  }
 
-  // CTA fatigue — same CTA pattern 3+ times in a row
-  if (ctx.deal_recent_cta_patterns.length >= 3) {
-    const last3 = ctx.deal_recent_cta_patterns.slice(-3);
-    if (last3[0] === last3[1] && last3[1] === last3[2]) {
+  // ── 3. CTA fatigue — same pattern 2+ times in a row (MEDIUM/HIGH) ──
+  if (ctx.deal_recent_cta_patterns.length >= 2) {
+    const last2 = ctx.deal_recent_cta_patterns.slice(-2);
+    if (last2[0] === last2[1]) {
       const detectedCtas = detectCTAsInContent(content);
-      if (detectedCtas.includes(last3[0])) {
+      if (detectedCtas.includes(last2[0])) {
+        const isThreeOrMore = ctx.deal_recent_cta_patterns.length >= 3 && 
+          ctx.deal_recent_cta_patterns.slice(-3).every(c => c === last2[0]);
         violations.push({
           rule: "cta_fatigue",
-          severity: "medium",
-          detail: `CTA "${last3[0]}" used 3+ times consecutively and is being repeated again`,
+          severity: isThreeOrMore ? "high" : "medium",
+          detail: `CTA "${last2[0]}" used ${isThreeOrMore ? "3+" : "2"} times consecutively — vary the approach`,
         });
       }
     }
   }
 
-  // Pretending progress when stalled/regressing
+  // ── 4. False progress claims when stalled/regressing (HIGH) ──
   if (ctx.deal_momentum_state === "stalled" || ctx.deal_momentum_state === "regressing") {
-    if (/(momentum|great progress|moving forward|exciting.*progress|things are going well)/i.test(content)) {
+    if (/(momentum|great progress|moving forward|exciting.*progress|things are going well|picking up|gaining traction)/i.test(content)) {
       violations.push({
         rule: "false_progress_claim",
         severity: "high",
         detail: `Reply claims progress but deal momentum is ${ctx.deal_momentum_state}`,
       });
     }
-  }
-
-  // Ignored CTA warning — if 3+ CTAs ignored and reply still uses heavy CTA
-  if (ctx.deal_ignored_cta_count >= 3) {
+    // Also flag aggressive closing when stalled
     const detectedCtas = detectCTAsInContent(content);
     if (detectedCtas.includes("commitment") || detectedCtas.includes("urgency_close")) {
       violations.push({
+        rule: "aggressive_close_when_stalled",
+        severity: "high",
+        detail: `Deal is ${ctx.deal_momentum_state} but reply uses aggressive closing CTA`,
+      });
+    }
+  }
+
+  // ── 5. Ignored CTA escalation (MEDIUM/HIGH) ──
+  if (ctx.deal_ignored_cta_count >= 2) {
+    const detectedCtas = detectCTAsInContent(content);
+    const isHeavy = detectedCtas.includes("commitment") || detectedCtas.includes("urgency_close") || detectedCtas.includes("meeting_request");
+    if (isHeavy) {
+      violations.push({
         rule: "heavy_cta_despite_fatigue",
-        severity: "medium",
-        detail: `${ctx.deal_ignored_cta_count} CTAs ignored but reply uses heavy closing CTA`,
+        severity: ctx.deal_ignored_cta_count >= 3 ? "high" : "medium",
+        detail: `${ctx.deal_ignored_cta_count} CTAs ignored — reply should use lighter approach, not ${detectedCtas.filter(c => ["commitment", "urgency_close", "meeting_request"].includes(c)).join("/")}`,
+      });
+    }
+  }
+
+  // ── 6. Re-handling already-handled objections without need ──
+  if (ctx.deal_handled_objections.length > 0) {
+    for (const obj of ctx.deal_handled_objections) {
+      const objLower = obj.toLowerCase().replace(/_/g, " ");
+      // Check if reply is addressing this objection
+      if (lower.includes(objLower) && /(understand|concern|worry|addressed|noted|previously)/i.test(content)) {
+        // Only flag if the latest inbound doesn't contain this objection topic
+        const inboundLower = ctx.latest_inbound.toLowerCase();
+        if (!inboundLower.includes(objLower)) {
+          violations.push({
+            rule: "rehandling_resolved_objection",
+            severity: "medium",
+            detail: `Objection "${obj}" was already handled — do not re-address unless prospect raises it again`,
+          });
+          break; // Only flag once
+        }
+      }
+    }
+  }
+
+  // ── 7. Unanswered questions ignored (LOW — informational) ──
+  if (ctx.deal_unanswered_questions.length > 0 && ctx.primary_objective !== "answer_direct_question") {
+    // Check if any unanswered question topics appear addressable from inbound
+    const hasRelevantQuestion = ctx.deal_unanswered_questions.some(q => {
+      const keywords = q.split(/\s+/).filter(w => w.length > 4).slice(0, 3);
+      return keywords.some(kw => lower.includes(kw.toLowerCase()));
+    });
+    if (!hasRelevantQuestion && ctx.deal_unanswered_questions.length >= 2) {
+      violations.push({
+        rule: "unanswered_questions_ignored",
+        severity: "low",
+        detail: `${ctx.deal_unanswered_questions.length} unanswered prospect questions pending — consider addressing`,
       });
     }
   }
