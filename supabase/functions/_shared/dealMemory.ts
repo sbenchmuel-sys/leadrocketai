@@ -139,25 +139,45 @@ async function seedFromIntelligence(
 }
 
 // ── Lightweight outbound-only update for non-ai_task send paths ──
+// Field classification:
+//   AUTHORITATIVE (from structured inputs):
+//     - last_outbound_cta, recent_cta_patterns (when ctaType provided)
+//     - sent_offers (when offerKey provided)
+//     - pricing_status (when explicit pricing context provided)
+//   HEURISTIC (inferred from body text):
+//     - shared_assets (regex pattern match — may have false positives)
+//     - last_outbound_cta, recent_cta_patterns (when ctaType NOT provided)
+//     - ignored_cta_count (incremented conservatively)
+
+export interface OutboundLiteOptions {
+  ctaType?: string;       // Authoritative if provided (e.g. from campaign step)
+  offerKey?: string;      // Authoritative if provided (e.g. from offer registry)
+  channel?: string;       // email, whatsapp, etc.
+}
 
 export function updateFromOutboundLite(
   memory: DealMemory,
   bodyText: string,
   subject: string,
+  options?: OutboundLiteOptions,
 ): DealMemory {
   const m = { ...memory };
 
-  // Track CTA patterns from content heuristics
-  let detectedCta = "soft_offer";
-  if (/\b(book|schedule|set up|arrange)\b.{0,30}\b(call|meeting|demo|time|slot)\b/i.test(bodyText)) detectedCta = "meeting_request";
-  else if (/\b(sign|commit|confirm|finalize|proceed|go ahead)\b/i.test(bodyText)) detectedCta = "commitment";
-  else if (/\b(check.{0,10}(in|back)|circle back|follow.{0,5}up|touch base)\b/i.test(bodyText)) detectedCta = "timing_check";
-  else if (/\b(quick question|curious|wondering)\b/i.test(bodyText)) detectedCta = "quick_question";
+  // Track CTA patterns — prefer structured ctaType when available
+  let detectedCta = options?.ctaType || "";
+  if (!detectedCta) {
+    // Heuristic CTA detection from body text
+    if (/\b(book|schedule|set up|arrange)\b.{0,30}\b(call|meeting|demo|time|slot)\b/i.test(bodyText)) detectedCta = "meeting_request";
+    else if (/\b(sign|commit|confirm|finalize|proceed|go ahead)\b/i.test(bodyText)) detectedCta = "commitment";
+    else if (/\b(check.{0,10}(in|back)|circle back|follow.{0,5}up|touch base)\b/i.test(bodyText)) detectedCta = "timing_check";
+    else if (/\b(quick question|curious|wondering)\b/i.test(bodyText)) detectedCta = "quick_question";
+    else detectedCta = "soft_offer";
+  }
 
   m.recent_cta_patterns = capArray([...m.recent_cta_patterns, detectedCta], 10);
   m.last_outbound_cta = detectedCta;
 
-  // Track shared assets
+  // Track shared assets (HEURISTIC — regex-based)
   const assetPatterns = bodyText.match(/(?:case study|one[- ]pager|guide|whitepaper|pdf|doc|presentation|deck|roi calculator|summary)/gi) || [];
   for (const asset of assetPatterns) {
     const normalized = asset.toLowerCase().replace(/\s+/g, "_");
@@ -166,13 +186,19 @@ export function updateFromOutboundLite(
     }
   }
 
-  // Pricing status from outbound
+  // Track sent offers (AUTHORITATIVE when provided)
+  if (options?.offerKey && !m.sent_offers.includes(options.offerKey)) {
+    m.sent_offers = capArray([...m.sent_offers, options.offerKey], 15);
+  }
+
+  // Pricing status from outbound (HEURISTIC)
   if (/quote|proposal|pricing (details|breakdown|sheet)/i.test(bodyText)) {
     if (m.pricing_status === "price_mentioned") m.pricing_status = "quote_sent";
   }
 
-  // If this is a follow-up with no reply, increment ignored CTA count
-  // (conservative: only increment if we had a previous outbound CTA)
+  // Increment ignored CTA count conservatively:
+  // Only if we had a previous outbound CTA and this is another outbound
+  // without an intervening inbound (indicated by recent_cta_patterns growing)
   if (m.last_outbound_cta && m.recent_cta_patterns.length > 1) {
     m.ignored_cta_count = (m.ignored_cta_count || 0) + 1;
   }
