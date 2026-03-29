@@ -64,6 +64,8 @@ interface EvalContext {
   deal_recent_cta_patterns: string[];
   deal_momentum_state: string;
   deal_ignored_cta_count: number;
+  deal_handled_objections: string[];
+  deal_unanswered_questions: string[];
 }
 
 // ── CTA detection patterns ──
@@ -552,6 +554,8 @@ export interface DealMemoryEvalContext {
   recent_cta_patterns?: string[];
   momentum_state?: string;
   ignored_cta_count?: number;
+  handled_objections?: string[];
+  unanswered_questions?: string[];
 }
 
 export function evaluateReply(
