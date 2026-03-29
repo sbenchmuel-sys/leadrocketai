@@ -498,11 +498,58 @@ Rules:
       }
     }
 
-    // ── 5. Upsert into lead_intelligence ──
+    // ── 5. Reconcile with deal_memory handled objections ──
+    // If deal_memory tracks objections as "handled", filter them from
+    // the canonical set UNLESS the latest inbound clearly re-raised them.
+    // Rule: a handled objection resurfaces only if it appears in a
+    // conversation_analysis or call_analysis from the last 48 hours.
     const allRisks = [...risksMap.values()];
     const allMilestones = [...milestonesMap.values()];
-    const allObjections = [...objectionsMap.values()];
+    let allObjections = [...objectionsMap.values()];
     const allBuyingSignals = [...buyingSignalsMap.values()];
+
+    try {
+      const { data: memRow } = await admin
+        .from("deal_memory")
+        .select("handled_objections")
+        .eq("lead_id", lead_id)
+        .maybeSingle();
+
+      if (memRow?.handled_objections && Array.isArray(memRow.handled_objections) && memRow.handled_objections.length > 0) {
+        const handledSet = new Set((memRow.handled_objections as string[]).map(h => h.toLowerCase().trim()));
+        const recentCutoff = Date.now() - 48 * 60 * 60 * 1000; // 48 hours
+
+        // Build set of objection texts that appeared in recent evidence
+        const recentlyReRaised = new Set<string>();
+        for (const obj of allObjections) {
+          const objKey = obj.text.toLowerCase().trim();
+          if (!handledSet.has(objKey)) continue;
+          // Check if any evidence is recent (within 48h)
+          for (const evId of obj.evidence_ids) {
+            const ev = evidenceRegistry.find(e => e.id === evId);
+            if (ev?.occurred_at && new Date(ev.occurred_at).getTime() > recentCutoff) {
+              recentlyReRaised.add(objKey);
+              break;
+            }
+          }
+        }
+
+        const beforeCount = allObjections.length;
+        allObjections = allObjections.filter(obj => {
+          const key = obj.text.toLowerCase().trim();
+          // Keep if: not handled, OR re-raised recently
+          if (!handledSet.has(key)) return true;
+          if (recentlyReRaised.has(key)) return true;
+          return false;
+        });
+        const removed = beforeCount - allObjections.length;
+        if (removed > 0) {
+          console.log(`[recompute-lead-intelligence] Filtered ${removed} handled objection(s) via deal_memory reconciliation`);
+        }
+      }
+    } catch (reconErr) {
+      console.error("[recompute-lead-intelligence] deal_memory reconciliation failed (non-fatal):", reconErr);
+    }
 
     const intelligenceRow = {
       lead_id,

@@ -875,6 +875,16 @@ serve(async (req) => {
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
+    // Resolve workspace_id early — needed by deal memory, diversity, and logging
+    let resolvedWorkspaceId: string | null = null;
+    if (payload?.lead_id) {
+      try {
+        const wsClient = createClient(supabaseUrl, supabaseServiceKey);
+        const { data: leadWs } = await wsClient.from("leads").select("workspace_id").eq("id", payload.lead_id).maybeSingle();
+        resolvedWorkspaceId = leadWs?.workspace_id ?? null;
+      } catch (err) { console.error("[ai_task] Failed to resolve workspace_id:", err); }
+    }
+
     let contextCachePromise: Promise<Record<string, unknown> | null> = Promise.resolve(null);
     if (payload?.lead_id) {
       contextCachePromise = (async () => {
@@ -1091,7 +1101,6 @@ serve(async (req) => {
     let diversityPromise: Promise<DiversityConstraints> = Promise.resolve({
       avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [],
     });
-    let resolvedWorkspaceId: string | null = null;
     if (payload?.lead_id && OUTREACH_TASKS.has(task)) {
       diversityPromise = (async () => {
         try {
