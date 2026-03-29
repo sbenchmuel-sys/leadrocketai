@@ -8,7 +8,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, RefreshCw, Brain, Target, Shield, Layers } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, RefreshCw, Brain, Target, Shield, Layers, Clock } from "lucide-react";
 
 // ── Types matching API response shape ──
 
@@ -138,8 +138,8 @@ function KV({ label, value }: { label: string; value: string | number | boolean 
 export function LastMileReasoningPanel({ context }: { context: OrchestrationContext | null }) {
   if (!context) return null;
 
-  const { decision, stage_policy, reply_objective, reply_evaluation, offer, regenerated } = context;
-  const hasOrchestration = decision || stage_policy || reply_objective || reply_evaluation;
+  const { decision, stage_policy, reply_objective, reply_evaluation, offer, deal_memory, regenerated } = context;
+  const hasOrchestration = decision || stage_policy || reply_objective || reply_evaluation || deal_memory;
   if (!hasOrchestration) return null;
 
   const totalScore = reply_evaluation
@@ -267,6 +267,69 @@ export function LastMileReasoningPanel({ context }: { context: OrchestrationCont
               )}
               <KV label="Dominant layer" value={reply_evaluation.dominant_layer} />
               <KV label="Summary" value={reply_evaluation.evaluation_summary} />
+            </div>
+          </Section>
+        )}
+
+        {/* Deal Memory / Continuity */}
+        {deal_memory && (
+          <Section title={`Deal Memory — ${deal_memory.momentum_state}`} icon={<Clock className="h-3 w-3 text-orange-500" />}>
+            <div className="space-y-1.5">
+              <KV label="Momentum" value={deal_memory.momentum_state} />
+              <KV label="Pricing status" value={deal_memory.pricing_status} />
+              <KV label="Ignored CTAs" value={deal_memory.ignored_cta_count} />
+              {deal_memory.unresolved_objections.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Unresolved objections</span>
+                  <TagList items={deal_memory.unresolved_objections} variant="destructive" />
+                </div>
+              )}
+              {deal_memory.handled_objections.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Handled objections</span>
+                  <TagList items={deal_memory.handled_objections} variant="secondary" />
+                </div>
+              )}
+              {deal_memory.unanswered_questions.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Unanswered questions</span>
+                  <div className="space-y-0.5 mt-0.5">
+                    {deal_memory.unanswered_questions.map((q, i) => (
+                      <div key={i} className="text-[10px] text-muted-foreground">• {q}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {deal_memory.shared_assets.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Shared assets</span>
+                  <TagList items={deal_memory.shared_assets} />
+                </div>
+              )}
+              {deal_memory.sent_offers.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Sent offers</span>
+                  <TagList items={deal_memory.sent_offers} />
+                </div>
+              )}
+              {deal_memory.recent_cta_patterns.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Recent CTAs</span>
+                  <TagList items={deal_memory.recent_cta_patterns} />
+                </div>
+              )}
+              {deal_memory.continuity_risks.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Continuity risks</span>
+                  <TagList items={deal_memory.continuity_risks} variant="destructive" />
+                </div>
+              )}
+              {deal_memory.pending_buyin_needs.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Pending buy-in</span>
+                  <TagList items={deal_memory.pending_buyin_needs} />
+                </div>
+              )}
             </div>
           </Section>
         )}
