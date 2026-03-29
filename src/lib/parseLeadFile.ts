@@ -213,6 +213,10 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     last_contact_date: (r["last_contact_date"] || "").trim() || undefined,
     next_step_text: (r["next_step_text"] || "").trim() || undefined,
     history_notes: (r["history_notes"] || "").trim() || undefined,
+    caution: (r["caution"] || "").trim() || undefined,
+    competitor: (r["competitor"] || "").trim() || undefined,
+    objection: (r["objection"] || "").trim() || undefined,
+    pain_point: (r["pain_point"] || "").trim() || undefined,
     // Raw preservation
     raw_import_json: Object.keys(rawImportJson).length > 0 ? rawImportJson : undefined,
   };
