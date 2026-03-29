@@ -341,6 +341,7 @@ async function routeOffer(
   leadSegment?: string,
   objections?: string[],
   decision?: ClassifiedDecision,
+  stagePolicy?: ResolvedPolicy,
 ): Promise<{ recommended: OfferMatch | null; fallback_reason: string }> {
   try {
     // 1. Fetch active offers for workspace
@@ -417,6 +418,11 @@ async function routeOffer(
       // Decision-aware scoring: boost/penalize by offer category
       if (decision && offer.offer_category) {
         score = adjustOfferScore(score, offer.offer_category, decision);
+      }
+
+      // Stage-aware scoring: boost/penalize by stage policy
+      if (stagePolicy && offer.offer_category) {
+        score = adjustOfferScoreByStage(score, offer.offer_category, stagePolicy);
       }
 
       if (score > 0 || reasons.length > 0) {
@@ -942,7 +948,7 @@ serve(async (req) => {
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy);
       }
     }
 
