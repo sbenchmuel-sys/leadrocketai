@@ -9,6 +9,19 @@ const corsHeaders = {
 };
 
 // ── Context structure ─────────────────────────────────────────────────
+interface LeadContextItem {
+  category: string;
+  content_type: string;
+  content_text: string;
+  original_snippet: string | null;
+  source_type: string;
+  source_column_name: string | null;
+  confidence: number | null;
+  author_name: string | null;
+  context_date: string | null;
+  is_active: boolean;
+}
+
 interface LeadContextJson {
   company_summary: string;
   lead_role_summary: string;
@@ -16,6 +29,7 @@ interface LeadContextJson {
   recommended_angles: string[];
   industry_context: string;
   previous_interactions_summary: string;
+  lead_context_items: LeadContextItem[];
   generated_at: string;
 }
 
