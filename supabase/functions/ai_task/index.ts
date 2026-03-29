@@ -1467,15 +1467,17 @@ ${customInstructionsText}
                 const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
                 const oldScore = replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score;
                 const newScore = reEval.objective_alignment_score + reEval.cta_alignment_score + reEval.focus_score + reEval.commercial_relevance_score;
-                console.log(`[ai_task] [EVALUATOR] Regen score: ${newScore}/40 (was ${oldScore}/40)`);
-                // Accept regenerated content only if improved
-                if (newScore > oldScore) {
+                const oldObjAlign = replyEvaluation.objective_alignment_score;
+                const newObjAlign = reEval.objective_alignment_score;
+                console.log(`[ai_task] [EVALUATOR] Regen score: ${newScore}/40 obj=${newObjAlign} (was ${oldScore}/40 obj=${oldObjAlign})`);
+                // Accept if total improved AND objective alignment didn't degrade
+                if (newScore > oldScore && newObjAlign >= oldObjAlign) {
                   content = regenContent;
                   replyEvaluation = reEval;
                   regenerated = true;
                   console.log(`[ai_task] [EVALUATOR] Accepted regenerated reply`);
                 } else {
-                  console.log(`[ai_task] [EVALUATOR] Kept original reply (regen did not improve)`);
+                  console.log(`[ai_task] [EVALUATOR] Kept original (regen did not improve both total+objective)`);
                 }
               }
             }
