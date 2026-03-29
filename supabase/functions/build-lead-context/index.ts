@@ -251,12 +251,6 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (!workspaceId) {
-      return new Response(JSON.stringify({ ok: false, error: "Could not resolve workspace" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     // Step 6: Include deal_memory continuity context
     let dealMemoryContext: Record<string, unknown> = {};
