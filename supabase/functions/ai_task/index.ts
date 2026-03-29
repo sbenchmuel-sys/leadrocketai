@@ -19,6 +19,10 @@ import {
   resolveStagePolicy, formatStagePolicyBlock, adjustOfferScoreByStage,
   type ResolvedPolicy,
 } from "../_shared/stagePolicy.ts";
+import {
+  selectReplyObjective, formatObjectiveBlock, applyObjectiveOverrides,
+  type ReplyObjectiveResult,
+} from "../_shared/replyObjective.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
