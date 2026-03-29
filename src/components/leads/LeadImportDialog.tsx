@@ -44,7 +44,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const preset = SOURCE_PRESETS[selectedSource] || SOURCE_PRESETS.outbound;
-  const isOutbound = preset.origin === "outbound";
+  const isOutbound = preset.origin === "outbound" && selectedSource !== "reactivation";
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
