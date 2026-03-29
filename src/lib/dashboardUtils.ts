@@ -45,7 +45,7 @@ export const SOURCE_TYPE_COLORS: Record<SourceType, { dot: string; bg: string; t
   manual_entry:         { dot: "bg-muted-foreground", bg: "bg-muted/50", text: "text-muted-foreground", bar: "bg-muted-foreground/50" },
 };
 
-export type Motion = "outbound_prospecting" | "inbound_response" | "pre_meeting" | "post_meeting" | "closing" | "nurture" | "closed";
+export type Motion = "outbound_prospecting" | "inbound_response" | "pre_meeting" | "post_meeting" | "closing" | "nurture" | "re_engagement" | "closed";
 
 export const MOTION_LABELS: Record<Motion, string> = {
   outbound_prospecting: "Prospecting",
@@ -54,6 +54,7 @@ export const MOTION_LABELS: Record<Motion, string> = {
   post_meeting: "Post-Meeting",
   closing: "Closing",
   nurture: "Nurture",
+  re_engagement: "Re-engagement",
   closed: "Closed",
 };
 
@@ -64,6 +65,7 @@ export const MOTION_ICONS: Record<Motion, string> = {
   post_meeting: "📝",
   closing: "🤝",
   nurture: "🌱",
+  re_engagement: "🔄",
   closed: "🏁",
 };
 
@@ -74,6 +76,7 @@ export const MOTION_COLORS: Record<Motion, { bg: string; text: string }> = {
   post_meeting: { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-800 dark:text-violet-200" },
   closing: { bg: "bg-amber-100 dark:bg-amber-900/40", text: "text-amber-800 dark:text-amber-200" },
   nurture: { bg: "bg-teal-100 dark:bg-teal-900/40", text: "text-teal-800 dark:text-teal-200" },
+  re_engagement: { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-800 dark:text-orange-200" },
   closed: { bg: "bg-muted", text: "text-muted-foreground" },
 };
 
@@ -129,7 +132,7 @@ export const SOURCE_PRESETS: Record<string, SourcePreset> = {
   },
   reactivation: {
     source_type: "csv_import",
-    motion: "nurture",
+    motion: "re_engagement",
     origin: "outbound",
   },
 };
