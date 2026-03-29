@@ -14,6 +14,7 @@ import { isInternalCaller } from "../_shared/authz.ts";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 
 function corsHeaders(origin: string): Record<string, string> {
   const allowed =
@@ -417,9 +418,18 @@ serve(async (req) => {
             .update({ status: "sent" })
             .eq("id", draftId);
         }
-      } catch (bgError) {
-        logger.error("mail.outlook.background_error", { error: String(bgError) });
-      }
+
+        // Update deal memory with outbound info
+        if (leadId) {
+          try {
+            const bodyPlain = htmlToPlainText(bodyHtml);
+            const mem = await loadDealMemory(serviceClient, leadId, accountData.workspace_id);
+            const updated = updateFromOutboundLite(mem, bodyPlain, subject);
+            await saveDealMemory(serviceClient, updated);
+          } catch (memErr) {
+            logger.error("mail.outlook.deal_memory_update_failed", { error: String(memErr) });
+          }
+        }
     };
 
     const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime;
