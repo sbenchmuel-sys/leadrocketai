@@ -927,8 +927,8 @@ serve(async (req) => {
       })();
     }
 
-    const [kbResult, , leadSignals, cachedContext, diversityConstraints] = await Promise.all([
-      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise,
+    const [kbResult, , leadSignals, cachedContext, diversityConstraints, offerResult] = await Promise.all([
+      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise,
     ]);
 
     if (cachedContext) {
