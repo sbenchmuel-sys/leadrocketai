@@ -4,6 +4,8 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
+import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
+import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
 import {
   loadExecutionSettings,
   clearSettingsCache,
@@ -1174,6 +1176,18 @@ serve(async (req) => {
 
         await supabase.from("leads").update(postUpdate).eq("id", lead.id);
         console.log(`[automation-executor] Post-send state updated for lead ${lead.id}:`, JSON.stringify(postUpdate));
+
+        // Update deal memory with outbound info
+        try {
+          const { data: wsInfo } = await supabase.from("leads").select("workspace_id").eq("id", lead.id).single();
+          if (wsInfo?.workspace_id) {
+            const mem = await loadDealMemory(supabase, lead.id, wsInfo.workspace_id);
+            const updated = updateFromOutboundLite(mem, draftBody, subject);
+            await saveDealMemory(supabase, updated);
+          }
+        } catch (memErr) {
+          console.error(`[automation-executor] Deal memory update failed for lead ${lead.id}:`, memErr);
+        }
 
         sentLeads.push({ leadId: lead.id, leadName: lead.name, subject });
         processed++;

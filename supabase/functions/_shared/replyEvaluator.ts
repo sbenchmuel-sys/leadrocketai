@@ -58,6 +58,12 @@ interface EvalContext {
   is_urgent: boolean;
   has_internal_buyin: boolean;
   objection_classes: string[];
+  // Deal memory continuity fields
+  deal_shared_assets: string[];
+  deal_sent_offers: string[];
+  deal_recent_cta_patterns: string[];
+  deal_momentum_state: string;
+  deal_ignored_cta_count: number;
 }
 
 // ── CTA detection patterns ──
@@ -411,7 +417,86 @@ function checkBuyinAlignment(content: string, ctx: EvalContext): PolicyViolation
   return violations;
 }
 
+// ── Continuity checks (deal memory) ──
+
+function checkContinuity(content: string, ctx: EvalContext): PolicyViolation[] {
+  const violations: PolicyViolation[] = [];
+  const lower = content.toLowerCase();
+
+  // Repeated asset reuse
+  for (const asset of ctx.deal_shared_assets) {
+    const assetLower = asset.replace(/_/g, " ");
+    if (lower.includes(assetLower)) {
+      violations.push({
+        rule: "repeated_asset_reuse",
+        severity: "medium",
+        detail: `Asset "${asset}" was already shared previously`,
+      });
+    }
+  }
+
+  // Repeated offer reuse
+  for (const offer of ctx.deal_sent_offers) {
+    const offerLower = offer.toLowerCase().replace(/_/g, " ");
+    if (lower.includes(offerLower)) {
+      violations.push({
+        rule: "repeated_offer_reuse",
+        severity: "low",
+        detail: `Offer "${offer}" was already sent previously`,
+      });
+    }
+  }
+
+  // CTA fatigue — same CTA pattern 3+ times in a row
+  if (ctx.deal_recent_cta_patterns.length >= 3) {
+    const last3 = ctx.deal_recent_cta_patterns.slice(-3);
+    if (last3[0] === last3[1] && last3[1] === last3[2]) {
+      const detectedCtas = detectCTAsInContent(content);
+      if (detectedCtas.includes(last3[0])) {
+        violations.push({
+          rule: "cta_fatigue",
+          severity: "medium",
+          detail: `CTA "${last3[0]}" used 3+ times consecutively and is being repeated again`,
+        });
+      }
+    }
+  }
+
+  // Pretending progress when stalled/regressing
+  if (ctx.deal_momentum_state === "stalled" || ctx.deal_momentum_state === "regressing") {
+    if (/(momentum|great progress|moving forward|exciting.*progress|things are going well)/i.test(content)) {
+      violations.push({
+        rule: "false_progress_claim",
+        severity: "high",
+        detail: `Reply claims progress but deal momentum is ${ctx.deal_momentum_state}`,
+      });
+    }
+  }
+
+  // Ignored CTA warning — if 3+ CTAs ignored and reply still uses heavy CTA
+  if (ctx.deal_ignored_cta_count >= 3) {
+    const detectedCtas = detectCTAsInContent(content);
+    if (detectedCtas.includes("commitment") || detectedCtas.includes("urgency_close")) {
+      violations.push({
+        rule: "heavy_cta_despite_fatigue",
+        severity: "medium",
+        detail: `${ctx.deal_ignored_cta_count} CTAs ignored but reply uses heavy closing CTA`,
+      });
+    }
+  }
+
+  return violations;
+}
+
 // ── Main evaluator ──────────────────────
+
+export interface DealMemoryEvalContext {
+  shared_assets?: string[];
+  sent_offers?: string[];
+  recent_cta_patterns?: string[];
+  momentum_state?: string;
+  ignored_cta_count?: number;
+}
 
 export function evaluateReply(
   content: string,
@@ -424,6 +509,7 @@ export function evaluateReply(
   stagePolicy: ResolvedPolicy,
   commercialDecision: ClassifiedDecision | undefined,
   latestInbound: string,
+  dealMemoryCtx?: DealMemoryEvalContext,
 ): ReplyEvaluation {
   const ctx: EvalContext = {
     primary_objective: replyObjective.primary,
@@ -438,6 +524,12 @@ export function evaluateReply(
     is_urgent: stagePolicy.urgency?.is_urgent ?? false,
     has_internal_buyin: commercialDecision?.detected_objection_classes?.includes("internal_buy_in") ?? false,
     objection_classes: commercialDecision?.detected_objection_classes ?? [],
+    // Deal memory continuity
+    deal_shared_assets: dealMemoryCtx?.shared_assets ?? [],
+    deal_sent_offers: dealMemoryCtx?.sent_offers ?? [],
+    deal_recent_cta_patterns: dealMemoryCtx?.recent_cta_patterns ?? [],
+    deal_momentum_state: dealMemoryCtx?.momentum_state ?? "unknown",
+    deal_ignored_cta_count: dealMemoryCtx?.ignored_cta_count ?? 0,
   };
 
   const allViolations: PolicyViolation[] = [];
@@ -470,6 +562,9 @@ export function evaluateReply(
 
   // 8. Internal buy-in alignment
   allViolations.push(...checkBuyinAlignment(content, ctx));
+
+  // 9. Deal memory continuity checks
+  allViolations.push(...checkContinuity(content, ctx));
 
   // ── Scoring ──
 

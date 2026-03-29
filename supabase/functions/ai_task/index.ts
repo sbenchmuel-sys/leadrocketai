@@ -30,6 +30,7 @@ import {
 import {
   loadDealMemory, saveDealMemory, updateFromInbound, updateFromOutbound,
   computeMomentum, formatDealMemoryBlock, getContinuityHints,
+  reconcileObjections,
   type DealMemory, type ContinuityHints,
 } from "../_shared/dealMemory.ts";
 
@@ -958,6 +959,23 @@ serve(async (req) => {
         const memClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
         dealMemory = await loadDealMemory(memClient, String(payload.lead_id), resolvedWorkspaceId);
 
+        // Reconcile objections with canonical lead_intelligence
+        if (payload?.lead_id) {
+          try {
+            const { data: intel } = await memClient.from("lead_intelligence")
+              .select("objections_json")
+              .eq("lead_id", payload.lead_id).maybeSingle();
+            if (intel?.objections_json && Array.isArray(intel.objections_json)) {
+              const canonicalObjs = (intel.objections_json as any[])
+                .map((o: any) => typeof o === "string" ? o : o.text || o.description || "")
+                .filter(Boolean);
+              dealMemory = reconcileObjections(dealMemory, canonicalObjs);
+            }
+          } catch (reconErr) {
+            console.error("[ai_task] Objection reconciliation failed:", reconErr);
+          }
+        }
+
         // Update from inbound
         if (latestInbound && commercialDecision) {
           dealMemory = updateFromInbound(
@@ -1502,7 +1520,14 @@ ${customInstructionsText}
     let replyEvaluation: ReplyEvaluation | undefined;
     if (replyObjective && resolvedStagePolicy && OFFER_ROUTED_TASKS.has(task)) {
       try {
-        replyEvaluation = evaluateReply(content, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
+        const dealMemEvalCtx = dealMemory ? {
+          shared_assets: dealMemory.shared_assets,
+          sent_offers: dealMemory.sent_offers,
+          recent_cta_patterns: dealMemory.recent_cta_patterns,
+          momentum_state: dealMemory.momentum_state,
+          ignored_cta_count: dealMemory.ignored_cta_count,
+        } : undefined;
+        replyEvaluation = evaluateReply(content, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
         console.log(`[ai_task] [EVALUATOR] score=${replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score}/40, violations=${replyEvaluation.policy_violations.length}, regen=${replyEvaluation.regeneration_recommended}, dominant=${replyEvaluation.dominant_layer}`);
 
         if (replyEvaluation.regeneration_recommended) {
@@ -1527,7 +1552,7 @@ ${customInstructionsText}
               regenContent = stripLeakedReasoning(regenContent);
               if (regenContent) {
                 // Re-evaluate regenerated content
-                const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
+                const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
                 const oldScore = replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score;
                 const newScore = reEval.objective_alignment_score + reEval.cta_alignment_score + reEval.focus_score + reEval.commercial_relevance_score;
                 const oldObjAlign = replyEvaluation.objective_alignment_score;

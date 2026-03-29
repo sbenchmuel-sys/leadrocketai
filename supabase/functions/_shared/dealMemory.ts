@@ -32,6 +32,7 @@ export interface DealMemory {
   continuity_risks: string[];
   last_outbound_cta: string | null;
   ignored_cta_count: number;
+  last_updated_at?: string;
 }
 
 export interface MomentumSignals {
@@ -80,7 +81,10 @@ export async function loadDealMemory(
       .eq("lead_id", leadId)
       .maybeSingle();
 
-    if (error || !data) return emptyMemory(leadId, workspaceId);
+    if (error || !data) {
+      // No existing memory — bootstrap from lead_intelligence
+      return seedFromIntelligence(supabaseClient, leadId, workspaceId);
+    }
 
     return {
       lead_id: data.lead_id,
@@ -104,6 +108,102 @@ export async function loadDealMemory(
     console.error("[dealMemory] Load failed:", err);
     return emptyMemory(leadId, workspaceId);
   }
+}
+
+// ── Seed from lead_intelligence on first load ──
+
+async function seedFromIntelligence(
+  supabaseClient: { from: (table: string) => any },
+  leadId: string,
+  workspaceId: string,
+): Promise<DealMemory> {
+  const memory = emptyMemory(leadId, workspaceId);
+  try {
+    const { data: intel } = await supabaseClient
+      .from("lead_intelligence")
+      .select("objections_json, buying_signals_json")
+      .eq("lead_id", leadId)
+      .maybeSingle();
+
+    if (intel?.objections_json && Array.isArray(intel.objections_json)) {
+      const objTexts = (intel.objections_json as any[])
+        .map((o: any) => typeof o === "string" ? o : o.text || o.description || "")
+        .filter(Boolean);
+      memory.unresolved_objections = dedupeStrings(objTexts);
+      console.log(`[dealMemory] Seeded ${memory.unresolved_objections.length} unresolved objections from lead_intelligence`);
+    }
+  } catch (err) {
+    console.error("[dealMemory] Seed from intelligence failed:", err);
+  }
+  return memory;
+}
+
+// ── Lightweight outbound-only update for non-ai_task send paths ──
+
+export function updateFromOutboundLite(
+  memory: DealMemory,
+  bodyText: string,
+  subject: string,
+): DealMemory {
+  const m = { ...memory };
+
+  // Track CTA patterns from content heuristics
+  let detectedCta = "soft_offer";
+  if (/\b(book|schedule|set up|arrange)\b.{0,30}\b(call|meeting|demo|time|slot)\b/i.test(bodyText)) detectedCta = "meeting_request";
+  else if (/\b(sign|commit|confirm|finalize|proceed|go ahead)\b/i.test(bodyText)) detectedCta = "commitment";
+  else if (/\b(check.{0,10}(in|back)|circle back|follow.{0,5}up|touch base)\b/i.test(bodyText)) detectedCta = "timing_check";
+  else if (/\b(quick question|curious|wondering)\b/i.test(bodyText)) detectedCta = "quick_question";
+
+  m.recent_cta_patterns = capArray([...m.recent_cta_patterns, detectedCta], 10);
+  m.last_outbound_cta = detectedCta;
+
+  // Track shared assets
+  const assetPatterns = bodyText.match(/(?:case study|one[- ]pager|guide|whitepaper|pdf|doc|presentation|deck|roi calculator|summary)/gi) || [];
+  for (const asset of assetPatterns) {
+    const normalized = asset.toLowerCase().replace(/\s+/g, "_");
+    if (!m.shared_assets.includes(normalized)) {
+      m.shared_assets = capArray([...m.shared_assets, normalized], 20);
+    }
+  }
+
+  // Pricing status from outbound
+  if (/quote|proposal|pricing (details|breakdown|sheet)/i.test(bodyText)) {
+    if (m.pricing_status === "price_mentioned") m.pricing_status = "quote_sent";
+  }
+
+  // If this is a follow-up with no reply, increment ignored CTA count
+  // (conservative: only increment if we had a previous outbound CTA)
+  if (m.last_outbound_cta && m.recent_cta_patterns.length > 1) {
+    m.ignored_cta_count = (m.ignored_cta_count || 0) + 1;
+  }
+
+  m.last_updated_at = new Date().toISOString();
+  return m;
+}
+
+// ── Reconcile objections with canonical lead_intelligence ──
+
+export function reconcileObjections(
+  memory: DealMemory,
+  canonicalObjections: string[],
+): DealMemory {
+  const m = { ...memory };
+
+  // Canonical objections from lead_intelligence are the extracted set.
+  // dealt_memory tracks which are handled vs unresolved.
+  // Any canonical objection NOT in handled should be unresolved.
+  // Any handled objection NOT in canonical can stay handled (was resolved).
+  for (const obj of canonicalObjections) {
+    if (!m.handled_objections.includes(obj) && !m.unresolved_objections.includes(obj)) {
+      m.unresolved_objections = dedupeStrings([...m.unresolved_objections, obj]);
+    }
+  }
+
+  // Remove unresolved objections that are no longer in canonical AND were not
+  // detected by the runtime classifier (they may have been resolved upstream)
+  // We keep them — better to be cautious. Only handled promotion removes them.
+
+  return m;
 }
 
 // ── Save memory to DB (upsert) ───────────
@@ -433,7 +533,7 @@ function extractQuestions(text: string): string[] {
   return questions.slice(0, 5);
 }
 
-function dedupeStrings(arr: string[]): string[] {
+export function dedupeStrings(arr: string[]): string[] {
   return [...new Set(arr)];
 }
 

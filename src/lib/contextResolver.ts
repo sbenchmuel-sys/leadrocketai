@@ -5,6 +5,7 @@ import { getRepProfile, getKnowledgeDocuments, type RepProfile, type KnowledgeDo
 import { getWorkspaceProfile, type WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { calculateClosingPower, SIGNAL_PATTERNS } from "@/lib/closingPowerUtils";
 import type { Motion, SourceType } from "@/lib/dashboardUtils";
+import { supabase } from "@/integrations/supabase/client";
 
 // ============================================
 // TYPES
@@ -216,13 +217,40 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     ? !lastMeeting.follow_up_email_body
     : false;
 
-  // Intelligence
-  const milestones: Milestone[] = lead.milestones_json
-    ? (lead.milestones_json as unknown as Milestone[])
-    : [];
-  const risks: Risk[] = lead.risks_json
-    ? (lead.risks_json as unknown as Risk[])
-    : [];
+  // Intelligence — prefer canonical lead_intelligence, fall back to legacy leads fields
+  let milestones: Milestone[] = [];
+  let risks: Risk[] = [];
+  try {
+    const { data: intel } = await supabase
+      .from("lead_intelligence")
+      .select("milestones_json, risks_json, objections_json, buying_signals_json")
+      .eq("lead_id", leadId)
+      .maybeSingle();
+    if (intel) {
+      milestones = intel.milestones_json
+        ? (intel.milestones_json as unknown as Milestone[])
+        : [];
+      risks = intel.risks_json
+        ? (intel.risks_json as unknown as Risk[])
+        : [];
+    } else {
+      // Legacy fallback — leads table fields
+      milestones = lead.milestones_json
+        ? (lead.milestones_json as unknown as Milestone[])
+        : [];
+      risks = lead.risks_json
+        ? (lead.risks_json as unknown as Risk[])
+        : [];
+    }
+  } catch {
+    // Legacy fallback on error
+    milestones = lead.milestones_json
+      ? (lead.milestones_json as unknown as Milestone[])
+      : [];
+    risks = lead.risks_json
+      ? (lead.risks_json as unknown as Risk[])
+      : [];
+  }
 
   const buyingSignals = extractBuyingSignals(milestones);
   const riskSignals = extractRiskSignals(risks);

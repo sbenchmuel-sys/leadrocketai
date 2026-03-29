@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isInternalCaller, assertLeadAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -440,6 +441,21 @@ serve(async (req) => {
             .from("drafts")
             .update({ status: "sent" })
             .eq("id", draftId);
+        }
+
+        // Update deal memory with outbound info
+        if (leadId) {
+          try {
+            const { data: leadWsData } = await serviceSupabase
+              .from("leads").select("workspace_id").eq("id", leadId).single();
+            if (leadWsData?.workspace_id) {
+              const mem = await loadDealMemory(serviceSupabase, leadId, leadWsData.workspace_id);
+              const updated = updateFromOutboundLite(mem, body, subject);
+              await saveDealMemory(serviceSupabase, updated);
+            }
+          } catch (memErr) {
+            console.error("[gmail-send] Deal memory update failed:", memErr);
+          }
         }
       } catch (bgError) {
         console.error("[gmail-send] Background task error:", bgError);
