@@ -1024,24 +1024,44 @@ serve(async (req) => {
 
     // ── REPLY OBJECTIVE ORCHESTRATOR (runs after stage policy + memory) ──
     let replyObjective: ReplyObjectiveResult | undefined;
+    let continuityInfluence: ContinuityObjectiveInfluence | undefined;
     if (OFFER_ROUTED_TASKS.has(task) && commercialDecision && resolvedStagePolicy && latestInbound) {
-      replyObjective = selectReplyObjective(
-        latestInbound, commercialDecision, resolvedStagePolicy,
-        dealMemory?.recent_cta_patterns, task,
-      );
+      // Use continuity-aware selection when deal memory is available
+      if (dealMemory && continuityHints) {
+        const { result, influence } = selectReplyObjectiveWithContinuity(
+          latestInbound, commercialDecision, resolvedStagePolicy,
+          dealMemory, continuityHints, task,
+        );
+        replyObjective = result;
+        continuityInfluence = influence;
 
-      // Apply continuity overrides
-      if (continuityHints) {
-        // If unanswered questions exist and objective isn't already answer-focused
-        if (continuityHints.prioritize_unanswered && replyObjective.primary !== "answer_direct_question") {
-          // Only override if confidence is low (stage default)
-          if (replyObjective.confidence === "low") {
-            replyObjective = selectReplyObjective(
-              latestInbound, commercialDecision, resolvedStagePolicy,
-              dealMemory?.recent_cta_patterns, task,
-            );
+        // Apply momentum-based stage policy adjustments
+        const momentumAdj = adjustStagePolicyByMomentum(resolvedStagePolicy, dealMemory, continuityHints);
+        if (momentumAdj.reasoning.length > 0) {
+          for (const s of momentumAdj.suppressed_cta_additions) {
+            if (!resolvedStagePolicy.final_suppressed_cta_patterns.includes(s)) {
+              resolvedStagePolicy.final_suppressed_cta_patterns.push(s);
+            }
           }
+          for (const p of momentumAdj.preferred_cta_additions) {
+            if (!resolvedStagePolicy.final_preferred_cta_patterns.includes(p)) {
+              resolvedStagePolicy.final_preferred_cta_patterns.unshift(p);
+            }
+          }
+          if (momentumAdj.cta_overrides.length > 0) {
+            resolvedStagePolicy.final_cta_strategy = momentumAdj.cta_overrides[0];
+          }
+          console.log(`[ai_task] [MOMENTUM_ADJ] ${momentumAdj.reasoning.join("; ")}`);
         }
+
+        if (continuityInfluence.overrides_applied.length > 0) {
+          console.log(`[ai_task] [CONTINUITY] overrides=[${continuityInfluence.overrides_applied.join(", ")}], original=${continuityInfluence.original_objective}→${continuityInfluence.final_objective}`);
+        }
+      } else {
+        replyObjective = selectReplyObjective(
+          latestInbound, commercialDecision, resolvedStagePolicy,
+          dealMemory?.recent_cta_patterns, task,
+        );
       }
 
       console.log(`[ai_task] [OBJECTIVE] primary=${replyObjective.primary}, secondary=${replyObjective.secondary || "none"}, confidence=${replyObjective.confidence}, override=${replyObjective.override_source || "none"}, reasoning=${replyObjective.reasoning}`);
