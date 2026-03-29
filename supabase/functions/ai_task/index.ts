@@ -427,7 +427,7 @@ async function routeOffer(
     // Sort by score descending
     scored.sort((a, b) => b.score - a.score);
 
-    // 3. Deduplicate — check if top offer was recently sent
+    // 3. Enhanced deduplicate — check exact link, offer family, and CTA pattern
     try {
       const { data: recentTimeline } = await adminClient
         .from("lead_timeline_items")
@@ -438,21 +438,25 @@ async function routeOffer(
         .limit(10);
 
       if (recentTimeline && recentTimeline.length > 0) {
-        const recentTexts = recentTimeline.map(t => 
-          `${t.snippet_text || ""} ${JSON.stringify(t.metadata_json || {})}`.toLowerCase()
-        ).join(" ");
+        const dedupeCtx = buildDedupeContext(recentTimeline as any[]);
 
-        // Try to find first offer whose link wasn't recently sent
+        // Try to find first offer that passes all dedupe checks
         for (const offer of scored) {
-          const linkSent = offer.link_url && recentTexts.includes(offer.link_url.toLowerCase());
-          const nameSent = recentTexts.includes(offer.offer_name.toLowerCase());
-          if (!linkSent && !nameSent) {
+          const verdict = checkOfferDedupe(
+            offer.offer_key,
+            (offers.find((o: any) => o.offer_key === offer.offer_key) as any)?.offer_category || "general",
+            offer.link_url,
+            offer.cta_type,
+            dedupeCtx,
+          );
+          if (verdict === "ok") {
             console.log(`[ai_task] Offer routed: ${offer.offer_key} (score: ${offer.score}, reason: ${offer.match_reason})`);
             return { recommended: offer, fallback_reason: "" };
           }
+          console.log(`[ai_task] Offer dedup: ${offer.offer_key} → ${verdict}, trying next`);
         }
 
-        // All top offers were recently sent — use top but note it
+        // All top offers hit dedupe — use top but note it
         console.log(`[ai_task] Offer routed (dedup-fallback): ${scored[0].offer_key} (all top matches recently sent)`);
         return { recommended: scored[0], fallback_reason: "Note: this offer/link was recently shared with this prospect" };
       }
