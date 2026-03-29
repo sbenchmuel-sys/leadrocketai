@@ -430,6 +430,9 @@ serve(async (req) => {
             logger.error("mail.outlook.deal_memory_update_failed", { error: String(memErr) });
           }
         }
+      } catch (bgError) {
+        logger.error("mail.outlook.background_error", { error: String(bgError) });
+      }
     };
 
     const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime;
