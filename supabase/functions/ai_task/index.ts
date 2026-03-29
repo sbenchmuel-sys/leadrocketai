@@ -909,6 +909,19 @@ serve(async (req) => {
       console.log(`[ai_task] [CLASSIFIER] objections=[${commercialDecision.detected_objection_classes}], intent=${commercialDecision.detected_commercial_intent}, confidence=${commercialDecision.confidence}, cta=${commercialDecision.cta_strategy}`);
     }
 
+    // ── STAGE-AWARE DECISION POLICY (runs after classification) ──
+    let resolvedStagePolicy: ResolvedPolicy | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && commercialDecision) {
+      const rawStage = payload?.stage ? String(payload.stage) : "new";
+      // Detect repeat customer from motion or stage
+      const isRepeatCustomer = payload?.motion === "expansion" || payload?.stage === "closed" ||
+        (payload?.nurture_outbound_count && Number(payload.nurture_outbound_count) > 3 && payload?.stage === "engaged");
+      resolvedStagePolicy = resolveStagePolicy(
+        rawStage, commercialDecision, latestInbound || "", !!isRepeatCustomer,
+      );
+      console.log(`[ai_task] [STAGE_POLICY] effective=${resolvedStagePolicy.effective_stage}, cta=${resolvedStagePolicy.final_cta_strategy}, urgent=${resolvedStagePolicy.urgency.is_urgent}, reasoning=${resolvedStagePolicy.stage_reasoning}`);
+    }
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
