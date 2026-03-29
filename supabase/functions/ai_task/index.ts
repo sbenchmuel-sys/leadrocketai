@@ -1487,7 +1487,7 @@ ${customInstructionsText}
 
     // Quality scoring for outbound emails
     let qualityScore: EmailQualityScore | null = null;
-    let regenerated_outbound = false;
+    let regenerated_outbound = regenerated;
 
     if (QUALITY_SCORED_TASKS.has(task)) {
       try {
