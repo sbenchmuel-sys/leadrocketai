@@ -1027,6 +1027,23 @@ serve(async (req) => {
             }
             console.log(`[ai_task] Context cache expired for lead ${payload.lead_id}`);
           }
+
+          // Cache miss/expired — inline-fetch lead_context_items directly
+          // This ensures imported context is available even before build-lead-context runs
+          console.log(`[ai_task] Cache miss for lead ${payload.lead_id}, fetching lead_context_items inline`);
+          const { data: contextItems } = await cacheClient
+            .from("lead_context_items")
+            .select("category, content_type, content_text, original_snippet, source_type, source_column_name, confidence, author_name, context_date, is_active")
+            .eq("lead_id", payload.lead_id)
+            .eq("is_active", true)
+            .order("created_at", { ascending: true })
+            .limit(50);
+
+          if (contextItems && contextItems.length > 0) {
+            console.log(`[ai_task] ✅ Inline-fetched ${contextItems.length} lead_context_items (cache bypass)`);
+            return { lead_context_items: contextItems } as Record<string, unknown>;
+          }
+
           return null;
         } catch (err) { console.error("[ai_task] Context cache lookup failed:", err); return null; }
       })();
