@@ -114,8 +114,8 @@ serve(async (req) => {
 
     console.log(`[build-lead-context] Building context for lead ${lead_id}`);
 
-    // Step 1-5: Fetch all data in parallel, including canonical intelligence
-    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult, intelligenceResult] = await Promise.all([
+    // Step 1-5: Fetch all data in parallel, including canonical intelligence and lead context items
+    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult, intelligenceResult, contextItemsResult] = await Promise.all([
       // 1. Lead profile
       adminClient.from("leads").select("*").eq("id", lead_id).maybeSingle(),
       // 2. Signals
@@ -150,6 +150,13 @@ serve(async (req) => {
         .select("summary_text, recommended_next_step, risks_json, milestones_json, objections_json, last_computed_at")
         .eq("lead_id", lead_id)
         .maybeSingle(),
+      // 7. Lead context items (from import, manual entry, etc.)
+      adminClient.from("lead_context_items")
+        .select("category, content_type, content_text, original_snippet, source_type, source_column_name, confidence, author_name, context_date, is_active")
+        .eq("lead_id", lead_id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true })
+        .limit(50),
     ]);
 
     const lead = leadResult.data;
