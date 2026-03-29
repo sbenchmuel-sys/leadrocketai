@@ -1586,7 +1586,7 @@ ${customInstructionsText}
                 let regenContent = regenResult.choices?.[0]?.message?.content || "";
                 regenContent = stripLeakedReasoning(regenContent);
                 if (regenContent) {
-                  regenerated = true;
+                  regenerated_outbound = true;
                   selectedFramework = "neutral_observation" as any;
                   // Re-score
                   const rescore = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
