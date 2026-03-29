@@ -23,10 +23,10 @@ export interface ReplyEvaluation {
   policy_violations: PolicyViolation[];
   regeneration_recommended: boolean;
   evaluation_summary: string;
-  dominant_layer: string; // which orchestration layer most influenced the reply
+  dominant_layer: string;
 }
 
-// ── Leaked-label patterns (must never appear in customer-facing output) ──
+// ── Leaked-label patterns ──
 
 const LEAKED_LABEL_PATTERNS = [
   /\bstage[_\s]?policy\b/i,
@@ -43,29 +43,27 @@ const LEAKED_LABEL_PATTERNS = [
   /\bstage[_\s]?aware\b/i,
 ];
 
-// ── Objective-specific policy checks ──────────
-
-interface ObjectiveCheck {
-  /** Returns violations for this objective */
-  check(content: string, ctx: EvalContext): PolicyViolation[];
-}
+// ── EvalContext (all structured fields the evaluator needs) ──
 
 interface EvalContext {
   primary_objective: ReplyObjective;
   secondary_objective: ReplyObjective | null;
   stage: string;
+  final_cta_strategy: string;
   suppressed_cta: string[];
   suppressed_offers: string[];
   preferred_cta: string[];
+  preferred_offers: string[];
   latest_inbound: string;
   is_urgent: boolean;
+  has_internal_buyin: boolean;
+  objection_classes: string[];
 }
 
-// ── CTA detection patterns ──────────────
+// ── CTA detection patterns ──
 
 function detectCTAsInContent(content: string): string[] {
   const found: string[] = [];
-  const t = content.toLowerCase();
   if (/\b(book|schedule|set up|arrange)\b.{0,30}\b(call|meeting|demo|time|slot)\b/i.test(content)) found.push("meeting_request");
   if (/\b(sign|commit|confirm|finalize|lock in|proceed|go ahead|place.{0,10}order)\b/i.test(content)) found.push("commitment");
   if (/\b(let me know|would.{0,15}(interest|helpful)|happy to|open to)\b/i.test(content)) found.push("soft_offer");
@@ -74,52 +72,60 @@ function detectCTAsInContent(content: string): string[] {
   if (/\b(check.{0,10}(in|back)|circle back|follow.{0,5}up|touch base)\b/i.test(content)) found.push("timing_check");
   if (/\b(discount|off|% off|coupon|promo)\b/i.test(content)) found.push("discount");
   if (/\b(trial|free|pilot|test drive|proof of concept|poc)\b/i.test(content)) found.push("trial_offer");
+  if (/\b(here's|check out|take a look|see the|attached)\b.{0,30}\b(link|pdf|doc|guide|resource)\b/i.test(content)) found.push("direct_offer");
   return [...new Set(found)];
 }
 
-// ── Count distinct "goals" attempted in the reply ──
+// ── Goal counter ──
 
 function countGoals(content: string): number {
   let goals = 0;
-  const t = content.toLowerCase();
-  // question-answering
   if (/\b(to answer|regarding your question|in response to|you asked)\b/i.test(content)) goals++;
-  // objection handling
   if (/\b(understand your concern|appreciate the concern|valid point|great question about)\b/i.test(content)) goals++;
-  // offer/pitch
   if (/\b(we offer|our solution|recommend|suggest|consider|check out)\b/i.test(content)) goals++;
-  // meeting ask
   if (/\b(book|schedule|set up|arrange)\b.{0,30}\b(call|meeting|demo)\b/i.test(content)) goals++;
-  // proof sharing
   if (/\b(case study|success story|attached|see the|here's a|proof)\b/i.test(content)) goals++;
   return goals;
 }
-
-// ── Word count helper ──
 
 function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
 }
 
-// ── Objective-specific validators ──────────
+// ── Suppressed offer mention detection ──
+
+function detectOfferMentionsInContent(content: string, offers: string[]): string[] {
+  const found: string[] = [];
+  const lower = content.toLowerCase();
+  for (const offer of offers) {
+    const offerLower = offer.toLowerCase().replace(/_/g, " ");
+    // Check both underscore and space variants
+    if (lower.includes(offerLower) || lower.includes(offer.toLowerCase())) {
+      found.push(offer);
+    }
+  }
+  return found;
+}
+
+// ── Objective-specific validators ──
+
+interface ObjectiveCheck {
+  check(content: string, ctx: EvalContext): PolicyViolation[];
+}
 
 const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
   answer_direct_question: {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
-      // Must contain some form of answer before any commercial move
-      const lines = content.split("\n").filter(l => l.trim());
-      const firstSubstantialLine = lines.find(l => l.trim().length > 20) || "";
       const ctas = detectCTAsInContent(content);
       if (ctas.includes("meeting_request") || ctas.includes("commitment")) {
-        // Check if the question was actually answered first
         const questionKeywords = ctx.latest_inbound.match(/\b(how|what|where|when|can|does|is)\b/gi) || [];
         if (questionKeywords.length > 0 && !/(to answer|here's|the answer|in short|specifically|yes|no,)/i.test(content.slice(0, 300))) {
-          violations.push({ rule: "answer_before_cta", severity: "high", detail: "Meeting/commitment CTA used without first answering the prospect's question" });
+          violations.push({ rule: "answer_before_cta", severity: "high", detail: "CTA used without first answering the prospect's question" });
         }
       }
       if (countGoals(content) > 2) {
-        violations.push({ rule: "multi_goal_overload", severity: "medium", detail: "Reply tries to do too many things; primary objective is to answer a question" });
+        violations.push({ rule: "multi_goal_overload", severity: "medium", detail: "Reply tries too many things; primary is answering a question" });
       }
       return violations;
     },
@@ -132,7 +138,11 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
       }
       const ctas = detectCTAsInContent(content);
       if (ctas.includes("commitment") || ctas.includes("urgency_close")) {
-        violations.push({ rule: "wrong_cta_for_objection", severity: "high", detail: "Commitment/urgency CTA is wrong when handling an objection" });
+        violations.push({ rule: "wrong_cta_for_objection", severity: "high", detail: "Commitment/urgency CTA wrong when handling objection" });
+      }
+      // Should not pitch multiple offers while resolving
+      if (countGoals(content) > 2) {
+        violations.push({ rule: "multi_goal_objection", severity: "medium", detail: "Too many goals while resolving objection" });
       }
       return violations;
     },
@@ -141,7 +151,10 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
       if (!/(case study|example|data|result|metric|customer|testimonial|evidence|showed|achieved|saved|reduced|increased)/i.test(content)) {
-        violations.push({ rule: "missing_proof", severity: "high", detail: "Proof objective selected but reply contains no concrete evidence" });
+        violations.push({ rule: "missing_proof", severity: "high", detail: "Proof objective but reply has no concrete evidence" });
+      }
+      if (countGoals(content) > 3) {
+        violations.push({ rule: "proof_unfocused", severity: "medium", detail: "Proof reply tries too many things" });
       }
       return violations;
     },
@@ -150,11 +163,15 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
       if (wordCount(content) > 250) {
-        violations.push({ rule: "too_long_for_forward", severity: "medium", detail: "Internal buy-in reply should be concise and forwardable but exceeds 250 words" });
+        violations.push({ rule: "too_long_for_forward", severity: "medium", detail: "Internal buy-in reply exceeds 250 words; not forwardable" });
       }
       const ctas = detectCTAsInContent(content);
       if (ctas.includes("meeting_request")) {
-        violations.push({ rule: "meeting_cta_buyin", severity: "medium", detail: "Avoid requesting a meeting with the decision-maker; let champion manage" });
+        violations.push({ rule: "meeting_cta_buyin", severity: "medium", detail: "Avoid meeting CTA for internal buy-in; let champion manage" });
+      }
+      // Should contain shareable proof
+      if (!/(summary|one.?pager|overview|roi|key (benefit|point|result)|highlight)/i.test(content)) {
+        violations.push({ rule: "missing_shareable_asset", severity: "low", detail: "Internal buy-in reply lacks shareable/summary content" });
       }
       return violations;
     },
@@ -162,8 +179,12 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
   resolve_logistics: {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
-      if (/(we'd love to|happy to explore|let's set up a call to discuss)/i.test(content) && !/(delivery|shipping|stock|available|timeline|eta|fulfill)/i.test(content)) {
-        violations.push({ rule: "vague_logistics", severity: "high", detail: "Logistics reply is vague/generic; should include concrete specifics" });
+      if (!/(delivery|shipping|stock|available|timeline|eta|fulfill|lead time|warehouse|pickup|days|weeks|business day)/i.test(content)) {
+        violations.push({ rule: "vague_logistics", severity: "high", detail: "Logistics reply lacks concrete specifics" });
+      }
+      // If urgent, should not defer
+      if (ctx.is_urgent && /(let me get back|I'll check|need to confirm|circle back)/i.test(content)) {
+        violations.push({ rule: "urgent_deferred", severity: "medium", detail: "Urgent logistics but reply defers answer" });
       }
       return violations;
     },
@@ -175,7 +196,11 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
         violations.push({ rule: "closing_too_verbose", severity: "medium", detail: "Closing reply should be short and action-oriented" });
       }
       if (/(discover|explore|learn more about|tell me more|what are your goals)/i.test(content)) {
-        violations.push({ rule: "reopened_discovery", severity: "high", detail: "Closing reply reopened discovery instead of driving commitment" });
+        violations.push({ rule: "reopened_discovery", severity: "high", detail: "Closing reply reopened discovery" });
+      }
+      const ctas = detectCTAsInContent(content);
+      if (!ctas.includes("commitment") && !ctas.includes("meeting_request")) {
+        violations.push({ rule: "weak_closing_cta", severity: "medium", detail: "Closing reply lacks commitment or meeting CTA" });
       }
       return violations;
     },
@@ -184,14 +209,45 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
       if (/(getting started|beginner|intro|onboard|welcome aboard|new to)/i.test(content)) {
-        violations.push({ rule: "beginner_tone_for_expansion", severity: "medium", detail: "Expansion/reorder reply uses beginner language for existing customer" });
+        violations.push({ rule: "beginner_tone_for_expansion", severity: "medium", detail: "Expansion reply uses beginner language" });
+      }
+      return violations;
+    },
+  },
+  guide_to_offer: {
+    check(content, ctx) {
+      const violations: PolicyViolation[] = [];
+      // Should mention at most 1-2 offers
+      const offerMentions = (content.match(/\b(offer|option|package|plan|bundle|product)\b/gi) || []).length;
+      if (offerMentions > 4) {
+        violations.push({ rule: "catalog_dump", severity: "medium", detail: "Guide-to-offer reply presents too many options (catalog dump)" });
+      }
+      return violations;
+    },
+  },
+  move_to_meeting_or_call: {
+    check(content, ctx) {
+      const violations: PolicyViolation[] = [];
+      const ctas = detectCTAsInContent(content);
+      if (!ctas.includes("meeting_request")) {
+        violations.push({ rule: "missing_meeting_cta", severity: "medium", detail: "Move-to-meeting objective but no meeting CTA detected" });
+      }
+      return violations;
+    },
+  },
+  low_pressure_hold_or_nurture: {
+    check(content, ctx) {
+      const violations: PolicyViolation[] = [];
+      const ctas = detectCTAsInContent(content);
+      if (ctas.includes("commitment") || ctas.includes("urgency_close")) {
+        violations.push({ rule: "pressure_in_nurture", severity: "high", detail: "Low-pressure hold used commitment/urgency CTA" });
       }
       return violations;
     },
   },
 };
 
-// ── Suppressed CTA/offer checker ──────────
+// ── Suppressed CTA checker ──
 
 function checkSuppressedPatterns(content: string, ctx: EvalContext): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
@@ -202,15 +258,25 @@ function checkSuppressedPatterns(content: string, ctx: EvalContext): PolicyViola
       violations.push({
         rule: "suppressed_cta_used",
         severity: "high",
-        detail: `CTA "${cta}" detected but is suppressed for objective "${ctx.primary_objective}" at stage "${ctx.stage}"`,
+        detail: `CTA "${cta}" is suppressed for "${ctx.primary_objective}" at stage "${ctx.stage}"`,
       });
     }
+  }
+
+  // Check suppressed offer categories mentioned
+  const suppressedOfferMentions = detectOfferMentionsInContent(content, ctx.suppressed_offers);
+  for (const offer of suppressedOfferMentions) {
+    violations.push({
+      rule: "suppressed_offer_mentioned",
+      severity: "medium",
+      detail: `Suppressed offer category "${offer}" mentioned in reply`,
+    });
   }
 
   return violations;
 }
 
-// ── Focus checker ──────────
+// ── Focus checker ──
 
 function checkFocus(content: string, ctx: EvalContext): { score: number; violations: PolicyViolation[] } {
   const goals = countGoals(content);
@@ -225,20 +291,20 @@ function checkFocus(content: string, ctx: EvalContext): { score: number; violati
     violations.push({ rule: "multi_goal_mild", severity: "medium", detail: `Reply attempts ${goals} goals; consider focusing more` });
   }
 
-  // Over-pitching check: if objective is answer/proof/objection/logistics, penalize heavy offer language
+  // Over-pitching check for answer/proof/objection/logistics objectives
   const answerObjectives: ReplyObjective[] = ["answer_direct_question", "resolve_objection", "provide_proof", "resolve_logistics"];
   if (answerObjectives.includes(ctx.primary_objective)) {
     const offerPatterns = content.match(/\b(we offer|our solution|pricing|package|plan|subscription|buy|purchase)\b/gi) || [];
     if (offerPatterns.length > 2) {
       score = Math.max(score - 3, 2);
-      violations.push({ rule: "over_pitching", severity: "medium", detail: `Heavy offer language (${offerPatterns.length} instances) when objective is "${ctx.primary_objective}"` });
+      violations.push({ rule: "over_pitching", severity: "medium", detail: `Heavy offer language (${offerPatterns.length}×) for "${ctx.primary_objective}"` });
     }
   }
 
   return { score, violations };
 }
 
-// ── Leaked label checker ──────────
+// ── Leaked label checker ──
 
 function checkLeakedLabels(content: string): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
@@ -247,23 +313,20 @@ function checkLeakedLabels(content: string): PolicyViolation[] {
       violations.push({
         rule: "leaked_internal_label",
         severity: "high",
-        detail: `Internal label leaked in output: matched pattern ${pattern.source}`,
+        detail: `Internal label leaked: matched ${pattern.source}`,
       });
-      break; // one is enough to flag
+      break;
     }
   }
   return violations;
 }
 
-// ── Secondary objective check ──────────
+// ── Secondary objective dominance check ──
 
 function checkSecondaryObjective(content: string, ctx: EvalContext): PolicyViolation[] {
   if (!ctx.secondary_objective) return [];
   const violations: PolicyViolation[] = [];
 
-  // Secondary objective should be "light-touch" — check if it dominates
-  const goals = countGoals(content);
-  // If secondary objective has heavy CTA presence, that's a violation
   const secondaryMeta: Record<string, string[]> = {
     move_to_meeting_or_call: ["meeting_request"],
     close_for_commitment: ["commitment"],
@@ -274,11 +337,74 @@ function checkSecondaryObjective(content: string, ctx: EvalContext): PolicyViola
   const heavyCtas = secondaryMeta[ctx.secondary_objective] || [];
   const detected = detectCTAsInContent(content);
   const heavyPresent = heavyCtas.filter(c => detected.includes(c));
-  if (heavyPresent.length > 0 && goals > 2) {
+  if (heavyPresent.length > 0 && countGoals(content) > 2) {
     violations.push({
       rule: "secondary_objective_dominant",
       severity: "medium",
-      detail: `Secondary objective "${ctx.secondary_objective}" appears to dominate with CTA(s): ${heavyPresent.join(", ")}`,
+      detail: `Secondary "${ctx.secondary_objective}" dominates with CTA(s): ${heavyPresent.join(", ")}`,
+    });
+  }
+
+  return violations;
+}
+
+// ── CTA alignment with selected strategy ──
+
+function checkCtaAlignment(content: string, ctx: EvalContext): { score: number; violations: PolicyViolation[] } {
+  const violations: PolicyViolation[] = [];
+  const detectedCtas = detectCTAsInContent(content);
+  let score = 10;
+
+  // If a specific CTA strategy is set, check alignment
+  if (ctx.final_cta_strategy && detectedCtas.length > 0) {
+    const strategyAligned = detectedCtas.some(c =>
+      c === ctx.final_cta_strategy ||
+      ctx.preferred_cta.some(p => c.includes(p) || p.includes(c))
+    );
+    if (!strategyAligned && detectedCtas.length > 0) {
+      score = Math.max(score - 3, 3);
+      violations.push({
+        rule: "cta_misaligned",
+        severity: "low",
+        detail: `Detected CTAs [${detectedCtas.join(",")}] don't match strategy "${ctx.final_cta_strategy}"`,
+      });
+    }
+  }
+
+  return { score, violations };
+}
+
+// ── Urgency alignment check ──
+
+function checkUrgencyAlignment(content: string, ctx: EvalContext): PolicyViolation[] {
+  if (!ctx.is_urgent) return [];
+  const violations: PolicyViolation[] = [];
+
+  // Urgent signals should not produce nurture/slow responses
+  if (/(no rush|take your time|whenever|next quarter|circle back later)/i.test(content)) {
+    violations.push({
+      rule: "urgency_ignored",
+      severity: "high",
+      detail: "Urgency detected but reply uses slow/nurture language",
+    });
+  }
+
+  return violations;
+}
+
+// ── Internal buy-in alignment check ──
+
+function checkBuyinAlignment(content: string, ctx: EvalContext): PolicyViolation[] {
+  if (!ctx.has_internal_buyin) return [];
+  if (ctx.primary_objective === "support_internal_buy_in") return []; // already checked
+  const violations: PolicyViolation[] = [];
+
+  // If internal buy-in is detected but not the primary objective, at least don't contradict it
+  if (/(just between us|don't share|confidential|this is private)/i.test(content)) {
+    violations.push({
+      rule: "buyin_anti_forward",
+      severity: "medium",
+      detail: "Internal buy-in context but reply uses non-forwardable language",
     });
   }
 
@@ -289,7 +415,12 @@ function checkSecondaryObjective(content: string, ctx: EvalContext): PolicyViola
 
 export function evaluateReply(
   content: string,
-  replyObjective: { primary: ReplyObjective; secondary: ReplyObjective | null; confidence: string; override_source: string | null },
+  replyObjective: {
+    primary: ReplyObjective;
+    secondary: ReplyObjective | null;
+    confidence: string;
+    override_source: string | null;
+  },
   stagePolicy: ResolvedPolicy,
   commercialDecision: ClassifiedDecision | undefined,
   latestInbound: string,
@@ -298,16 +429,20 @@ export function evaluateReply(
     primary_objective: replyObjective.primary,
     secondary_objective: replyObjective.secondary,
     stage: stagePolicy.effective_stage,
+    final_cta_strategy: stagePolicy.final_cta_strategy,
     suppressed_cta: stagePolicy.final_suppressed_cta_patterns ?? [],
     suppressed_offers: stagePolicy.final_suppressed_offer_categories ?? [],
-    preferred_cta: stagePolicy.final_cta_strategy ? [stagePolicy.final_cta_strategy] : [],
-    latest_inbound: latestInbound,
+    preferred_cta: stagePolicy.final_preferred_cta_patterns ?? [],
+    preferred_offers: stagePolicy.final_preferred_offer_categories ?? [],
+    latest_inbound: latestInbound || "",
     is_urgent: stagePolicy.urgency?.is_urgent ?? false,
+    has_internal_buyin: commercialDecision?.detected_objection_classes?.includes("internal_buy_in") ?? false,
+    objection_classes: commercialDecision?.detected_objection_classes ?? [],
   };
 
   const allViolations: PolicyViolation[] = [];
 
-  // 1. Leaked labels check
+  // 1. Leaked labels
   allViolations.push(...checkLeakedLabels(content));
 
   // 2. Objective-specific checks
@@ -326,29 +461,49 @@ export function evaluateReply(
   // 5. Secondary objective dominance
   allViolations.push(...checkSecondaryObjective(content, ctx));
 
+  // 6. CTA alignment with strategy
+  const ctaResult = checkCtaAlignment(content, ctx);
+  allViolations.push(...ctaResult.violations);
+
+  // 7. Urgency alignment
+  allViolations.push(...checkUrgencyAlignment(content, ctx));
+
+  // 8. Internal buy-in alignment
+  allViolations.push(...checkBuyinAlignment(content, ctx));
+
   // ── Scoring ──
 
-  // Objective alignment: start at 10, deduct for objective-specific violations
+  // Objective alignment: high-severity objective-specific violations
+  const objectiveViolationRules = [
+    "answer_before_cta", "missing_acknowledgment", "missing_proof",
+    "vague_logistics", "reopened_discovery", "wrong_cta_for_objection",
+    "urgency_ignored", "pressure_in_nurture", "weak_closing_cta",
+  ];
   const highObjectiveViolations = allViolations.filter(v =>
-    v.severity === "high" && ["answer_before_cta", "missing_acknowledgment", "missing_proof",
-    "vague_logistics", "reopened_discovery", "wrong_cta_for_objection"].includes(v.rule)
+    v.severity === "high" && objectiveViolationRules.includes(v.rule)
   ).length;
   const objective_alignment_score = Math.max(10 - highObjectiveViolations * 4, 0);
 
-  // CTA alignment: based on suppressed CTA violations
-  const ctaViolations = allViolations.filter(v => v.rule === "suppressed_cta_used").length;
-  const cta_alignment_score = Math.max(10 - ctaViolations * 3, 0);
+  // CTA alignment: suppressed CTA + misalignment
+  const ctaViolationCount = allViolations.filter(v =>
+    v.rule === "suppressed_cta_used" || v.rule === "cta_misaligned"
+  ).length;
+  const cta_alignment_score = Math.max(10 - ctaViolationCount * 3, 0);
 
-  // Focus score from focus checker
+  // Focus score
   const focus_score = focusResult.score;
 
-  // Commercial relevance: penalize leaked labels, over-pitching, beginner tone for expansion
+  // Commercial relevance
+  const commercialIssueRules = [
+    "leaked_internal_label", "over_pitching", "beginner_tone_for_expansion",
+    "closing_too_verbose", "suppressed_offer_mentioned", "buyin_anti_forward",
+  ];
   const commercialIssues = allViolations.filter(v =>
-    ["leaked_internal_label", "over_pitching", "beginner_tone_for_expansion", "closing_too_verbose"].includes(v.rule)
+    commercialIssueRules.includes(v.rule)
   ).length;
   const commercial_relevance_score = Math.max(10 - commercialIssues * 3, 0);
 
-  // Determine dominant orchestration layer
+  // Dominant layer
   let dominant_layer = "stage_policy";
   if (replyObjective.override_source) {
     dominant_layer = "reply_objective";
@@ -358,14 +513,17 @@ export function evaluateReply(
     dominant_layer = "intent_classifier";
   }
 
-  // Regeneration decision: high-severity violations
+  // Regeneration: require BOTH low total AND low objective alignment
   const highViolations = allViolations.filter(v => v.severity === "high");
   const totalScore = objective_alignment_score + cta_alignment_score + focus_score + commercial_relevance_score;
-  const regeneration_recommended = highViolations.length >= 2 || totalScore < 20;
+  const regeneration_recommended =
+    (highViolations.length >= 2 && objective_alignment_score < 6) ||
+    (totalScore < 20 && objective_alignment_score < 6) ||
+    (highViolations.length >= 3);
 
   const evaluation_summary = regeneration_recommended
-    ? `Reply failed policy check: ${highViolations.map(v => v.rule).join(", ")}. Total score: ${totalScore}/40.`
-    : `Reply passed policy check. Score: ${totalScore}/40. ${allViolations.length > 0 ? `Minor issues: ${allViolations.filter(v => v.severity !== "high").map(v => v.rule).join(", ")}` : "No violations."}`;
+    ? `Reply failed: ${highViolations.map(v => v.rule).join(", ")}. Score: ${totalScore}/40 (obj=${objective_alignment_score}).`
+    : `Reply OK. Score: ${totalScore}/40.${allViolations.length > 0 ? ` Minor: ${allViolations.filter(v => v.severity !== "high").map(v => v.rule).join(", ")}` : ""}`;
 
   return {
     objective_alignment_score,
@@ -379,7 +537,7 @@ export function evaluateReply(
   };
 }
 
-// ── Build evaluator feedback for regeneration prompt ──
+// ── Build evaluator feedback for regeneration ──
 
 export function buildEvaluatorFeedback(evaluation: ReplyEvaluation, objective: string): string {
   const highViolations = evaluation.policy_violations.filter(v => v.severity === "high");
@@ -387,20 +545,138 @@ export function buildEvaluatorFeedback(evaluation: ReplyEvaluation, objective: s
 
   const lines = [
     "=== EVALUATOR FEEDBACK (REGENERATION) ===",
-    `The previous reply FAILED the policy check for objective: "${objective}".`,
-    "Fix these specific issues:",
+    `Previous reply FAILED policy check for objective: "${objective}".`,
+    "Fix these issues:",
   ];
 
   for (const v of highViolations) {
     lines.push(`- [${v.rule}] ${v.detail}`);
   }
 
-  lines.push("");
-  lines.push("RULES for this regeneration:");
-  lines.push("- Address ONLY the violations listed above");
-  lines.push("- Keep the same overall structure and tone");
-  lines.push("- Do NOT add new goals or CTAs not aligned with the objective");
-  lines.push("- Do NOT leak internal labels, scores, or evaluation reasoning");
+  lines.push(
+    "",
+    "RULES:",
+    "- Fix ONLY the violations above",
+    "- Keep same structure and tone",
+    "- Do NOT add goals/CTAs not aligned with the objective",
+    "- Do NOT leak internal labels or reasoning",
+  );
 
   return lines.join("\n");
 }
+
+// ── Test scenarios (exported for validation) ──
+
+export interface EvalTestScenario {
+  name: string;
+  objective: ReplyObjective;
+  stage: string;
+  content: string;
+  latest_inbound: string;
+  is_urgent: boolean;
+  expected_violations: string[];
+  expected_regen: boolean;
+}
+
+export const EVAL_TEST_SCENARIOS: EvalTestScenario[] = [
+  {
+    name: "direct_question_answered",
+    objective: "answer_direct_question",
+    stage: "active_eval",
+    content: "To answer your question, the minimum order quantity is 500 units. We also offer flexible batching. Let me know if this works for your needs.",
+    latest_inbound: "What is the minimum order quantity?",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "direct_question_ignored_meeting_pushed",
+    objective: "answer_direct_question",
+    stage: "active_eval",
+    content: "Great question! I'd love to schedule a call to walk you through our capabilities. How about Thursday at 2pm?",
+    latest_inbound: "What is the minimum order quantity?",
+    is_urgent: false,
+    expected_violations: ["answer_before_cta"],
+    expected_regen: false,
+  },
+  {
+    name: "objection_acknowledged",
+    objective: "resolve_objection",
+    stage: "objection",
+    content: "I completely understand your budget concern. Many of our customers had similar worries. Here's a case study showing 3x ROI within 6 months. Would a pilot program help you test the waters?",
+    latest_inbound: "The pricing seems too high for our budget.",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "objection_dismissed_with_close",
+    objective: "resolve_objection",
+    stage: "objection",
+    content: "Let's finalize your order today and lock in current pricing before rates go up!",
+    latest_inbound: "The pricing seems too high for our budget.",
+    is_urgent: false,
+    expected_violations: ["missing_acknowledgment", "wrong_cta_for_objection"],
+    expected_regen: true,
+  },
+  {
+    name: "proof_provided",
+    objective: "provide_proof",
+    stage: "active_eval",
+    content: "Here's a case study from a similar company in your industry. They achieved a 40% reduction in processing time within 3 months. Happy to share more details if helpful.",
+    latest_inbound: "Can you share some examples of results?",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "logistics_urgent_concrete",
+    objective: "resolve_logistics",
+    stage: "commercial",
+    content: "We have 200 units available in our east coast warehouse. Standard delivery is 3-5 business days, but we can do express 1-2 day shipping for urgent orders. I'll reserve stock for you now.",
+    latest_inbound: "We need 200 units delivered by Friday, is that possible?",
+    is_urgent: true,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "logistics_urgent_vague",
+    objective: "resolve_logistics",
+    stage: "commercial",
+    content: "We'd love to help! Let me check with the team and circle back on availability. In the meantime, would you like to explore our premium options?",
+    latest_inbound: "We need 200 units delivered by Friday, is that possible?",
+    is_urgent: true,
+    expected_violations: ["vague_logistics", "urgent_deferred"],
+    expected_regen: true,
+  },
+  {
+    name: "internal_buyin_concise",
+    objective: "support_internal_buy_in",
+    stage: "closing",
+    content: "Here's a one-pager summarizing our key benefits and ROI data you can share with your team. Key highlights: 40% cost reduction, 99.9% uptime, dedicated support.",
+    latest_inbound: "I need to run this by my CFO. Can you send something I can forward?",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "closing_clean",
+    objective: "close_for_commitment",
+    stage: "closing",
+    content: "Great to hear you're ready to move forward! I've prepared the agreement. You can sign electronically here. Once confirmed, we'll begin onboarding Monday.",
+    latest_inbound: "Let's go ahead with the standard package.",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+  {
+    name: "expansion_no_beginner",
+    objective: "support_expansion_or_reorder",
+    stage: "expansion",
+    content: "Thanks for the reorder! Based on your volume history, you qualify for our loyalty tier which includes a dedicated account manager and priority fulfillment.",
+    latest_inbound: "We'd like to place another order, same as last time but double the quantity.",
+    is_urgent: false,
+    expected_violations: [],
+    expected_regen: false,
+  },
+];
