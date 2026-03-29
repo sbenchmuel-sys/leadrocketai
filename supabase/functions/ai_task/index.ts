@@ -1284,7 +1284,7 @@ ${customInstructionsText}
       diversityConstraints.avoid_angles.length > 0 ||
       diversityConstraints.avoid_cta_types.length > 0
     );
-    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
+    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints, OFFER_ROUTED_TASKS.has(task)) : "";
     if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
 
     const resolvedChannel = resolveChannel(task, payload?.channel ? String(payload.channel) : undefined);
