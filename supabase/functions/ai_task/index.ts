@@ -264,6 +264,15 @@ function getExpandedKBTypes(task: string, latestInbound?: string, decision?: Cla
         console.log(`[ai_task] KB expansion: +${t} (decision boost: ${decision.detected_objection_classes[0] || "intent"})`);
       }
     }
+    // Also boost stage-preferred KB types
+    if (stagePolicy) {
+      for (const t of stagePolicy.final_preferred_kb_types) {
+        if (!expanded.includes(t)) {
+          expanded.push(t);
+          console.log(`[ai_task] KB expansion: +${t} (stage=${stagePolicy.effective_stage})`);
+        }
+      }
+    }
     return expanded;
   }
 
