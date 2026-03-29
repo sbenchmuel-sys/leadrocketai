@@ -1028,8 +1028,8 @@ serve(async (req) => {
             console.log(`[ai_task] Context cache expired for lead ${payload.lead_id}`);
           }
 
-          // Cache miss/expired — inline-fetch lead_context_items directly
-          // This ensures imported context is available even before build-lead-context runs
+          // Cache miss/expired — inline-fetch lead_context_items as short-term fallback
+          // Also fire-and-forget cache rebuild so subsequent calls hit the cache
           console.log(`[ai_task] Cache miss for lead ${payload.lead_id}, fetching lead_context_items inline`);
           const { data: contextItems } = await cacheClient
             .from("lead_context_items")
@@ -1039,8 +1039,23 @@ serve(async (req) => {
             .order("created_at", { ascending: true })
             .limit(50);
 
+          // Fire-and-forget: trigger build-lead-context to populate the cache for next call
+          try {
+            const rebuildUrl = `${supabaseUrl}/functions/v1/build-lead-context`;
+            fetch(rebuildUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                "x-internal-secret": Deno.env.get("INTERNAL_API_SECRET") || "",
+              },
+              body: JSON.stringify({ lead_id: payload.lead_id, force: true }),
+            }).catch(e => console.error("[ai_task] Background cache rebuild failed:", e));
+            console.log(`[ai_task] Triggered background cache rebuild for ${payload.lead_id}`);
+          } catch (_) { /* non-fatal */ }
+
           if (contextItems && contextItems.length > 0) {
-            console.log(`[ai_task] ✅ Inline-fetched ${contextItems.length} lead_context_items (cache bypass)`);
+            console.log(`[ai_task] ✅ Inline-fetched ${contextItems.length} lead_context_items (cache bypass, rebuild queued)`);
             return { lead_context_items: contextItems } as Record<string, unknown>;
           }
 

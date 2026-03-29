@@ -37,13 +37,13 @@ interface LeadContextItem {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-const CATEGORY_META: Record<string, { label: string; icon: typeof AlertTriangle; colorClass: string }> = {
-  caution: { label: "Caution", icon: AlertTriangle, colorClass: "text-destructive" },
-  relationship_history: { label: "Relationship", icon: Handshake, colorClass: "text-primary" },
-  commercial_signal: { label: "Commercial", icon: ShoppingCart, colorClass: "text-accent-foreground" },
-  historical_fact: { label: "Fact", icon: FileText, colorClass: "text-foreground" },
-  imported_note: { label: "Note", icon: StickyNote, colorClass: "text-muted-foreground" },
-  inferred_hypothesis: { label: "Inferred", icon: Brain, colorClass: "text-muted-foreground" },
+const CATEGORY_META: Record<string, { label: string; icon: typeof AlertTriangle; colorClass: string; bgClass: string }> = {
+  caution: { label: "Caution", icon: AlertTriangle, colorClass: "text-destructive", bgClass: "bg-destructive/10 border-destructive/20" },
+  relationship_history: { label: "Relationship", icon: Handshake, colorClass: "text-primary", bgClass: "bg-primary/5 border-primary/10" },
+  commercial_signal: { label: "Commercial", icon: ShoppingCart, colorClass: "text-accent-foreground", bgClass: "bg-muted/30 border-border" },
+  historical_fact: { label: "Fact", icon: FileText, colorClass: "text-foreground", bgClass: "bg-muted/30 border-border" },
+  imported_note: { label: "Note", icon: StickyNote, colorClass: "text-muted-foreground", bgClass: "bg-muted/20 border-border" },
+  inferred_hypothesis: { label: "Inferred", icon: Brain, colorClass: "text-muted-foreground", bgClass: "bg-muted/20 border-border" },
 };
 
 const CATEGORY_ORDER = ["caution", "relationship_history", "commercial_signal", "historical_fact", "imported_note", "inferred_hypothesis"];
@@ -211,15 +211,31 @@ export default function LeadContextPanel({ leadId, workspaceId, onUpdate }: Prop
 function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (item: LeadContextItem) => void }) {
   const sourceLabel = SOURCE_LABELS[item.source_type] || item.source_type;
   const confidenceLabel = item.confidence != null ? `${(item.confidence * 100).toFixed(0)}%` : null;
+  const meta = CATEGORY_META[item.category];
+  const isCaution = item.category === "caution";
 
   return (
     <div className={cn(
-      "group flex items-start gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
-      item.is_active ? "bg-muted/30" : "bg-muted/10 opacity-50",
+      "group flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs transition-colors",
+      item.is_active
+        ? (meta?.bgClass || "bg-muted/30 border-border")
+        : "bg-muted/10 border-border/50 opacity-50",
     )}>
       <div className="flex-1 min-w-0">
-        <p className={cn("text-foreground", !item.is_active && "line-through")}>{item.content_text}</p>
+        <p className={cn(
+          "text-foreground",
+          !item.is_active && "line-through",
+          isCaution && item.is_active && "text-destructive font-medium",
+        )}>
+          {isCaution && item.is_active && "⚠ "}{item.content_text}
+        </p>
         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          <Badge
+            variant={item.is_active ? "secondary" : "outline"}
+            className={cn("text-[9px] px-1.5 py-0", !item.is_active && "opacity-60")}
+          >
+            {item.is_active ? "Used by AI" : "Inactive"}
+          </Badge>
           <span className="text-[10px] text-muted-foreground">{sourceLabel}</span>
           {item.source_column_name && (
             <span className="text-[10px] text-muted-foreground">• col: {item.source_column_name}</span>
@@ -229,6 +245,11 @@ function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (
           )}
           {confidenceLabel && (
             <Badge variant="outline" className="text-[9px] px-1 py-0">{confidenceLabel}</Badge>
+          )}
+          {item.original_snippet && item.original_snippet !== item.content_text && (
+            <span className="text-[10px] text-muted-foreground italic truncate max-w-[150px]" title={item.original_snippet}>
+              • raw: "{item.original_snippet}"
+            </span>
           )}
           {item.context_date && (
             <span className="text-[10px] text-muted-foreground">• {new Date(item.context_date).toLocaleDateString()}</span>
@@ -240,7 +261,7 @@ function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (
         size="icon"
         className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={() => onToggle(item)}
-        title={item.is_active ? "Deactivate this context item" : "Re-activate this context item"}
+        title={item.is_active ? "Deactivate — AI will stop using this" : "Re-activate — AI will use this again"}
       >
         {item.is_active ? (
           <AlertTriangle className="h-3 w-3 text-destructive" />
