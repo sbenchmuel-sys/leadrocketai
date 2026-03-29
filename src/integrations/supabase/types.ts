@@ -909,6 +909,72 @@ export type Database = {
         }
         Relationships: []
       }
+      deal_memory: {
+        Row: {
+          continuity_risks: string[] | null
+          created_at: string
+          handled_objections: string[] | null
+          id: string
+          ignored_cta_count: number | null
+          last_outbound_cta: string | null
+          last_updated_at: string
+          lead_id: string
+          logistics_constraints: string[] | null
+          momentum_signals: Json | null
+          momentum_state: string | null
+          pending_buyin_needs: string[] | null
+          pricing_status: string | null
+          recent_cta_patterns: string[] | null
+          sent_offers: string[] | null
+          shared_assets: string[] | null
+          unanswered_questions: string[] | null
+          unresolved_objections: string[] | null
+          workspace_id: string
+        }
+        Insert: {
+          continuity_risks?: string[] | null
+          created_at?: string
+          handled_objections?: string[] | null
+          id?: string
+          ignored_cta_count?: number | null
+          last_outbound_cta?: string | null
+          last_updated_at?: string
+          lead_id: string
+          logistics_constraints?: string[] | null
+          momentum_signals?: Json | null
+          momentum_state?: string | null
+          pending_buyin_needs?: string[] | null
+          pricing_status?: string | null
+          recent_cta_patterns?: string[] | null
+          sent_offers?: string[] | null
+          shared_assets?: string[] | null
+          unanswered_questions?: string[] | null
+          unresolved_objections?: string[] | null
+          workspace_id: string
+        }
+        Update: {
+          continuity_risks?: string[] | null
+          created_at?: string
+          handled_objections?: string[] | null
+          id?: string
+          ignored_cta_count?: number | null
+          last_outbound_cta?: string | null
+          last_updated_at?: string
+          lead_id?: string
+          logistics_constraints?: string[] | null
+          momentum_signals?: Json | null
+          momentum_state?: string | null
+          pending_buyin_needs?: string[] | null
+          pricing_status?: string | null
+          recent_cta_patterns?: string[] | null
+          sent_offers?: string[] | null
+          shared_assets?: string[] | null
+          unanswered_questions?: string[] | null
+          unresolved_objections?: string[] | null
+          workspace_id?: string
+        }
+        Relationships: []
+      }
       drafts: {
         Row: {
           body_text: string
