@@ -990,6 +990,7 @@ serve(async (req) => {
             leadSegment,
             objections.length > 0 ? objections : undefined,
             commercialDecision,
+            resolvedStagePolicy,
           );
         } catch (err) {
           console.error("[ai_task] Offer routing setup failed:", err);
@@ -1267,6 +1268,20 @@ ${customInstructionsText}
       if (decisionBlock) console.log(`[ai_task] [10/DECISION] Injected decision context (${commercialDecision.detected_objection_classes.length} objections, intent=${commercialDecision.detected_commercial_intent})`);
     }
 
+    // Build stage-aware policy block for last-mile tasks
+    let stagePolicyBlock = "";
+    if (resolvedStagePolicy && OFFER_ROUTED_TASKS.has(task)) {
+      stagePolicyBlock = formatStagePolicyBlock(resolvedStagePolicy);
+      // Override decision-level fields with stage-resolved finals
+      enhancedPayload.effective_stage_policy = resolvedStagePolicy.effective_stage;
+      enhancedPayload.final_cta_strategy = resolvedStagePolicy.final_cta_strategy;
+      enhancedPayload.final_preferred_offer_categories = resolvedStagePolicy.final_preferred_offer_categories.join(", ");
+      enhancedPayload.final_suppressed_offer_categories = resolvedStagePolicy.final_suppressed_offer_categories.join(", ");
+      enhancedPayload.stage_reasoning_summary = resolvedStagePolicy.stage_reasoning;
+      if (resolvedStagePolicy.urgency.is_urgent) enhancedPayload.is_urgent = "true";
+      console.log(`[ai_task] [11/STAGE_POLICY] Injected stage policy block (stage=${resolvedStagePolicy.effective_stage})`);
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -1275,7 +1290,8 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
-    if (decisionBlock) promptParts.push(decisionBlock);  // Decision BEFORE offer
+    if (stagePolicyBlock) promptParts.push(stagePolicyBlock);    // Stage policy BEFORE decision
+    if (decisionBlock) promptParts.push(decisionBlock);          // Decision BEFORE offer
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
@@ -1597,6 +1613,16 @@ ${customInstructionsText}
         proof_strategy: commercialDecision.proof_strategy,
         cta_strategy: commercialDecision.cta_strategy,
         confidence: commercialDecision.confidence,
+      };
+    }
+    if (resolvedStagePolicy) {
+      responsePayload.stage_policy = {
+        effective_stage: resolvedStagePolicy.effective_stage,
+        final_cta_strategy: resolvedStagePolicy.final_cta_strategy,
+        final_preferred_offer_categories: resolvedStagePolicy.final_preferred_offer_categories,
+        final_suppressed_offer_categories: resolvedStagePolicy.final_suppressed_offer_categories,
+        stage_reasoning: resolvedStagePolicy.stage_reasoning,
+        is_urgent: resolvedStagePolicy.urgency.is_urgent,
       };
     }
 
