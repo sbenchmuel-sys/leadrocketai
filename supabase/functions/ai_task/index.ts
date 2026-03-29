@@ -1435,6 +1435,7 @@ ${customInstructionsText}
     }
 
     // Reply quality evaluation for last-mile tasks (OFFER_ROUTED_TASKS with orchestration context)
+    let regenerated = false;
     let replyEvaluation: ReplyEvaluation | undefined;
     if (replyObjective && resolvedStagePolicy && OFFER_ROUTED_TASKS.has(task)) {
       try {
