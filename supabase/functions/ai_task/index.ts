@@ -327,6 +327,7 @@ async function routeOffer(
   leadTags?: string[],
   leadSegment?: string,
   objections?: string[],
+  decision?: ClassifiedDecision,
 ): Promise<{ recommended: OfferMatch | null; fallback_reason: string }> {
   try {
     // 1. Fetch active offers for workspace
@@ -399,6 +400,11 @@ async function routeOffer(
 
       // Priority boost
       score += (offer.priority || 1);
+
+      // Decision-aware scoring: boost/penalize by offer category
+      if (decision && offer.offer_category) {
+        score = adjustOfferScore(score, offer.offer_category, decision);
+      }
 
       if (score > 0 || reasons.length > 0) {
         scored.push({
