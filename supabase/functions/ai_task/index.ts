@@ -233,7 +233,8 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
 };
 
 const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
-const MAX_KB_CHUNKS = 4;
+const MAX_KB_CHUNKS = 6;
+const MAX_PER_CONTENT_TYPE = 2;
 
 const ANALYSIS_TASKS = new Set([
   "post_meeting_recap", "post_meeting_followup_personalized", "post_meeting_followup_email",
@@ -262,59 +263,93 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
 }
 
 async function getSemanticKnowledgeChunks(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, contentTypes?: string[]
-): Promise<KBChunksGrouped | null> {
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, contentTypes?: string[], avoidChunkIds?: string[]
+): Promise<{ grouped: KBChunksGrouped; chunkIds: string[] } | null> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) { console.log("[ai_task] No OPENAI_API_KEY — falling back to text search"); return null; }
   const queryEmbedding = await generateQueryEmbedding(queryText, openaiKey);
   if (!queryEmbedding) { console.warn("[ai_task] Failed to generate query embedding — falling back to text search"); return null; }
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    const fetchCount = contentTypes ? Math.max(contentTypes.length * 3, 10) : MAX_KB_CHUNKS;
+    const fetchCount = contentTypes ? Math.max(contentTypes.length * 4, 12) : MAX_KB_CHUNKS * 2;
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
       query_embedding: JSON.stringify(queryEmbedding), p_owner_user_id: userId, match_threshold: 0.4,
       match_count: fetchCount, filter_customer_facing: true, filter_lead_id: leadId || null, filter_content_types: contentTypes || null,
     });
     if (error) { console.error("[ai_task] Semantic search failed:", error); return null; }
     if (!matches || matches.length === 0) { console.log("[ai_task] No semantic matches found"); return null; }
+
+    // Item 6: Apply priority boost; Item 7: deprioritize recently used chunks
+    const avoidSet = new Set(avoidChunkIds || []);
+    const scored = matches.map((m: any) => {
+      let adjustedSim = m.similarity || 0;
+      const priority = m.priority ?? 1;
+      adjustedSim += (priority - 1) * 0.03;
+      if (avoidSet.has(m.id)) adjustedSim -= 0.08;
+      return { ...m, adjustedSim };
+    });
+    scored.sort((a: any, b: any) => b.adjustedSim - a.adjustedSim);
+
+    // Item 1: Allow up to MAX_PER_CONTENT_TYPE chunks per content_type
     const grouped: KBChunksGrouped = {};
+    const typeCounts: Record<string, number> = {};
+    const chunkIds: string[] = [];
     let count = 0;
-    for (const m of matches) {
+    for (const m of scored) {
       const ct = m.content_type || "knowledge";
-      if (grouped[ct]) continue;
-      grouped[ct] = `${m.title ? `[${m.title}] ` : ""}${m.content}`;
+      const currentCount = typeCounts[ct] || 0;
+      if (currentCount >= MAX_PER_CONTENT_TYPE) continue;
+      const entry = `${m.title ? `[${m.title}] ` : ""}${m.content}`;
+      grouped[ct] = grouped[ct] ? `${grouped[ct]}\n\n${entry}` : entry;
+      typeCounts[ct] = currentCount + 1;
+      chunkIds.push(m.id);
       count++;
       if (count >= MAX_KB_CHUNKS) break;
     }
-    console.log(`[ai_task] Semantic: ${matches.length} raw → ${count} grouped (${Object.keys(grouped).join(",")}), top sim: ${matches[0]?.similarity?.toFixed(3)}`);
-    return grouped;
+    console.log(`[ai_task] Semantic: ${matches.length} raw → ${count} selected (${Object.keys(grouped).join(",")}), top sim: ${matches[0]?.similarity?.toFixed(3)}${avoidSet.size > 0 ? `, avoided: ${avoidSet.size}` : ""}`);
+    return { grouped, chunkIds };
   } catch (err) { console.error("[ai_task] Error in semantic search:", err); return null; }
 }
 
 async function getTextBasedKnowledgeChunks(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string
-): Promise<KBChunksGrouped | null> {
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, avoidChunkIds?: string[]
+): Promise<{ grouped: KBChunksGrouped; chunkIds: string[] } | null> {
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    let query = supabaseAdmin.from("kb_chunks").select("id, title, content, source, content_type")
-      .eq("owner_user_id", userId).eq("allowed_customer_facing", true).eq("processing_status", "completed").limit(10);
+    let query = supabaseAdmin.from("kb_chunks").select("id, title, content, source, content_type, priority")
+      .eq("owner_user_id", userId).eq("allowed_customer_facing", true).eq("processing_status", "completed").limit(12);
     if (leadId) query = query.or(`lead_id.eq.${leadId},lead_id.is.null`);
     const keyTerms = queryText.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(term => term.length > 4).slice(0, 5);
     if (keyTerms.length > 0) query = query.or(keyTerms.map(term => `content.ilike.%${term}%`).join(','));
     const { data: matches, error } = await query;
     if (error) { console.error("[ai_task] Text search failed:", error); return null; }
     if (!matches || matches.length === 0) { console.log("[ai_task] No text matches found"); return null; }
+
+    // Sort by priority descending, deprioritize recently used
+    const avoidSet = new Set(avoidChunkIds || []);
+    const sorted = [...matches].sort((a: any, b: any) => {
+      const pa = (a.priority ?? 1) - (avoidSet.has(a.id) ? 2 : 0);
+      const pb = (b.priority ?? 1) - (avoidSet.has(b.id) ? 2 : 0);
+      return pb - pa;
+    });
+
     const grouped: KBChunksGrouped = {};
+    const typeCounts: Record<string, number> = {};
+    const chunkIds: string[] = [];
     let count = 0;
-    for (const m of matches) {
+    for (const m of sorted) {
       const ct = (m as any).content_type || "knowledge";
-      if (grouped[ct]) continue;
-      grouped[ct] = `${m.title ? `[${m.title}] ` : ""}${m.content}`;
+      const currentCount = typeCounts[ct] || 0;
+      if (currentCount >= MAX_PER_CONTENT_TYPE) continue;
+      const entry = `${m.title ? `[${m.title}] ` : ""}${m.content}`;
+      grouped[ct] = grouped[ct] ? `${grouped[ct]}\n\n${entry}` : entry;
+      typeCounts[ct] = currentCount + 1;
+      chunkIds.push(m.id);
       count++;
       if (count >= MAX_KB_CHUNKS) break;
     }
-    console.log(`[ai_task] Text fallback: ${matches.length} raw → ${count} grouped (${Object.keys(grouped).join(",")})`);
-    return grouped;
+    console.log(`[ai_task] Text fallback: ${matches.length} raw → ${count} selected (${Object.keys(grouped).join(",")})`);
+    return { grouped, chunkIds };
   } catch (err) { console.error("[ai_task] Error in text search:", err); return null; }
 }
 
@@ -337,17 +372,41 @@ function formatKBContext(grouped: KBChunksGrouped, charLimit: number): string {
 
 async function getKnowledgeContext(
   queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string
-): Promise<{ formatted: string; grouped: KBChunksGrouped }> {
+): Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> {
   const contentTypes = task ? TASK_KB_CONFIG[task] || undefined : undefined;
   const charLimit = task ? getKbCharLimit(task) : KB_CHAR_LIMIT_OUTBOUND;
   if (contentTypes) console.log(`[ai_task] Task "${task}" → KB types: [${contentTypes.join(", ")}], limit: ${charLimit} chars`);
-  let grouped = await getSemanticKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes);
-  if (!grouped) {
-    console.log("[ai_task] Falling back to text-based KB search");
-    grouped = await getTextBasedKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId);
+
+  // Item 7: Fetch recently used chunk IDs for this lead (soft repetition avoidance)
+  let avoidChunkIds: string[] = [];
+  if (leadId) {
+    try {
+      const cacheClient = createClient(supabaseUrl, supabaseServiceKey);
+      const { data: recentLogs } = await cacheClient
+        .from("message_generation_log")
+        .select("kb_chunk_ids")
+        .eq("lead_id", leadId)
+        .not("kb_chunk_ids", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (recentLogs) {
+        for (const log of recentLogs) {
+          const ids = (log as any).kb_chunk_ids;
+          if (Array.isArray(ids)) avoidChunkIds.push(...ids);
+        }
+        avoidChunkIds = [...new Set(avoidChunkIds)];
+        if (avoidChunkIds.length > 0) console.log(`[ai_task] KB repetition avoidance: ${avoidChunkIds.length} recently used chunk IDs`);
+      }
+    } catch (err) { console.error("[ai_task] Failed to load recent KB chunk IDs:", err); }
   }
-  if (!grouped || Object.keys(grouped).length === 0) return { formatted: "", grouped: {} };
-  return { formatted: formatKBContext(grouped, charLimit), grouped };
+
+  let result = await getSemanticKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes, avoidChunkIds);
+  if (!result) {
+    console.log("[ai_task] Falling back to text-based KB search");
+    result = await getTextBasedKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, avoidChunkIds);
+  }
+  if (!result || Object.keys(result.grouped).length === 0) return { formatted: "", grouped: {}, chunkIds: [] };
+  return { formatted: formatKBContext(result.grouped, charLimit), grouped: result.grouped, chunkIds: result.chunkIds };
 }
 
 // ============================================
@@ -561,7 +620,7 @@ serve(async (req) => {
       })();
     }
 
-    let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped }> = Promise.resolve({ formatted: "", grouped: {} });
+    let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
@@ -1064,6 +1123,7 @@ ${customInstructionsText}
                             secondary_angle: classification.secondary_angle || null,
                             cta_type: classification.cta_type || "quick_question",
                             tone: classification.tone || "professional",
+                            kb_chunk_ids: kbResult.chunkIds.length > 0 ? kbResult.chunkIds : null,
                           });
                         }
                       }
@@ -1110,6 +1170,7 @@ ${customInstructionsText}
               secondary_angle: classification.secondary_angle || null,
               cta_type: classification.cta_type || "quick_question",
               tone: classification.tone || "professional",
+              kb_chunk_ids: kbResult.chunkIds.length > 0 ? kbResult.chunkIds : null,
             });
             console.log(`[ai_task] ✅ Logged diversity: ${classification.opening_type}/${classification.primary_angle}/${classification.cta_type}`);
           }
@@ -1121,6 +1182,7 @@ ${customInstructionsText}
     if (qualityScore) responsePayload.quality_score = qualityScore;
     if (regenerated) responsePayload.regenerated = true;
     if (selectedFramework) responsePayload.framework_used = selectedFramework;
+    if (kbResult.chunkIds.length > 0) responsePayload.kb_chunk_ids = kbResult.chunkIds;
 
     return new Response(
       JSON.stringify(responsePayload),

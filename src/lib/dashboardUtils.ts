@@ -127,6 +127,11 @@ export const SOURCE_PRESETS: Record<string, SourcePreset> = {
     motion: "outbound_prospecting",
     origin: "outbound",
   },
+  reactivation: {
+    source_type: "csv_import",
+    motion: "nurture",
+    origin: "outbound",
+  },
 };
 
 

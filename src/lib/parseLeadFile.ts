@@ -15,6 +15,16 @@ export interface ParsedLead {
   company_linkedin_url?: string;
   city?: string;
   state?: string;
+  // Extended import fields (Item 4)
+  stage?: string;
+  priority_label?: string;
+  source_label?: string;
+  product?: string;
+  owner_name?: string;
+  previous_owner?: string;
+  last_contact_date?: string;
+  next_step_text?: string;
+  history_notes?: string;
 }
 
 // Canonical key aliases: maps normalized variations to a single canonical name
@@ -81,6 +91,39 @@ const KEY_ALIASES: Record<string, string> = {
   "state": "state",
   "state/province": "state",
   "province": "state",
+  // Extended import fields (Item 4)
+  "stage": "stage",
+  "lead stage": "stage",
+  "deal stage": "stage",
+  "pipeline stage": "stage",
+  "priority": "priority_label",
+  "lead priority": "priority_label",
+  "source": "source_label",
+  "lead source": "source_label",
+  "product": "product",
+  "product interest": "product",
+  "product_interest": "product",
+  "owner": "owner_name",
+  "lead owner": "owner_name",
+  "assigned to": "owner_name",
+  "assigned_to": "owner_name",
+  "previous owner": "previous_owner",
+  "previous_owner": "previous_owner",
+  "last contact date": "last_contact_date",
+  "last contact": "last_contact_date",
+  "last_contact_date": "last_contact_date",
+  "last contacted": "last_contact_date",
+  "last_contacted": "last_contact_date",
+  "next step": "next_step_text",
+  "next_step": "next_step_text",
+  "next action": "next_step_text",
+  "next_action": "next_step_text",
+  "history": "history_notes",
+  "history notes": "history_notes",
+  "history_notes": "history_notes",
+  "account notes": "history_notes",
+  "account_notes": "history_notes",
+  "context": "history_notes",
 };
 
 /** Normalize all row keys to canonical names for case/variation-insensitive lookup */
@@ -122,6 +165,16 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     company_linkedin_url: (r["company_linkedin_url"] || "").trim() || undefined,
     city: (r["city"] || "").trim() || undefined,
     state: (r["state"] || "").trim() || undefined,
+    // Extended import fields (Item 4)
+    stage: (r["stage"] || "").trim() || undefined,
+    priority_label: (r["priority_label"] || "").trim() || undefined,
+    source_label: (r["source_label"] || "").trim() || undefined,
+    product: (r["product"] || "").trim() || undefined,
+    owner_name: (r["owner_name"] || "").trim() || undefined,
+    previous_owner: (r["previous_owner"] || "").trim() || undefined,
+    last_contact_date: (r["last_contact_date"] || "").trim() || undefined,
+    next_step_text: (r["next_step_text"] || "").trim() || undefined,
+    history_notes: (r["history_notes"] || "").trim() || undefined,
   };
 }
 

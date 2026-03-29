@@ -21,6 +21,7 @@ type ImportStep = "upload" | "source" | "confirm";
 
 const SOURCE_OPTIONS = [
   { key: "outbound", emoji: "🔵", label: "Outbound prospect list", description: "Cold outreach, prospecting lists" },
+  { key: "reactivation", emoji: "🔄", label: "Reactivation / historical list", description: "Re-engaging old leads or leads from a previous owner" },
   { key: "inbound_website", emoji: "🟢", label: "Website contact form", description: "Leads from your website or landing pages" },
   { key: "event", emoji: "🟣", label: "Event / conference", description: "Leads collected at trade shows or events" },
   { key: "referral", emoji: "🟡", label: "Referral", description: "Warm introductions from partners or customers" },
@@ -81,15 +82,46 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
 
-      const leadsToInsert = parsedLeads.map((lead) => ({
-        ...lead,
-        owner_user_id: user.id,
-        workspace_id: workspaceId,
-        source_type: preset.source_type,
-        motion: preset.motion,
-        strategy: 'fast' as const,
-        last_activity_at: new Date().toISOString(),
-      }));
+      const validStages = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"];
+      const isReactivation = selectedSource === "reactivation";
+
+      const leadsToInsert = parsedLeads.map((lead) => {
+        // Item 4: Build personal_notes from supplementary import fields
+        const noteParts: string[] = [];
+        if (lead.history_notes) noteParts.push(`History: ${lead.history_notes}`);
+        if (lead.owner_name) noteParts.push(`Previous owner: ${lead.owner_name}`);
+        if (lead.previous_owner && lead.previous_owner !== lead.owner_name) noteParts.push(`Previous owner: ${lead.previous_owner}`);
+        if (lead.priority_label) noteParts.push(`Priority: ${lead.priority_label}`);
+        if (lead.source_label) noteParts.push(`Source: ${lead.source_label}`);
+        if (lead.product) noteParts.push(`Product: ${lead.product}`);
+        if (lead.last_contact_date) noteParts.push(`Last contact: ${lead.last_contact_date}`);
+        const personalNotes = noteParts.length > 0 ? noteParts.join(" | ") : undefined;
+
+        // Validate stage if provided
+        const importedStage = lead.stage?.toLowerCase().replace(/[\s-]+/g, "_");
+        const resolvedStage = importedStage && validStages.includes(importedStage) ? importedStage : undefined;
+
+        // Item 3: Reactivation leads default to "contacted" stage
+        const finalStage = resolvedStage || (isReactivation ? "contacted" : undefined);
+
+        // Strip extended fields before spread (they don't exist on leads table)
+        const { stage: _s, priority_label: _p, source_label: _sl, product: _pr,
+          owner_name: _o, previous_owner: _po, last_contact_date: _lc,
+          next_step_text: _ns, history_notes: _h, ...leadFields } = lead;
+
+        return {
+          ...leadFields,
+          owner_user_id: user.id,
+          workspace_id: workspaceId,
+          source_type: preset.source_type,
+          motion: preset.motion,
+          strategy: 'fast' as const,
+          last_activity_at: new Date().toISOString(),
+          ...(personalNotes && { personal_notes: personalNotes }),
+          ...(finalStage && { stage: finalStage }),
+          ...(lead.next_step_text && { next_step: lead.next_step_text }),
+        };
+      });
 
       const { data, error } = await supabase
         .from("leads")
