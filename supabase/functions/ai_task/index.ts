@@ -1135,6 +1135,8 @@ serve(async (req) => {
             objections.length > 0 ? objections : undefined,
             commercialDecision,
             resolvedStagePolicy,
+            dealMemory,
+            continuityHints,
           );
         } catch (err) {
           console.error("[ai_task] Offer routing setup failed:", err);
