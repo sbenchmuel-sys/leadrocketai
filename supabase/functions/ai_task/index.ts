@@ -10,6 +10,11 @@ import {
   type EmailFramework, selectEmailFramework, getEmailFrameworkBlock,
   buildMotionBlock, buildStyleModifier, buildToneBlock,
 } from "../_shared/frameworks.ts";
+import {
+  classifyCommercialIntent, formatDecisionBlock, adjustOfferScore,
+  buildDedupeContext, checkOfferDedupe,
+  type ClassifiedDecision, type DedupeContext,
+} from "../_shared/intentClassifier.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
