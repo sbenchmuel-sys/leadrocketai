@@ -34,6 +34,10 @@ import {
   reconcileObjections,
   type DealMemory, type ContinuityHints,
 } from "../_shared/dealMemory.ts";
+import {
+  adjustOfferScoreByContinuity, adjustStagePolicyByMomentum,
+  type ContinuityScoreAdjustment,
+} from "../_shared/continuityScoring.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
