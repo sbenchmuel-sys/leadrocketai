@@ -1164,6 +1164,8 @@ serve(async (req) => {
       kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise,
     ]);
 
+    // ── LEAD CONTEXT ITEMS: structured prior knowledge ──
+    let leadContextBlock = "";
     if (cachedContext) {
       if (Array.isArray(cachedContext.recommended_angles) && (cachedContext.recommended_angles as string[]).length > 0) {
         enhancedPayload.recommended_angles = `Recommended outreach angles:\n- ${(cachedContext.recommended_angles as string[]).join("\n- ")}`;
@@ -1176,6 +1178,13 @@ serve(async (req) => {
       if (leadSignals.length === 0 && Array.isArray(cachedContext.signals) && (cachedContext.signals as any[]).length > 0) {
         enhancedPayload.signals = JSON.stringify(cachedContext.signals);
         console.log(`[ai_task] ✅ Injected ${(cachedContext.signals as any[]).length} signals from context cache`);
+      }
+
+      // Build LEAD CONTEXT block from lead_context_items (priority-ordered)
+      const contextItems = cachedContext.lead_context_items;
+      if (Array.isArray(contextItems) && contextItems.length > 0) {
+        leadContextBlock = buildLeadContextBlock(contextItems as any[]);
+        console.log(`[ai_task] ✅ LEAD CONTEXT block built from ${contextItems.length} items`);
       }
     }
 
