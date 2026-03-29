@@ -140,12 +140,19 @@ export default function LeadDetail() {
         </div>
 
         {/* Sticky side panel — 1/3 */}
-        <div className="hidden lg:block">
+        <div className="hidden lg:block space-y-4">
           <LeadOverviewPanel
             lead={lead}
             onNavigateToMeetings={() => setActiveTab("meetings")}
             onUpdate={handleUpdate}
           />
+          {workspaceId && (
+            <LeadContextPanel
+              leadId={lead.id}
+              workspaceId={workspaceId}
+              onUpdate={handleUpdate}
+            />
+          )}
         </div>
       </div>
     </div>
