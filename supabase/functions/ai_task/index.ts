@@ -1478,6 +1478,16 @@ ${customInstructionsText}
     if (regenerated) responsePayload.regenerated = true;
     if (selectedFramework) responsePayload.framework_used = selectedFramework;
     if (kbResult.chunkIds.length > 0) responsePayload.kb_chunk_ids = kbResult.chunkIds;
+    if (offerResult?.recommended) {
+      responsePayload.offer = {
+        offer_key: offerResult.recommended.offer_key,
+        offer_name: offerResult.recommended.offer_name,
+        link_url: offerResult.recommended.link_url,
+        cta_type: offerResult.recommended.cta_type,
+        match_reason: offerResult.recommended.match_reason,
+        score: offerResult.recommended.score,
+      };
+    }
 
     return new Response(
       JSON.stringify(responsePayload),
