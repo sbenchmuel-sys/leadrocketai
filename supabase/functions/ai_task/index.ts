@@ -625,10 +625,10 @@ function formatKBContext(grouped: KBChunksGrouped, charLimit: number): string {
 }
 
 async function getKnowledgeContext(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string, decision?: ClassifiedDecision
 ): Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> {
-  // Use dynamic expansion for reply_to_thread based on inbound signals
-  const contentTypes = task ? getExpandedKBTypes(task, latestInbound) : undefined;
+  // Use dynamic expansion for reply_to_thread based on inbound signals + decision context
+  const contentTypes = task ? getExpandedKBTypes(task, latestInbound, decision) : undefined;
   const charLimit = task ? getKbCharLimit(task) : KB_CHAR_LIMIT_OUTBOUND;
   if (contentTypes && contentTypes.length > 0) console.log(`[ai_task] Task "${task}" → KB types: [${contentTypes.join(", ")}], limit: ${charLimit} chars`);
 
