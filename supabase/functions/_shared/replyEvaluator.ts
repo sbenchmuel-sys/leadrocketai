@@ -563,6 +563,9 @@ export function evaluateReply(
   // 8. Internal buy-in alignment
   allViolations.push(...checkBuyinAlignment(content, ctx));
 
+  // 9. Deal memory continuity checks
+  allViolations.push(...checkContinuity(content, ctx));
+
   // ── Scoring ──
 
   // Objective alignment: high-severity objective-specific violations
