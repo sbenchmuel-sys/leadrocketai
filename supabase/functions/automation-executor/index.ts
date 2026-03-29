@@ -660,7 +660,10 @@ serve(async (req) => {
         }
 
         let aiTask: string;
-        if (actionKey) {
+        // Re-engagement leads always use re_engagement_intro task
+        if (lead.motion === "re_engagement") {
+          aiTask = "re_engagement_intro";
+        } else if (actionKey) {
           if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
           else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
           else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";

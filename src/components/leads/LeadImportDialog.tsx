@@ -84,6 +84,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
       const validStages = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"];
       const isReactivation = selectedSource === "reactivation";
+      const reactivationMotion = preset.motion; // "re_engagement" for reactivation
 
       const leadsToInsert = parsedLeads.map((lead) => {
         // Item 4: Build personal_notes from supplementary import fields
