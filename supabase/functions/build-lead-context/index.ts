@@ -340,7 +340,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] Upsert error:", upsertError);
     }
 
-    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles, deal_memory=${Object.keys(dealMemoryContext).length > 0 ? "yes" : "no"}`);
+    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles, ${leadContextItems.length} context items, deal_memory=${Object.keys(dealMemoryContext).length > 0 ? "yes" : "no"}`);
 
     return new Response(JSON.stringify({ ok: true, context: extendedContextJson, cached: false }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
