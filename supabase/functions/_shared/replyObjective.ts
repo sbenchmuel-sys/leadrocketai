@@ -5,6 +5,7 @@
 
 import type { ClassifiedDecision, ObjectionClass } from "./intentClassifier.ts";
 import type { ResolvedPolicy, DealStage, UrgencySignal } from "./stagePolicy.ts";
+import type { ContinuityHints, DealMemory } from "./dealMemory.ts";
 
 // ── Objective taxonomy ────────────────────
 
@@ -206,6 +207,149 @@ function detectInboundSignals(text: string): InboundSignals {
   };
 }
 
+// ── Continuity influence on objective selection ──
+
+export interface ContinuityObjectiveInfluence {
+  original_objective: ReplyObjective;
+  final_objective: ReplyObjective;
+  overrides_applied: string[];
+  momentum_adjustment: string | null;
+  cta_penalty_reason: string | null;
+}
+
+function applyContinuityInfluence(
+  baseResult: ReplyObjectiveResult,
+  hints: ContinuityHints,
+  memory: DealMemory,
+  signals: InboundSignals,
+): { result: ReplyObjectiveResult; influence: ContinuityObjectiveInfluence } {
+  const overrides: string[] = [];
+  let primary = baseResult.primary;
+  let secondary = baseResult.secondary;
+  const reasons = baseResult.reasoning.split("; ");
+  let momentumAdj: string | null = null;
+  let ctaPenalty: string | null = null;
+  const originalPrimary = primary;
+
+  // ── 1. Unanswered questions override ──
+  // If memory has unanswered questions AND the latest inbound is compatible
+  // (not a clear commitment/reorder), bias toward answer-focused objectives
+  if (hints.prioritize_unanswered && memory.unanswered_questions.length > 0) {
+    const answerObjectives: ReplyObjective[] = [
+      "answer_direct_question", "resolve_logistics", "provide_proof",
+    ];
+    if (!answerObjectives.includes(primary) && !signals.has_commitment_signal && !signals.has_reorder_signal) {
+      // Strong override for stage-default (low confidence) selections
+      if (baseResult.confidence === "low") {
+        primary = "answer_direct_question";
+        overrides.push("continuity:unanswered_questions→answer_first");
+        reasons.push("continuity:unanswered_questions_pending");
+      }
+      // Medium override: set as secondary if not already present
+      else if (!secondary || !answerObjectives.includes(secondary)) {
+        secondary = "answer_direct_question";
+        overrides.push("continuity:unanswered_questions→secondary");
+        reasons.push("continuity:unanswered_questions_as_secondary");
+      }
+    }
+  }
+
+  // ── 2. Pending internal buy-in override ──
+  if (hints.prioritize_buyin && memory.pending_buyin_needs.length > 0) {
+    const buyinIncompatible: ReplyObjective[] = [
+      "close_for_commitment", "move_to_meeting_or_call", "move_to_commercial_step",
+    ];
+    // If current objective is pressure-oriented and inbound doesn't clearly change direction
+    if (buyinIncompatible.includes(primary) && !signals.has_commitment_signal) {
+      primary = "support_internal_buy_in";
+      overrides.push("continuity:pending_buyin→support_internal");
+      reasons.push("continuity:pending_buyin_suppresses_pressure");
+    }
+    // Also suppress meeting CTAs for any objective when buy-in is pending
+    if (!signals.has_commitment_signal && !overrides.some(o => o.includes("buyin"))) {
+      overrides.push("continuity:pending_buyin→suppress_meeting_cta");
+    }
+  }
+
+  // ── 3. CTA fatigue override ──
+  if (hints.should_vary_cta) {
+    const lastCta = memory.recent_cta_patterns[memory.recent_cta_patterns.length - 1];
+    ctaPenalty = `repeated_cta:${lastCta}`;
+    overrides.push(`continuity:cta_fatigue→vary_from_${lastCta}`);
+    reasons.push("continuity:cta_repetition_detected");
+
+    // If meeting_request is the repeated CTA and objective is move_to_meeting,
+    // switch to a different objective unless strong signal
+    if (lastCta === "meeting_request" && primary === "move_to_meeting_or_call" && !signals.has_commitment_signal) {
+      primary = "guide_to_offer";
+      overrides.push("continuity:repeated_meeting_cta→guide_to_offer");
+    }
+  }
+
+  // Ignored CTA escalation
+  if (memory.ignored_cta_count >= 3) {
+    const heavyObjectives: ReplyObjective[] = [
+      "close_for_commitment", "move_to_commercial_step",
+    ];
+    if (heavyObjectives.includes(primary) && !signals.has_commitment_signal) {
+      primary = "low_pressure_hold_or_nurture";
+      overrides.push("continuity:high_ignored_cta→low_pressure");
+      reasons.push("continuity:ignored_cta_count_" + memory.ignored_cta_count);
+      ctaPenalty = `ignored_cta_count:${memory.ignored_cta_count}`;
+    }
+  }
+
+  // ── 4. Momentum state influence ──
+  if (hints.is_stalled || hints.is_regressing) {
+    const state = hints.is_regressing ? "regressing" : "stalled";
+    momentumAdj = state;
+
+    const aggressiveObjectives: ReplyObjective[] = [
+      "close_for_commitment", "move_to_commercial_step",
+    ];
+    if (aggressiveObjectives.includes(primary) && !signals.has_commitment_signal) {
+      primary = hints.is_regressing
+        ? "low_pressure_hold_or_nurture"
+        : "provide_proof";
+      overrides.push(`continuity:momentum_${state}→${primary}`);
+      reasons.push(`continuity:momentum_${state}`);
+    }
+  }
+
+  // ── 5. Already-handled objections ──
+  // Don't resolve objections that are already handled unless latest inbound reopens them
+  if (primary === "resolve_objection" && memory.handled_objections.length > 0) {
+    // If inbound text doesn't contain objection language, this may be a stale signal
+    if (!signals.has_direct_question && !signals.has_proof_request) {
+      // Check if the detected objection is already handled
+      // (We can't check exact match here, but we can add a guardrail)
+      overrides.push("continuity:check_handled_objections");
+    }
+  }
+
+  // Build final result
+  const finalResult: ReplyObjectiveResult = {
+    primary,
+    secondary,
+    reasoning: reasons.join("; "),
+    confidence: baseResult.confidence,
+    override_source: overrides.length > 0 ? overrides[0] : baseResult.override_source,
+    meta: OBJECTIVE_META[primary],
+    secondary_meta: secondary ? OBJECTIVE_META[secondary] : null,
+  };
+
+  return {
+    result: finalResult,
+    influence: {
+      original_objective: originalPrimary,
+      final_objective: primary,
+      overrides_applied: overrides,
+      momentum_adjustment: momentumAdj,
+      cta_penalty_reason: ctaPenalty,
+    },
+  };
+}
+
 // ── Objective selection ───────────────────
 
 export interface ReplyObjectiveResult {
@@ -333,6 +477,28 @@ export function selectReplyObjective(
   reasons.push(`stage_default:${stage}`);
   const primary = getStageDefaultObjective(stage);
   return build(primary, null, reasons, "low", null);
+}
+
+// ── Continuity-aware objective selection ──
+// This is the primary entry point when deal memory is available
+
+export function selectReplyObjectiveWithContinuity(
+  latestInbound: string,
+  decision: ClassifiedDecision,
+  stagePolicy: ResolvedPolicy,
+  memory: DealMemory,
+  hints: ContinuityHints,
+  task?: string,
+): { result: ReplyObjectiveResult; influence: ContinuityObjectiveInfluence } {
+  // First get the base objective from standard precedence
+  const baseResult = selectReplyObjective(
+    latestInbound, decision, stagePolicy,
+    memory.recent_cta_patterns, task,
+  );
+
+  // Then apply continuity influence
+  const signals = detectInboundSignals(latestInbound);
+  return applyContinuityInfluence(baseResult, hints, memory, signals);
 }
 
 // ── Stage default objectives ──────────────
