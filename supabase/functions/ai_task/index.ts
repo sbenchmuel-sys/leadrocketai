@@ -221,9 +221,9 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
 
-  // Last-mile / reply — objection + proof-first
-  reply_to_thread: ["objection", "case_study", "knowledge", "messaging", "competitor", "discovery"],
-  answer_questions: ["knowledge", "objection", "case_study", "messaging", "competitor"],
+  // Last-mile / reply — narrow core, expanded on signal below
+  reply_to_thread: ["objection", "case_study", "knowledge", "messaging"],
+  answer_questions: ["knowledge", "objection", "case_study", "messaging"],
 
   // Post-meeting
   post_meeting_recap: ["knowledge", "discovery", "strategy", "case_study"],
@@ -241,6 +241,30 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   lead_deep_analysis: ["strategy", "signal", "industry", "competitor"],
 };
 
+// Dynamically expand reply_to_thread KB types based on inbound message signals
+function getExpandedKBTypes(task: string, latestInbound?: string): string[] {
+  const base = TASK_KB_CONFIG[task];
+  if (!base) return [];
+  if (task !== "reply_to_thread" || !latestInbound) return [...base];
+
+  const lower = latestInbound.toLowerCase();
+  const expanded = [...base];
+
+  // Comparison signals → add competitor
+  if (/compet|alternative|vs\b|compared|switch|other (option|vendor|provider|solution)|currently using|already (have|use)/i.test(lower)) {
+    if (!expanded.includes("competitor")) expanded.push("competitor");
+    console.log("[ai_task] KB expansion: +competitor (comparison signal)");
+  }
+
+  // Discovery / qualification signals → add discovery
+  if (/how (does|do|would|can)|what (is|are)|explain|tell me more|walk me through|understand|curious about|looking (to|for|into)/i.test(lower)) {
+    if (!expanded.includes("discovery")) expanded.push("discovery");
+    console.log("[ai_task] KB expansion: +discovery (qualification signal)");
+  }
+
+  return expanded;
+}
+
 const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
 const MAX_KB_CHUNKS = 6;
 const MAX_PER_CONTENT_TYPE = 2;
@@ -254,6 +278,200 @@ const KB_CHAR_LIMIT_ANALYSIS = 2400;
 
 function getKbCharLimit(task: string): number {
   return ANALYSIS_TASKS.has(task) ? KB_CHAR_LIMIT_ANALYSIS : KB_CHAR_LIMIT_OUTBOUND;
+}
+
+// ============================================
+// OFFER ROUTING — Structured commercial recommendation
+// ============================================
+
+const OFFER_ROUTED_TASKS = new Set([
+  "reply_to_thread", "answer_questions", "post_meeting_followup_personalized",
+  "post_meeting_followup_email", "recommend_next_steps",
+]);
+
+interface OfferMatch {
+  offer_key: string;
+  offer_name: string;
+  link_url: string | null;
+  cta_type: string;
+  customer_facing_summary: string;
+  internal_notes: string | null;
+  score: number;
+  match_reason: string;
+}
+
+async function routeOffer(
+  adminClient: ReturnType<typeof createClient>,
+  workspaceId: string,
+  leadId: string,
+  latestInbound: string,
+  stage: string,
+  channel: string,
+  leadTags?: string[],
+  leadSegment?: string,
+  objections?: string[],
+): Promise<{ recommended: OfferMatch | null; fallback_reason: string }> {
+  try {
+    // 1. Fetch active offers for workspace
+    const { data: offers, error } = await adminClient
+      .from("offer_registry")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .eq("is_active", true)
+      .order("priority", { ascending: false });
+
+    if (error || !offers || offers.length === 0) {
+      return { recommended: null, fallback_reason: "No active offers configured for this workspace" };
+    }
+
+    const lowerInbound = latestInbound.toLowerCase();
+
+    // 2. Score each offer
+    const scored: OfferMatch[] = [];
+
+    for (const offer of offers) {
+      let score = 0;
+      const reasons: string[] = [];
+
+      // Stage match
+      const allowedStages: string[] = offer.allowed_stages || [];
+      if (allowedStages.length > 0 && !allowedStages.includes(stage)) continue;
+
+      // Channel match
+      const allowedChannels: string[] = offer.allowed_channels || [];
+      if (allowedChannels.length > 0 && !allowedChannels.includes(channel)) continue;
+
+      // Trigger phrase match (strongest signal)
+      const triggerPhrases: string[] = offer.trigger_phrases || [];
+      for (const phrase of triggerPhrases) {
+        if (lowerInbound.includes(phrase.toLowerCase())) {
+          score += 10;
+          reasons.push(`phrase:"${phrase}"`);
+        }
+      }
+
+      // Trigger tag match
+      const triggerTags: string[] = offer.trigger_tags || [];
+      if (leadTags && leadTags.length > 0) {
+        for (const tag of triggerTags) {
+          if (leadTags.includes(tag)) {
+            score += 5;
+            reasons.push(`tag:"${tag}"`);
+          }
+        }
+      }
+
+      // Objection match
+      const relatedObjections: string[] = offer.related_objections || [];
+      if (objections && objections.length > 0) {
+        for (const obj of relatedObjections) {
+          const objLower = obj.toLowerCase();
+          if (objections.some(o => o.toLowerCase().includes(objLower) || objLower.includes(o.toLowerCase()))) {
+            score += 8;
+            reasons.push(`objection:"${obj}"`);
+          }
+        }
+      }
+
+      // Segment match
+      const relatedSegments: string[] = offer.related_segments || [];
+      if (leadSegment && relatedSegments.includes(leadSegment)) {
+        score += 4;
+        reasons.push(`segment:"${leadSegment}"`);
+      }
+
+      // Priority boost
+      score += (offer.priority || 1);
+
+      if (score > 0 || reasons.length > 0) {
+        scored.push({
+          offer_key: offer.offer_key,
+          offer_name: offer.offer_name,
+          link_url: offer.link_url,
+          cta_type: offer.cta_type,
+          customer_facing_summary: offer.customer_facing_summary,
+          internal_notes: offer.internal_notes,
+          score,
+          match_reason: reasons.length > 0 ? reasons.join(", ") : `priority:${offer.priority}`,
+        });
+      }
+    }
+
+    if (scored.length === 0) {
+      return { recommended: null, fallback_reason: "No offers matched the current lead context, stage, or inbound message" };
+    }
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score);
+
+    // 3. Deduplicate — check if top offer was recently sent
+    try {
+      const { data: recentTimeline } = await adminClient
+        .from("lead_timeline_items")
+        .select("snippet_text, metadata_json")
+        .eq("lead_id", leadId)
+        .eq("direction", "outbound")
+        .order("occurred_at", { ascending: false })
+        .limit(10);
+
+      if (recentTimeline && recentTimeline.length > 0) {
+        const recentTexts = recentTimeline.map(t => 
+          `${t.snippet_text || ""} ${JSON.stringify(t.metadata_json || {})}`.toLowerCase()
+        ).join(" ");
+
+        // Try to find first offer whose link wasn't recently sent
+        for (const offer of scored) {
+          const linkSent = offer.link_url && recentTexts.includes(offer.link_url.toLowerCase());
+          const nameSent = recentTexts.includes(offer.offer_name.toLowerCase());
+          if (!linkSent && !nameSent) {
+            console.log(`[ai_task] Offer routed: ${offer.offer_key} (score: ${offer.score}, reason: ${offer.match_reason})`);
+            return { recommended: offer, fallback_reason: "" };
+          }
+        }
+
+        // All top offers were recently sent — use top but note it
+        console.log(`[ai_task] Offer routed (dedup-fallback): ${scored[0].offer_key} (all top matches recently sent)`);
+        return { recommended: scored[0], fallback_reason: "Note: this offer/link was recently shared with this prospect" };
+      }
+    } catch (dedupeErr) {
+      console.error("[ai_task] Offer dedup check failed:", dedupeErr);
+    }
+
+    console.log(`[ai_task] Offer routed: ${scored[0].offer_key} (score: ${scored[0].score}, reason: ${scored[0].match_reason})`);
+    return { recommended: scored[0], fallback_reason: "" };
+  } catch (err) {
+    console.error("[ai_task] Offer routing failed:", err);
+    return { recommended: null, fallback_reason: "Offer routing failed due to an internal error" };
+  }
+}
+
+function formatOfferBlock(match: OfferMatch | null, fallbackReason: string): string {
+  if (!match) {
+    return `=== COMMERCIAL RECOMMENDATION ===\nNo specific offer matched. ${fallbackReason}\nUse general knowledge base context for the reply. Do not invent products or links.\n=== END COMMERCIAL RECOMMENDATION ===`;
+  }
+
+  const parts = [
+    "=== COMMERCIAL RECOMMENDATION ===",
+    `Recommended Offer: ${match.offer_name}`,
+    `Offer Summary: ${match.customer_facing_summary}`,
+  ];
+  if (match.link_url) parts.push(`Link: ${match.link_url}`);
+  parts.push(`CTA Type: ${match.cta_type}`);
+  parts.push(`Match Reason: ${match.match_reason}`);
+  if (match.internal_notes) parts.push(`Internal Notes (do NOT share with customer): ${match.internal_notes}`);
+  if (fallbackReason) parts.push(`Note: ${fallbackReason}`);
+  parts.push(
+    "",
+    "Instructions:",
+    "- Weave this offer naturally into your reply when relevant",
+    "- Use the customer-facing summary as the basis for your description",
+    "- Include the link if present and appropriate for the conversation",
+    "- Do NOT force the offer if the prospect is asking a different question",
+    "- Do NOT include more than 1-2 links total in the reply",
+    "- Do NOT repeat internal notes to the customer",
+    "=== END COMMERCIAL RECOMMENDATION ==="
+  );
+  return parts.join("\n");
 }
 
 interface KBChunksGrouped { [contentType: string]: string; }
