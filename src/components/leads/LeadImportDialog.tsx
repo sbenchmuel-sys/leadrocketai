@@ -44,7 +44,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const preset = SOURCE_PRESETS[selectedSource] || SOURCE_PRESETS.outbound;
-  const isOutbound = preset.origin === "outbound";
+  const isOutbound = preset.origin === "outbound" && selectedSource !== "reactivation";
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -84,6 +84,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
       const validStages = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"];
       const isReactivation = selectedSource === "reactivation";
+      const reactivationMotion = preset.motion; // "re_engagement" for reactivation
 
       const leadsToInsert = parsedLeads.map((lead) => {
         // Item 4: Build personal_notes from supplementary import fields
