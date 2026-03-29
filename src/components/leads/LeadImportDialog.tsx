@@ -108,9 +108,15 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
         // Strip extended fields before spread (they don't exist on leads table)
         const { stage: _s, priority_label: _p, source_label: _sl, product: _pr,
           owner_name: _o, previous_owner: _po, last_contact_date: _lc,
-          next_step_text: _ns, history_notes: _h, raw_import_json: _raw, ...leadFields } = lead;
+          next_step_text: _ns, history_notes: _h, raw_import_json: _raw,
+          caution: _ca, competitor: _co, objection: _ob, pain_point: _pp,
+          ...leadFields } = lead;
+
+        // Client-generated UUID — guarantees we know each lead's ID before insert
+        const leadId = crypto.randomUUID();
 
         return {
+          id: leadId,
           ...leadFields,
           owner_user_id: user.id,
           workspace_id: workspaceId,
@@ -129,25 +135,20 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const { data, error } = await supabase
         .from("leads")
         .insert(leadsToInsert)
-        .select("id, email");
+        .select("id");
 
       if (error) throw error;
 
       const count = data.length;
 
       // Phase 1B: Extract and insert lead context items (non-blocking)
-      // Match by email instead of index to guarantee correct lead-context mapping
-      if (data.length > 0) {
+      // Uses client-generated UUIDs — each lead's ID is known before insert
+      if (leadsToInsert.length > 0) {
         try {
-          const emailToIdMap = new Map<string, string>();
-          for (const row of data) {
-            if (row.email) emailToIdMap.set(row.email.toLowerCase().trim(), row.id);
-          }
-
-          const allContextItems = parsedLeads.flatMap((parsedLead) => {
-            const leadId = emailToIdMap.get(parsedLead.email.toLowerCase().trim());
-            if (!leadId) return [];
-            return extractLeadContextItems(parsedLead, leadId, workspaceId);
+          const allContextItems = leadsToInsert.flatMap((insertedLead, idx) => {
+            const parsedLead = parsedLeads[idx];
+            if (!parsedLead) return [];
+            return extractLeadContextItems(parsedLead, insertedLead.id, workspaceId);
           });
 
           if (allContextItems.length > 0) {
