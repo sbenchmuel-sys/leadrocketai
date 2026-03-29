@@ -1557,6 +1557,16 @@ ${customInstructionsText}
         score: offerResult.recommended.score,
       };
     }
+    if (commercialDecision && commercialDecision.detected_objection_classes.length > 0) {
+      responsePayload.decision = {
+        detected_objection_classes: commercialDecision.detected_objection_classes,
+        detected_commercial_intent: commercialDecision.detected_commercial_intent,
+        response_strategy: commercialDecision.response_strategy,
+        proof_strategy: commercialDecision.proof_strategy,
+        cta_strategy: commercialDecision.cta_strategy,
+        confidence: commercialDecision.confidence,
+      };
+    }
 
     return new Response(
       JSON.stringify(responsePayload),
