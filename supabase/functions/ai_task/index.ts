@@ -1683,7 +1683,7 @@ ${customInstructionsText}
 
     const responsePayload: Record<string, unknown> = { ok: true, content };
     if (qualityScore) responsePayload.quality_score = qualityScore;
-    if (regenerated) responsePayload.regenerated = true;
+    if (regenerated || regenerated_outbound) responsePayload.regenerated = true;
     if (selectedFramework) responsePayload.framework_used = selectedFramework;
     if (kbResult.chunkIds.length > 0) responsePayload.kb_chunk_ids = kbResult.chunkIds;
     if (offerResult?.recommended) {
