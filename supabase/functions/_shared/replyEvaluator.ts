@@ -162,7 +162,7 @@ const OBJECTIVE_CHECKS: Partial<Record<ReplyObjective, ObjectiveCheck>> = {
   resolve_logistics: {
     check(content, ctx) {
       const violations: PolicyViolation[] = [];
-      if (/(we'd love to|happy to explore|let's set up a call to discuss/i.test(content)) && !/(delivery|shipping|stock|available|timeline|eta|fulfill)/i.test(content)) {
+      if (/(we'd love to|happy to explore|let's set up a call to discuss)/i.test(content) && !/(delivery|shipping|stock|available|timeline|eta|fulfill)/i.test(content)) {
         violations.push({ rule: "vague_logistics", severity: "high", detail: "Logistics reply is vague/generic; should include concrete specifics" });
       }
       return violations;
