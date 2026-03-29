@@ -1149,6 +1149,24 @@ ${customInstructionsText}
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
 
+    // Build offer recommendation block for last-mile tasks
+    let offerBlock = "";
+    if (OFFER_ROUTED_TASKS.has(task) && offerResult) {
+      offerBlock = formatOfferBlock(offerResult.recommended, offerResult.fallback_reason);
+      if (offerResult.recommended) {
+        enhancedPayload.recommended_offer_key = offerResult.recommended.offer_key;
+        enhancedPayload.recommended_offer_name = offerResult.recommended.offer_name;
+        enhancedPayload.recommended_link_url = offerResult.recommended.link_url || "";
+        enhancedPayload.recommended_cta_type = offerResult.recommended.cta_type;
+        enhancedPayload.recommended_reason = offerResult.recommended.match_reason;
+        console.log(`[ai_task] [9/OFFER] ${offerResult.recommended.offer_key} → ${offerResult.recommended.match_reason}`);
+      } else {
+        enhancedPayload.recommended_offer_key = "";
+        enhancedPayload.recommended_reason = offerResult.fallback_reason;
+        console.log(`[ai_task] [9/OFFER] No match: ${offerResult.fallback_reason}`);
+      }
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -1157,6 +1175,7 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
+    if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
