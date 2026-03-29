@@ -20,8 +20,9 @@ import {
   type ResolvedPolicy,
 } from "../_shared/stagePolicy.ts";
 import {
-  selectReplyObjective, formatObjectiveBlock, applyObjectiveOverrides,
-  type ReplyObjectiveResult,
+  selectReplyObjective, selectReplyObjectiveWithContinuity,
+  formatObjectiveBlock, applyObjectiveOverrides,
+  type ReplyObjectiveResult, type ContinuityObjectiveInfluence,
 } from "../_shared/replyObjective.ts";
 import {
   evaluateReply, buildEvaluatorFeedback,
