@@ -1725,6 +1725,18 @@ ${customInstructionsText}
         override_source: replyObjective.override_source,
       };
     }
+    if (replyEvaluation) {
+      responsePayload.reply_evaluation = {
+        objective_alignment_score: replyEvaluation.objective_alignment_score,
+        cta_alignment_score: replyEvaluation.cta_alignment_score,
+        focus_score: replyEvaluation.focus_score,
+        commercial_relevance_score: replyEvaluation.commercial_relevance_score,
+        policy_violations: replyEvaluation.policy_violations.map(v => ({ rule: v.rule, severity: v.severity })),
+        regeneration_recommended: replyEvaluation.regeneration_recommended,
+        evaluation_summary: replyEvaluation.evaluation_summary,
+        dominant_layer: replyEvaluation.dominant_layer,
+      };
+    }
     return new Response(
       JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
