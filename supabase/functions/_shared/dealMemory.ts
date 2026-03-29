@@ -32,6 +32,7 @@ export interface DealMemory {
   continuity_risks: string[];
   last_outbound_cta: string | null;
   ignored_cta_count: number;
+  last_updated_at?: string;
 }
 
 export interface MomentumSignals {
