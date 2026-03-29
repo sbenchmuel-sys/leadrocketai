@@ -212,24 +212,33 @@ function textSimilarity(a: string, b: string): number {
 // ============================================
 
 const TASK_KB_CONFIG: Record<string, string[]> = {
+  // Outbound / cold — messaging-first
   email_intro_fast: ["messaging", "knowledge", "industry"],
   email_intro_nurture: ["messaging", "knowledge", "industry"],
   pre_email_1_intro: ["messaging", "knowledge", "industry"],
-  inbound_intro: ["messaging", "knowledge", "industry"],
-  re_engagement_intro: ["messaging", "knowledge", "industry"],
+  inbound_intro: ["messaging", "knowledge", "industry", "case_study"],
+  re_engagement_intro: ["messaging", "knowledge", "industry", "case_study"],
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
-  reply_to_thread: ["knowledge", "objection", "messaging"],
-  answer_questions: ["knowledge", "objection", "messaging"],
-  post_meeting_recap: ["knowledge", "discovery", "strategy"],
-  post_meeting_followup_personalized: ["knowledge", "discovery", "strategy"],
-  post_meeting_followup_email: ["knowledge", "discovery"],
-  nurture_sequence: ["messaging", "industry"],
-  nurture_email_single: ["messaging", "industry"],
+
+  // Last-mile / reply — objection + proof-first
+  reply_to_thread: ["objection", "case_study", "knowledge", "messaging", "competitor", "discovery"],
+  answer_questions: ["knowledge", "objection", "case_study", "messaging", "competitor"],
+
+  // Post-meeting
+  post_meeting_recap: ["knowledge", "discovery", "strategy", "case_study"],
+  post_meeting_followup_personalized: ["knowledge", "discovery", "strategy", "case_study", "objection"],
+  post_meeting_followup_email: ["knowledge", "discovery", "case_study"],
+
+  // Nurture
+  nurture_sequence: ["messaging", "industry", "case_study"],
+  nurture_email_single: ["messaging", "industry", "case_study"],
+
+  // Analysis
   extract_milestones_risks: ["strategy", "signal"],
-  extract_deal_factors: ["strategy", "signal"],
-  recommend_next_steps: ["strategy", "signal", "knowledge"],
-  lead_deep_analysis: ["strategy", "signal", "industry"],
+  extract_deal_factors: ["strategy", "signal", "competitor"],
+  recommend_next_steps: ["strategy", "signal", "knowledge", "case_study", "objection"],
+  lead_deep_analysis: ["strategy", "signal", "industry", "competitor"],
 };
 
 const KNOWLEDGE_SEARCH_TASKS = Object.keys(TASK_KB_CONFIG);
