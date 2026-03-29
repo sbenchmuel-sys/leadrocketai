@@ -2275,6 +2275,80 @@ export type Database = {
         }
         Relationships: []
       }
+      offer_registry: {
+        Row: {
+          allowed_channels: string[]
+          allowed_stages: string[]
+          created_at: string
+          cta_type: string
+          customer_facing_summary: string
+          id: string
+          internal_notes: string | null
+          is_active: boolean
+          link_url: string | null
+          offer_category: string
+          offer_key: string
+          offer_name: string
+          priority: number
+          related_objections: string[]
+          related_segments: string[]
+          trigger_phrases: string[]
+          trigger_tags: string[]
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          allowed_channels?: string[]
+          allowed_stages?: string[]
+          created_at?: string
+          cta_type?: string
+          customer_facing_summary: string
+          id?: string
+          internal_notes?: string | null
+          is_active?: boolean
+          link_url?: string | null
+          offer_category?: string
+          offer_key: string
+          offer_name: string
+          priority?: number
+          related_objections?: string[]
+          related_segments?: string[]
+          trigger_phrases?: string[]
+          trigger_tags?: string[]
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          allowed_channels?: string[]
+          allowed_stages?: string[]
+          created_at?: string
+          cta_type?: string
+          customer_facing_summary?: string
+          id?: string
+          internal_notes?: string | null
+          is_active?: boolean
+          link_url?: string | null
+          offer_category?: string
+          offer_key?: string
+          offer_name?: string
+          priority?: number
+          related_objections?: string[]
+          related_segments?: string[]
+          trigger_phrases?: string[]
+          trigger_tags?: string[]
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offer_registry_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       onboarding_config: {
         Row: {
           automation_level: string | null
