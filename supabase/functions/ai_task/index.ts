@@ -30,6 +30,7 @@ import {
 import {
   loadDealMemory, saveDealMemory, updateFromInbound, updateFromOutbound,
   computeMomentum, formatDealMemoryBlock, getContinuityHints,
+  reconcileObjections,
   type DealMemory, type ContinuityHints,
 } from "../_shared/dealMemory.ts";
 
@@ -957,6 +958,23 @@ serve(async (req) => {
       try {
         const memClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
         dealMemory = await loadDealMemory(memClient, String(payload.lead_id), resolvedWorkspaceId);
+
+        // Reconcile objections with canonical lead_intelligence
+        if (payload?.lead_id) {
+          try {
+            const { data: intel } = await memClient.from("lead_intelligence")
+              .select("objections_json")
+              .eq("lead_id", payload.lead_id).maybeSingle();
+            if (intel?.objections_json && Array.isArray(intel.objections_json)) {
+              const canonicalObjs = (intel.objections_json as any[])
+                .map((o: any) => typeof o === "string" ? o : o.text || o.description || "")
+                .filter(Boolean);
+              dealMemory = reconcileObjections(dealMemory, canonicalObjs);
+            }
+          } catch (reconErr) {
+            console.error("[ai_task] Objection reconciliation failed:", reconErr);
+          }
+        }
 
         // Update from inbound
         if (latestInbound && commercialDecision) {
