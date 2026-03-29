@@ -1434,9 +1434,60 @@ ${customInstructionsText}
       });
     }
 
+    // Reply quality evaluation for last-mile tasks (OFFER_ROUTED_TASKS with orchestration context)
+    let replyEvaluation: ReplyEvaluation | undefined;
+    if (replyObjective && resolvedStagePolicy && OFFER_ROUTED_TASKS.has(task)) {
+      try {
+        replyEvaluation = evaluateReply(content, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
+        console.log(`[ai_task] [EVALUATOR] score=${replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score}/40, violations=${replyEvaluation.policy_violations.length}, regen=${replyEvaluation.regeneration_recommended}, dominant=${replyEvaluation.dominant_layer}`);
+
+        if (replyEvaluation.regeneration_recommended) {
+          const feedback = buildEvaluatorFeedback(replyEvaluation, replyObjective.primary);
+          if (feedback) {
+            console.log(`[ai_task] [EVALUATOR] Triggering one-pass regeneration...`);
+            const regenPromptParts = [...promptParts, feedback];
+            const regenResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+                  { role: "user", content: regenPromptParts.join("\n\n") },
+                ],
+              }),
+            });
+            if (regenResponse.ok) {
+              const regenResult = await regenResponse.json();
+              let regenContent = regenResult.choices?.[0]?.message?.content || "";
+              regenContent = stripLeakedReasoning(regenContent);
+              if (regenContent) {
+                // Re-evaluate regenerated content
+                const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
+                const oldScore = replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score;
+                const newScore = reEval.objective_alignment_score + reEval.cta_alignment_score + reEval.focus_score + reEval.commercial_relevance_score;
+                console.log(`[ai_task] [EVALUATOR] Regen score: ${newScore}/40 (was ${oldScore}/40)`);
+                // Accept regenerated content only if improved
+                if (newScore > oldScore) {
+                  content = regenContent;
+                  replyEvaluation = reEval;
+                  regenerated = true;
+                  console.log(`[ai_task] [EVALUATOR] Accepted regenerated reply`);
+                } else {
+                  console.log(`[ai_task] [EVALUATOR] Kept original reply (regen did not improve)`);
+                }
+              }
+            }
+          }
+        }
+      } catch (evalErr) {
+        console.error("[ai_task] Reply evaluation failed:", evalErr);
+      }
+    }
+
     // Quality scoring for outbound emails
     let qualityScore: EmailQualityScore | null = null;
-    let regenerated = false;
+    let regenerated_outbound = false;
 
     if (QUALITY_SCORED_TASKS.has(task)) {
       try {
