@@ -27,6 +27,11 @@ import {
   evaluateReply, buildEvaluatorFeedback,
   type ReplyEvaluation,
 } from "../_shared/replyEvaluator.ts";
+import {
+  loadDealMemory, saveDealMemory, updateFromInbound, updateFromOutbound,
+  computeMomentum, formatDealMemoryBlock, getContinuityHints,
+  type DealMemory, type ContinuityHints,
+} from "../_shared/dealMemory.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
