@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { SOURCE_PRESETS, SOURCE_TYPE_COLORS } from "@/lib/dashboardUtils";
-import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
+import { parseLeadFile, extractLeadContextItems, type ParsedLead } from "@/lib/parseLeadFile";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type ImportStep = "upload" | "source" | "confirm";
@@ -108,7 +108,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
         // Strip extended fields before spread (they don't exist on leads table)
         const { stage: _s, priority_label: _p, source_label: _sl, product: _pr,
           owner_name: _o, previous_owner: _po, last_contact_date: _lc,
-          next_step_text: _ns, history_notes: _h, ...leadFields } = lead;
+          next_step_text: _ns, history_notes: _h, raw_import_json: _raw, ...leadFields } = lead;
 
         return {
           ...leadFields,
@@ -121,6 +121,8 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
           ...(personalNotes && { personal_notes: personalNotes }),
           ...(finalStage && { stage: finalStage }),
           ...(lead.next_step_text && { next_step: lead.next_step_text }),
+          // Preserve raw import data verbatim
+          ...(lead.raw_import_json && { raw_import_json: lead.raw_import_json }),
         };
       });
 
@@ -132,6 +134,30 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       if (error) throw error;
 
       const count = data.length;
+
+      // Phase 1B: Extract and insert lead context items (non-blocking)
+      if (data.length > 0) {
+        try {
+          const allContextItems = data.flatMap((row, idx) => {
+            const parsedLead = parsedLeads[idx];
+            if (!parsedLead) return [];
+            return extractLeadContextItems(parsedLead, row.id, workspaceId);
+          });
+
+          if (allContextItems.length > 0) {
+            const { error: ctxErr } = await supabase
+              .from("lead_context_items")
+              .insert(allContextItems);
+            if (ctxErr) {
+              console.error("Failed to insert lead context items:", ctxErr);
+            } else {
+              console.log(`[import] Inserted ${allContextItems.length} lead context items for ${count} leads`);
+            }
+          }
+        } catch (ctxErr) {
+          console.error("Lead context extraction failed (non-fatal):", ctxErr);
+        }
+      }
 
       if (autoSendIntro && isOutbound) {
         toast.success(`Imported ${count} leads — intro emails will be queued`, {

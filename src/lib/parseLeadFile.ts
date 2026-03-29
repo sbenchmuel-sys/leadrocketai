@@ -25,6 +25,8 @@ export interface ParsedLead {
   last_contact_date?: string;
   next_step_text?: string;
   history_notes?: string;
+  // Raw import preservation
+  raw_import_json?: Record<string, string>;
 }
 
 // Canonical key aliases: maps normalized variations to a single canonical name
@@ -151,6 +153,13 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
   const company = (r["company"] || "").trim();
   const email = (r["email"] || "").trim().toLowerCase();
 
+  // Preserve ALL original columns verbatim (before normalization)
+  const rawImportJson: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row)) {
+    const trimmed = (value || "").trim();
+    if (trimmed) rawImportJson[key] = trimmed;
+  }
+
   return {
     name,
     company: company || "Unknown Company",
@@ -175,7 +184,153 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     last_contact_date: (r["last_contact_date"] || "").trim() || undefined,
     next_step_text: (r["next_step_text"] || "").trim() || undefined,
     history_notes: (r["history_notes"] || "").trim() || undefined,
+    // Raw preservation
+    raw_import_json: Object.keys(rawImportJson).length > 0 ? rawImportJson : undefined,
   };
+}
+
+// ============================================
+// LEAD CONTEXT EXTRACTION (deterministic, no AI)
+// ============================================
+
+/** Category + content_type classification rules for known column types */
+const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: string }> = {
+  previous_owner: { category: "relationship_history", content_type: "prior_contact" },
+  owner_name: { category: "relationship_history", content_type: "prior_contact" },
+  product: { category: "commercial_signal", content_type: "product_owned" },
+  history_notes: { category: "imported_note", content_type: "prior_rep_notes" },
+  last_contact_date: { category: "historical_fact", content_type: "prior_contact" },
+  next_step_text: { category: "imported_note", content_type: "next_step" },
+  priority_label: { category: "imported_note", content_type: "general" },
+  source_label: { category: "historical_fact", content_type: "general" },
+  message: { category: "imported_note", content_type: "general" },
+};
+
+// Columns that are already mapped to core lead fields (no need to create context items)
+const MAPPED_CANONICAL_KEYS = new Set([
+  "first_name", "last_name", "name", "company", "email", "job_title", "phone",
+  "industry", "country", "website", "linkedin_url", "company_linkedin_url",
+  "city", "state", "street", "stage",
+]);
+
+export interface LeadContextItemInsert {
+  lead_id: string;
+  workspace_id: string;
+  category: string;
+  content_type: string;
+  content_text: string;
+  original_snippet: string;
+  source_type: string;
+  source_column_name: string | null;
+  confidence: number | null;
+  author_name: string | null;
+  context_date: string | null;
+}
+
+/**
+ * Deterministically extract context items from a parsed lead's data.
+ * No AI involved — purely rule-based.
+ */
+export function extractLeadContextItems(
+  lead: ParsedLead,
+  leadId: string,
+  workspaceId: string,
+): LeadContextItemInsert[] {
+  const items: LeadContextItemInsert[] = [];
+  const rawJson = lead.raw_import_json || {};
+
+  // 1. Extract from known extended fields
+  const knownExtractions: Array<{ key: string; value: string | undefined; label: string }> = [
+    { key: "previous_owner", value: lead.previous_owner, label: `Previous owner/rep: ${lead.previous_owner}` },
+    { key: "owner_name", value: lead.owner_name, label: `Prior owner: ${lead.owner_name}` },
+    { key: "product", value: lead.product, label: `Product interest/owned: ${lead.product}` },
+    { key: "history_notes", value: lead.history_notes, label: lead.history_notes || "" },
+    { key: "last_contact_date", value: lead.last_contact_date, label: `Last contacted: ${lead.last_contact_date}` },
+    { key: "next_step_text", value: lead.next_step_text, label: `Next step: ${lead.next_step_text}` },
+  ];
+
+  // Avoid duplicate: if owner_name === previous_owner, skip one
+  const seenValues = new Set<string>();
+
+  for (const ext of knownExtractions) {
+    if (!ext.value) continue;
+    const normalizedVal = ext.value.toLowerCase().trim();
+    if (seenValues.has(normalizedVal)) continue;
+    seenValues.add(normalizedVal);
+
+    const rule = COLUMN_CONTEXT_RULES[ext.key] || { category: "imported_note", content_type: "general" };
+    const authorName = (ext.key === "previous_owner" || ext.key === "owner_name") ? ext.value : null;
+
+    items.push({
+      lead_id: leadId,
+      workspace_id: workspaceId,
+      category: rule.category,
+      content_type: rule.content_type,
+      content_text: ext.label,
+      original_snippet: ext.value,
+      source_type: "csv_import",
+      source_column_name: ext.key,
+      confidence: null, // deterministic — no confidence needed
+      author_name: authorName,
+      context_date: ext.key === "last_contact_date" ? tryParseDate(ext.value) : null,
+    });
+  }
+
+  // 2. Extract initial_message / notes as imported_note
+  if (lead.initial_message) {
+    items.push({
+      lead_id: leadId,
+      workspace_id: workspaceId,
+      category: "imported_note",
+      content_type: "general",
+      content_text: lead.initial_message,
+      original_snippet: lead.initial_message,
+      source_type: "csv_import",
+      source_column_name: "message",
+      confidence: null,
+      author_name: null,
+      context_date: null,
+    });
+  }
+
+  // 3. Capture unmapped columns (columns not in MAPPED_CANONICAL_KEYS or known extractions)
+  const extractedKeys = new Set(knownExtractions.map(e => e.key));
+  extractedKeys.add("message");
+
+  for (const [originalColName, value] of Object.entries(rawJson)) {
+    if (!value || value.trim().length === 0) continue;
+    const normalizedKey = originalColName.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+    const canonicalKey = KEY_ALIASES[normalizedKey] || KEY_ALIASES[normalizedKey.replace(/ /g, "_")] || normalizedKey;
+
+    // Skip if it's a core mapped field or already extracted
+    if (MAPPED_CANONICAL_KEYS.has(canonicalKey) || extractedKeys.has(canonicalKey)) continue;
+    // Skip priority_label and source_label (already in personal_notes)
+    if (canonicalKey === "priority_label" || canonicalKey === "source_label") continue;
+
+    items.push({
+      lead_id: leadId,
+      workspace_id: workspaceId,
+      category: "imported_note", // safe default for unmapped columns
+      content_type: "general",
+      content_text: `${originalColName}: ${value}`,
+      original_snippet: value,
+      source_type: "csv_import",
+      source_column_name: originalColName,
+      confidence: null,
+      author_name: null,
+      context_date: null,
+    });
+  }
+
+  return items;
+}
+
+function tryParseDate(value: string): string | null {
+  try {
+    const d = new Date(value);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  } catch { /* ignore */ }
+  return null;
 }
 
 function isExcel(fileName: string): boolean {

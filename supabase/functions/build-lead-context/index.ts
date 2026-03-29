@@ -9,6 +9,19 @@ const corsHeaders = {
 };
 
 // ── Context structure ─────────────────────────────────────────────────
+interface LeadContextItem {
+  category: string;
+  content_type: string;
+  content_text: string;
+  original_snippet: string | null;
+  source_type: string;
+  source_column_name: string | null;
+  confidence: number | null;
+  author_name: string | null;
+  context_date: string | null;
+  is_active: boolean;
+}
+
 interface LeadContextJson {
   company_summary: string;
   lead_role_summary: string;
@@ -16,6 +29,7 @@ interface LeadContextJson {
   recommended_angles: string[];
   industry_context: string;
   previous_interactions_summary: string;
+  lead_context_items: LeadContextItem[];
   generated_at: string;
 }
 
@@ -100,8 +114,8 @@ serve(async (req) => {
 
     console.log(`[build-lead-context] Building context for lead ${lead_id}`);
 
-    // Step 1-5: Fetch all data in parallel, including canonical intelligence
-    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult, intelligenceResult] = await Promise.all([
+    // Step 1-5: Fetch all data in parallel, including canonical intelligence and lead context items
+    const [leadResult, signalsResult, interactionsResult, enrichmentResult, kbResult, intelligenceResult, contextItemsResult] = await Promise.all([
       // 1. Lead profile
       adminClient.from("leads").select("*").eq("id", lead_id).maybeSingle(),
       // 2. Signals
@@ -136,6 +150,13 @@ serve(async (req) => {
         .select("summary_text, recommended_next_step, risks_json, milestones_json, objections_json, last_computed_at")
         .eq("lead_id", lead_id)
         .maybeSingle(),
+      // 7. Lead context items (from import, manual entry, etc.)
+      adminClient.from("lead_context_items")
+        .select("category, content_type, content_text, original_snippet, source_type, source_column_name, confidence, author_name, context_date, is_active")
+        .eq("lead_id", lead_id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true })
+        .limit(50),
     ]);
 
     const lead = leadResult.data;
@@ -278,6 +299,12 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] deal_memory lookup failed (non-fatal):", memErr);
     }
 
+    // Lead context items from import/manual entry
+    const leadContextItems: LeadContextItem[] = (contextItemsResult.data || []) as LeadContextItem[];
+    if (leadContextItems.length > 0) {
+      console.log(`[build-lead-context] Loaded ${leadContextItems.length} lead context items`);
+    }
+
     // Build final context_json
     const contextJson: LeadContextJson = {
       company_summary: companySummary,
@@ -286,6 +313,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       recommended_angles: recommendedAngles,
       industry_context: industryContext,
       previous_interactions_summary: previousInteractionsSummary,
+      lead_context_items: leadContextItems,
       generated_at: new Date().toISOString(),
     };
 
@@ -312,7 +340,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] Upsert error:", upsertError);
     }
 
-    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles, deal_memory=${Object.keys(dealMemoryContext).length > 0 ? "yes" : "no"}`);
+    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles, ${leadContextItems.length} context items, deal_memory=${Object.keys(dealMemoryContext).length > 0 ? "yes" : "no"}`);
 
     return new Response(JSON.stringify({ ok: true, context: extendedContextJson, cached: false }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

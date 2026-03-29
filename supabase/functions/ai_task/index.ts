@@ -242,6 +242,108 @@ function textSimilarity(a: string, b: string): number {
 }
 
 // ============================================
+// LEAD CONTEXT BLOCK BUILDER (import/manual prior knowledge)
+// ============================================
+
+/** Priority order for lead context categories in prompt assembly.
+ * Lower index = higher priority. This is NOT a char cap — it's structural ordering.
+ * Cautions and prior relationships always come first. */
+const LEAD_CONTEXT_CATEGORY_PRIORITY: string[] = [
+  "caution",                // do-not-say / do-not-mention — ALWAYS first
+  "relationship_history",   // prior contact, prior rep
+  "commercial_signal",      // products owned, budget, competitor intel
+  "historical_fact",        // factual data from known columns
+  "imported_note",          // ambiguous free-text notes
+  "inferred_hypothesis",    // AI-derived (lower confidence)
+];
+
+function buildLeadContextBlock(items: Array<{
+  category: string; content_type: string; content_text: string;
+  confidence: number | null; author_name: string | null; source_type: string;
+}>): string {
+  if (!items || items.length === 0) return "";
+
+  // Sort by priority order
+  const sorted = [...items].sort((a, b) => {
+    const aIdx = LEAD_CONTEXT_CATEGORY_PRIORITY.indexOf(a.category);
+    const bIdx = LEAD_CONTEXT_CATEGORY_PRIORITY.indexOf(b.category);
+    return (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+  });
+
+  // Group by category
+  const groups = new Map<string, string[]>();
+  for (const item of sorted) {
+    const key = item.category;
+    if (!groups.has(key)) groups.set(key, []);
+    const prefix = item.confidence != null ? `[confidence: ${(item.confidence * 100).toFixed(0)}%] ` : "";
+    const authorSuffix = item.author_name ? ` (source: ${item.author_name})` : "";
+    groups.get(key)!.push(`- ${prefix}${item.content_text}${authorSuffix}`);
+  }
+
+  const CATEGORY_LABELS: Record<string, string> = {
+    caution: "CAUTIONS (DO NOT violate these)",
+    relationship_history: "PRIOR RELATIONSHIP (do NOT sound like a cold intro if this exists)",
+    commercial_signal: "COMMERCIAL CONTEXT (products owned, competitors, budget)",
+    historical_fact: "KNOWN FACTS",
+    imported_note: "IMPORTED NOTES (treat as background, not evidence)",
+    inferred_hypothesis: "INFERRED (lower confidence — use carefully)",
+  };
+
+  // Build with char budget: caution+relationship unlimited, others capped
+  const parts: string[] = ["=== LEAD CONTEXT (from import/notes — NOT from live conversation) ==="];
+  let totalChars = 0;
+  const MAX_CHARS = 1500;
+
+  for (const category of LEAD_CONTEXT_CATEGORY_PRIORITY) {
+    const lines = groups.get(category);
+    if (!lines || lines.length === 0) continue;
+
+    const label = CATEGORY_LABELS[category] || category.toUpperCase();
+    const section = `\n${label}:\n${lines.join("\n")}`;
+
+    // Caution and relationship_history always included (safety-critical)
+    if (category === "caution" || category === "relationship_history") {
+      parts.push(section);
+      totalChars += section.length;
+    } else if (totalChars + section.length <= MAX_CHARS) {
+      parts.push(section);
+      totalChars += section.length;
+    } else {
+      // Truncate remaining items
+      const remaining = MAX_CHARS - totalChars;
+      if (remaining > 100) {
+        parts.push(section.slice(0, remaining) + "\n[...truncated]");
+      }
+      break;
+    }
+  }
+
+  // Add behavioral rules based on what context exists
+  const rules: string[] = [];
+  if (groups.has("relationship_history")) {
+    rules.push("- This lead has PRIOR relationship history. Do NOT open as if they are completely unknown.");
+  }
+  if (groups.has("commercial_signal")) {
+    const signals = groups.get("commercial_signal")!.join(" ").toLowerCase();
+    if (signals.includes("product")) {
+      rules.push("- This lead already owns/uses a product. Do NOT re-pitch what they already have.");
+    }
+    if (signals.includes("competitor")) {
+      rules.push("- Competitor intel exists. You may differentiate, but do NOT bash competitors.");
+    }
+  }
+  if (groups.has("caution")) {
+    rules.push("- CAUTION items above are mandatory constraints. Violating them is a critical error.");
+  }
+  if (rules.length > 0) {
+    parts.push(`\nRULES FROM LEAD CONTEXT:\n${rules.join("\n")}`);
+  }
+  parts.push("===");
+
+  return parts.join("\n");
+}
+
+// ============================================
 // KNOWLEDGE BASE CONFIG & RETRIEVAL
 // ============================================
 
@@ -1164,6 +1266,8 @@ serve(async (req) => {
       kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise,
     ]);
 
+    // ── LEAD CONTEXT ITEMS: structured prior knowledge ──
+    let leadContextBlock = "";
     if (cachedContext) {
       if (Array.isArray(cachedContext.recommended_angles) && (cachedContext.recommended_angles as string[]).length > 0) {
         enhancedPayload.recommended_angles = `Recommended outreach angles:\n- ${(cachedContext.recommended_angles as string[]).join("\n- ")}`;
@@ -1176,6 +1280,13 @@ serve(async (req) => {
       if (leadSignals.length === 0 && Array.isArray(cachedContext.signals) && (cachedContext.signals as any[]).length > 0) {
         enhancedPayload.signals = JSON.stringify(cachedContext.signals);
         console.log(`[ai_task] ✅ Injected ${(cachedContext.signals as any[]).length} signals from context cache`);
+      }
+
+      // Build LEAD CONTEXT block from lead_context_items (priority-ordered)
+      const contextItems = cachedContext.lead_context_items;
+      if (Array.isArray(contextItems) && contextItems.length > 0) {
+        leadContextBlock = buildLeadContextBlock(contextItems as any[]);
+        console.log(`[ai_task] ✅ LEAD CONTEXT block built from ${contextItems.length} items`);
       }
     }
 
@@ -1467,6 +1578,12 @@ ${customInstructionsText}
       console.log(`[ai_task] [13/DEAL_MEMORY] Injected deal memory block (momentum=${dealMemory.momentum_state})`);
     }
     if (dealMemoryBlock) promptParts.push(dealMemoryBlock);
+
+    // Lead context block — prior knowledge from import/notes (injected AFTER deal memory, BEFORE offers)
+    if (leadContextBlock) {
+      promptParts.push(leadContextBlock);
+      console.log(`[ai_task] [14/LEAD_CONTEXT] Lead context block injected`);
+    }
 
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
