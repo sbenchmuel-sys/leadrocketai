@@ -19,6 +19,10 @@ import {
   resolveStagePolicy, formatStagePolicyBlock, adjustOfferScoreByStage,
   type ResolvedPolicy,
 } from "../_shared/stagePolicy.ts";
+import {
+  selectReplyObjective, formatObjectiveBlock, applyObjectiveOverrides,
+  type ReplyObjectiveResult,
+} from "../_shared/replyObjective.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
@@ -937,6 +941,15 @@ serve(async (req) => {
       console.log(`[ai_task] [STAGE_POLICY] effective=${resolvedStagePolicy.effective_stage}, cta=${resolvedStagePolicy.final_cta_strategy}, urgent=${resolvedStagePolicy.urgency.is_urgent}, reasoning=${resolvedStagePolicy.stage_reasoning}`);
     }
 
+    // ── REPLY OBJECTIVE ORCHESTRATOR (runs after stage policy) ──
+    let replyObjective: ReplyObjectiveResult | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && commercialDecision && resolvedStagePolicy && latestInbound) {
+      replyObjective = selectReplyObjective(
+        latestInbound, commercialDecision, resolvedStagePolicy, undefined, task,
+      );
+      console.log(`[ai_task] [OBJECTIVE] primary=${replyObjective.primary}, secondary=${replyObjective.secondary || "none"}, confidence=${replyObjective.confidence}, override=${replyObjective.override_source || "none"}, reasoning=${replyObjective.reasoning}`);
+    }
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
@@ -1282,6 +1295,27 @@ ${customInstructionsText}
       console.log(`[ai_task] [11/STAGE_POLICY] Injected stage policy block (stage=${resolvedStagePolicy.effective_stage})`);
     }
 
+    // Build reply objective block for last-mile tasks
+    let objectiveBlock = "";
+    if (replyObjective && OFFER_ROUTED_TASKS.has(task)) {
+      objectiveBlock = formatObjectiveBlock(replyObjective);
+      // Apply objective overrides to CTA and offer categories
+      const overrides = applyObjectiveOverrides(
+        replyObjective,
+        resolvedStagePolicy?.final_cta_strategy || commercialDecision?.cta_strategy || "soft_offer",
+        resolvedStagePolicy?.final_preferred_offer_categories || [],
+        resolvedStagePolicy?.final_suppressed_offer_categories || [],
+      );
+      enhancedPayload.primary_reply_objective = replyObjective.primary;
+      enhancedPayload.secondary_reply_objective = replyObjective.secondary || "";
+      enhancedPayload.objective_reasoning = replyObjective.reasoning;
+      enhancedPayload.final_cta_strategy = overrides.final_cta;
+      enhancedPayload.final_preferred_offer_categories = overrides.final_preferred_offers.join(", ");
+      enhancedPayload.final_suppressed_offer_categories = overrides.final_suppressed_offers.join(", ");
+      if (replyObjective.override_source) enhancedPayload.objective_override_source = replyObjective.override_source;
+      console.log(`[ai_task] [12/OBJECTIVE] primary=${replyObjective.primary}, cta→${overrides.final_cta}`);
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -1290,8 +1324,9 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
-    if (stagePolicyBlock) promptParts.push(stagePolicyBlock);    // Stage policy BEFORE decision
-    if (decisionBlock) promptParts.push(decisionBlock);          // Decision BEFORE offer
+    if (objectiveBlock) promptParts.push(objectiveBlock);          // Objective FIRST (controls everything)
+    if (stagePolicyBlock) promptParts.push(stagePolicyBlock);      // Stage policy context
+    if (decisionBlock) promptParts.push(decisionBlock);            // Decision context
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
@@ -1625,8 +1660,16 @@ ${customInstructionsText}
         is_urgent: resolvedStagePolicy.urgency.is_urgent,
       };
     }
+    if (replyObjective) {
+      responsePayload.reply_objective = {
+        primary: replyObjective.primary,
+        secondary: replyObjective.secondary,
+        reasoning: replyObjective.reasoning,
+        confidence: replyObjective.confidence,
+        override_source: replyObjective.override_source,
+      };
+    }
 
-    return new Response(
       JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
