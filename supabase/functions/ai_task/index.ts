@@ -1579,6 +1579,12 @@ ${customInstructionsText}
     }
     if (dealMemoryBlock) promptParts.push(dealMemoryBlock);
 
+    // Lead context block — prior knowledge from import/notes (injected AFTER deal memory, BEFORE offers)
+    if (leadContextBlock) {
+      promptParts.push(leadContextBlock);
+      console.log(`[ai_task] [14/LEAD_CONTEXT] Lead context block injected`);
+    }
+
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
