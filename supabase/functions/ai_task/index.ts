@@ -1933,6 +1933,17 @@ ${customInstructionsText}
         ignored_cta_count: dealMemory.ignored_cta_count,
       };
     }
+    // Continuity influence metadata
+    if (continuityInfluence && continuityInfluence.overrides_applied.length > 0) {
+      responsePayload.continuity_influence = {
+        original_objective: continuityInfluence.original_objective,
+        final_objective: continuityInfluence.final_objective,
+        overrides_applied: continuityInfluence.overrides_applied,
+        momentum_adjustment_applied: continuityInfluence.momentum_adjustment,
+        repeated_cta_penalty_applied: continuityInfluence.cta_penalty_reason,
+        continuity_influence_summary: continuityInfluence.overrides_applied.join("; "),
+      };
+    }
 
     // Save deal memory after generation (async, non-blocking)
     if (dealMemory && OFFER_ROUTED_TASKS.has(task)) {
