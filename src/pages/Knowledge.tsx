@@ -9,8 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Trash2, Upload, FileText, Loader2, RefreshCw, ChevronDown, ChevronRight, Check, Clock } from "lucide-react";
+import { Plus, Trash2, Upload, FileText, Loader2, RefreshCw, ChevronDown, ChevronRight, Check, Clock, BookOpen } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 interface KBChunk {
   id: string;
@@ -489,6 +490,71 @@ export default function Knowledge() {
           </Dialog>
         </div>
       </div>
+
+      {/* Item 5: KB Structure Guide */}
+      <Card className="border-dashed">
+        <Accordion type="single" collapsible>
+          <AccordionItem value="guide" className="border-b-0">
+            <CardHeader className="pb-0 pt-4 px-6">
+              <AccordionTrigger className="py-0 hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-sm font-medium">Recommended KB Structure</CardTitle>
+                </div>
+              </AccordionTrigger>
+            </CardHeader>
+            <AccordionContent>
+              <CardContent className="pt-3 pb-4 text-sm text-muted-foreground space-y-4">
+                <p>For best AI results, organize your knowledge base into focused documents covering these areas:</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Company Overview</p>
+                    <p className="text-xs">What you do, who you serve, key differentiators</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">ICP & Buyer Personas</p>
+                    <p className="text-xs">Target roles, industries, company profiles</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Pain Points & Use Cases</p>
+                    <p className="text-xs">Problems you solve, real-world scenarios</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Differentiators</p>
+                    <p className="text-xs">What makes you unique vs. alternatives</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Objections & Responses</p>
+                    <p className="text-xs">Common pushbacks and approved rebuttals</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Proof Points & Case Studies</p>
+                    <p className="text-xs">Results, testimonials, customer stories</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Messaging Guardrails</p>
+                    <p className="text-xs">Words to use/avoid, positioning rules</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3 space-y-1">
+                    <p className="font-medium text-foreground text-xs">Internal-Only Notes</p>
+                    <p className="text-xs">Strategy notes — mark as non-customer-facing</p>
+                  </div>
+                </div>
+                <div className="rounded-md bg-muted/50 p-3 space-y-1.5">
+                  <p className="font-medium text-foreground text-xs">Best Practices</p>
+                  <ul className="text-xs space-y-1 list-disc list-inside">
+                    <li>Use smaller, focused documents rather than one large file</li>
+                    <li>Separate customer-safe content from internal-only strategy notes</li>
+                    <li>Use clear headings — they help the AI find the right content</li>
+                    <li>Include specific examples, numbers, and outcomes where possible</li>
+                    <li>Update regularly as your messaging and proof points evolve</li>
+                  </ul>
+                </div>
+              </CardContent>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </Card>
 
       <Card>
         <CardHeader>
