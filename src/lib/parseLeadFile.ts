@@ -287,6 +287,10 @@ export function extractLeadContextItems(
     { key: "history_notes", value: lead.history_notes, label: lead.history_notes || "" },
     { key: "last_contact_date", value: lead.last_contact_date, label: `Last contacted: ${lead.last_contact_date}` },
     { key: "next_step_text", value: lead.next_step_text, label: `Next step: ${lead.next_step_text}` },
+    { key: "caution", value: lead.caution, label: `⚠️ ${lead.caution}` },
+    { key: "competitor", value: lead.competitor, label: `Competitor: ${lead.competitor}` },
+    { key: "objection", value: lead.objection, label: `Known objection: ${lead.objection}` },
+    { key: "pain_point", value: lead.pain_point, label: `Pain point: ${lead.pain_point}` },
   ];
 
   // Avoid duplicate: if owner_name === previous_owner, skip one
