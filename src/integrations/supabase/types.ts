@@ -3013,6 +3013,7 @@ export type Database = {
           content: string
           content_type: string
           id: string
+          priority: number
           segment: string
           similarity: number
           source: string
