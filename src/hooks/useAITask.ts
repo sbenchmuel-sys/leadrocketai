@@ -51,6 +51,48 @@ export interface AITaskResponse {
   quality_score?: EmailQualityScore;
   regenerated?: boolean;
   framework_used?: string;
+  // Last-mile orchestration context (internal/admin only)
+  decision?: {
+    detected_objection_classes: string[];
+    detected_commercial_intent: string;
+    response_strategy: string;
+    proof_strategy: string;
+    cta_strategy: string;
+    confidence: string;
+  };
+  stage_policy?: {
+    effective_stage: string;
+    final_cta_strategy: string;
+    final_preferred_offer_categories: string[];
+    final_suppressed_offer_categories: string[];
+    stage_reasoning: string;
+    is_urgent: boolean;
+  };
+  reply_objective?: {
+    primary: string;
+    secondary: string | null;
+    reasoning: string;
+    confidence: string;
+    override_source: string | null;
+  };
+  reply_evaluation?: {
+    objective_alignment_score: number;
+    cta_alignment_score: number;
+    focus_score: number;
+    commercial_relevance_score: number;
+    policy_violations: Array<{ rule: string; severity: string }>;
+    regeneration_recommended: boolean;
+    evaluation_summary: string;
+    dominant_layer: string;
+  };
+  offer?: {
+    offer_key: string;
+    offer_name: string;
+    link_url?: string;
+    cta_type: string;
+    match_reason: string;
+    score: number;
+  };
 }
 
 export function useAITask() {
