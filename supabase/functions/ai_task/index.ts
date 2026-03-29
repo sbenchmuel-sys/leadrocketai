@@ -1582,6 +1582,8 @@ ${customInstructionsText}
           recent_cta_patterns: dealMemory.recent_cta_patterns,
           momentum_state: dealMemory.momentum_state,
           ignored_cta_count: dealMemory.ignored_cta_count,
+          handled_objections: dealMemory.handled_objections,
+          unanswered_questions: dealMemory.unanswered_questions,
         } : undefined;
         replyEvaluation = evaluateReply(content, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
         console.log(`[ai_task] [EVALUATOR] score=${replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score}/40, violations=${replyEvaluation.policy_violations.length}, regen=${replyEvaluation.regeneration_recommended}, dominant=${replyEvaluation.dominant_layer}`);
