@@ -1660,8 +1660,16 @@ ${customInstructionsText}
         is_urgent: resolvedStagePolicy.urgency.is_urgent,
       };
     }
+    if (replyObjective) {
+      responsePayload.reply_objective = {
+        primary: replyObjective.primary,
+        secondary: replyObjective.secondary,
+        reasoning: replyObjective.reasoning,
+        confidence: replyObjective.confidence,
+        override_source: replyObjective.override_source,
+      };
+    }
 
-    return new Response(
       JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
