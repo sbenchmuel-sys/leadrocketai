@@ -1835,6 +1835,47 @@ ${customInstructionsText}
         dominant_layer: replyEvaluation.dominant_layer,
       };
     }
+    if (dealMemory) {
+      responsePayload.deal_memory = {
+        momentum_state: dealMemory.momentum_state,
+        handled_objections: dealMemory.handled_objections,
+        unresolved_objections: dealMemory.unresolved_objections,
+        shared_assets: dealMemory.shared_assets.slice(-5),
+        sent_offers: dealMemory.sent_offers.slice(-5),
+        recent_cta_patterns: dealMemory.recent_cta_patterns.slice(-5),
+        unanswered_questions: dealMemory.unanswered_questions,
+        pending_buyin_needs: dealMemory.pending_buyin_needs,
+        pricing_status: dealMemory.pricing_status,
+        continuity_risks: dealMemory.continuity_risks,
+        ignored_cta_count: dealMemory.ignored_cta_count,
+      };
+    }
+
+    // Save deal memory after generation (async, non-blocking)
+    if (dealMemory && OFFER_ROUTED_TASKS.has(task)) {
+      try {
+        const memSaveClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const resolvedObjInReply = commercialDecision?.detected_objection_classes.filter(obj =>
+          content.toLowerCase().includes(obj.replace(/_/g, " ")) ||
+          (obj === "budget" && /(roi|value|investment|cost.effective|affordable)/i.test(content)) ||
+          (obj === "quality_concern" && /(case study|proof|evidence|results|testimonial)/i.test(content))
+        ) ?? [];
+        const answeredQs = dealMemory.unanswered_questions.filter(q => {
+          const words = q.split(/\s+/).slice(0, 4).join("|");
+          return words.length > 5 && new RegExp(words, "i").test(content);
+        });
+        const updatedMemory = updateFromOutbound(
+          dealMemory, content,
+          resolvedStagePolicy?.final_cta_strategy ?? "soft_offer",
+          offerResult?.recommended?.offer_key ?? null,
+          resolvedObjInReply, answeredQs,
+        );
+        saveDealMemory(memSaveClient, updatedMemory);
+      } catch (saveErr) {
+        console.error("[ai_task] Deal memory save failed:", saveErr);
+      }
+    }
+
     return new Response(
       JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
