@@ -54,6 +54,19 @@ export interface OrchestrationContext {
     match_reason: string;
     score: number;
   };
+  deal_memory?: {
+    momentum_state: string;
+    handled_objections: string[];
+    unresolved_objections: string[];
+    shared_assets: string[];
+    sent_offers: string[];
+    recent_cta_patterns: string[];
+    unanswered_questions: string[];
+    pending_buyin_needs: string[];
+    pricing_status: string;
+    continuity_risks: string[];
+    ignored_cta_count: number;
+  };
   regenerated?: boolean;
   framework_used?: string;
 }
