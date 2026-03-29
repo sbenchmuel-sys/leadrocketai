@@ -15,6 +15,10 @@ import {
   buildDedupeContext, checkOfferDedupe,
   type ClassifiedDecision, type DedupeContext,
 } from "../_shared/intentClassifier.ts";
+import {
+  resolveStagePolicy, formatStagePolicyBlock, adjustOfferScoreByStage,
+  type ResolvedPolicy,
+} from "../_shared/stagePolicy.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
@@ -247,7 +251,7 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
 };
 
 // Dynamically expand reply_to_thread KB types based on inbound message signals
-function getExpandedKBTypes(task: string, latestInbound?: string, decision?: ClassifiedDecision): string[] {
+function getExpandedKBTypes(task: string, latestInbound?: string, decision?: ClassifiedDecision, stagePolicy?: ResolvedPolicy): string[] {
   const base = TASK_KB_CONFIG[task];
   if (!base) return [];
   const expanded = [...base];
@@ -258,6 +262,15 @@ function getExpandedKBTypes(task: string, latestInbound?: string, decision?: Cla
       if (!expanded.includes(t)) {
         expanded.push(t);
         console.log(`[ai_task] KB expansion: +${t} (decision boost: ${decision.detected_objection_classes[0] || "intent"})`);
+      }
+    }
+    // Also boost stage-preferred KB types
+    if (stagePolicy) {
+      for (const t of stagePolicy.final_preferred_kb_types) {
+        if (!expanded.includes(t)) {
+          expanded.push(t);
+          console.log(`[ai_task] KB expansion: +${t} (stage=${stagePolicy.effective_stage})`);
+        }
       }
     }
     return expanded;
@@ -328,6 +341,7 @@ async function routeOffer(
   leadSegment?: string,
   objections?: string[],
   decision?: ClassifiedDecision,
+  stagePolicy?: ResolvedPolicy,
 ): Promise<{ recommended: OfferMatch | null; fallback_reason: string }> {
   try {
     // 1. Fetch active offers for workspace
@@ -404,6 +418,11 @@ async function routeOffer(
       // Decision-aware scoring: boost/penalize by offer category
       if (decision && offer.offer_category) {
         score = adjustOfferScore(score, offer.offer_category, decision);
+      }
+
+      // Stage-aware scoring: boost/penalize by stage policy
+      if (stagePolicy && offer.offer_category) {
+        score = adjustOfferScoreByStage(score, offer.offer_category, stagePolicy);
       }
 
       if (score > 0 || reasons.length > 0) {
@@ -625,10 +644,10 @@ function formatKBContext(grouped: KBChunksGrouped, charLimit: number): string {
 }
 
 async function getKnowledgeContext(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string, decision?: ClassifiedDecision
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string, decision?: ClassifiedDecision, stagePolicy?: ResolvedPolicy
 ): Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> {
-  // Use dynamic expansion for reply_to_thread based on inbound signals + decision context
-  const contentTypes = task ? getExpandedKBTypes(task, latestInbound, decision) : undefined;
+  // Use dynamic expansion for reply_to_thread based on inbound signals + decision context + stage policy
+  const contentTypes = task ? getExpandedKBTypes(task, latestInbound, decision, stagePolicy) : undefined;
   const charLimit = task ? getKbCharLimit(task) : KB_CHAR_LIMIT_OUTBOUND;
   if (contentTypes && contentTypes.length > 0) console.log(`[ai_task] Task "${task}" → KB types: [${contentTypes.join(", ")}], limit: ${charLimit} chars`);
 
@@ -905,6 +924,19 @@ serve(async (req) => {
       console.log(`[ai_task] [CLASSIFIER] objections=[${commercialDecision.detected_objection_classes}], intent=${commercialDecision.detected_commercial_intent}, confidence=${commercialDecision.confidence}, cta=${commercialDecision.cta_strategy}`);
     }
 
+    // ── STAGE-AWARE DECISION POLICY (runs after classification) ──
+    let resolvedStagePolicy: ResolvedPolicy | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && commercialDecision) {
+      const rawStage = payload?.stage ? String(payload.stage) : "new";
+      // Detect repeat customer from motion or stage
+      const isRepeatCustomer = payload?.motion === "expansion" || payload?.stage === "closed" ||
+        (payload?.nurture_outbound_count && Number(payload.nurture_outbound_count) > 3 && payload?.stage === "engaged");
+      resolvedStagePolicy = resolveStagePolicy(
+        rawStage, commercialDecision, latestInbound || "", !!isRepeatCustomer,
+      );
+      console.log(`[ai_task] [STAGE_POLICY] effective=${resolvedStagePolicy.effective_stage}, cta=${resolvedStagePolicy.final_cta_strategy}, urgent=${resolvedStagePolicy.urgency.is_urgent}, reasoning=${resolvedStagePolicy.stage_reasoning}`);
+    }
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
@@ -916,7 +948,7 @@ serve(async (req) => {
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy);
       }
     }
 
@@ -958,6 +990,7 @@ serve(async (req) => {
             leadSegment,
             objections.length > 0 ? objections : undefined,
             commercialDecision,
+            resolvedStagePolicy,
           );
         } catch (err) {
           console.error("[ai_task] Offer routing setup failed:", err);
@@ -1235,6 +1268,20 @@ ${customInstructionsText}
       if (decisionBlock) console.log(`[ai_task] [10/DECISION] Injected decision context (${commercialDecision.detected_objection_classes.length} objections, intent=${commercialDecision.detected_commercial_intent})`);
     }
 
+    // Build stage-aware policy block for last-mile tasks
+    let stagePolicyBlock = "";
+    if (resolvedStagePolicy && OFFER_ROUTED_TASKS.has(task)) {
+      stagePolicyBlock = formatStagePolicyBlock(resolvedStagePolicy);
+      // Override decision-level fields with stage-resolved finals
+      enhancedPayload.effective_stage_policy = resolvedStagePolicy.effective_stage;
+      enhancedPayload.final_cta_strategy = resolvedStagePolicy.final_cta_strategy;
+      enhancedPayload.final_preferred_offer_categories = resolvedStagePolicy.final_preferred_offer_categories.join(", ");
+      enhancedPayload.final_suppressed_offer_categories = resolvedStagePolicy.final_suppressed_offer_categories.join(", ");
+      enhancedPayload.stage_reasoning_summary = resolvedStagePolicy.stage_reasoning;
+      if (resolvedStagePolicy.urgency.is_urgent) enhancedPayload.is_urgent = "true";
+      console.log(`[ai_task] [11/STAGE_POLICY] Injected stage policy block (stage=${resolvedStagePolicy.effective_stage})`);
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -1243,7 +1290,8 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
-    if (decisionBlock) promptParts.push(decisionBlock);  // Decision BEFORE offer
+    if (stagePolicyBlock) promptParts.push(stagePolicyBlock);    // Stage policy BEFORE decision
+    if (decisionBlock) promptParts.push(decisionBlock);          // Decision BEFORE offer
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
@@ -1565,6 +1613,16 @@ ${customInstructionsText}
         proof_strategy: commercialDecision.proof_strategy,
         cta_strategy: commercialDecision.cta_strategy,
         confidence: commercialDecision.confidence,
+      };
+    }
+    if (resolvedStagePolicy) {
+      responsePayload.stage_policy = {
+        effective_stage: resolvedStagePolicy.effective_stage,
+        final_cta_strategy: resolvedStagePolicy.final_cta_strategy,
+        final_preferred_offer_categories: resolvedStagePolicy.final_preferred_offer_categories,
+        final_suppressed_offer_categories: resolvedStagePolicy.final_suppressed_offer_categories,
+        stage_reasoning: resolvedStagePolicy.stage_reasoning,
+        is_urgent: resolvedStagePolicy.urgency.is_urgent,
       };
     }
 
