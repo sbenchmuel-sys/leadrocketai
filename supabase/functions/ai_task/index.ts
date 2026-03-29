@@ -1222,6 +1222,19 @@ ${customInstructionsText}
       }
     }
 
+    // Build commercial decision context block for last-mile tasks
+    let decisionBlock = "";
+    if (commercialDecision && OFFER_ROUTED_TASKS.has(task)) {
+      decisionBlock = formatDecisionBlock(commercialDecision);
+      // Also inject structured fields into payload for template vars
+      enhancedPayload.detected_objection_classes = commercialDecision.detected_objection_classes.join(", ");
+      enhancedPayload.detected_commercial_intent = commercialDecision.detected_commercial_intent;
+      enhancedPayload.response_strategy = commercialDecision.response_strategy;
+      enhancedPayload.proof_strategy = commercialDecision.proof_strategy;
+      enhancedPayload.cta_strategy = commercialDecision.cta_strategy;
+      if (decisionBlock) console.log(`[ai_task] [10/DECISION] Injected decision context (${commercialDecision.detected_objection_classes.length} objections, intent=${commercialDecision.detected_commercial_intent})`);
+    }
+
     const promptParts: string[] = [];
     if (topLevelInstructionBlock) promptParts.push(topLevelInstructionBlock);
     if (motionBlock) promptParts.push(motionBlock);
@@ -1230,6 +1243,7 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
+    if (decisionBlock) promptParts.push(decisionBlock);  // Decision BEFORE offer
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
