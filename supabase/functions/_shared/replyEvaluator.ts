@@ -298,7 +298,7 @@ export function evaluateReply(
     primary_objective: replyObjective.primary,
     secondary_objective: replyObjective.secondary,
     stage: stagePolicy.effective_stage,
-    suppressed_cta: stagePolicy.final_suppressed_cta ?? [],
+    suppressed_cta: stagePolicy.final_suppressed_cta_patterns ?? [],
     suppressed_offers: stagePolicy.final_suppressed_offer_categories ?? [],
     preferred_cta: stagePolicy.final_cta_strategy ? [stagePolicy.final_cta_strategy] : [],
     latest_inbound: latestInbound,
