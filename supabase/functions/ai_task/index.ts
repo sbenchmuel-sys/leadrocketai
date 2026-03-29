@@ -957,6 +957,7 @@ serve(async (req) => {
             leadTags.length > 0 ? leadTags : undefined,
             leadSegment,
             objections.length > 0 ? objections : undefined,
+            commercialDecision,
           );
         } catch (err) {
           console.error("[ai_task] Offer routing setup failed:", err);
