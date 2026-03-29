@@ -25,6 +25,10 @@ export interface ParsedLead {
   last_contact_date?: string;
   next_step_text?: string;
   history_notes?: string;
+  caution?: string;
+  competitor?: string;
+  objection?: string;
+  pain_point?: string;
   // Raw import preservation
   raw_import_json?: Record<string, string>;
 }
