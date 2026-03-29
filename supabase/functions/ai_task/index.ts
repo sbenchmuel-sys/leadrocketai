@@ -848,6 +848,9 @@ serve(async (req) => {
       })();
     }
 
+    // Extract latest inbound for signal-aware KB expansion and offer routing
+    const latestInbound = payload?.email_text ? String(payload.email_text) : (payload?.latest_inbound ? String(payload.latest_inbound) : undefined);
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
@@ -859,8 +862,53 @@ serve(async (req) => {
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound);
       }
+    }
+
+    // Offer routing for last-mile tasks
+    let offerPromise: Promise<{ recommended: OfferMatch | null; fallback_reason: string }> = Promise.resolve({ recommended: null, fallback_reason: "" });
+    if (OFFER_ROUTED_TASKS.has(task) && payload?.lead_id) {
+      offerPromise = (async () => {
+        try {
+          const offerClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          // Resolve workspace_id from lead
+          const { data: leadRow } = await offerClient.from("leads")
+            .select("workspace_id, stage, nurture_theme, personal_notes")
+            .eq("id", payload.lead_id).maybeSingle();
+          if (!leadRow?.workspace_id) return { recommended: null, fallback_reason: "No workspace found for lead" };
+
+          // Extract objections from lead_intelligence if available
+          let objections: string[] = [];
+          const { data: intel } = await offerClient.from("lead_intelligence")
+            .select("objections_json").eq("lead_id", payload.lead_id).maybeSingle();
+          if (intel?.objections_json && Array.isArray(intel.objections_json)) {
+            objections = (intel.objections_json as any[]).map((o: any) => typeof o === "string" ? o : o.text || o.description || "").filter(Boolean);
+          }
+
+          // Extract tags from payload or lead context
+          const leadTags: string[] = [];
+          if (payload?.tags && Array.isArray(payload.tags)) leadTags.push(...payload.tags);
+          if (leadRow.nurture_theme) leadTags.push(leadRow.nurture_theme);
+
+          const leadSegment = payload?.segment ? String(payload.segment) : undefined;
+
+          return routeOffer(
+            offerClient,
+            leadRow.workspace_id,
+            String(payload.lead_id),
+            latestInbound || "",
+            leadRow.stage || "engaged",
+            resolveChannel(task, payload?.channel ? String(payload.channel) : undefined),
+            leadTags.length > 0 ? leadTags : undefined,
+            leadSegment,
+            objections.length > 0 ? objections : undefined,
+          );
+        } catch (err) {
+          console.error("[ai_task] Offer routing setup failed:", err);
+          return { recommended: null, fallback_reason: "Offer routing error" };
+        }
+      })();
     }
 
     let diversityPromise: Promise<DiversityConstraints> = Promise.resolve({
