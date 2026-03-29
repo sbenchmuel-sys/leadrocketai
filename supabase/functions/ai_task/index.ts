@@ -950,12 +950,61 @@ serve(async (req) => {
       console.log(`[ai_task] [STAGE_POLICY] effective=${resolvedStagePolicy.effective_stage}, cta=${resolvedStagePolicy.final_cta_strategy}, urgent=${resolvedStagePolicy.urgency.is_urgent}, reasoning=${resolvedStagePolicy.stage_reasoning}`);
     }
 
-    // ── REPLY OBJECTIVE ORCHESTRATOR (runs after stage policy) ──
+    // ── DEAL MEMORY (load before objective selection) ──
+    let dealMemory: DealMemory | undefined;
+    let continuityHints: ContinuityHints | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && payload?.lead_id && resolvedWorkspaceId) {
+      try {
+        const memClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        dealMemory = await loadDealMemory(memClient, String(payload.lead_id), resolvedWorkspaceId);
+
+        // Update from inbound
+        if (latestInbound && commercialDecision) {
+          dealMemory = updateFromInbound(
+            dealMemory, latestInbound,
+            commercialDecision.detected_objection_classes,
+            commercialDecision.detected_commercial_intent,
+          );
+        }
+
+        // Compute momentum
+        const daysSinceInbound = payload?.last_inbound_at
+          ? Math.floor((Date.now() - new Date(String(payload.last_inbound_at)).getTime()) / 86400000)
+          : null;
+        const recentReplyCount = payload?.recent_reply_count ? Number(payload.recent_reply_count) : 0;
+        const hasBuyingSignals = commercialDecision?.detected_commercial_intent === "ready_to_buy";
+        const hasNewObj = (commercialDecision?.detected_objection_classes.length ?? 0) > 0;
+        dealMemory = computeMomentum(dealMemory, daysSinceInbound, recentReplyCount, hasBuyingSignals, hasNewObj);
+
+        continuityHints = getContinuityHints(dealMemory);
+        console.log(`[ai_task] [DEAL_MEMORY] momentum=${dealMemory.momentum_state}, risks=[${dealMemory.continuity_risks}], unresolved_obj=${dealMemory.unresolved_objections.length}, unanswered_q=${dealMemory.unanswered_questions.length}`);
+      } catch (memErr) {
+        console.error("[ai_task] Deal memory load failed:", memErr);
+      }
+    }
+
+    // ── REPLY OBJECTIVE ORCHESTRATOR (runs after stage policy + memory) ──
     let replyObjective: ReplyObjectiveResult | undefined;
     if (OFFER_ROUTED_TASKS.has(task) && commercialDecision && resolvedStagePolicy && latestInbound) {
       replyObjective = selectReplyObjective(
-        latestInbound, commercialDecision, resolvedStagePolicy, undefined, task,
+        latestInbound, commercialDecision, resolvedStagePolicy,
+        dealMemory?.recent_cta_patterns, task,
       );
+
+      // Apply continuity overrides
+      if (continuityHints) {
+        // If unanswered questions exist and objective isn't already answer-focused
+        if (continuityHints.prioritize_unanswered && replyObjective.primary !== "answer_direct_question") {
+          // Only override if confidence is low (stage default)
+          if (replyObjective.confidence === "low") {
+            replyObjective = selectReplyObjective(
+              latestInbound, commercialDecision, resolvedStagePolicy,
+              dealMemory?.recent_cta_patterns, task,
+            );
+          }
+        }
+      }
+
       console.log(`[ai_task] [OBJECTIVE] primary=${replyObjective.primary}, secondary=${replyObjective.secondary || "none"}, confidence=${replyObjective.confidence}, override=${replyObjective.override_source || "none"}, reasoning=${replyObjective.reasoning}`);
     }
 
