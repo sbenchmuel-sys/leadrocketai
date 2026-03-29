@@ -877,6 +877,33 @@ serve(async (req) => {
 
     // Extract latest inbound for signal-aware KB expansion and offer routing
     const latestInbound = payload?.email_text ? String(payload.email_text) : (payload?.latest_inbound ? String(payload.latest_inbound) : undefined);
+    const threadContext = payload?.thread_summary ? String(payload.thread_summary) : (payload?.previous_emails ? String(payload.previous_emails).slice(0, 1500) : undefined);
+
+    // ── COMMERCIAL INTENT CLASSIFICATION (runs early to influence KB + offer routing) ──
+    let commercialDecision: ClassifiedDecision | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && latestInbound) {
+      // We'll fetch intelligence inline for classification — lightweight query
+      let intelligenceJson: Record<string, unknown> | null = null;
+      if (payload?.lead_id) {
+        try {
+          const intClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          const { data: intel } = await intClient.from("lead_intelligence")
+            .select("objections_json, buying_signals_json, engagement_signals_json")
+            .eq("lead_id", payload.lead_id).maybeSingle();
+          if (intel) intelligenceJson = intel as Record<string, unknown>;
+        } catch (err) { console.error("[ai_task] Intel fetch for classifier failed:", err); }
+      }
+
+      const leadTags: string[] = [];
+      if (payload?.tags && Array.isArray(payload.tags)) leadTags.push(...payload.tags);
+      const leadSegment = payload?.segment ? String(payload.segment) : undefined;
+      const leadStage = payload?.stage ? String(payload.stage) : undefined;
+
+      commercialDecision = classifyCommercialIntent(
+        latestInbound, threadContext, intelligenceJson, leadStage, leadTags, leadSegment,
+      );
+      console.log(`[ai_task] [CLASSIFIER] objections=[${commercialDecision.detected_objection_classes}], intent=${commercialDecision.detected_commercial_intent}, confidence=${commercialDecision.confidence}, cta=${commercialDecision.cta_strategy}`);
+    }
 
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
@@ -889,7 +916,7 @@ serve(async (req) => {
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
         console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision);
       }
     }
 
