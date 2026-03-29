@@ -142,8 +142,8 @@ export const SOURCE_PRESETS: Record<string, SourcePreset> = {
 export type DisplayPhase = "Prospecting" | "Engaged" | "Post-Meeting" | "Closing" | "Nurture" | "Closed";
 
 export function getDisplayPhase(stage: DealStage, motion?: Motion): DisplayPhase {
-  // If motion is nurture, always show Nurture
-  if (motion === "nurture") return "Nurture";
+  // If motion is nurture or re_engagement, show Nurture phase
+  if (motion === "nurture" || motion === "re_engagement") return "Nurture";
   if (motion === "closed") return "Closed";
 
   switch (stage) {
