@@ -1669,7 +1669,7 @@ ${customInstructionsText}
         override_source: replyObjective.override_source,
       };
     }
-
+    return new Response(
       JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
