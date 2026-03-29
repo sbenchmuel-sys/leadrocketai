@@ -4,7 +4,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane } from "lucide-react";
+import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane, AlertTriangle, Handshake, ShoppingCart } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import { cn } from "@/lib/utils";
 import {
@@ -14,8 +14,9 @@ import {
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { calculateClosingPower, getMomentum } from "@/lib/closingPowerUtils";
+import { supabase } from "@/integrations/supabase/client";
 
 type OriginContext = "dashboard" | "leads" | "inbox";
 
@@ -159,6 +160,24 @@ export default function LeadDetailHeader({
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 shrink-0">
                 <Plane className="h-2.5 w-2.5" />
                 OOO until {new Date((lead as any).ooo_until).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+            )}
+            {contextFlags.hasCaution && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/20 shrink-0">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                Caution
+              </span>
+            )}
+            {contextFlags.hasRelationship && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20 shrink-0">
+                <Handshake className="h-2.5 w-2.5" />
+                Prior Relationship
+              </span>
+            )}
+            {contextFlags.hasProduct && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground border border-border shrink-0">
+                <ShoppingCart className="h-2.5 w-2.5" />
+                Product Owned
               </span>
             )}
           </div>
