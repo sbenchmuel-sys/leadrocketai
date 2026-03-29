@@ -12,7 +12,9 @@ import MeetingsTab from "@/components/lead/MeetingsTab";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
+import LeadContextPanel from "@/components/lead/LeadContextPanel";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
