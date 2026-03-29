@@ -109,6 +109,30 @@ export default function LeadDetailHeader({
 
   const originLabel = origin === "inbound" ? "Inbound" : "Outbound";
 
+  // Lightweight context badge counts
+  const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
+    hasCaution: false, hasRelationship: false, hasProduct: false,
+  });
+
+  useEffect(() => {
+    supabase
+      .from("lead_context_items")
+      .select("category, content_text")
+      .eq("lead_id", lead.id)
+      .eq("is_active", true)
+      .then(({ data }) => {
+        if (!data) return;
+        const cats = new Set(data.map(i => i.category));
+        const hasProduct = cats.has("commercial_signal") &&
+          data.some(i => i.category === "commercial_signal" && /product|owns|using|license/i.test(i.content_text));
+        setContextFlags({
+          hasCaution: cats.has("caution"),
+          hasRelationship: cats.has("relationship_history"),
+          hasProduct,
+        });
+      });
+  }, [lead.id]);
+
   return (
     <div className="space-y-0">
       {/* Back + Actions row — slim */}
