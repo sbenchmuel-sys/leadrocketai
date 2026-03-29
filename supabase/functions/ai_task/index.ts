@@ -251,7 +251,7 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
 };
 
 // Dynamically expand reply_to_thread KB types based on inbound message signals
-function getExpandedKBTypes(task: string, latestInbound?: string, decision?: ClassifiedDecision): string[] {
+function getExpandedKBTypes(task: string, latestInbound?: string, decision?: ClassifiedDecision, stagePolicy?: ResolvedPolicy): string[] {
   const base = TASK_KB_CONFIG[task];
   if (!base) return [];
   const expanded = [...base];
