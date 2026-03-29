@@ -1405,6 +1405,85 @@ export type Database = {
           },
         ]
       }
+      lead_context_items: {
+        Row: {
+          author_name: string | null
+          category: string
+          confidence: number | null
+          content_text: string
+          content_type: string
+          context_date: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          lead_id: string
+          original_snippet: string | null
+          parent_item_id: string | null
+          source_column_name: string | null
+          source_type: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          author_name?: string | null
+          category?: string
+          confidence?: number | null
+          content_text: string
+          content_type?: string
+          context_date?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          lead_id: string
+          original_snippet?: string | null
+          parent_item_id?: string | null
+          source_column_name?: string | null
+          source_type?: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          author_name?: string | null
+          category?: string
+          confidence?: number | null
+          content_text?: string
+          content_type?: string
+          context_date?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          lead_id?: string
+          original_snippet?: string | null
+          parent_item_id?: string | null
+          source_column_name?: string | null
+          source_type?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_context_items_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_context_items_parent_item_id_fkey"
+            columns: ["parent_item_id"]
+            isOneToOne: false
+            referencedRelation: "lead_context_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_context_items_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_intelligence: {
         Row: {
           buying_signals_json: Json
@@ -1697,6 +1776,7 @@ export type Database = {
           phone: string | null
           pref_email_drafts: boolean
           pref_linkedin_drafts: boolean
+          raw_import_json: Json | null
           risks_json: Json | null
           source_type: string
           stage: string
@@ -1764,6 +1844,7 @@ export type Database = {
           phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
+          raw_import_json?: Json | null
           risks_json?: Json | null
           source_type?: string
           stage?: string
@@ -1831,6 +1912,7 @@ export type Database = {
           phone?: string | null
           pref_email_drafts?: boolean
           pref_linkedin_drafts?: boolean
+          raw_import_json?: Json | null
           risks_json?: Json | null
           source_type?: string
           stage?: string
