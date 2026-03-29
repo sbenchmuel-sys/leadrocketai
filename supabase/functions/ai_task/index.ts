@@ -1385,6 +1385,15 @@ ${customInstructionsText}
     if (objectiveBlock) promptParts.push(objectiveBlock);          // Objective FIRST (controls everything)
     if (stagePolicyBlock) promptParts.push(stagePolicyBlock);      // Stage policy context
     if (decisionBlock) promptParts.push(decisionBlock);            // Decision context
+
+    // Deal memory block — continuity context
+    let dealMemoryBlock = "";
+    if (dealMemory && OFFER_ROUTED_TASKS.has(task)) {
+      dealMemoryBlock = formatDealMemoryBlock(dealMemory);
+      console.log(`[ai_task] [13/DEAL_MEMORY] Injected deal memory block (momentum=${dealMemory.momentum_state})`);
+    }
+    if (dealMemoryBlock) promptParts.push(dealMemoryBlock);
+
     if (offerBlock) promptParts.push(offerBlock);
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
