@@ -450,6 +450,18 @@ async function routeOffer(
         score = adjustOfferScoreByStage(score, offer.offer_category, stagePolicy);
       }
 
+      // Continuity-aware scoring: penalize repeated offers/assets/CTAs
+      if (continuityMemory && continuityHintsForOffer && offer.offer_category) {
+        const contAdj = adjustOfferScoreByContinuity(
+          score, offer.offer_key, offer.offer_category, offer.cta_type || "soft_offer",
+          continuityMemory, continuityHintsForOffer,
+        );
+        if (contAdj.penalties_applied.length > 0) {
+          console.log(`[ai_task] Offer continuity: ${offer.offer_key} → ${contAdj.penalties_applied.join(", ")}`);
+        }
+        score = contAdj.adjusted_score;
+      }
+
       if (score > 0 || reasons.length > 0) {
         scored.push({
           offer_key: offer.offer_key,
