@@ -129,19 +129,25 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const { data, error } = await supabase
         .from("leads")
         .insert(leadsToInsert)
-        .select("id");
+        .select("id, email");
 
       if (error) throw error;
 
       const count = data.length;
 
       // Phase 1B: Extract and insert lead context items (non-blocking)
+      // Match by email instead of index to guarantee correct lead-context mapping
       if (data.length > 0) {
         try {
-          const allContextItems = data.flatMap((row, idx) => {
-            const parsedLead = parsedLeads[idx];
-            if (!parsedLead) return [];
-            return extractLeadContextItems(parsedLead, row.id, workspaceId);
+          const emailToIdMap = new Map<string, string>();
+          for (const row of data) {
+            if (row.email) emailToIdMap.set(row.email.toLowerCase().trim(), row.id);
+          }
+
+          const allContextItems = parsedLeads.flatMap((parsedLead) => {
+            const leadId = emailToIdMap.get(parsedLead.email.toLowerCase().trim());
+            if (!leadId) return [];
+            return extractLeadContextItems(parsedLead, leadId, workspaceId);
           });
 
           if (allContextItems.length > 0) {

@@ -25,6 +25,10 @@ export interface ParsedLead {
   last_contact_date?: string;
   next_step_text?: string;
   history_notes?: string;
+  caution?: string;
+  competitor?: string;
+  objection?: string;
+  pain_point?: string;
   // Raw import preservation
   raw_import_json?: Record<string, string>;
 }
@@ -126,6 +130,31 @@ const KEY_ALIASES: Record<string, string> = {
   "account notes": "history_notes",
   "account_notes": "history_notes",
   "context": "history_notes",
+  // Caution / restriction columns
+  "caution": "caution",
+  "cautions": "caution",
+  "do not mention": "caution",
+  "do_not_mention": "caution",
+  "do not say": "caution",
+  "do_not_say": "caution",
+  "warning": "caution",
+  "restriction": "caution",
+  "restrictions": "caution",
+  "sensitive": "caution",
+  // Competitor columns
+  "competitor": "competitor",
+  "competitors": "competitor",
+  "competitor_info": "competitor",
+  "competitive context": "competitor",
+  // Objection columns
+  "objection": "objection",
+  "objections": "objection",
+  "known objections": "objection",
+  "known_objections": "objection",
+  "pain point": "pain_point",
+  "pain points": "pain_point",
+  "pain_points": "pain_point",
+  "challenges": "pain_point",
 };
 
 /** Normalize all row keys to canonical names for case/variation-insensitive lookup */
@@ -184,6 +213,10 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     last_contact_date: (r["last_contact_date"] || "").trim() || undefined,
     next_step_text: (r["next_step_text"] || "").trim() || undefined,
     history_notes: (r["history_notes"] || "").trim() || undefined,
+    caution: (r["caution"] || "").trim() || undefined,
+    competitor: (r["competitor"] || "").trim() || undefined,
+    objection: (r["objection"] || "").trim() || undefined,
+    pain_point: (r["pain_point"] || "").trim() || undefined,
     // Raw preservation
     raw_import_json: Object.keys(rawImportJson).length > 0 ? rawImportJson : undefined,
   };
@@ -204,6 +237,13 @@ const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: str
   priority_label: { category: "imported_note", content_type: "general" },
   source_label: { category: "historical_fact", content_type: "general" },
   message: { category: "imported_note", content_type: "general" },
+  // Caution / restriction items
+  caution: { category: "caution", content_type: "do_not_say" },
+  // Competitor intel
+  competitor: { category: "commercial_signal", content_type: "competitor_context" },
+  // Pain points / objections
+  objection: { category: "commercial_signal", content_type: "known_objection" },
+  pain_point: { category: "commercial_signal", content_type: "pain_point" },
 };
 
 // Columns that are already mapped to core lead fields (no need to create context items)
@@ -247,6 +287,10 @@ export function extractLeadContextItems(
     { key: "history_notes", value: lead.history_notes, label: lead.history_notes || "" },
     { key: "last_contact_date", value: lead.last_contact_date, label: `Last contacted: ${lead.last_contact_date}` },
     { key: "next_step_text", value: lead.next_step_text, label: `Next step: ${lead.next_step_text}` },
+    { key: "caution", value: lead.caution, label: `⚠️ ${lead.caution}` },
+    { key: "competitor", value: lead.competitor, label: `Competitor: ${lead.competitor}` },
+    { key: "objection", value: lead.objection, label: `Known objection: ${lead.objection}` },
+    { key: "pain_point", value: lead.pain_point, label: `Pain point: ${lead.pain_point}` },
   ];
 
   // Avoid duplicate: if owner_name === previous_owner, skip one

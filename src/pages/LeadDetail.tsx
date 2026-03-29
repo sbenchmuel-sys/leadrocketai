@@ -12,7 +12,9 @@ import MeetingsTab from "@/components/lead/MeetingsTab";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
+import LeadContextPanel from "@/components/lead/LeadContextPanel";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
@@ -25,6 +27,7 @@ export default function LeadDetail() {
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
+  const { workspaceId } = useWorkspace();
 
   const backRoute = originContext === "leads" ? "/app/leads" : originContext === "inbox" ? "/app/inbox" : "/app";
 
@@ -137,12 +140,19 @@ export default function LeadDetail() {
         </div>
 
         {/* Sticky side panel — 1/3 */}
-        <div className="hidden lg:block">
+        <div className="hidden lg:block space-y-4">
           <LeadOverviewPanel
             lead={lead}
             onNavigateToMeetings={() => setActiveTab("meetings")}
             onUpdate={handleUpdate}
           />
+          {workspaceId && (
+            <LeadContextPanel
+              leadId={lead.id}
+              workspaceId={workspaceId}
+              onUpdate={handleUpdate}
+            />
+          )}
         </div>
       </div>
     </div>
