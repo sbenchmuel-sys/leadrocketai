@@ -111,6 +111,33 @@ const KB_CATEGORY_PRESETS: CategoryPreset[] = [
     suggested_tags: ["internal", "strategy"],
     icon: "🔒",
   },
+  {
+    label: "Product / Offer Cards",
+    description: "Individual products, packages, pricing tiers, bundles — one card per offer",
+    content_type: "knowledge",
+    allowed_customer_facing: true,
+    priority: 3,
+    suggested_tags: ["product-card", "offer", "pricing"],
+    icon: "🎁",
+  },
+  {
+    label: "Stakeholder Cards",
+    description: "Key buyer personas — role, goals, pain points, preferred messaging angles",
+    content_type: "industry",
+    allowed_customer_facing: true,
+    priority: 2,
+    suggested_tags: ["stakeholder", "persona", "decision-maker"],
+    icon: "👤",
+  },
+  {
+    label: "Stage Playbooks",
+    description: "Strategy guidance per deal stage — what to do, say, and avoid at each step",
+    content_type: "strategy",
+    allowed_customer_facing: false,
+    priority: 3,
+    suggested_tags: ["playbook", "stage", "methodology"],
+    icon: "📋",
+  },
 ];
 
 const CONTENT_TYPE_OPTIONS = [
