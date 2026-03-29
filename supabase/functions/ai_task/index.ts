@@ -941,6 +941,15 @@ serve(async (req) => {
       console.log(`[ai_task] [STAGE_POLICY] effective=${resolvedStagePolicy.effective_stage}, cta=${resolvedStagePolicy.final_cta_strategy}, urgent=${resolvedStagePolicy.urgency.is_urgent}, reasoning=${resolvedStagePolicy.stage_reasoning}`);
     }
 
+    // ── REPLY OBJECTIVE ORCHESTRATOR (runs after stage policy) ──
+    let replyObjective: ReplyObjectiveResult | undefined;
+    if (OFFER_ROUTED_TASKS.has(task) && commercialDecision && resolvedStagePolicy && latestInbound) {
+      replyObjective = selectReplyObjective(
+        latestInbound, commercialDecision, resolvedStagePolicy, undefined, task,
+      );
+      console.log(`[ai_task] [OBJECTIVE] primary=${replyObjective.primary}, secondary=${replyObjective.secondary || "none"}, confidence=${replyObjective.confidence}, override=${replyObjective.override_source || "none"}, reasoning=${replyObjective.reasoning}`);
+    }
+
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
     if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
       const queryParts: string[] = [];
