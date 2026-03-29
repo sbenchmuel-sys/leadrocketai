@@ -367,6 +367,8 @@ async function routeOffer(
   objections?: string[],
   decision?: ClassifiedDecision,
   stagePolicy?: ResolvedPolicy,
+  continuityMemory?: DealMemory,
+  continuityHintsForOffer?: ContinuityHints,
 ): Promise<{ recommended: OfferMatch | null; fallback_reason: string }> {
   try {
     // 1. Fetch active offers for workspace
