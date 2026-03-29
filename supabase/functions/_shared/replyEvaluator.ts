@@ -590,6 +590,8 @@ export function evaluateReply(
     deal_recent_cta_patterns: dealMemoryCtx?.recent_cta_patterns ?? [],
     deal_momentum_state: dealMemoryCtx?.momentum_state ?? "unknown",
     deal_ignored_cta_count: dealMemoryCtx?.ignored_cta_count ?? 0,
+    deal_handled_objections: dealMemoryCtx?.handled_objections ?? [],
+    deal_unanswered_questions: dealMemoryCtx?.unanswered_questions ?? [],
   };
 
   const allViolations: PolicyViolation[] = [];
