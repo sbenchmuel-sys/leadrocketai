@@ -58,6 +58,12 @@ interface EvalContext {
   is_urgent: boolean;
   has_internal_buyin: boolean;
   objection_classes: string[];
+  // Deal memory continuity fields
+  deal_shared_assets: string[];
+  deal_sent_offers: string[];
+  deal_recent_cta_patterns: string[];
+  deal_momentum_state: string;
+  deal_ignored_cta_count: number;
 }
 
 // ── CTA detection patterns ──
