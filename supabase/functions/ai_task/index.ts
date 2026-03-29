@@ -1467,15 +1467,17 @@ ${customInstructionsText}
                 const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "");
                 const oldScore = replyEvaluation.objective_alignment_score + replyEvaluation.cta_alignment_score + replyEvaluation.focus_score + replyEvaluation.commercial_relevance_score;
                 const newScore = reEval.objective_alignment_score + reEval.cta_alignment_score + reEval.focus_score + reEval.commercial_relevance_score;
-                console.log(`[ai_task] [EVALUATOR] Regen score: ${newScore}/40 (was ${oldScore}/40)`);
-                // Accept regenerated content only if improved
-                if (newScore > oldScore) {
+                const oldObjAlign = replyEvaluation.objective_alignment_score;
+                const newObjAlign = reEval.objective_alignment_score;
+                console.log(`[ai_task] [EVALUATOR] Regen score: ${newScore}/40 obj=${newObjAlign} (was ${oldScore}/40 obj=${oldObjAlign})`);
+                // Accept if total improved AND objective alignment didn't degrade
+                if (newScore > oldScore && newObjAlign >= oldObjAlign) {
                   content = regenContent;
                   replyEvaluation = reEval;
                   regenerated = true;
                   console.log(`[ai_task] [EVALUATOR] Accepted regenerated reply`);
                 } else {
-                  console.log(`[ai_task] [EVALUATOR] Kept original reply (regen did not improve)`);
+                  console.log(`[ai_task] [EVALUATOR] Kept original (regen did not improve both total+objective)`);
                 }
               }
             }
@@ -1483,6 +1485,39 @@ ${customInstructionsText}
         }
       } catch (evalErr) {
         console.error("[ai_task] Reply evaluation failed:", evalErr);
+      }
+
+      // Lightweight orchestration log for analytics/tuning
+      if (replyEvaluation && resolvedWorkspaceId) {
+        try {
+          const logClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          await logClient.from("orchestration_log").insert({
+            workspace_id: resolvedWorkspaceId,
+            lead_id: payload?.lead_id ? String(payload.lead_id) : null,
+            task_type: task,
+            effective_stage: resolvedStagePolicy?.effective_stage ?? null,
+            primary_objective: replyObjective?.primary ?? null,
+            secondary_objective: replyObjective?.secondary ?? null,
+            objective_confidence: replyObjective?.confidence ?? null,
+            override_source: replyObjective?.override_source ?? null,
+            dominant_layer: replyEvaluation.dominant_layer,
+            objection_classes: commercialDecision?.detected_objection_classes ?? [],
+            commercial_intent: commercialDecision?.detected_commercial_intent ?? null,
+            cta_strategy: resolvedStagePolicy?.final_cta_strategy ?? null,
+            is_urgent: resolvedStagePolicy?.urgency?.is_urgent ?? false,
+            objective_alignment_score: replyEvaluation.objective_alignment_score,
+            cta_alignment_score: replyEvaluation.cta_alignment_score,
+            focus_score: replyEvaluation.focus_score,
+            commercial_relevance_score: replyEvaluation.commercial_relevance_score,
+            violation_rules: replyEvaluation.policy_violations.map(v => v.rule),
+            regeneration_triggered: regenerated,
+            offer_key: offerResult?.recommended?.offer_key ?? null,
+          }).then(({ error }) => {
+            if (error) console.error("[ai_task] Orchestration log insert failed:", error.message);
+          });
+        } catch (logErr) {
+          console.error("[ai_task] Orchestration log failed:", logErr);
+        }
       }
     }
 
