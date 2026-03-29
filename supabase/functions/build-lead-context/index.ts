@@ -299,6 +299,12 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] deal_memory lookup failed (non-fatal):", memErr);
     }
 
+    // Lead context items from import/manual entry
+    const leadContextItems: LeadContextItem[] = (contextItemsResult.data || []) as LeadContextItem[];
+    if (leadContextItems.length > 0) {
+      console.log(`[build-lead-context] Loaded ${leadContextItems.length} lead context items`);
+    }
+
     // Build final context_json
     const contextJson: LeadContextJson = {
       company_summary: companySummary,
@@ -307,6 +313,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       recommended_angles: recommendedAngles,
       industry_context: industryContext,
       previous_interactions_summary: previousInteractionsSummary,
+      lead_context_items: leadContextItems,
       generated_at: new Date().toISOString(),
     };
 
