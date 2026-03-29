@@ -247,13 +247,25 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
 };
 
 // Dynamically expand reply_to_thread KB types based on inbound message signals
-function getExpandedKBTypes(task: string, latestInbound?: string): string[] {
+function getExpandedKBTypes(task: string, latestInbound?: string, decision?: ClassifiedDecision): string[] {
   const base = TASK_KB_CONFIG[task];
   if (!base) return [];
-  if (task !== "reply_to_thread" || !latestInbound) return [...base];
+  const expanded = [...base];
+
+  // Decision-driven KB boost for last-mile tasks
+  if (decision && decision.kb_boost_types.length > 0 && OFFER_ROUTED_TASKS.has(task)) {
+    for (const t of decision.kb_boost_types) {
+      if (!expanded.includes(t)) {
+        expanded.push(t);
+        console.log(`[ai_task] KB expansion: +${t} (decision boost: ${decision.detected_objection_classes[0] || "intent"})`);
+      }
+    }
+    return expanded;
+  }
+
+  if (task !== "reply_to_thread" || !latestInbound) return expanded;
 
   const lower = latestInbound.toLowerCase();
-  const expanded = [...base];
 
   // Comparison signals → add competitor
   if (/compet|alternative|vs\b|compared|switch|other (option|vendor|provider|solution)|currently using|already (have|use)/i.test(lower)) {
