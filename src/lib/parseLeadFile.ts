@@ -126,6 +126,31 @@ const KEY_ALIASES: Record<string, string> = {
   "account notes": "history_notes",
   "account_notes": "history_notes",
   "context": "history_notes",
+  // Caution / restriction columns
+  "caution": "caution",
+  "cautions": "caution",
+  "do not mention": "caution",
+  "do_not_mention": "caution",
+  "do not say": "caution",
+  "do_not_say": "caution",
+  "warning": "caution",
+  "restriction": "caution",
+  "restrictions": "caution",
+  "sensitive": "caution",
+  // Competitor columns
+  "competitor": "competitor",
+  "competitors": "competitor",
+  "competitor_info": "competitor",
+  "competitive context": "competitor",
+  // Objection columns
+  "objection": "objection",
+  "objections": "objection",
+  "known objections": "objection",
+  "known_objections": "objection",
+  "pain point": "pain_point",
+  "pain points": "pain_point",
+  "pain_points": "pain_point",
+  "challenges": "pain_point",
 };
 
 /** Normalize all row keys to canonical names for case/variation-insensitive lookup */
@@ -204,6 +229,13 @@ const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: str
   priority_label: { category: "imported_note", content_type: "general" },
   source_label: { category: "historical_fact", content_type: "general" },
   message: { category: "imported_note", content_type: "general" },
+  // Caution / restriction items
+  caution: { category: "caution", content_type: "do_not_say" },
+  // Competitor intel
+  competitor: { category: "commercial_signal", content_type: "competitor_context" },
+  // Pain points / objections
+  objection: { category: "commercial_signal", content_type: "known_objection" },
+  pain_point: { category: "commercial_signal", content_type: "pain_point" },
 };
 
 // Columns that are already mapped to core lead fields (no need to create context items)
