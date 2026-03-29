@@ -23,6 +23,10 @@ import {
   selectReplyObjective, formatObjectiveBlock, applyObjectiveOverrides,
   type ReplyObjectiveResult,
 } from "../_shared/replyObjective.ts";
+import {
+  evaluateReply, buildEvaluatorFeedback,
+  type ReplyEvaluation,
+} from "../_shared/replyEvaluator.ts";
 
 // ============================================
 // STRIP LEAKED REASONING FROM LLM OUTPUT
