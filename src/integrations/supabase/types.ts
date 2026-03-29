@@ -2400,6 +2400,81 @@ export type Database = {
         }
         Relationships: []
       }
+      orchestration_log: {
+        Row: {
+          commercial_intent: string | null
+          commercial_relevance_score: number | null
+          created_at: string
+          cta_alignment_score: number | null
+          cta_strategy: string | null
+          dominant_layer: string | null
+          effective_stage: string | null
+          focus_score: number | null
+          id: string
+          is_urgent: boolean | null
+          lead_id: string | null
+          objection_classes: string[] | null
+          objective_alignment_score: number | null
+          objective_confidence: string | null
+          offer_key: string | null
+          override_source: string | null
+          primary_objective: string | null
+          regeneration_triggered: boolean | null
+          secondary_objective: string | null
+          task_type: string
+          violation_rules: string[] | null
+          workspace_id: string
+        }
+        Insert: {
+          commercial_intent?: string | null
+          commercial_relevance_score?: number | null
+          created_at?: string
+          cta_alignment_score?: number | null
+          cta_strategy?: string | null
+          dominant_layer?: string | null
+          effective_stage?: string | null
+          focus_score?: number | null
+          id?: string
+          is_urgent?: boolean | null
+          lead_id?: string | null
+          objection_classes?: string[] | null
+          objective_alignment_score?: number | null
+          objective_confidence?: string | null
+          offer_key?: string | null
+          override_source?: string | null
+          primary_objective?: string | null
+          regeneration_triggered?: boolean | null
+          secondary_objective?: string | null
+          task_type: string
+          violation_rules?: string[] | null
+          workspace_id: string
+        }
+        Update: {
+          commercial_intent?: string | null
+          commercial_relevance_score?: number | null
+          created_at?: string
+          cta_alignment_score?: number | null
+          cta_strategy?: string | null
+          dominant_layer?: string | null
+          effective_stage?: string | null
+          focus_score?: number | null
+          id?: string
+          is_urgent?: boolean | null
+          lead_id?: string | null
+          objection_classes?: string[] | null
+          objective_alignment_score?: number | null
+          objective_confidence?: string | null
+          offer_key?: string | null
+          override_source?: string | null
+          primary_objective?: string | null
+          regeneration_triggered?: boolean | null
+          secondary_objective?: string | null
+          task_type?: string
+          violation_rules?: string[] | null
+          workspace_id?: string
+        }
+        Relationships: []
+      }
       org_settings: {
         Row: {
           created_at: string
