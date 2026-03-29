@@ -251,11 +251,31 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (!workspaceId) {
-      return new Response(JSON.stringify({ ok: false, error: "Could not resolve workspace" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+
+    // Step 6: Include deal_memory continuity context
+    let dealMemoryContext: Record<string, unknown> = {};
+    try {
+      const { data: memRow } = await adminClient
+        .from("deal_memory")
+        .select("momentum_state, unanswered_questions, unresolved_objections, continuity_risks, recent_cta_patterns, shared_assets, sent_offers, pricing_status, ignored_cta_count")
+        .eq("lead_id", lead_id)
+        .maybeSingle();
+      if (memRow) {
+        dealMemoryContext = {
+          momentum_state: memRow.momentum_state ?? "unknown",
+          unanswered_questions: memRow.unanswered_questions ?? [],
+          unresolved_objections: memRow.unresolved_objections ?? [],
+          continuity_risks: memRow.continuity_risks ?? [],
+          recent_cta_patterns: memRow.recent_cta_patterns ?? [],
+          shared_assets: memRow.shared_assets ?? [],
+          sent_offers: memRow.sent_offers ?? [],
+          pricing_status: memRow.pricing_status ?? "not_discussed",
+          ignored_cta_count: memRow.ignored_cta_count ?? 0,
+        };
+        console.log(`[build-lead-context] Included deal_memory: momentum=${memRow.momentum_state}, risks=${(memRow.continuity_risks || []).length}`);
+      }
+    } catch (memErr) {
+      console.error("[build-lead-context] deal_memory lookup failed (non-fatal):", memErr);
     }
 
     // Build final context_json
@@ -269,6 +289,12 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       generated_at: new Date().toISOString(),
     };
 
+    // Merge deal memory into context (available to all consumers)
+    const extendedContextJson = {
+      ...contextJson,
+      deal_continuity: dealMemoryContext,
+    };
+
     // Upsert into cache
     const { error: upsertError } = await adminClient
       .from("lead_context_cache")
@@ -276,7 +302,7 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
         {
           lead_id,
           workspace_id: workspaceId,
-          context_json: contextJson,
+          context_json: extendedContextJson,
           last_generated_at: new Date().toISOString(),
         },
         { onConflict: "lead_id" }
@@ -286,9 +312,9 @@ Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No mar
       console.error("[build-lead-context] Upsert error:", upsertError);
     }
 
-    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles`);
+    console.log(`[build-lead-context] ✅ Context built for ${lead_id}: ${signals.length} signals, ${timelineItems.length} timeline items, ${recommendedAngles.length} angles, deal_memory=${Object.keys(dealMemoryContext).length > 0 ? "yes" : "no"}`);
 
-    return new Response(JSON.stringify({ ok: true, context: contextJson, cached: false }), {
+    return new Response(JSON.stringify({ ok: true, context: extendedContextJson, cached: false }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {

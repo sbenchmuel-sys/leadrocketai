@@ -202,14 +202,20 @@ async function buildDiversityConstraints(
   return constraints;
 }
 
-function formatDiversityBlock(constraints: DiversityConstraints): string {
+function formatDiversityBlock(constraints: DiversityConstraints, isOfferRouted: boolean): string {
   const parts: string[] = [];
   parts.push("=== MESSAGE DIVERSITY CONSTRAINTS ===");
   parts.push("To ensure fresh, varied outreach, follow these constraints:");
   if (constraints.avoid_opening_types.length > 0) parts.push(`- DO NOT use these opening styles (recently used): ${constraints.avoid_opening_types.join(", ")}`);
   if (constraints.avoid_angles.length > 0) parts.push(`- DO NOT use these angles/themes (overused): ${constraints.avoid_angles.join(", ")}`);
-  if (constraints.avoid_cta_types.length > 0) parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
-  if (constraints.preferred_cta_types.length > 0) parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  // For OFFER_ROUTED_TASKS, CTA avoidance is handled by deal_memory (stateful),
+  // so diversity constraints only apply to cold outreach tasks.
+  if (!isOfferRouted && constraints.avoid_cta_types.length > 0) {
+    parts.push(`- DO NOT use these CTA types (recently used): ${constraints.avoid_cta_types.join(", ")}`);
+  }
+  if (!isOfferRouted && constraints.preferred_cta_types.length > 0) {
+    parts.push(`- PREFER one of these fresh CTA styles: ${constraints.preferred_cta_types.slice(0, 3).join(", ")}`);
+  }
   parts.push("- Maintain brand voice consistency while varying approach");
   parts.push("- Quality and relevance always take priority over forced variation");
   return parts.join("\n");
@@ -875,6 +881,16 @@ serve(async (req) => {
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
 
+    // Resolve workspace_id early — needed by deal memory, diversity, and logging
+    let resolvedWorkspaceId: string | null = null;
+    if (payload?.lead_id) {
+      try {
+        const wsClient = createClient(supabaseUrl, supabaseServiceKey);
+        const { data: leadWs } = await wsClient.from("leads").select("workspace_id").eq("id", payload.lead_id).maybeSingle();
+        resolvedWorkspaceId = leadWs?.workspace_id ?? null;
+      } catch (err) { console.error("[ai_task] Failed to resolve workspace_id:", err); }
+    }
+
     let contextCachePromise: Promise<Record<string, unknown> | null> = Promise.resolve(null);
     if (payload?.lead_id) {
       contextCachePromise = (async () => {
@@ -1091,7 +1107,6 @@ serve(async (req) => {
     let diversityPromise: Promise<DiversityConstraints> = Promise.resolve({
       avoid_opening_types: [], avoid_angles: [], avoid_cta_types: [], preferred_angles: [], preferred_cta_types: [],
     });
-    let resolvedWorkspaceId: string | null = null;
     if (payload?.lead_id && OUTREACH_TASKS.has(task)) {
       diversityPromise = (async () => {
         try {
@@ -1269,7 +1284,7 @@ ${customInstructionsText}
       diversityConstraints.avoid_angles.length > 0 ||
       diversityConstraints.avoid_cta_types.length > 0
     );
-    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints) : "";
+    const diversityBlock = hasDiversityConstraints ? formatDiversityBlock(diversityConstraints, OFFER_ROUTED_TASKS.has(task)) : "";
     if (diversityBlock) console.log("[ai_task] [4/DIVERSITY] Constraints injected");
 
     const resolvedChannel = resolveChannel(task, payload?.channel ? String(payload.channel) : undefined);

@@ -5,7 +5,6 @@ import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
-import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
 import {
   loadExecutionSettings,
   clearSettingsCache,
