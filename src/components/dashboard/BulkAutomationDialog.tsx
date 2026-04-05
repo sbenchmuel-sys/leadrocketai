@@ -14,7 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Zap, Loader2, AlertTriangle, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { EnrichedLead, MOTION_LABELS, Motion } from "@/lib/dashboardUtils";
-import { getMotionIntervals, getNurtureCadenceDays, staggerSendTime } from "@/lib/cadenceSettingsTypes";
+import { getMotionIntervals, getNurtureCadenceDays, calculateEligibleAt, DEFAULT_CADENCE_SETTINGS } from "@/lib/cadenceSettingsTypes";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { addDays } from "date-fns";
