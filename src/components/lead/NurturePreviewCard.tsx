@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays, isPast } from "date-fns";
+import { staggerSendTime } from "@/lib/cadenceSettingsTypes";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { saveDraft } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
@@ -266,12 +267,13 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
     try {
       const now = new Date();
       // Always schedule in the future: next business morning at 9:30
-      const tomorrow = addDays(now, 1);
-      tomorrow.setHours(9, 30, 0, 0);
+      let baseDay = addDays(now, 1);
       // Skip weekends
-      const day = tomorrow.getDay();
-      const daysToAdd = day === 0 ? 1 : day === 6 ? 2 : 0;
-      const eligibleAt = daysToAdd > 0 ? addDays(tomorrow, daysToAdd) : tomorrow;
+      const dayOfWeek = baseDay.getDay();
+      if (dayOfWeek === 0) baseDay = addDays(baseDay, 1);
+      else if (dayOfWeek === 6) baseDay = addDays(baseDay, 2);
+      // Stagger time across business hours using lead id
+      const eligibleAt = staggerSendTime(baseDay, lead.id);
 
       const { error } = await supabase
         .from("leads")
