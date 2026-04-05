@@ -79,11 +79,11 @@ function computeAutomationFields(lead: EnrichedLead) {
     const gapDays = getNurtureCadenceDays(cadence);
     const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
 
-    let eligibleAt = addDays(new Date(), gapDays);
-    eligibleAt = staggerSendTime(eligibleAt, lead.id);
-    if (eligibleAt.getTime() <= Date.now()) {
-      eligibleAt = staggerSendTime(addDays(eligibleAt, 1), lead.id);
-    }
+    const intervalMs = gapDays * 24 * 60 * 60 * 1000;
+    const actionKey = `nurture_${stepNum}`;
+    const eligibleAt = calculateEligibleAt(
+      Date.now(), intervalMs, lead.id, actionKey, DEFAULT_CADENCE_SETTINGS, null
+    );
 
     return {
       needs_action: true,
