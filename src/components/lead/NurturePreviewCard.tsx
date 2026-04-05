@@ -266,14 +266,13 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const handleEnableAutomation = async () => {
     try {
       const now = new Date();
-      // Always schedule in the future: next business morning at 9:30
-      let baseDay = addDays(now, 1);
-      // Skip weekends
-      const dayOfWeek = baseDay.getDay();
-      if (dayOfWeek === 0) baseDay = addDays(baseDay, 1);
-      else if (dayOfWeek === 6) baseDay = addDays(baseDay, 2);
-      // Stagger time across business hours using lead id
-      const eligibleAt = staggerSendTime(baseDay, lead.id);
+      const cadenceDays = CADENCE_DAYS[lead.nurture_cadence || "biweekly"] || 14;
+      const intervalMs = cadenceDays * 24 * 60 * 60 * 1000;
+      const actionKey = `send_nurture_${nurtureSent + 1}`;
+      const eligibleAt = calculateEligibleAt(
+        now.getTime(), intervalMs, lead.id, actionKey,
+        DEFAULT_CADENCE_SETTINGS, null
+      );
 
       const { error } = await supabase
         .from("leads")

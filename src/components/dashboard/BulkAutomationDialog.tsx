@@ -117,10 +117,9 @@ function computeAutomationFields(lead: EnrichedLead) {
     eligibleAt = new Date();
     eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
   } else {
-    eligibleAt = staggerSendTime(addDays(new Date(), gapDays), lead.id);
-    if (eligibleAt.getTime() <= Date.now()) {
-      eligibleAt = staggerSendTime(addDays(eligibleAt, 1), lead.id);
-    }
+    eligibleAt = calculateEligibleAt(
+      Date.now(), gapDays * 24 * 60 * 60 * 1000, lead.id, nextKey, DEFAULT_CADENCE_SETTINGS, null
+    );
   }
 
   return {
