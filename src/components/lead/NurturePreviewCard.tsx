@@ -124,45 +124,71 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
   const handleSendNow = async (target: "next" | "following") => {
     setIsSending(true);
+    const stepNum = nurtureSent + (target === "following" ? 2 : 1);
+    const actionKey = `send_nurture_${stepNum}`;
+
     try {
-      // Trigger the automation executor for this lead by setting it eligible now
-      await supabase
+      // Step 1: Set lead state for executor pickup
+      const { error: updateErr } = await supabase
         .from("leads")
         .update({
           needs_action: true,
           eligible_at: new Date().toISOString(),
-          next_action_key: `send_nurture_${nurtureSent + (target === "following" ? 2 : 1)}`,
-          next_action_label: `Nurture email #${nurtureSent + (target === "following" ? 2 : 1)}`,
+          next_action_key: actionKey,
+          next_action_label: `Nurture email #${stepNum}`,
           action_reason_code: "NURTURE_DUE",
-          nurture_mode: "automatic", // temporarily set to automatic so executor processes it
+          nurture_mode: "automatic", // executor requires automatic mode
         })
         .eq("id", lead.id);
 
-      // Invoke the automation executor directly
-      const { error } = await supabase.functions.invoke("automation-executor", {});
-      if (error) throw error;
+      if (updateErr) throw updateErr;
 
-      // Revert nurture_mode back to review if it was review before
-      if (mode === "review") {
-        await supabase
-          .from("leads")
-          .update({ nurture_mode: "review" })
-          .eq("id", lead.id);
+      // Step 2: Small delay to ensure DB write is committed before executor reads
+      await new Promise(r => setTimeout(r, 500));
+
+      // Step 3: Invoke executor
+      const { data, error } = await supabase.functions.invoke("automation-executor", {});
+      
+      // Check both function-level error and response-level error
+      if (error) throw error;
+      if (data && !data.ok) {
+        throw new Error(data.error || "Executor returned error");
       }
 
-      toast.success("Nurture email sent");
+      // Check if our lead was actually processed or skipped
+      const processed = data?.sentLeads?.some((s: any) => s.leadId === lead.id);
+      const wasSkipped = !processed && (data?.skipped > 0 || data?.errors?.length > 0);
+
+      if (wasSkipped) {
+        // Check automation_log for the reason
+        const { data: logEntry } = await supabase
+          .from("automation_log")
+          .select("error_message, status")
+          .eq("lead_id", lead.id)
+          .eq("action_key", actionKey)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const reason = logEntry?.error_message || "Unknown reason — check automation logs";
+        console.warn("[NurturePreviewCard] Send was skipped:", reason);
+        toast.error(`Send skipped: ${reason}`);
+      } else {
+        toast.success("Nurture email sent");
+      }
+
       onUpdate();
     } catch (err) {
       console.error("[NurturePreviewCard] Send now error:", err);
-      toast.error("Failed to send nurture email");
-      // Revert nurture_mode on failure too
+      toast.error(`Failed to send: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      // Always revert nurture_mode if it was review
       if (mode === "review") {
         await supabase
           .from("leads")
           .update({ nurture_mode: "review" })
           .eq("id", lead.id);
       }
-    } finally {
       setIsSending(false);
     }
   };
