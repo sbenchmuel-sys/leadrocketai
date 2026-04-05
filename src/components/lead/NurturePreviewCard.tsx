@@ -41,12 +41,17 @@ const NURTURE_STEP_LABELS = ["Industry Insight", "Case Study", "Value-Add Resour
 function getScheduledDates(lead: LeadDetail) {
   const cadence = lead.nurture_cadence || "biweekly";
   const days = CADENCE_DAYS[cadence] || 14;
-  const base = lead.mode_changed_at ? new Date(lead.mode_changed_at) : new Date();
   const nurtureSent = (lead as any).nurture_outbound_count || 0;
 
-  const nextDate = addDays(base, days * (nurtureSent + 1));
-  nextDate.setHours(9, 30, 0, 0);
-  const followingDate = addDays(base, days * (nurtureSent + 2));
+  // Use eligible_at if set (authoritative), otherwise compute from mode_changed_at
+  const eligibleAt = (lead as any).eligible_at ? new Date((lead as any).eligible_at) : null;
+  const base = lead.mode_changed_at ? new Date(lead.mode_changed_at) : new Date();
+
+  // Next date: prefer eligible_at (actual scheduled time), fallback to computed
+  let nextDate = eligibleAt || addDays(base, days * (nurtureSent + 1));
+  if (!eligibleAt) nextDate.setHours(9, 30, 0, 0);
+
+  const followingDate = addDays(nextDate, days);
   followingDate.setHours(9, 0, 0, 0);
 
   const nextLabel = NURTURE_STEP_LABELS[nurtureSent % NURTURE_STEP_LABELS.length];
