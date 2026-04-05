@@ -14,7 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Zap, Loader2, AlertTriangle, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { EnrichedLead, MOTION_LABELS, Motion } from "@/lib/dashboardUtils";
-import { getMotionIntervals, getNurtureCadenceDays, staggerSendTime } from "@/lib/cadenceSettingsTypes";
+import { getMotionIntervals, getNurtureCadenceDays, calculateEligibleAt, DEFAULT_CADENCE_SETTINGS } from "@/lib/cadenceSettingsTypes";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { addDays } from "date-fns";
@@ -79,11 +79,11 @@ function computeAutomationFields(lead: EnrichedLead) {
     const gapDays = getNurtureCadenceDays(cadence);
     const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
 
-    let eligibleAt = addDays(new Date(), gapDays);
-    eligibleAt = staggerSendTime(eligibleAt, lead.id);
-    if (eligibleAt.getTime() <= Date.now()) {
-      eligibleAt = staggerSendTime(addDays(eligibleAt, 1), lead.id);
-    }
+    const intervalMs = gapDays * 24 * 60 * 60 * 1000;
+    const actionKey = `nurture_${stepNum}`;
+    const eligibleAt = calculateEligibleAt(
+      Date.now(), intervalMs, lead.id, actionKey, DEFAULT_CADENCE_SETTINGS, null
+    );
 
     return {
       needs_action: true,
@@ -117,10 +117,9 @@ function computeAutomationFields(lead: EnrichedLead) {
     eligibleAt = new Date();
     eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
   } else {
-    eligibleAt = staggerSendTime(addDays(new Date(), gapDays), lead.id);
-    if (eligibleAt.getTime() <= Date.now()) {
-      eligibleAt = staggerSendTime(addDays(eligibleAt, 1), lead.id);
-    }
+    eligibleAt = calculateEligibleAt(
+      Date.now(), gapDays * 24 * 60 * 60 * 1000, lead.id, nextKey, DEFAULT_CADENCE_SETTINGS, null
+    );
   }
 
   return {
