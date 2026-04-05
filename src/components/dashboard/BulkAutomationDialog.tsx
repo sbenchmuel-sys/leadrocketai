@@ -80,9 +80,9 @@ function computeAutomationFields(lead: EnrichedLead) {
     const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
 
     let eligibleAt = addDays(new Date(), gapDays);
-    eligibleAt.setHours(9, 30, 0, 0);
+    eligibleAt = staggerSendTime(eligibleAt, lead.id);
     if (eligibleAt.getTime() <= Date.now()) {
-      eligibleAt = addDays(eligibleAt, 1);
+      eligibleAt = staggerSendTime(addDays(eligibleAt, 1), lead.id);
     }
 
     return {
