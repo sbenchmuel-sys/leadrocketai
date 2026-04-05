@@ -276,29 +276,6 @@ export function getDeterministicJitter(
   return (normalized * 2 - 1) * jitterPercent;
 }
 
-// Stagger a send time across a business-day window (default 9:00–16:30)
-// Uses a deterministic hash from leadId so each lead gets a stable slot
-export function staggerSendTime(
-  date: Date,
-  leadId: string,
-  windowStart = 9,
-  windowEnd = 16.5
-): Date {
-  let hash = 0;
-  for (let i = 0; i < leadId.length; i++) {
-    hash = ((hash << 5) - hash) + leadId.charCodeAt(i);
-    hash = hash & hash;
-  }
-  const bucket = ((hash >>> 0) % 10000) / 10000; // 0-1
-  const totalMinutes = (windowEnd - windowStart) * 60; // e.g. 450 min
-  const offsetMinutes = Math.floor(bucket * totalMinutes);
-  const hour = windowStart + Math.floor(offsetMinutes / 60);
-  const minute = offsetMinutes % 60;
-  const result = new Date(date);
-  result.setHours(Math.floor(hour), minute, 0, 0);
-  return result;
-}
-
 // Helper to check if a time is within the send window (business hours)
 export function isWithinSendWindow(
   date: Date,
