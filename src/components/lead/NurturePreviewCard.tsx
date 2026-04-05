@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, addDays, isPast } from "date-fns";
+import { staggerSendTime } from "@/lib/cadenceSettingsTypes";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { saveDraft } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
