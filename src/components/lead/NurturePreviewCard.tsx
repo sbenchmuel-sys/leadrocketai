@@ -264,21 +264,20 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
   const handleEnableAutomation = async () => {
     try {
-      // Calculate next eligible_at based on cadence
-      const cadence = lead.nurture_cadence || "biweekly";
-      const days = CADENCE_DAYS[cadence] || 14;
-      const base = lead.mode_changed_at ? new Date(lead.mode_changed_at) : new Date();
-      const nextEligible = addDays(base, days * (nurtureSent + 1));
-      nextEligible.setHours(9, 30, 0, 0);
-      // If next eligible is in the past, schedule for tomorrow
       const now = new Date();
-      const eligibleAt = nextEligible > now ? nextEligible : addDays(now, 1);
-      if (nextEligible <= now) eligibleAt.setHours(9, 30, 0, 0);
+      // Always schedule in the future: next business morning at 9:30
+      const tomorrow = addDays(now, 1);
+      tomorrow.setHours(9, 30, 0, 0);
+      // Skip weekends
+      const day = tomorrow.getDay();
+      const daysToAdd = day === 0 ? 1 : day === 6 ? 2 : 0;
+      const eligibleAt = daysToAdd > 0 ? addDays(tomorrow, daysToAdd) : tomorrow;
 
-      await supabase
+      const { error } = await supabase
         .from("leads")
         .update({
           nurture_mode: "automatic",
+          nurture_status: "active",
           needs_action: true,
           eligible_at: eligibleAt.toISOString(),
           next_action_key: `send_nurture_${nurtureSent + 1}`,
@@ -286,10 +285,14 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           action_reason_code: "NURTURE_DUE",
         })
         .eq("id", lead.id);
-      toast.success("Nurture automation enabled — emails will send automatically");
+
+      if (error) throw error;
+
+      toast.success(`Nurture automation enabled — next email scheduled for ${format(eligibleAt, "MMM d 'at' h:mm a")}`);
       setShowUpgradeDialog(false);
       onUpdate();
-    } catch {
+    } catch (err) {
+      console.error("[NurturePreviewCard] Enable automation error:", err);
       toast.error("Failed to enable automation");
     }
   };
