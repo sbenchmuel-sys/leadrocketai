@@ -206,11 +206,12 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
   const [emailDialogActionKey, setEmailDialogActionKey] = useState<string | undefined>(undefined);
 
   // Auto-intent
-  const autoSuggestion = useMemo(() => {
+  const autoSuggestion = useMemo((): IntentSuggestion => {
     switch (channel) {
       case "email": return deriveEmailIntent(lead, hasOutboundAfterMeeting);
       case "linkedin": return deriveLinkedInIntent(lead);
       case "whatsapp": return deriveWhatsAppIntent(lead);
+      case "sms": return { intent: "sms_follow_up" as SmsIntent, reason: "SMS outreach" };
     }
   }, [channel, lead, hasOutboundAfterMeeting]);
 
