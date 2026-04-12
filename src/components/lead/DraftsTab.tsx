@@ -881,7 +881,7 @@ function SendSmsButton({ phone, messageText, leadId, selectedIntent, onSent }: S
 
       // Update sequence state
       const intentUsed = INTENT_TO_AI_TASK[selectedIntent] || "sms_message";
-      await updateSequenceState(leadId, intentUsed, "sms").catch(() => {});
+      await updateSequenceState(leadId, intentUsed, null, null, "sms").catch(() => {});
 
       toast.success("SMS sent successfully");
       onSent();
