@@ -1113,8 +1113,9 @@ serve(async (req) => {
           continue;
         }
 
-        const gmailMessageId = sendResult.messageId || null;
-        console.log(`[automation-executor] Email sent for lead ${lead.id}: ${gmailMessageId}`);
+        const gmailMessageId = sendResult.messageId || sendResult.messageSid || null;
+        const sendChannelLabel = resolvedChannel === "sms" ? "SMS" : "Email";
+        console.log(`[automation-executor] ${sendChannelLabel} sent for lead ${lead.id}: ${gmailMessageId}`);
 
         // ── UPGRADE CLAIM TO SENT ───────────────────────────────
         // The interaction + timeline records are created by gmail-send / outlook-send
