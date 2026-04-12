@@ -1017,9 +1017,34 @@ serve(async (req) => {
         }
         const claimId = claimRow?.id;
 
-        // Send via appropriate mail provider
+        // Send via appropriate channel + provider
         let sendResponse: Response;
-        if (mailProvider === "outlook" && mailAccountId) {
+        if (resolvedChannel === "sms") {
+          // ── SMS SEND ──────────────────────────────────────────
+          if (!lead.phone) {
+            console.warn(`[automation-executor] Lead ${lead.id}: SMS channel but no phone number — skipping`);
+            await supabase.from("automation_log")
+              .update({ status: "skipped", error_message: "No phone number for SMS", completed_at: new Date().toISOString() })
+              .eq("id", claimId);
+            skipped++;
+            continue;
+          }
+          sendResponse = await fetch(`${supabaseUrl}/functions/v1/sms-send`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseServiceKey}`,
+              "X-Internal-Secret": Deno.env.get("INTERNAL_API_SECRET") ?? "",
+            },
+            body: JSON.stringify({
+              to: lead.phone,
+              body: draftBody,
+              leadId: lead.id,
+              ownerUserId: lead.owner_user_id,
+              skipStateUpdate: true,
+            }),
+          });
+        } else if (mailProvider === "outlook" && mailAccountId) {
           const bodyHtml = draftBody.replace(/\n/g, "<br>");
           sendResponse = await fetch(`${supabaseUrl}/functions/v1/outlook-send`, {
             method: "POST",
