@@ -775,6 +775,7 @@ serve(async (req) => {
 
         let draftBody: string;
         let subject: string;
+        let resolvedChannel: string = "email"; // default, overridden by campaign resolver
         const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
