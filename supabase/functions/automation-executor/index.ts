@@ -931,36 +931,46 @@ serve(async (req) => {
             .replace(/\{First\s*Name\}/gi, repFirstName)
             .replace(/\[First\s*Name\]/gi, repFirstName);
 
-          // Append signature
-          if (repSignature?.signature_text) {
-            draftBody += `\n\n${repSignature.signature_text}`;
-          } else if (repProfile?.full_name) {
-            const sigParts = [repProfile.full_name];
-            if (repProfile.job_title) sigParts.push(repProfile.job_title);
-            if (repProfile.company_name) sigParts.push(repProfile.company_name);
-            if (repProfile.phone) sigParts.push(repProfile.phone);
-            if (repProfile.email) sigParts.push(repProfile.email);
-            draftBody += `\n\n${sigParts.join("\n")}`;
+          // Determine resolved channel for this step
+          const resolvedChannel = resolvedInstruction?.channel || "email";
+
+          // Append signature + footer only for email channel
+          if (resolvedChannel === "email") {
+            if (repSignature?.signature_text) {
+              draftBody += `\n\n${repSignature.signature_text}`;
+            } else if (repProfile?.full_name) {
+              const sigParts = [repProfile.full_name];
+              if (repProfile.job_title) sigParts.push(repProfile.job_title);
+              if (repProfile.company_name) sigParts.push(repProfile.company_name);
+              if (repProfile.phone) sigParts.push(repProfile.phone);
+              if (repProfile.email) sigParts.push(repProfile.email);
+              draftBody += `\n\n${sigParts.join("\n")}`;
+            }
+
+            // Unsubscribe footer
+            draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
           }
 
-          // Unsubscribe footer
-          draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
-
-          // Subject line
+          // Subject line (only for email)
           const leadFirstName = lead.name.split(" ")[0];
           const companyName = lead.company !== "Unknown Company" ? lead.company : null;
-          if (aiTask === "pre_email_1_intro") {
-            subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
-          } else if (aiTask === "pre_email_2_followup") {
-            subject = `Following up - ${leadFirstName}`;
-          } else if (aiTask === "pre_email_3_followup") {
-            subject = `Checking in - ${leadFirstName}`;
-          } else if (aiTask === "pre_email_4_breakup") {
-            subject = `Closing the loop - ${leadFirstName}`;
-          } else if (aiTask === "nurture_email_single") {
-            subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+          if (resolvedChannel === "email") {
+            if (aiTask === "pre_email_1_intro") {
+              subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
+            } else if (aiTask === "pre_email_2_followup") {
+              subject = `Following up - ${leadFirstName}`;
+            } else if (aiTask === "pre_email_3_followup") {
+              subject = `Checking in - ${leadFirstName}`;
+            } else if (aiTask === "pre_email_4_breakup") {
+              subject = `Closing the loop - ${leadFirstName}`;
+            } else if (aiTask === "nurture_email_single") {
+              subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+            } else {
+              subject = `Following up - ${leadFirstName}`;
+            }
           } else {
-            subject = `Following up - ${leadFirstName}`;
+            // SMS/WhatsApp: no subject line
+            subject = "";
           }
         } // end else (no cached draft)
 
