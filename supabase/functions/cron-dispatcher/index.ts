@@ -51,13 +51,17 @@ Deno.serve(async (req) => {
   // forwarded to target functions.
   const authHeader = req.headers.get("Authorization") ?? "";
   const bearerToken = authHeader.replace("Bearer ", "");
+  const apikeyHeader = req.headers.get("apikey") ?? "";
+  const tokenToCheck = bearerToken || apikeyHeader;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  // Try both known env var names for the anon key
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("ANON_KEY") || "";
 
-  const isServiceRole = serviceKey && constantTimeEqual(bearerToken, serviceKey);
-  const isAnon = anonKey && constantTimeEqual(bearerToken, anonKey);
+  const isServiceRole = serviceKey && constantTimeEqual(tokenToCheck, serviceKey);
+  const isAnon = anonKey && constantTimeEqual(tokenToCheck, anonKey);
 
-  if (!bearerToken || (!isServiceRole && !isAnon)) {
+  if (!tokenToCheck || (!isServiceRole && !isAnon)) {
+    console.warn(`[cron-dispatcher] Auth rejected. tokenLen=${tokenToCheck.length}, anonKeyLen=${anonKey.length}, serviceKeyLen=${serviceKey.length}`);
     return jsonResp({ error: "Forbidden — dispatcher requires valid auth" }, 403);
   }
 
