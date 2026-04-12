@@ -979,7 +979,7 @@ serve(async (req) => {
         // Save as draft for audit trail
         await supabase.from("drafts").insert({
           lead_id: lead.id,
-          channel: "email",
+          channel: resolvedChannel || "email",
           draft_type: aiTask,
           subject,
           body_text: draftBody,
