@@ -828,6 +828,84 @@ function SendWhatsAppButton({ phone, messageText, leadId, selectedIntent, onSent
 }
 
 // ============================================
+// Send via SMS (Twilio) Button
+// ============================================
+
+interface SendSmsButtonProps {
+  phone: string;
+  messageText: string;
+  leadId: string;
+  selectedIntent: ComposerIntent;
+  onSent: () => void;
+}
+
+function SendSmsButton({ phone, messageText, leadId, selectedIntent, onSent }: SendSmsButtonProps) {
+  const [isSending, setIsSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!messageText.trim()) {
+      toast.error("No message to send");
+      return;
+    }
+    if (messageText.length > 160) {
+      toast.error("SMS exceeds 160 character limit");
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Not authenticated");
+        return;
+      }
+
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sms-send`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          to: phone,
+          body: messageText,
+          leadId,
+        }),
+      });
+
+      const result = await res.json();
+      if (!result.ok) {
+        throw new Error(result.error || "SMS send failed");
+      }
+
+      // Update sequence state
+      const intentUsed = INTENT_TO_AI_TASK[selectedIntent] || "sms_message";
+      await updateSequenceState(leadId, intentUsed, "sms").catch(() => {});
+
+      toast.success("SMS sent successfully");
+      onSent();
+    } catch (err: any) {
+      console.error("[SendSmsButton] Error:", err);
+      toast.error(err.message || "Failed to send SMS");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <Button size="sm" onClick={handleSend} disabled={isSending}>
+      {isSending ? (
+        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+      ) : (
+        <Send className="h-3.5 w-3.5 mr-1" />
+      )}
+      {isSending ? "Sending..." : "Send SMS"}
+    </Button>
+  );
+}
+
+// ============================================
 // Saved Drafts List (simplified)
 // ============================================
 
