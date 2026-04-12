@@ -44,16 +44,21 @@ Deno.serve(async (req) => {
   const requestId = crypto.randomUUID();
   const startedAt = Date.now();
 
-  // ── Auth gate: only service-role callers (pg_cron/pg_net) ──
-  // pg_cron calls via pg_net with the service-role key in the
-  // Authorization header. We verify it here so arbitrary callers
-  // cannot use the dispatcher as a proxy.
+  // ── Auth gate: accept anon key OR service-role key ──────────
+  // pg_cron uses pg_net which can only pass static headers, so
+  // the anon key is used there. We accept both anon and service-role
+  // keys. The real security boundary is the INTERNAL_API_SECRET
+  // forwarded to target functions.
   const authHeader = req.headers.get("Authorization") ?? "";
   const bearerToken = authHeader.replace("Bearer ", "");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
-  if (!bearerToken || !serviceKey || !constantTimeEqual(bearerToken, serviceKey)) {
-    return jsonResp({ error: "Forbidden — dispatcher requires service-role auth" }, 403);
+  const isServiceRole = serviceKey && constantTimeEqual(bearerToken, serviceKey);
+  const isAnon = anonKey && constantTimeEqual(bearerToken, anonKey);
+
+  if (!bearerToken || (!isServiceRole && !isAnon)) {
+    return jsonResp({ error: "Forbidden — dispatcher requires valid auth" }, 403);
   }
 
   const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
