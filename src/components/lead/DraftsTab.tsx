@@ -347,19 +347,24 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
   };
 
   const saveAsDraft = async () => {
+    if (!generatedContent.trim()) {
+      toast.error("No content to save");
+      return;
+    }
     try {
       await saveDraft(lead.id, {
         channel: channel,
         draft_type: selectedIntent,
         subject: generatedSubject || undefined,
         body_text: generatedContent,
-        to_recipient: lead.email,
+        to_recipient: channel === "sms" || channel === "whatsapp" ? (lead.phone || undefined) : lead.email,
       });
       toast.success("Draft saved");
       setGeneratedContent("");
       setGeneratedSubject("");
       loadDrafts();
-    } catch {
+    } catch (err: any) {
+      console.error("[saveAsDraft] Error:", err);
       toast.error("Failed to save draft");
     }
   };
