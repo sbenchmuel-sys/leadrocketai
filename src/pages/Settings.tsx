@@ -8,6 +8,7 @@ import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard
 import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
 import { OutlookConnectionCard } from "@/components/settings/OutlookConnectionCard";
 import { WorkspaceMembersCard } from "@/components/settings/WorkspaceMembersCard";
+import { SmsSettingsCard } from "@/components/settings/SmsSettingsCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   Accordion,
@@ -165,6 +166,21 @@ export default function Settings() {
           </AccordionTrigger>
           <AccordionContent>
             <WhatsAppAutomationCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="sms" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Phone className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">SMS</div>
+                <div className="text-sm text-muted-foreground font-normal">Enable SMS outreach via Twilio</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <SmsSettingsCard />
           </AccordionContent>
         </AccordionItem>
 
