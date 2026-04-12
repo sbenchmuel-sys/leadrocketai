@@ -32,6 +32,7 @@ export type AITaskType =
   | "whatsapp_message"
   | "whatsapp_classify_intent"
   | "whatsapp_reply_suggestion"
+  | "sms_message"
   | "re_engagement_intro";
 
 export interface EmailQualityScore {

@@ -1283,6 +1283,40 @@ SAFETY
 
 OUTPUT
 Return the WhatsApp message text ONLY. No JSON. No markdown.`,
+
+  sms_message: `ROLE
+You are writing a short SMS text message for a B2B sales context.
+
+GOAL
+Send a concise, natural text message. This is NOT an email — it's an SMS. Treat it like texting a business contact.
+
+KB-GROUNDING CHECK:
+- Any pain point or claim must come from Knowledge Context or Sales Signals
+- If no relevant KB insight, ask a neutral question about their role/company
+
+FORMAT RULES (MANDATORY)
+- MAXIMUM 160 characters total (this is a hard SMS limit)
+- NO greeting like "Dear" or "Hello" — start with first name or jump straight in
+- NO sign-off like "Best", "Best regards", "Thanks" — just end naturally
+- NO signature block, NO sender name at the end
+- 1-2 short sentences maximum
+- Direct, casual, conversational tone
+- NO emoji unless truly natural
+- One soft CTA (question preferred)
+- NO subject line
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the SMS text ONLY. No JSON. No markdown. No greeting. No sign-off. Maximum 160 characters.`,
 };
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.
