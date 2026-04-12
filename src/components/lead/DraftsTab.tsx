@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database } from "lucide-react";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database, Phone } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
