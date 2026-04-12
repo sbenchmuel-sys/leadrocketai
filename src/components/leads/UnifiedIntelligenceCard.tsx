@@ -289,20 +289,6 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </div>
         )}
 
-        {/* Next Step */}
-        {nextStep && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
-              Best Next Step
-            </span>
-            <p className={cn("font-medium text-foreground", isCompact ? "text-sm" : "text-base")}>
-              {nextStep}
-            </p>
-            {nextStepReason && (
-              <p className="text-xs text-muted-foreground mt-1">{nextStepReason}</p>
-            )}
-          </div>
-        )}
 
         {/* Risks */}
         {risks.length > 0 && (
