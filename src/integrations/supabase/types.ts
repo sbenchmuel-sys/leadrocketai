@@ -1778,6 +1778,7 @@ export type Database = {
           pref_linkedin_drafts: boolean
           raw_import_json: Json | null
           risks_json: Json | null
+          sms_opted_in: boolean
           source_type: string
           stage: string
           state: string | null
@@ -1846,6 +1847,7 @@ export type Database = {
           pref_linkedin_drafts?: boolean
           raw_import_json?: Json | null
           risks_json?: Json | null
+          sms_opted_in?: boolean
           source_type?: string
           stage?: string
           state?: string | null
@@ -1914,6 +1916,7 @@ export type Database = {
           pref_linkedin_drafts?: boolean
           raw_import_json?: Json | null
           risks_json?: Json | null
+          sms_opted_in?: boolean
           source_type?: string
           stage?: string
           state?: string | null
@@ -3153,25 +3156,31 @@ export type Database = {
         Row: {
           billing_email: string | null
           created_at: string
+          default_sms_number: string | null
           id: string
           name: string
           plan: string
+          sms_enabled: boolean
           updated_at: string
         }
         Insert: {
           billing_email?: string | null
           created_at?: string
+          default_sms_number?: string | null
           id?: string
           name: string
           plan?: string
+          sms_enabled?: boolean
           updated_at?: string
         }
         Update: {
           billing_email?: string | null
           created_at?: string
+          default_sms_number?: string | null
           id?: string
           name?: string
           plan?: string
+          sms_enabled?: boolean
           updated_at?: string
         }
         Relationships: []
