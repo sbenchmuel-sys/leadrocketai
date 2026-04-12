@@ -933,7 +933,7 @@ serve(async (req) => {
             .replace(/\[First\s*Name\]/gi, repFirstName);
 
           // Determine resolved channel for this step
-          const resolvedChannel = resolvedInstruction?.channel || "email";
+          resolvedChannel = resolvedInstruction?.channel || "email";
 
           // Append signature + footer only for email channel
           if (resolvedChannel === "email") {
