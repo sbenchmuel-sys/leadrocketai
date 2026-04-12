@@ -485,7 +485,8 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                   {channel === "email" ? "📧" : channel === "linkedin" ? "🔗" : "💬"}{" "}
                   {EMAIL_INTENT_LABELS[selectedIntent as EmailIntent] ||
                    LINKEDIN_INTENT_LABELS[selectedIntent as LinkedInIntent] ||
-                   WHATSAPP_INTENT_LABELS[selectedIntent as WhatsAppIntent]}
+                   WHATSAPP_INTENT_LABELS[selectedIntent as WhatsAppIntent] ||
+                   SMS_INTENT_LABELS[selectedIntent as SmsIntent]}
                 </CardTitle>
                 {knowledgeUsed ? (
                   <Badge variant="outline" className="text-xs text-primary border-primary/30">
