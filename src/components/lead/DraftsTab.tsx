@@ -413,6 +413,10 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
               <MessageSquare className="h-4 w-4" />
               WhatsApp
             </ToggleGroupItem>
+            <ToggleGroupItem value="sms" className="flex-1 gap-1.5 data-[state=on]:bg-background data-[state=on]:shadow-sm">
+              <Phone className="h-4 w-4" />
+              SMS
+            </ToggleGroupItem>
             <ToggleGroupItem value="linkedin" className="flex-1 gap-1.5 data-[state=on]:bg-background data-[state=on]:shadow-sm">
               <Linkedin className="h-4 w-4" />
               LinkedIn
