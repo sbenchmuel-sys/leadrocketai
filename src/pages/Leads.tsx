@@ -35,9 +35,11 @@ import { SOURCE_TYPE_LABELS, SourceType } from "@/lib/dashboardUtils";
 import { SourceDropdown } from "@/components/dashboard/SourceDropdown";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export default function Leads() {
   const navigate = useNavigate();
+  const { workspaceId } = useWorkspace();
   const { connectGmail, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -239,7 +241,7 @@ export default function Leads() {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await createLead(newLead);
+      await createLead({ ...newLead, workspace_id: workspaceId });
       toast.success("Lead created!");
       setIsAddOpen(false);
       setNewLead({ name: "", company: "", email: "", source_type: "manual_entry" });
