@@ -381,11 +381,13 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         return Object.entries(LINKEDIN_INTENT_LABELS).map(([value, label]) => ({ value, label }));
       case "whatsapp":
         return Object.entries(WHATSAPP_INTENT_LABELS).map(([value, label]) => ({ value, label }));
+      case "sms":
+        return Object.entries(SMS_INTENT_LABELS).map(([value, label]) => ({ value, label }));
     }
   };
 
   const charLimit = CHAR_LIMITS[selectedIntent];
-  const isShortForm = channel === "linkedin" || channel === "whatsapp";
+  const isShortForm = channel === "linkedin" || channel === "whatsapp" || channel === "sms";
 
   return (
     <div className="space-y-6">
