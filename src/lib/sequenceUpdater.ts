@@ -114,7 +114,7 @@ export async function updateSequenceState(
   intentUsed: AITaskType,
   recommendedIntent?: AITaskType | null,
   overrideIntent?: AITaskType | null,
-  channel: "email" | "linkedin" | "whatsapp" = "email",
+  channel: "email" | "linkedin" | "whatsapp" | "sms" = "email",
   previousSequenceStep?: string | null,
   motionOverride?: string | null
 ): Promise<SequenceUpdateResult> {

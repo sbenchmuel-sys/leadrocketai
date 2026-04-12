@@ -16,7 +16,7 @@ export interface PlaybookRecommendation {
 // RESOLVER (priority-ordered rules)
 // ============================================
 
-export function playbookResolver(ctx: ResolvedContext, channel: "email" | "linkedin" | "whatsapp" = "email"): PlaybookRecommendation {
+export function playbookResolver(ctx: ResolvedContext, channel: "email" | "linkedin" | "whatsapp" | "sms" = "email"): PlaybookRecommendation {
   // WhatsApp uses a separate micro-playbook — light conversational cadence
   if (channel === "whatsapp") {
     return whatsappMicroPlaybook(ctx);

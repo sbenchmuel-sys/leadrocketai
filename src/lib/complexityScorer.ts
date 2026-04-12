@@ -106,7 +106,7 @@ const PRO_THRESHOLD = 35;
 
 export function modelSelector(
   score: number,
-  channel: "email" | "linkedin" | "whatsapp" = "email"
+  channel: "email" | "linkedin" | "whatsapp" | "sms" = "email"
 ): AIModel {
   // WhatsApp and LinkedIn always use Fast (short-form content)
   if (channel === "whatsapp" || channel === "linkedin") {
@@ -124,7 +124,7 @@ export function modelSelector(
 export function scoreAndSelectModel(
   ctx: ResolvedContext,
   intent: AITaskType,
-  channel: "email" | "linkedin" | "whatsapp" = "email",
+  channel: "email" | "linkedin" | "whatsapp" | "sms" = "email",
   instructions?: string | null
 ): ComplexityResult {
   const { score, factors } = complexityScorer(ctx, intent, instructions);
