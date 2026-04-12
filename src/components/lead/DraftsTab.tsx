@@ -106,6 +106,8 @@ const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
   quick_follow_up: "whatsapp_message",
   meeting_reminder: "whatsapp_message",
   short_answer: "whatsapp_message",
+  sms_follow_up: "pre_email_2_followup",
+  sms_nudge: "pre_email_3_followup",
 };
 
 // Map email intents to EmailActionDialog action keys
