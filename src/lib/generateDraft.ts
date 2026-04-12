@@ -563,7 +563,8 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
     // Final cleanup pass to prevent "Email body" label-only and leaked reasoning artifacts
     fullText = sanitizeDraftContent(
-      resolveEmailPlaceholders(aiData.content, resolvedContext.rep_profile?.full_name || null)
+      resolveEmailPlaceholders(aiData.content, resolvedContext.rep_profile?.full_name || null),
+      channel
     );
 
     if (!fullText) {
@@ -661,7 +662,8 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
         resolveEmailPlaceholders(
           data.content,
           resolvedContext.rep_profile?.full_name || null
-        )
+        ),
+        channel
       );
     } else {
       console.warn("[generateDraft] AI task returned no content:", data);
