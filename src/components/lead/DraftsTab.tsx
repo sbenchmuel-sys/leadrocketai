@@ -42,7 +42,7 @@ interface Draft {
   nurture_cadence?: string | null;
 }
 
-type Channel = "email" | "whatsapp" | "linkedin";
+type Channel = "email" | "whatsapp" | "linkedin" | "sms";
 
 type EmailIntent =
   | "follow_up"
@@ -54,8 +54,9 @@ type EmailIntent =
 
 type LinkedInIntent = "connection_request" | "follow_up_message";
 type WhatsAppIntent = "quick_follow_up" | "meeting_reminder" | "short_answer";
+type SmsIntent = "sms_follow_up" | "sms_nudge";
 
-type ComposerIntent = EmailIntent | LinkedInIntent | WhatsAppIntent;
+type ComposerIntent = EmailIntent | LinkedInIntent | WhatsAppIntent | SmsIntent;
 
 const EMAIL_INTENT_LABELS: Record<EmailIntent, string> = {
   follow_up: "Follow-up",
@@ -77,12 +78,19 @@ const WHATSAPP_INTENT_LABELS: Record<WhatsAppIntent, string> = {
   short_answer: "Soft Nudge",
 };
 
+const SMS_INTENT_LABELS: Record<SmsIntent, string> = {
+  sms_follow_up: "Follow-up SMS",
+  sms_nudge: "Quick Nudge",
+};
+
 const CHAR_LIMITS: Partial<Record<ComposerIntent, number>> = {
   connection_request: 300,
   follow_up_message: 600,
   quick_follow_up: 500,
   meeting_reminder: 300,
   short_answer: 400,
+  sms_follow_up: 160,
+  sms_nudge: 160,
 };
 
 // Map composer intents to AITaskType for pipeline override
