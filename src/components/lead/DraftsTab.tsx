@@ -593,6 +593,21 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                     "Open in WhatsApp" instead. */}
               </div>
             )}
+            {/* SMS actions: Send via Twilio */}
+            {channel === "sms" && lead.phone && (
+              <div className="flex gap-2 justify-end">
+                <SendSmsButton
+                  phone={lead.phone}
+                  messageText={generatedContent}
+                  leadId={lead.id}
+                  selectedIntent={selectedIntent}
+                  onSent={() => {
+                    setGeneratedContent("");
+                    onUpdate();
+                  }}
+                />
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
