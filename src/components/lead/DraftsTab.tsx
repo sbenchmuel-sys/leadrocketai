@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database } from "lucide-react";
+import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database, Phone } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
@@ -42,7 +42,7 @@ interface Draft {
   nurture_cadence?: string | null;
 }
 
-type Channel = "email" | "whatsapp" | "linkedin";
+type Channel = "email" | "whatsapp" | "linkedin" | "sms";
 
 type EmailIntent =
   | "follow_up"
@@ -54,8 +54,9 @@ type EmailIntent =
 
 type LinkedInIntent = "connection_request" | "follow_up_message";
 type WhatsAppIntent = "quick_follow_up" | "meeting_reminder" | "short_answer";
+type SmsIntent = "sms_follow_up" | "sms_nudge";
 
-type ComposerIntent = EmailIntent | LinkedInIntent | WhatsAppIntent;
+type ComposerIntent = EmailIntent | LinkedInIntent | WhatsAppIntent | SmsIntent;
 
 const EMAIL_INTENT_LABELS: Record<EmailIntent, string> = {
   follow_up: "Follow-up",
@@ -77,12 +78,19 @@ const WHATSAPP_INTENT_LABELS: Record<WhatsAppIntent, string> = {
   short_answer: "Soft Nudge",
 };
 
+const SMS_INTENT_LABELS: Record<SmsIntent, string> = {
+  sms_follow_up: "Follow-up SMS",
+  sms_nudge: "Quick Nudge",
+};
+
 const CHAR_LIMITS: Partial<Record<ComposerIntent, number>> = {
   connection_request: 300,
   follow_up_message: 600,
   quick_follow_up: 500,
   meeting_reminder: 300,
   short_answer: 400,
+  sms_follow_up: 160,
+  sms_nudge: 160,
 };
 
 // Map composer intents to AITaskType for pipeline override
@@ -98,6 +106,8 @@ const INTENT_TO_AI_TASK: Partial<Record<ComposerIntent, AITaskType>> = {
   quick_follow_up: "whatsapp_message",
   meeting_reminder: "whatsapp_message",
   short_answer: "whatsapp_message",
+  sms_follow_up: "pre_email_2_followup",
+  sms_nudge: "pre_email_3_followup",
 };
 
 // Map email intents to EmailActionDialog action keys
@@ -371,11 +381,13 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         return Object.entries(LINKEDIN_INTENT_LABELS).map(([value, label]) => ({ value, label }));
       case "whatsapp":
         return Object.entries(WHATSAPP_INTENT_LABELS).map(([value, label]) => ({ value, label }));
+      case "sms":
+        return Object.entries(SMS_INTENT_LABELS).map(([value, label]) => ({ value, label }));
     }
   };
 
   const charLimit = CHAR_LIMITS[selectedIntent];
-  const isShortForm = channel === "linkedin" || channel === "whatsapp";
+  const isShortForm = channel === "linkedin" || channel === "whatsapp" || channel === "sms";
 
   return (
     <div className="space-y-6">
@@ -402,6 +414,10 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
             <ToggleGroupItem value="whatsapp" className="flex-1 gap-1.5 data-[state=on]:bg-background data-[state=on]:shadow-sm">
               <MessageSquare className="h-4 w-4" />
               WhatsApp
+            </ToggleGroupItem>
+            <ToggleGroupItem value="sms" className="flex-1 gap-1.5 data-[state=on]:bg-background data-[state=on]:shadow-sm">
+              <Phone className="h-4 w-4" />
+              SMS
             </ToggleGroupItem>
             <ToggleGroupItem value="linkedin" className="flex-1 gap-1.5 data-[state=on]:bg-background data-[state=on]:shadow-sm">
               <Linkedin className="h-4 w-4" />
@@ -469,7 +485,8 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                   {channel === "email" ? "📧" : channel === "linkedin" ? "🔗" : "💬"}{" "}
                   {EMAIL_INTENT_LABELS[selectedIntent as EmailIntent] ||
                    LINKEDIN_INTENT_LABELS[selectedIntent as LinkedInIntent] ||
-                   WHATSAPP_INTENT_LABELS[selectedIntent as WhatsAppIntent]}
+                   WHATSAPP_INTENT_LABELS[selectedIntent as WhatsAppIntent] ||
+                   SMS_INTENT_LABELS[selectedIntent as SmsIntent]}
                 </CardTitle>
                 {knowledgeUsed ? (
                   <Badge variant="outline" className="text-xs text-primary border-primary/30">

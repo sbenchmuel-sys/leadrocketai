@@ -47,7 +47,7 @@ export function clearDraftCache(leadId: string): void {
 
 export interface GenerateDraftInput {
   lead_id: string;
-  channel?: "email" | "linkedin" | "whatsapp";
+  channel?: "email" | "linkedin" | "whatsapp" | "sms";
   override_intent?: AITaskType | null;
   instructions?: string | null;
   motion_override?: Motion | null;

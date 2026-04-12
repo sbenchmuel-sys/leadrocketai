@@ -775,6 +775,7 @@ serve(async (req) => {
 
         let draftBody: string;
         let subject: string;
+        let resolvedChannel: string = "email"; // default, overridden by campaign resolver
         const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
@@ -931,36 +932,46 @@ serve(async (req) => {
             .replace(/\{First\s*Name\}/gi, repFirstName)
             .replace(/\[First\s*Name\]/gi, repFirstName);
 
-          // Append signature
-          if (repSignature?.signature_text) {
-            draftBody += `\n\n${repSignature.signature_text}`;
-          } else if (repProfile?.full_name) {
-            const sigParts = [repProfile.full_name];
-            if (repProfile.job_title) sigParts.push(repProfile.job_title);
-            if (repProfile.company_name) sigParts.push(repProfile.company_name);
-            if (repProfile.phone) sigParts.push(repProfile.phone);
-            if (repProfile.email) sigParts.push(repProfile.email);
-            draftBody += `\n\n${sigParts.join("\n")}`;
+          // Determine resolved channel for this step
+          resolvedChannel = resolvedInstruction?.channel || "email";
+
+          // Append signature + footer only for email channel
+          if (resolvedChannel === "email") {
+            if (repSignature?.signature_text) {
+              draftBody += `\n\n${repSignature.signature_text}`;
+            } else if (repProfile?.full_name) {
+              const sigParts = [repProfile.full_name];
+              if (repProfile.job_title) sigParts.push(repProfile.job_title);
+              if (repProfile.company_name) sigParts.push(repProfile.company_name);
+              if (repProfile.phone) sigParts.push(repProfile.phone);
+              if (repProfile.email) sigParts.push(repProfile.email);
+              draftBody += `\n\n${sigParts.join("\n")}`;
+            }
+
+            // Unsubscribe footer
+            draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
           }
 
-          // Unsubscribe footer
-          draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
-
-          // Subject line
+          // Subject line (only for email)
           const leadFirstName = lead.name.split(" ")[0];
           const companyName = lead.company !== "Unknown Company" ? lead.company : null;
-          if (aiTask === "pre_email_1_intro") {
-            subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
-          } else if (aiTask === "pre_email_2_followup") {
-            subject = `Following up - ${leadFirstName}`;
-          } else if (aiTask === "pre_email_3_followup") {
-            subject = `Checking in - ${leadFirstName}`;
-          } else if (aiTask === "pre_email_4_breakup") {
-            subject = `Closing the loop - ${leadFirstName}`;
-          } else if (aiTask === "nurture_email_single") {
-            subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+          if (resolvedChannel === "email") {
+            if (aiTask === "pre_email_1_intro") {
+              subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
+            } else if (aiTask === "pre_email_2_followup") {
+              subject = `Following up - ${leadFirstName}`;
+            } else if (aiTask === "pre_email_3_followup") {
+              subject = `Checking in - ${leadFirstName}`;
+            } else if (aiTask === "pre_email_4_breakup") {
+              subject = `Closing the loop - ${leadFirstName}`;
+            } else if (aiTask === "nurture_email_single") {
+              subject = companyName ? `Thought you'd find this valuable, ${leadFirstName}` : `Thought you'd find this valuable`;
+            } else {
+              subject = `Following up - ${leadFirstName}`;
+            }
           } else {
-            subject = `Following up - ${leadFirstName}`;
+            // SMS/WhatsApp: no subject line
+            subject = "";
           }
         } // end else (no cached draft)
 
@@ -969,7 +980,7 @@ serve(async (req) => {
         // Save as draft for audit trail
         await supabase.from("drafts").insert({
           lead_id: lead.id,
-          channel: "email",
+          channel: resolvedChannel || "email",
           draft_type: aiTask,
           subject,
           body_text: draftBody,
@@ -1007,9 +1018,34 @@ serve(async (req) => {
         }
         const claimId = claimRow?.id;
 
-        // Send via appropriate mail provider
+        // Send via appropriate channel + provider
         let sendResponse: Response;
-        if (mailProvider === "outlook" && mailAccountId) {
+        if (resolvedChannel === "sms") {
+          // ── SMS SEND ──────────────────────────────────────────
+          if (!lead.phone) {
+            console.warn(`[automation-executor] Lead ${lead.id}: SMS channel but no phone number — skipping`);
+            await supabase.from("automation_log")
+              .update({ status: "skipped", error_message: "No phone number for SMS", completed_at: new Date().toISOString() })
+              .eq("id", claimId);
+            skipped++;
+            continue;
+          }
+          sendResponse = await fetch(`${supabaseUrl}/functions/v1/sms-send`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseServiceKey}`,
+              "X-Internal-Secret": Deno.env.get("INTERNAL_API_SECRET") ?? "",
+            },
+            body: JSON.stringify({
+              to: lead.phone,
+              body: draftBody,
+              leadId: lead.id,
+              ownerUserId: lead.owner_user_id,
+              skipStateUpdate: true,
+            }),
+          });
+        } else if (mailProvider === "outlook" && mailAccountId) {
           const bodyHtml = draftBody.replace(/\n/g, "<br>");
           sendResponse = await fetch(`${supabaseUrl}/functions/v1/outlook-send`, {
             method: "POST",
@@ -1078,8 +1114,9 @@ serve(async (req) => {
           continue;
         }
 
-        const gmailMessageId = sendResult.messageId || null;
-        console.log(`[automation-executor] Email sent for lead ${lead.id}: ${gmailMessageId}`);
+        const gmailMessageId = sendResult.messageId || sendResult.messageSid || null;
+        const sendChannelLabel = resolvedChannel === "sms" ? "SMS" : "Email";
+        console.log(`[automation-executor] ${sendChannelLabel} sent for lead ${lead.id}: ${gmailMessageId}`);
 
         // ── UPGRADE CLAIM TO SENT ───────────────────────────────
         // The interaction + timeline records are created by gmail-send / outlook-send
