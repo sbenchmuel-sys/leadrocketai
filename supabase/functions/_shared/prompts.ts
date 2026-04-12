@@ -1284,8 +1284,9 @@ SAFETY
 OUTPUT
 Return the WhatsApp message text ONLY. No JSON. No markdown.`,
 
-  sms_message: `ROLE
-You are writing a short SMS text message for a B2B sales context.
+  sms_message: `You are writing a short SMS text message for a B2B sales context.
+
+CRITICAL OUTPUT RULE: Your response must contain ONLY the final SMS text. NEVER include reasoning, analysis, thought process, preamble, or explanations. Do NOT start with "INTERNAL REASONING" or any other headers. Output the SMS text and NOTHING else.
 
 GOAL
 Send a concise, natural text message. This is NOT an email — it's an SMS. Treat it like texting a business contact.
@@ -1316,7 +1317,7 @@ Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
 OUTPUT
-Return the SMS text ONLY. No JSON. No markdown. No greeting. No sign-off. Maximum 160 characters.`,
+Return the SMS text ONLY. No JSON. No markdown. No greeting. No sign-off. No reasoning. Maximum 160 characters.`,
 };
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.

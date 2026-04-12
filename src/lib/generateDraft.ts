@@ -335,7 +335,7 @@ export function resolveEmailPlaceholders(text: string, repName: string | null): 
     .replace(/\[First\s*Name\]/gi, firstName);
 }
 
-function sanitizeDraftContent(text: string): string {
+function sanitizeDraftContent(text: string, channel?: string): string {
   let cleaned = (text || "").trim();
 
   // Strip markdown fences if a model wraps output
@@ -344,26 +344,53 @@ function sanitizeDraftContent(text: string): string {
     .replace(/\s*```$/i, "")
     .trim();
 
-  // Strip label-only prefixes like "Email body:" or "Body:"
-  cleaned = cleaned.replace(/^(?:email\s*body|body)\s*:\s*/i, "").trim();
+  // Strip label-only prefixes like "Email body:" or "Body:" or "SMS:" or "Message:"
+  cleaned = cleaned.replace(/^(?:email\s*body|body|sms|message|text\s*message)\s*:\s*/i, "").trim();
 
   // Guard against leaked reasoning blocks if model slips through
-  if (/(?:INTERNAL\s+(?:REASONING|REFLECTION|ANALYSIS)|^Reasoning\s*:)/im.test(cleaned)) {
+  if (/(?:INTERNAL\s+(?:REASONING|REFLECTION|ANALYSIS)|^Reasoning\s*:|^THOUGHT\s*:|^CHAIN\s*OF\s*THOUGHT)/im.test(cleaned)) {
     const lines = cleaned.split("\n");
-    const emailStart = lines.findIndex((line) => {
-      const t = line.trim();
-      return (
-        /^(?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\b/i.test(t) ||
-        /^[A-Z][a-z]{1,20},\s*$/.test(t)
-      );
-    });
-    if (emailStart > 0) {
-      cleaned = lines.slice(emailStart).join("\n").trim();
+
+    if (channel === "sms" || channel === "whatsapp") {
+      // For short-form channels: strip all lines that look like reasoning,
+      // then take whatever remains
+      const reasoningEnd = lines.findIndex((line, i) => {
+        const t = line.trim();
+        // Skip empty lines and lines that look like reasoning
+        if (!t) return false;
+        if (/^(?:INTERNAL|Reasoning|THOUGHT|CHAIN|OUTPUT|FINAL|The user|The motion|The message|The lead|I need|I should|Let me|This is|Here)/i.test(t)) return false;
+        if (t.endsWith(":") || t.startsWith("-") || t.startsWith("*")) return false;
+        // This line looks like actual message content
+        return i > 0;
+      });
+      if (reasoningEnd > 0) {
+        cleaned = lines.slice(reasoningEnd).join("\n").trim();
+      }
+    } else {
+      // For email: look for greeting-style start
+      const emailStart = lines.findIndex((line) => {
+        const t = line.trim();
+        return (
+          /^(?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\b/i.test(t) ||
+          /^[A-Z][a-z]{1,20},\s*$/.test(t)
+        );
+      });
+      if (emailStart > 0) {
+        cleaned = lines.slice(emailStart).join("\n").trim();
+      }
     }
   }
 
+  // For SMS: also strip any greeting/sign-off that slipped through
+  if (channel === "sms") {
+    // Remove greeting lines
+    cleaned = cleaned.replace(/^(?:Hi|Hey|Hello|Dear)\s+\w+[,!]?\s*\n/i, "").trim();
+    // Remove sign-off lines (Best, Thanks, Regards, name-only last line)
+    cleaned = cleaned.replace(/\n\s*(?:Best|Thanks|Regards|Cheers|Sincerely)[,.]?\s*\n?.*$/i, "").trim();
+  }
+
   // If model only returns the label, treat as empty
-  if (/^email\s*body\.?$/i.test(cleaned)) return "";
+  if (/^(?:email\s*body|sms|message)\.?$/i.test(cleaned)) return "";
 
   return cleaned;
 }
@@ -536,7 +563,8 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
     // Final cleanup pass to prevent "Email body" label-only and leaked reasoning artifacts
     fullText = sanitizeDraftContent(
-      resolveEmailPlaceholders(aiData.content, resolvedContext.rep_profile?.full_name || null)
+      resolveEmailPlaceholders(aiData.content, resolvedContext.rep_profile?.full_name || null),
+      channel
     );
 
     if (!fullText) {
@@ -634,7 +662,8 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
         resolveEmailPlaceholders(
           data.content,
           resolvedContext.rep_profile?.full_name || null
-        )
+        ),
+        channel
       );
     } else {
       console.warn("[generateDraft] AI task returned no content:", data);
