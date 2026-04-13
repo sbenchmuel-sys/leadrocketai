@@ -1,6 +1,6 @@
 // Context Resolver — fetches and assembles all lead context for draft generation
-import type { LeadDetail, MeetingPackItem, EmailThreadItem, InteractionItem } from "@/lib/supabaseQueries";
-import { getLeadDetail, getLeadEmailThread, getLeadMeetingPacks, getLeadInteractions } from "@/lib/supabaseQueries";
+import type { LeadDetail, MeetingPackItem, EmailThreadItem, InteractionItem, TimelineItem } from "@/lib/supabaseQueries";
+import { getLeadDetail, getLeadEmailThread, getLeadMeetingPacks, getLeadInteractions, getLeadTimeline } from "@/lib/supabaseQueries";
 import { getRepProfile, getKnowledgeDocuments, type RepProfile, type KnowledgeDocument } from "@/lib/repProfileQueries";
 import { getWorkspaceProfile, type WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { calculateClosingPower, SIGNAL_PATTERNS } from "@/lib/closingPowerUtils";
@@ -30,6 +30,10 @@ export interface ResolvedContext {
   last_inbound_email: EmailThreadItem | null;
   thread_emails: EmailThreadItem[];
   thread_summary: string;
+
+  // Cross-channel conversation history (all channels: email, sms, whatsapp, etc.)
+  cross_channel_summary: string;
+  last_inbound_any_channel: { channel: string; snippet: string; occurred_at: string } | null;
 
   // Meeting data
   last_meeting_summary: MeetingPackItem | null;
