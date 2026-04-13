@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane, AlertTriangle, Handshake, ShoppingCart } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
+import LinkedInMessageButton from "@/components/lead/LinkedInMessageButton";
 import { cn } from "@/lib/utils";
 import {
   MOTION_LABELS, MOTION_COLORS,
