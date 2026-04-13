@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, Clock, Check, CheckCheck, RefreshCw } from "lucide-react";
+import { ArrowLeft, Clock, Check, CheckCheck, RefreshCw, Phone, Mail, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -30,9 +30,11 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
     if (showFullLoader) setIsLoading(true);
     else setIsRefreshing(true);
     try {
+      // Use lead_id to fetch all cross-channel messages
+      const leadId = conversation.lead_id ?? conversation.id;
       const [msgData, contactAnalysis] = await Promise.all([
-        fetchDecryptedMessages(conversation.id),
-        fetchContactAnalysis(conversation.contact_id),
+        fetchDecryptedMessages(leadId),
+        fetchContactAnalysis(leadId),
       ]);
       setMessages(msgData.messages);
       onAnalysisLoaded(contactAnalysis ?? msgData.analysis);
@@ -42,14 +44,12 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [conversation.id, conversation.contact_id, onAnalysisLoaded]);
+  }, [conversation.id, conversation.lead_id, onAnalysisLoaded]);
 
-  // Initial load
   useEffect(() => {
     loadMessages(true);
   }, [loadMessages]);
 
-  // Reload on reloadKey bump (after send)
   useEffect(() => {
     if (reloadKey > 0) {
       loadMessages(false);
@@ -61,6 +61,9 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Channel badges for the header
+  const channelsUsed = conversation.channels_used ?? [];
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Thread header */}
@@ -69,22 +72,7 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
           <ArrowLeft className="h-4 w-4" />
         </Button>
 
-        {(() => {
-          const canonical = providerToCanonical(conversation.channel);
-          const Icon = canonicalIcon(canonical);
-          const colors = channelColors(canonical);
-          return (
-            <div
-              className="rounded-full p-1.5 shrink-0"
-              style={{ backgroundColor: colors.bg, color: colors.fg }}
-              title={canonicalLabel(canonical)}
-            >
-              <Icon className="h-4 w-4" />
-            </div>
-          );
-        })()}
-
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-foreground truncate">
             {conversation.contact_name}
           </h3>
@@ -93,7 +81,25 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
           )}
         </div>
 
-        <Badge variant="outline" className="ml-auto text-xs capitalize">
+        {/* Channel badges */}
+        <div className="flex items-center gap-1">
+          {channelsUsed.map((ch) => {
+            const Icon = canonicalIcon(ch as any);
+            const colors = channelColors(ch as any);
+            return (
+              <div
+                key={ch}
+                className="rounded-full p-1 shrink-0"
+                style={{ backgroundColor: colors.bg, color: colors.fg }}
+                title={canonicalLabel(ch as any)}
+              >
+                <Icon className="h-3 w-3" />
+              </div>
+            );
+          })}
+        </div>
+
+        <Badge variant="outline" className="text-xs capitalize">
           {conversation.contact_status}
         </Badge>
 
@@ -120,10 +126,10 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
             ))}
           </div>
         ) : messages.length === 0 ? (
-          <div className="text-sm text-muted-foreground text-center py-8">No messages</div>
+          <div className="text-sm text-muted-foreground text-center py-8">No messages yet</div>
         ) : (
           messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} channel={conversation.channel} />
+            <MessageBubble key={msg.id} message={msg} />
           ))
         )}
         <div ref={bottomRef} />
@@ -132,60 +138,40 @@ export function ConversationThread({ conversation, onBack, onAnalysisLoaded, rel
   );
 }
 
-function WaStatusIcon({ status }: { status: DecryptedMessage["status"] }) {
-  if (status === "read") {
-    return <CheckCheck className="h-3 w-3 text-[hsl(var(--info))]" aria-label="Read" />;
-  }
-  if (status === "delivered") {
-    return <CheckCheck className="h-3 w-3 text-primary-foreground/50" aria-label="Delivered" />;
-  }
-  if (status === "failed") {
-    return <span className="text-[9px] font-semibold text-destructive uppercase tracking-wide">Failed</span>;
-  }
-  // sent
-  return <Check className="h-3 w-3 text-primary-foreground/40" aria-label="Sent" />;
-}
-
-function MessageBubble({ message, channel }: { message: DecryptedMessage; channel?: string }) {
+function MessageBubble({ message }: { message: DecryptedMessage }) {
   const isOutbound = message.direction === "outbound";
-  const canonical = providerToCanonical(channel);
-  const showDeliveryStatus = canonical === "whatsapp";
+  const isVoice = message.media_type === "voice";
 
   return (
     <div className={cn("flex", isOutbound ? "justify-end" : "justify-start")}>
       <div
         className={cn(
           "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm",
-          isOutbound
-            ? "bg-primary text-primary-foreground rounded-br-md"
-            : "bg-muted text-foreground rounded-bl-md"
+          isVoice
+            ? "bg-muted/50 text-foreground border border-border rounded-lg"
+            : isOutbound
+              ? "bg-primary text-primary-foreground rounded-br-md"
+              : "bg-muted text-foreground rounded-bl-md"
         )}
       >
-        {message.is_expired && !message.body_text ? (
-          <div className="flex items-center gap-1.5 text-muted-foreground italic text-xs">
-            <Clock className="h-3 w-3" />
-            <span>Message expired — see AI summary</span>
+        {isVoice && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+            <Phone className="h-3 w-3" />
+            <span>Phone call</span>
           </div>
-        ) : message.body_text ? (
+        )}
+
+        {message.body_text ? (
           <p className="whitespace-pre-wrap break-words">{message.body_text}</p>
         ) : (
           <span className="text-muted-foreground italic text-xs">No content</span>
         )}
 
-        {message.media_type && message.media_type !== "text" && (
-          <Badge variant="secondary" className="mt-1 text-[10px]">
-            📎 {message.media_type}
-          </Badge>
-        )}
-
         <div className={cn(
           "flex items-center gap-1 text-[10px] mt-1",
-          isOutbound ? "justify-end text-primary-foreground/60" : "text-muted-foreground"
+          isOutbound && !isVoice ? "justify-end text-primary-foreground/60" : "text-muted-foreground"
         )}>
           <span>{format(new Date(message.created_at), "MMM d, h:mm a")}</span>
-          {isOutbound && showDeliveryStatus && (
-            <WaStatusIcon status={message.status} />
-          )}
         </div>
       </div>
     </div>
