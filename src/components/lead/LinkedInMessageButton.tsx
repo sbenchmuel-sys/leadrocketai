@@ -75,7 +75,13 @@ export default function LinkedInMessageButton({
   const handleCopyAndOpen = async () => {
     await handleCopy();
     if (linkedinUrl) {
-      window.open(linkedinUrl, "_blank", "noopener,noreferrer");
+      const a = document.createElement("a");
+      a.href = linkedinUrl;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   };
 
