@@ -48,11 +48,13 @@ Deno.serve(async (req) => {
   }
 
   // ── Signature verification ─────────────────────────
+  // req.url is the internal container URL; Twilio signs against the public URL
+  const publicUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/sms-webhook`;
   const signature = req.headers.get("X-Twilio-Signature") ?? "";
   const isValid = await validateTwilioSignature(
     twilioAuthToken,
     signature,
-    req.url,
+    publicUrl,
     params,
   );
   if (!isValid) {
