@@ -195,6 +195,7 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     emailThread,
     meetingPacks,
     interactions,
+    timelineItems,
     repProfile,
     workspaceProfile,
     knowledgeDocs,
@@ -203,6 +204,7 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     getLeadEmailThread(leadId, 10),
     getLeadMeetingPacks(leadId),
     getLeadInteractions(leadId),
+    getLeadTimeline(leadId, { limit: 20 }),
     needsRepProfile ? getRepProfile().catch(() => null) : Promise.resolve(prefetched!.repProfile ?? null),
     needsWorkspaceProfile ? getWorkspaceProfile().catch(() => null) : Promise.resolve(prefetched!.workspaceProfile ?? null),
     needsKnowledgeDocs ? getKnowledgeDocuments().catch(() => [] as KnowledgeDocument[]) : Promise.resolve(prefetched!.knowledgeDocs ?? [] as KnowledgeDocument[]),
@@ -214,6 +216,26 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
   // Extract emails
   const lastOutbound = emailThread.emails.find(e => e.direction === "outbound") || null;
   const lastInbound = emailThread.emails.find(e => e.direction === "inbound") || null;
+
+  // Build cross-channel conversation summary from lead_timeline_items
+  // This includes SMS, WhatsApp, email, calls — everything
+  const crossChannelLines = timelineItems
+    .filter(t => !t.hidden && t.snippet_text)
+    .slice(0, 15)
+    .map((t) => {
+      const dir = t.direction === "inbound" ? "IN" : t.direction === "outbound" ? "OUT" : "";
+      const dateStr = new Date(t.occurred_at).toISOString().split("T")[0];
+      return `[${dir}] [${t.channel}] ${dateStr}: ${(t.snippet_text || "").slice(0, 300)}`;
+    });
+  const crossChannelSummary = crossChannelLines.length > 0
+    ? `=== FULL CONVERSATION HISTORY (all channels, most recent first) ===\n${crossChannelLines.join("\n")}\n===`
+    : "";
+
+  // Find latest inbound from ANY channel
+  const latestInboundAny = timelineItems.find(t => t.direction === "inbound" && !t.hidden && t.snippet_text);
+  const lastInboundAnyChannel = latestInboundAny
+    ? { channel: latestInboundAny.channel, snippet: latestInboundAny.snippet_text || "", occurred_at: latestInboundAny.occurred_at }
+    : null;
 
   // Meeting analysis
   const lastMeeting = meetingPacks[0] || null;
@@ -238,7 +260,6 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
         ? (intel.risks_json as unknown as Risk[])
         : [];
     } else {
-      // Legacy fallback — leads table fields
       milestones = lead.milestones_json
         ? (lead.milestones_json as unknown as Milestone[])
         : [];
@@ -247,7 +268,6 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
         : [];
     }
   } catch {
-    // Legacy fallback on error
     milestones = lead.milestones_json
       ? (lead.milestones_json as unknown as Milestone[])
       : [];
@@ -286,6 +306,9 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     thread_emails: emailThread.emails,
     thread_summary: annotatedThreadSummary,
 
+    cross_channel_summary: crossChannelSummary,
+    last_inbound_any_channel: lastInboundAnyChannel,
+
     last_meeting_summary: lastMeeting,
     meeting_packs: meetingPacks,
     has_unsent_recap: hasUnsentRecap,
@@ -323,6 +346,8 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     riskSignals: riskSignals.length,
     engagementLevel: resolved.engagement_level,
     closingPower: cpResult.total,
+    crossChannelItems: timelineItems.length,
+    lastInboundChannel: lastInboundAnyChannel?.channel || "none",
   });
 
   return resolved;
