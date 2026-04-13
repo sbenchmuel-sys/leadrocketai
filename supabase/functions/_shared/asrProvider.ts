@@ -62,56 +62,70 @@ ${options.diarization ? "Identify and label different speakers consistently." : 
 ${options.timestamps ? "Provide accurate timestamps in milliseconds." : ""}
 Return valid JSON only, no markdown fences.`;
 
-    // Use inline_data format for Gemini audio via OpenAI-compatible gateway
-    const audioDataUri = `data:audio/wav;base64,${audioBase64}`;
+    // Try multiple content formats — gateway compatibility varies
+    const contentFormats = [
+      // Format 1: OpenAI-style image_url with audio data URI
+      [
+        { type: "image_url", image_url: { url: `data:audio/wav;base64,${audioBase64}` } },
+        { type: "text", text: prompt },
+      ],
+      // Format 2: input_audio (OpenAI native)
+      [
+        { type: "input_audio", input_audio: { data: audioBase64, format: "wav" } },
+        { type: "text", text: prompt },
+      ],
+    ];
 
-    const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: audioDataUri },
-              },
-              { type: "text", text: prompt },
-            ],
+    let lastError = "";
+
+    for (const content of contentFormats) {
+      try {
+        const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
           },
-        ],
-        temperature: 0.1,
-      }),
-    });
+          body: JSON.stringify({
+            model: this.model,
+            messages: [{ role: "user", content }],
+            temperature: 0.1,
+          }),
+        });
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      logger.error("gemini_asr_error", { status: resp.status, error: errText });
-      throw new Error(`Gemini ASR failed: ${resp.status}`);
+        if (!resp.ok) {
+          lastError = await resp.text();
+          logger.warn("asr_format_attempt_failed", { status: resp.status, error: lastError.slice(0, 200) });
+          continue; // Try next format
+        }
+
+        const result = await resp.json();
+        const resultContent = result.choices?.[0]?.message?.content ?? "";
+
+        let parsed: { segments?: AsrSegment[]; fullText?: string; confidence?: number; language?: string };
+        try {
+          const jsonMatch = resultContent.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+        } catch {
+          parsed = { fullText: resultContent, segments: [], confidence: undefined };
+        }
+
+        return {
+          language: parsed.language ?? options.language ?? "en-US",
+          confidence: parsed.confidence,
+          segments: parsed.segments ?? [],
+          fullText: parsed.fullText ?? resultContent,
+        };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        logger.warn("asr_format_attempt_exception", { error: lastError });
+        continue;
+      }
     }
 
-    const result = await resp.json();
-    const content = result.choices?.[0]?.message?.content ?? "";
-
-    let parsed: { segments?: AsrSegment[]; fullText?: string; confidence?: number; language?: string };
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    } catch {
-      parsed = { fullText: content, segments: [], confidence: undefined };
-    }
-
-    return {
-      language: parsed.language ?? options.language ?? "en-US",
-      confidence: parsed.confidence,
-      segments: parsed.segments ?? [],
-      fullText: parsed.fullText ?? content,
-    };
+    // All formats failed
+    logger.error("gemini_asr_all_formats_failed", { error: lastError.slice(0, 500) });
+    throw new Error(`Gemini ASR failed with all content formats: ${lastError.slice(0, 200)}`);
   }
 }
 
