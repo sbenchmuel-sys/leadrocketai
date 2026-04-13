@@ -7,6 +7,7 @@ import { logger } from "../_shared/logger.ts";
 import { mapTwilioStatus, enqueueCallJob, CALL_DEFAULTS } from "../_shared/callConfig.ts";
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
 import { resolvePhoneMapping } from "../_shared/phoneMapping.ts";
+import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
