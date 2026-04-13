@@ -119,7 +119,7 @@ Deno.serve(async (req) => {
         call_session_id: callSessionId,
         status: "processing",
         language: resolvedLanguage,
-        provider: "lovable-ai",
+        provider: "google-speech",
       })
       .select("id")
       .single();
