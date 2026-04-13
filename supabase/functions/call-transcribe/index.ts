@@ -187,15 +187,11 @@ Deno.serve(async (req) => {
     const base64Audio = arrayBufferToBase64(audioBuffer);
 
     // ---- §5 ASR with auto-detect always enabled ----
-    const asr = new GeminiAsrProvider(lovableApiKey);
+    const asr = new GeminiAsrProvider(lovableApiKey || "");
 
-    // Generate a signed URL for the audio file (for URL-based ASR strategies)
-    const audioStoragePath = storagePath?.replace("call-recordings/", "") ?? "";
-    const { data: signedData } = await supabase.storage
-      .from("call-recordings")
-      .createSignedUrl(audioStoragePath, 3600);
-    if (signedData?.signedUrl) {
-      asr.setAudioUrl(signedData.signedUrl);
+    // Configure Twilio fallback for transcription when LLM gateway doesn't support audio
+    if (twilioAccountSid && twilioAuthToken && recording.recording_sid) {
+      asr.setTwilioFallback(twilioAccountSid, twilioAuthToken, recording.recording_sid);
     }
 
     let asrResult;
