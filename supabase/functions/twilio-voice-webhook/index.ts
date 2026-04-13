@@ -188,6 +188,41 @@ async function handleCallStatus(
       logger.info("call_session_created", { callSid, status, workspaceId: mapping.workspaceId });
     }
   }
+
+  // ---- Project completed/answered calls to lead timeline ----
+  const isTerminal = ["completed", "failed", "busy", "no-answer", "canceled"].includes(status);
+  if (isTerminal) {
+    // Re-fetch session to get lead_id and workspace_id
+    const { data: sess } = await supabase
+      .from("call_sessions")
+      .select("id, workspace_id, lead_id, duration_sec, direction, started_at")
+      .eq("call_sid", callSid)
+      .maybeSingle();
+
+    if (sess?.lead_id && sess.workspace_id) {
+      const durationSec = params.CallDuration ? parseInt(params.CallDuration, 10) : sess.duration_sec;
+      const snippet = status === "completed"
+        ? `Phone call (${sess.direction}) — ${durationSec ? `${Math.ceil(durationSec / 60)} min` : "unknown duration"}`
+        : `Phone call (${sess.direction}) — ${status}`;
+
+      await projectTimelineItem(supabase, {
+        workspace_id: sess.workspace_id,
+        lead_id: sess.lead_id,
+        channel: "voice",
+        provider: "twilio",
+        direction: sess.direction as "inbound" | "outbound",
+        event_type: `call_${status}`,
+        occurred_at: sess.started_at ?? new Date().toISOString(),
+        source_table: "call_sessions",
+        source_id: sess.id,
+        snippet_text: snippet,
+        metadata_json: { call_sid: callSid, duration_sec: durationSec, status },
+        dedupe_key: callDedupeKey(sess.id),
+      }, { triggerRecompute: status === "completed" });
+
+      logger.info("call_timeline_projected", { callSid, leadId: sess.lead_id, status });
+    }
+  }
 }
 
 // ============================================================
