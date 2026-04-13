@@ -36,11 +36,13 @@ Deno.serve(async (req) => {
     // ---- Validate Twilio signature ----
     const signature = req.headers.get("X-Twilio-Signature");
     if (twilioAuthToken && signature) {
-      const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL") ?? req.url;
+      // Use public SUPABASE_URL — Twilio computes signatures against the public
+      // webhook URL, not the internal container URL that req.url returns.
+      const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
       const isValid = await validateTwilioSignature(
         twilioAuthToken,
         signature,
-        baseUrl,
+        publicUrl,
         params,
       );
       if (!isValid) {
