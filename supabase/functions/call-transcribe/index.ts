@@ -47,6 +47,8 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+  const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
+  const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
@@ -93,7 +95,25 @@ Deno.serve(async (req) => {
     }
 
     // ---- §2 Insert-first idempotency (race-safe via UNIQUE constraint) ----
+    // Allow retry of failed transcripts by deleting the old record first
     const resolvedLanguage = workspaceLang;
+
+    // Check for existing transcript
+    const { data: existing } = await supabase
+      .from("call_transcripts")
+      .select("id, status")
+      .eq("call_session_id", callSessionId)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.status === "completed" || existing.status === "processing") {
+        logger.info("transcribe_already_started_or_completed", { callSessionId, status: existing.status });
+        return respond({ ok: true, status: "already_started_or_completed" });
+      }
+      // Failed or skipped — delete to allow retry
+      await supabase.from("call_transcripts").delete().eq("id", existing.id);
+      logger.info("transcribe_retry_cleared", { callSessionId, oldStatus: existing.status });
+    }
 
     const { data: transcript, error: insertErr } = await supabase
       .from("call_transcripts")
@@ -167,7 +187,12 @@ Deno.serve(async (req) => {
     const base64Audio = arrayBufferToBase64(audioBuffer);
 
     // ---- §5 ASR with auto-detect always enabled ----
-    const asr = new GeminiAsrProvider(lovableApiKey);
+    const asr = new GeminiAsrProvider(lovableApiKey || "");
+
+    // Configure Twilio fallback for transcription when LLM gateway doesn't support audio
+    if (twilioAccountSid && twilioAuthToken && recording.recording_sid) {
+      asr.setTwilioFallback(twilioAccountSid, twilioAuthToken, recording.recording_sid);
+    }
 
     let asrResult;
     try {
