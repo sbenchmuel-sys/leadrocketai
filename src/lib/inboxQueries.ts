@@ -2,20 +2,38 @@ import { supabase } from "@/integrations/supabase/client";
 import { providerToCanonical, type CanonicalChannel } from "@/lib/channels";
 import type { QuickChip, InboxSort, WaitingOn } from "@/lib/inboxStateCache";
 
+// ── Types ──────────────────────────────────────────────────────────────
+
 export type ConversationListItem = {
-  id: string;
-  contact_id: string;
+  id: string;            // lead_id — one "conversation" per lead
+  contact_id: string;    // kept for compat — same as lead_id
   contact_name: string;
   contact_company: string | null;
   contact_status: string;
-  channel: "gmail" | "whatsapp";
+  channel: string;       // canonical channel of latest message
   status: string;
   last_message_at: string;
   message_count: number;
   latest_summary: string | null;
   latest_sentiment: string | null;
-  unread: boolean; // inbound after last outbound
-  lead_id: string | null;
+  unread: boolean;
+  lead_id: string;
+  latest_snippet: string | null;
+  latest_direction: string | null;
+  channels_used: string[];
+};
+
+export type TimelineMessage = {
+  id: string;
+  direction: "inbound" | "outbound" | null;
+  body_text: string | null;
+  channel: string;
+  provider: string | null;
+  event_type: string;
+  created_at: string;
+  subject: string | null;
+  status: string;
+  source_table: string;
 };
 
 export type DecryptedMessage = {
@@ -56,94 +74,144 @@ export interface InboxFilters {
   waitingOn?: WaitingOn;
 }
 
+/**
+ * Fetch inbox items — one row per lead, sourced from lead_timeline_items + leads.
+ * Groups by lead and picks the latest timeline entry for display.
+ */
 export async function fetchConversations(
   filterOrTab: InboxFilters | "active" | "new" | "archived"
 ): Promise<ConversationListItem[]> {
-  // Support legacy simple string argument
   const filters: InboxFilters = typeof filterOrTab === "string"
     ? { tab: filterOrTab }
     : filterOrTab;
 
   const { tab, search, channelFilter, sortBy = "recent" } = filters;
 
-  // Use the manager view for enriched data
-  let query = supabase
-    .from("manager_conversation_metrics")
-    .select("*");
-
-  // Sort server-side
-  if (sortBy === "stale") {
-    query = query.order("last_message_at", { ascending: true });
-  } else {
-    // recent, urgent, new_inbound all use desc last_message_at as base sort
-    query = query.order("last_message_at", { ascending: false });
-  }
+  // Step 1: Fetch leads (the "conversation" unit)
+  let leadsQuery = supabase
+    .from("leads")
+    .select("id, name, company, email, status, stage, last_activity_at, phone");
 
   // Tab filter
   if (tab === "new") {
-    query = query.eq("contact_status", "unclassified");
+    leadsQuery = leadsQuery.eq("stage", "new");
   } else if (tab === "archived") {
-    query = query.eq("status", "closed");
+    leadsQuery = leadsQuery.in("status", ["lost", "unresponsive", "disqualified"]);
   } else {
-    query = query.neq("status", "closed").neq("contact_status", "unclassified");
+    // active — not new and not lost
+    leadsQuery = leadsQuery.neq("stage", "new").not("status", "in", '("lost","unresponsive","disqualified")');
   }
 
-  // Server-side search (ilike on contact name/company)
   if (search && search.trim().length >= 2) {
     const term = `%${search.trim()}%`;
-    query = query.or(`contact_name.ilike.${term},contact_company.ilike.${term}`);
+    leadsQuery = leadsQuery.or(`name.ilike.${term},company.ilike.${term},email.ilike.${term}`);
   }
 
-  // Server-side channel filter
-  if (channelFilter && channelFilter.length > 0) {
-    // Map canonical channels back to provider channels stored in DB
-    const providerChannels: string[] = [];
-    for (const ch of channelFilter) {
-      if (ch === "email") { providerChannels.push("gmail", "outlook"); }
-      else { providerChannels.push(ch); }
+  // Sort
+  if (sortBy === "stale") {
+    leadsQuery = leadsQuery.order("last_activity_at", { ascending: true });
+  } else {
+    leadsQuery = leadsQuery.order("last_activity_at", { ascending: false });
+  }
+
+  leadsQuery = leadsQuery.limit(100);
+
+  const { data: leads, error: leadsErr } = await leadsQuery;
+  if (leadsErr) throw leadsErr;
+  if (!leads?.length) return [];
+
+  const leadIds = leads.map((l) => l.id);
+
+  // Step 2: Get latest timeline item per lead + aggregate counts
+  // We use a single query with ordering and then group client-side
+  const { data: timelineItems, error: tlErr } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, channel, direction, event_type, snippet_text, subject, occurred_at, source_table")
+    .in("lead_id", leadIds)
+    .eq("hidden", false)
+    .order("occurred_at", { ascending: false })
+    .limit(1000);
+
+  if (tlErr) throw tlErr;
+
+  // Group timeline data by lead
+  const leadTimeline = new Map<string, {
+    latest: typeof timelineItems[0] | null;
+    count: number;
+    channels: Set<string>;
+    hasInbound: boolean;
+    lastInboundAt: string | null;
+    lastOutboundAt: string | null;
+  }>();
+
+  for (const item of (timelineItems ?? [])) {
+    let entry = leadTimeline.get(item.lead_id);
+    if (!entry) {
+      entry = { latest: null, count: 0, channels: new Set(), hasInbound: false, lastInboundAt: null, lastOutboundAt: null };
+      leadTimeline.set(item.lead_id, entry);
     }
-    query = query.in("channel", providerChannels as any);
+    if (!entry.latest) entry.latest = item;
+    entry.count++;
+    if (item.channel) entry.channels.add(item.channel);
+    if (item.direction === "inbound") {
+      entry.hasInbound = true;
+      if (!entry.lastInboundAt) entry.lastInboundAt = item.occurred_at;
+    }
+    if (item.direction === "outbound") {
+      if (!entry.lastOutboundAt) entry.lastOutboundAt = item.occurred_at;
+    }
   }
 
-  // Limit for performance
-  query = query.limit(200);
+  // Build list items
+  let items: ConversationListItem[] = leads.map((lead) => {
+    const tl = leadTimeline.get(lead.id);
+    const latest = tl?.latest;
+    const isUnread = tl?.lastInboundAt && tl?.lastOutboundAt
+      ? new Date(tl.lastInboundAt) > new Date(tl.lastOutboundAt)
+      : !!tl?.hasInbound;
 
-  const { data, error } = await query;
-  if (error) throw error;
+    return {
+      id: lead.id,
+      contact_id: lead.id,
+      contact_name: lead.name,
+      contact_company: lead.company,
+      contact_status: lead.stage ?? lead.status,
+      channel: latest?.channel ?? "email",
+      status: lead.status === "lost" ? "closed" : "open",
+      last_message_at: latest?.occurred_at ?? lead.last_activity_at,
+      message_count: tl?.count ?? 0,
+      latest_summary: null,
+      latest_sentiment: null,
+      unread: isUnread,
+      lead_id: lead.id,
+      latest_snippet: latest?.snippet_text ?? null,
+      latest_direction: latest?.direction ?? null,
+      channels_used: Array.from(tl?.channels ?? []),
+    };
+  });
 
-  let items: ConversationListItem[] = (data ?? []).map((row) => ({
-    id: row.conversation_id!,
-    contact_id: row.contact_id!,
-    contact_name: row.contact_name ?? "Unknown",
-    contact_company: row.contact_company,
-    contact_status: row.contact_status ?? "unclassified",
-    channel: row.channel as "gmail" | "whatsapp",
-    status: row.status ?? "open",
-    last_message_at: row.last_message_at ?? "",
-    message_count: row.message_count ?? 0,
-    latest_summary: row.latest_summary,
-    latest_sentiment: row.latest_sentiment,
-    unread: false, // TODO: compute from last seen
-    lead_id: (row as any).lead_id ?? null,
-  }));
+  // Filter out leads with no timeline items in active/archived tabs
+  if (tab !== "new") {
+    items = items.filter((item) => item.message_count > 0);
+  }
 
-  // Client-side quick chip filters (data not always available server-side)
+  // Client-side channel filter
+  if (channelFilter && channelFilter.length > 0) {
+    items = items.filter((item) => {
+      return item.channels_used.some((ch) => channelFilter.includes(ch as CanonicalChannel));
+    });
+  }
+
+  // Client-side quick chip filters
   if (filters.quickChip) {
     items = applyQuickChipFilter(items, filters.quickChip);
   }
 
-  // Client-side sentiment filter for "hot" sort
+  // Urgent sort
   if (sortBy === "urgent") {
-    // Negative/urgent sentiment first
     items.sort((a, b) => {
-      const urgencyScore = (s: string | null) => {
-        if (!s) return 0;
-        const sl = s.toLowerCase();
-        if (sl === "negative" || sl === "frustrated") return 3;
-        if (sl === "neutral") return 1;
-        return 0;
-      };
-      return urgencyScore(b.latest_sentiment) - urgencyScore(a.latest_sentiment);
+      const score = (i: ConversationListItem) => (i.unread ? 2 : 0) + (i.message_count > 5 ? 1 : 0);
+      return score(b) - score(a);
     });
   }
 
@@ -153,22 +221,14 @@ export async function fetchConversations(
 function applyQuickChipFilter(items: ConversationListItem[], chip: QuickChip): ConversationListItem[] {
   switch (chip) {
     case "needs_action":
-      // Conversations with unread inbound (approximation: unread flag or contact_status indicators)
-      // TODO: extend server view to include lead.needs_action
-      return items.filter((c) => c.unread || c.contact_status === "unclassified");
+      return items.filter((c) => c.unread);
     case "new_inbound":
-      return items.filter((c) => c.contact_status === "unclassified");
+      return items.filter((c) => c.latest_direction === "inbound");
     case "unreplied":
-      // Conversations where latest message was inbound (no outbound reply yet)
-      // Best-effort: low message count + unread
       return items.filter((c) => c.unread);
     case "hot":
-      return items.filter((c) => {
-        const s = c.latest_sentiment?.toLowerCase();
-        return s === "positive" || s === "interested" || s === "excited";
-      });
+      return items.filter((c) => c.message_count >= 5);
     case "overdue":
-      // Conversations with no activity in 48h+
       return items.filter((c) => {
         if (!c.last_message_at) return false;
         const diffMs = Date.now() - new Date(c.last_message_at).getTime();
@@ -179,35 +239,90 @@ function applyQuickChipFilter(items: ConversationListItem[], chip: QuickChip): C
   }
 }
 
+// ── Thread messages — from interactions + timeline ─────────────────────
+
 export async function fetchDecryptedMessages(
-  conversationId: string
+  leadId: string
 ): Promise<{ messages: DecryptedMessage[]; analysis: ConversationAnalysis | null }> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error("Not authenticated");
+  // Fetch interactions for this lead (the actual message content)
+  const { data: interactions, error } = await supabase
+    .from("interactions")
+    .select("id, direction, body_text, type, source, subject, occurred_at, hidden")
+    .eq("lead_id", leadId)
+    .eq("hidden", false)
+    .order("occurred_at", { ascending: true })
+    .limit(200);
 
-  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/decrypt-messages?conversation_id=${conversationId}`;
-  const fetchResp = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      "Content-Type": "application/json",
-    },
-  });
+  if (error) throw error;
 
-  if (!fetchResp.ok) {
-    const errText = await fetchResp.text();
-    throw new Error(`Failed to fetch messages: ${errText}`);
+  const messages: DecryptedMessage[] = (interactions ?? []).map((i) => ({
+    id: i.id,
+    direction: (i.direction as "inbound" | "outbound") ?? "outbound",
+    body_text: i.body_text,
+    is_expired: false,
+    media_type: null,
+    created_at: i.occurred_at,
+    sender_identity_id: null,
+    status: "delivered" as const,
+  }));
+
+  // Also fetch SMS/WhatsApp messages from the messages table via timeline
+  const { data: timelineItems } = await supabase
+    .from("lead_timeline_items")
+    .select("id, direction, snippet_text, channel, occurred_at, event_type, source_table, source_id, subject")
+    .eq("lead_id", leadId)
+    .eq("hidden", false)
+    .in("channel", ["sms", "whatsapp", "voice"])
+    .order("occurred_at", { ascending: true })
+    .limit(200);
+
+  for (const tl of (timelineItems ?? [])) {
+    // Avoid duplicates with interactions
+    messages.push({
+      id: tl.id,
+      direction: (tl.direction as "inbound" | "outbound") ?? "outbound",
+      body_text: tl.snippet_text ?? `[${tl.event_type}]`,
+      is_expired: false,
+      media_type: tl.channel === "voice" ? "voice" : null,
+      created_at: tl.occurred_at,
+      sender_identity_id: null,
+      status: "delivered",
+    });
   }
 
-  return fetchResp.json();
+  // Sort all messages chronologically
+  messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  return { messages, analysis: null };
 }
 
 export async function fetchContactAnalysis(
-  contactId: string
+  contactOrLeadId: string
 ): Promise<ConversationAnalysis | null> {
+  // Try lead intelligence first (canonical source)
+  const { data: intel } = await supabase
+    .from("lead_intelligence")
+    .select("summary_text, channel_recommendations_json")
+    .eq("lead_id", contactOrLeadId)
+    .maybeSingle();
+
+  if (intel) {
+    return {
+      summary_short: intel.summary_text?.substring(0, 100) ?? null,
+      summary_text: intel.summary_text,
+      sentiment: null,
+      urgency: null,
+      topics: null,
+      extracted_features: {},
+      recommended_reply_channel: null,
+    };
+  }
+
+  // Fallback to conversation_analysis
   const { data, error } = await supabase
     .from("conversation_analysis")
     .select("summary_short, summary_text, sentiment, urgency, topics, extracted_features, recommended_reply_channel")
-    .eq("contact_id", contactId)
+    .eq("contact_id", contactOrLeadId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -217,12 +332,12 @@ export async function fetchContactAnalysis(
 }
 
 export async function fetchAllContactAnalysis(
-  contactId: string
+  contactOrLeadId: string
 ): Promise<ConversationAnalysis[]> {
   const { data, error } = await supabase
     .from("conversation_analysis")
     .select("summary_short, summary_text, sentiment, urgency, topics, extracted_features, recommended_reply_channel")
-    .eq("contact_id", contactId)
+    .eq("contact_id", contactOrLeadId)
     .order("created_at", { ascending: false })
     .limit(10);
 

@@ -17,7 +17,6 @@ export function ConversationList({ filter, selectedId, onSelect, inboxState }: P
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Build filter object from inbox state
   const filtersKey = JSON.stringify({
     tab: filter,
     search: inboxState.searchQuery,
@@ -81,59 +80,61 @@ export function ConversationList({ filter, selectedId, onSelect, inboxState }: P
             selectedId === convo.id && "bg-accent"
           )}
         >
-          <div className="flex items-start gap-3">
-            {/* Channel icon */}
-            {(() => {
-              const canonical = providerToCanonical(convo.channel);
-              const Icon = canonicalIcon(canonical);
-              const colors = channelColors(canonical);
-              return (
-                <div
-                  className="mt-0.5 rounded-full p-1.5 shrink-0"
-                  style={{ backgroundColor: colors.bg, color: colors.fg }}
-                  title={canonicalLabel(canonical)}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                </div>
-              );
-            })()}
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium truncate text-foreground">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                {convo.unread && (
+                  <span className="h-2 w-2 rounded-full bg-primary shrink-0" />
+                )}
+                <span className="text-sm font-medium text-foreground truncate">
                   {convo.contact_name}
                 </span>
-                <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                  {convo.last_message_at
-                    ? formatDistanceToNow(new Date(convo.last_message_at), { addSuffix: false })
-                    : ""}
-                </span>
               </div>
-
               {convo.contact_company && (
                 <span className="text-xs text-muted-foreground truncate block">
                   {convo.contact_company}
                 </span>
               )}
+            </div>
 
-              {convo.latest_summary && (
-                <p className="text-xs text-muted-foreground/70 truncate mt-0.5">
-                  {convo.latest_summary}
-                </p>
-              )}
-
-              <div className="flex items-center gap-1.5 mt-1">
-                {convo.latest_sentiment && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
-                    {convo.latest_sentiment}
-                  </Badge>
-                )}
-                <span className="text-[10px] text-muted-foreground">
-                  {convo.message_count} msg{convo.message_count !== 1 ? "s" : ""}
-                </span>
-              </div>
+            <div className="flex items-center gap-1 shrink-0">
+              {(convo.channels_used ?? []).slice(0, 3).map((ch) => {
+                const Icon = canonicalIcon(ch as any);
+                const colors = channelColors(ch as any);
+                return (
+                  <div
+                    key={ch}
+                    className="rounded-full p-0.5"
+                    style={{ backgroundColor: colors.bg, color: colors.fg }}
+                  >
+                    <Icon className="h-2.5 w-2.5" />
+                  </div>
+                );
+              })}
             </div>
           </div>
+
+          <div className="mt-1 flex items-end justify-between gap-2">
+            <p className="text-xs text-muted-foreground truncate flex-1">
+              {convo.latest_snippet
+                ? `${convo.latest_direction === "outbound" ? "You: " : ""}${convo.latest_snippet}`
+                : convo.latest_summary ?? "No messages yet"
+              }
+            </p>
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {convo.last_message_at
+                ? formatDistanceToNow(new Date(convo.last_message_at), { addSuffix: true })
+                : ""}
+            </span>
+          </div>
+
+          {convo.message_count > 0 && (
+            <div className="mt-1">
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                {convo.message_count} {convo.message_count === 1 ? "message" : "messages"}
+              </Badge>
+            </div>
+          )}
         </button>
       ))}
     </div>
