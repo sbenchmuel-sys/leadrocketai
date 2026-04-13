@@ -93,7 +93,25 @@ Deno.serve(async (req) => {
     }
 
     // ---- §2 Insert-first idempotency (race-safe via UNIQUE constraint) ----
+    // Allow retry of failed transcripts by deleting the old record first
     const resolvedLanguage = workspaceLang;
+
+    // Check for existing transcript
+    const { data: existing } = await supabase
+      .from("call_transcripts")
+      .select("id, status")
+      .eq("call_session_id", callSessionId)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.status === "completed" || existing.status === "processing") {
+        logger.info("transcribe_already_started_or_completed", { callSessionId, status: existing.status });
+        return respond({ ok: true, status: "already_started_or_completed" });
+      }
+      // Failed or skipped — delete to allow retry
+      await supabase.from("call_transcripts").delete().eq("id", existing.id);
+      logger.info("transcribe_retry_cleared", { callSessionId, oldStatus: existing.status });
+    }
 
     const { data: transcript, error: insertErr } = await supabase
       .from("call_transcripts")
