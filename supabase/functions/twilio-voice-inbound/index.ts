@@ -161,10 +161,9 @@ Deno.serve(async (req) => {
     // Validate Twilio signature (only for non-browser inbound calls)
     const signature = req.headers.get("X-Twilio-Signature");
     if (twilioAuthToken && signature) {
-      const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL")
-        ? `${Deno.env.get("TWILIO_WEBHOOK_BASE_URL")!.replace(/\/$/, "")}/twilio-voice-inbound`
-        : req.url;
-      const isValid = await validateTwilioSignature(twilioAuthToken, signature, baseUrl, params);
+      // Use public SUPABASE_URL for signature validation (same fix as sms-webhook)
+      const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
+      const isValid = await validateTwilioSignature(twilioAuthToken, signature, publicUrl, params);
       if (!isValid) {
         logger.warn("inbound_signature_invalid");
         return new Response("<Response><Say>Unauthorized</Say></Response>", {

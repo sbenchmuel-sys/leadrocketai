@@ -7,6 +7,7 @@ import { logger } from "../_shared/logger.ts";
 import { mapTwilioStatus, enqueueCallJob, CALL_DEFAULTS } from "../_shared/callConfig.ts";
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
 import { resolvePhoneMapping } from "../_shared/phoneMapping.ts";
+import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,11 +37,13 @@ Deno.serve(async (req) => {
     // ---- Validate Twilio signature ----
     const signature = req.headers.get("X-Twilio-Signature");
     if (twilioAuthToken && signature) {
-      const baseUrl = Deno.env.get("TWILIO_WEBHOOK_BASE_URL") ?? req.url;
+      // Use public SUPABASE_URL — Twilio computes signatures against the public
+      // webhook URL, not the internal container URL that req.url returns.
+      const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
       const isValid = await validateTwilioSignature(
         twilioAuthToken,
         signature,
-        baseUrl,
+        publicUrl,
         params,
       );
       if (!isValid) {
@@ -183,6 +186,41 @@ async function handleCallStatus(
       }
     } else {
       logger.info("call_session_created", { callSid, status, workspaceId: mapping.workspaceId });
+    }
+  }
+
+  // ---- Project completed/answered calls to lead timeline ----
+  const isTerminal = ["completed", "failed", "busy", "no-answer", "canceled"].includes(status);
+  if (isTerminal) {
+    // Re-fetch session to get lead_id and workspace_id
+    const { data: sess } = await supabase
+      .from("call_sessions")
+      .select("id, workspace_id, lead_id, duration_sec, direction, started_at")
+      .eq("call_sid", callSid)
+      .maybeSingle();
+
+    if (sess?.lead_id && sess.workspace_id) {
+      const durationSec = params.CallDuration ? parseInt(params.CallDuration, 10) : sess.duration_sec;
+      const snippet = status === "completed"
+        ? `Phone call (${sess.direction}) — ${durationSec ? `${Math.ceil(durationSec / 60)} min` : "unknown duration"}`
+        : `Phone call (${sess.direction}) — ${status}`;
+
+      await projectTimelineItem(supabase, {
+        workspace_id: sess.workspace_id,
+        lead_id: sess.lead_id,
+        channel: "voice",
+        provider: "twilio",
+        direction: sess.direction as "inbound" | "outbound",
+        event_type: `call_${status}`,
+        occurred_at: sess.started_at ?? new Date().toISOString(),
+        source_table: "call_sessions",
+        source_id: sess.id,
+        snippet_text: snippet,
+        metadata_json: { call_sid: callSid, duration_sec: durationSec, status },
+        dedupe_key: callDedupeKey(sess.id),
+      }, { triggerRecompute: status === "completed" });
+
+      logger.info("call_timeline_projected", { callSid, leadId: sess.lead_id, status });
     }
   }
 }
