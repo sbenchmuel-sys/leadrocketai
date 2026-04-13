@@ -7,7 +7,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { CALL_DEFAULTS, enqueueCallJob } from "../_shared/callConfig.ts";
 import {
-  GeminiAsrProvider,
+  GoogleSpeechAsrProvider,
   normalizeSpeakerRoles,
   cleanSegments,
   formatLlmTranscript,
@@ -46,9 +46,7 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
-  const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
-  const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  const googleSpeechApiKey = Deno.env.get("GOOGLE_SPEECH_API_KEY");
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
@@ -121,7 +119,7 @@ Deno.serve(async (req) => {
         call_session_id: callSessionId,
         status: "processing",
         language: resolvedLanguage,
-        provider: "lovable-ai",
+        provider: "google-speech",
       })
       .select("id")
       .single();
@@ -143,7 +141,7 @@ Deno.serve(async (req) => {
     // ---- Get recording audio ----
     const { data: recording } = await supabase
       .from("call_recordings")
-      .select("storage_url, recording_sid")
+      .select("storage_url, recording_sid, channels")
       .eq("call_session_id", callSessionId)
       .eq("status", "downloaded")
       .order("created_at", { ascending: false })
@@ -156,10 +154,10 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "No downloaded recording" }, 404);
     }
 
-    if (!lovableApiKey) {
+    if (!googleSpeechApiKey) {
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
-      logger.error("transcribe_no_api_key", { callSessionId });
-      return respond({ ok: false, error: "LOVABLE_API_KEY not configured" }, 500);
+      logger.error("transcribe_no_google_speech_key", { callSessionId });
+      return respond({ ok: false, error: "GOOGLE_SPEECH_API_KEY not configured" }, 500);
     }
 
     // ---- Download audio from storage ----
@@ -186,13 +184,8 @@ Deno.serve(async (req) => {
     // ---- §1 Safe base64 conversion ----
     const base64Audio = arrayBufferToBase64(audioBuffer);
 
-    // ---- §5 ASR with auto-detect always enabled ----
-    const asr = new GeminiAsrProvider(lovableApiKey || "");
-
-    // Configure Twilio fallback for transcription when LLM gateway doesn't support audio
-    if (twilioAccountSid && twilioAuthToken && recording.recording_sid) {
-      asr.setTwilioFallback(twilioAccountSid, twilioAuthToken, recording.recording_sid);
-    }
+    // ---- ASR via Google Speech-to-Text ----
+    const asr = new GoogleSpeechAsrProvider(googleSpeechApiKey);
 
     let asrResult;
     try {
@@ -202,6 +195,7 @@ Deno.serve(async (req) => {
         allowedLanguages: supportedLangs as string[],
         diarization: true,
         timestamps: true,
+        channelCount: recording.channels ?? 1,
       });
     } catch (err) {
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
