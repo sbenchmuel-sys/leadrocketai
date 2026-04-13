@@ -1,5 +1,5 @@
 // ===========================================================
-// ASR Provider Abstraction — Future-proof audio transcription
+// ASR Provider Abstraction — Multi-strategy audio transcription
 // ===========================================================
 import { logger } from "./logger.ts";
 
@@ -31,59 +31,150 @@ export interface AsrProvider {
   transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult>;
 }
 
-// ---- Gemini (Default) Provider ----
+// ---- Twilio Transcription Provider ----
+// Uses Twilio Intelligence / basic transcription via recording SID
+
+export class TwilioAsrProvider implements AsrProvider {
+  private accountSid: string;
+  private authToken: string;
+  private recordingSid: string;
+
+  constructor(accountSid: string, authToken: string, recordingSid: string) {
+    this.accountSid = accountSid;
+    this.authToken = authToken;
+    this.recordingSid = recordingSid;
+  }
+
+  async transcribe(_audioBase64: string, options: AsrOptions): Promise<AsrResult> {
+    // Use Twilio's Transcription API to create a transcription from the recording
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}/Transcriptions.json`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      logger.warn("twilio_transcription_create_failed", { status: resp.status, error: errText.slice(0, 300) });
+      
+      // Fallback: download the recording directly from Twilio and try LLM-based transcription
+      return this.fallbackDirectDownload(options);
+    }
+
+    const txResult = await resp.json();
+    logger.info("twilio_transcription_created", { sid: txResult.sid, status: txResult.status });
+
+    // Twilio transcription is async — poll for completion
+    const transcriptionSid = txResult.sid;
+    const maxWait = 120_000; // 2 minutes
+    const pollInterval = 5_000;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWait) {
+      await new Promise(r => setTimeout(r, pollInterval));
+
+      const statusUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}/Transcriptions/${transcriptionSid}.json`;
+      const statusResp = await fetch(statusUrl, {
+        headers: {
+          Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+        },
+      });
+
+      if (!statusResp.ok) continue;
+
+      const statusData = await statusResp.json();
+      if (statusData.status === "completed") {
+        return {
+          language: options.language ?? "en-US",
+          confidence: undefined,
+          segments: [{
+            startMs: 0,
+            endMs: (statusData.duration || 0) * 1000,
+            speaker: "Speaker 1",
+            text: statusData.transcription_text || "",
+          }],
+          fullText: statusData.transcription_text || "",
+        };
+      } else if (statusData.status === "failed") {
+        logger.error("twilio_transcription_failed", { sid: transcriptionSid });
+        return this.fallbackDirectDownload(options);
+      }
+    }
+
+    logger.warn("twilio_transcription_timeout", { sid: transcriptionSid });
+    return this.fallbackDirectDownload(options);
+  }
+
+  /** Fallback: Download recording audio from Twilio and return raw text via LLM */
+  private async fallbackDirectDownload(options: AsrOptions): Promise<AsrResult> {
+    // Try to get the recording audio directly from Twilio
+    const audioUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}.wav`;
+    const audioResp = await fetch(audioUrl, {
+      headers: {
+        Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+      },
+    });
+
+    if (!audioResp.ok) {
+      throw new Error(`Failed to download recording from Twilio: ${audioResp.status}`);
+    }
+
+    // We have the audio but no way to transcribe it without an LLM that supports audio
+    // Return a placeholder that indicates manual transcription is needed
+    throw new Error("Twilio basic transcription unavailable — no audio-capable LLM configured");
+  }
+}
+
+// ---- Gemini ASR Provider (for when gateway supports audio) ----
 
 export class GeminiAsrProvider implements AsrProvider {
   private apiKey: string;
   private model: string;
-  private audioUrl?: string; // Optional: signed URL for the audio file
+  private twilioFallback?: TwilioAsrProvider;
 
   constructor(apiKey: string, model = "google/gemini-2.5-flash") {
     this.apiKey = apiKey;
     this.model = model;
   }
 
-  /** Set a signed URL for the audio file (preferred over base64) */
-  setAudioUrl(url: string) {
-    this.audioUrl = url;
+  /** Configure Twilio fallback for when the LLM gateway doesn't support audio */
+  setTwilioFallback(accountSid: string, authToken: string, recordingSid: string) {
+    this.twilioFallback = new TwilioAsrProvider(accountSid, authToken, recordingSid);
   }
 
   async transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult> {
-    // Strategy 1: Try Whisper-style /v1/audio/transcriptions endpoint
+    // Strategy 1: Try LLM gateway with audio (may not be supported)
     try {
-      const whisperResult = await this.tryWhisperEndpoint(audioBase64, options);
-      if (whisperResult) return whisperResult;
+      const result = await this.tryLlmAudio(audioBase64, options);
+      if (result) return result;
     } catch (err) {
-      logger.warn("whisper_endpoint_failed", { error: err instanceof Error ? err.message : String(err) });
+      logger.warn("llm_audio_failed", { error: err instanceof Error ? err.message : String(err) });
     }
 
-    // Strategy 2: Try chat completions with audio URL reference (if available)
-    if (this.audioUrl) {
+    // Strategy 2: Twilio native transcription
+    if (this.twilioFallback) {
       try {
-        const urlResult = await this.tryChatWithAudioUrl(options);
-        if (urlResult) return urlResult;
+        const result = await this.twilioFallback.transcribe(audioBase64, options);
+        logger.info("twilio_fallback_success");
+        return result;
       } catch (err) {
-        logger.warn("chat_audio_url_failed", { error: err instanceof Error ? err.message : String(err) });
+        logger.warn("twilio_fallback_failed", { error: err instanceof Error ? err.message : String(err) });
       }
     }
 
-    // Strategy 3: Try chat completions with inline base64 audio
-    try {
-      const inlineResult = await this.tryChatWithInlineAudio(audioBase64, options);
-      if (inlineResult) return inlineResult;
-    } catch (err) {
-      logger.warn("chat_inline_audio_failed", { error: err instanceof Error ? err.message : String(err) });
-    }
-
-    throw new Error("All ASR strategies failed — audio transcription not supported by current gateway");
+    throw new Error("All ASR strategies failed — no audio transcription service available");
   }
 
-  private buildPrompt(options: AsrOptions): string {
+  private async tryLlmAudio(audioBase64: string, options: AsrOptions): Promise<AsrResult | null> {
     const langInstruction = options.autoDetect && options.allowedLanguages?.length
       ? `Auto-detect the language from these options: ${options.allowedLanguages.join(", ")}. Report detected language in BCP-47 format.`
       : `Transcribe in ${options.language ?? "en-US"}.`;
 
-    return `${langInstruction}
+    const prompt = `${langInstruction}
 Return JSON ONLY with this exact structure:
 {
   "segments": [
@@ -97,105 +188,8 @@ Return JSON ONLY with this exact structure:
 ${options.diarization ? "Identify and label different speakers consistently." : ""}
 ${options.timestamps ? "Provide accurate timestamps in milliseconds." : ""}
 Return valid JSON only, no markdown fences.`;
-  }
 
-  private parseResult(content: string, options: AsrOptions): AsrResult {
-    let parsed: { segments?: AsrSegment[]; fullText?: string; confidence?: number; language?: string };
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    } catch {
-      parsed = { fullText: content, segments: [], confidence: undefined };
-    }
-    return {
-      language: parsed.language ?? options.language ?? "en-US",
-      confidence: parsed.confidence,
-      segments: parsed.segments ?? [],
-      fullText: parsed.fullText ?? content,
-    };
-  }
-
-  /** Whisper-style audio transcription endpoint */
-  private async tryWhisperEndpoint(audioBase64: string, options: AsrOptions): Promise<AsrResult | null> {
-    // Convert base64 to Blob for form-data
-    const binaryStr = atob(audioBase64);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
-
-    const formData = new FormData();
-    formData.append("file", new Blob([bytes], { type: "audio/wav" }), "recording.wav");
-    formData.append("model", "whisper-1");
-    formData.append("response_format", "verbose_json");
-    if (options.language && !options.autoDetect) {
-      formData.append("language", options.language.split("-")[0]); // "en-US" → "en"
-    }
-
-    const resp = await fetch("https://api.lovable.dev/v1/audio/transcriptions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: formData,
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      logger.warn("whisper_api_error", { status: resp.status, error: errText.slice(0, 200) });
-      return null;
-    }
-
-    const result = await resp.json();
-    logger.info("whisper_transcription_success", { language: result.language });
-
-    // Whisper verbose_json includes segments
-    const segments: AsrSegment[] = (result.segments || []).map((seg: any, i: number) => ({
-      startMs: Math.round((seg.start || 0) * 1000),
-      endMs: Math.round((seg.end || 0) * 1000),
-      speaker: `Speaker ${i % 2 === 0 ? 1 : 2}`, // Basic alternation — will be normalized later
-      text: seg.text?.trim() || "",
-    }));
-
-    return {
-      language: result.language ? `${result.language}-US` : options.language ?? "en-US",
-      confidence: undefined,
-      segments,
-      fullText: result.text || "",
-    };
-  }
-
-  /** Chat completions with audio URL reference */
-  private async tryChatWithAudioUrl(options: AsrOptions): Promise<AsrResult | null> {
-    const prompt = this.buildPrompt(options);
-    const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: this.audioUrl } },
-            { type: "text", text: prompt },
-          ],
-        }],
-        temperature: 0.1,
-      }),
-    });
-
-    if (!resp.ok) return null;
-    const result = await resp.json();
-    const content = result.choices?.[0]?.message?.content ?? "";
-    return this.parseResult(content, options);
-  }
-
-  /** Chat completions with inline base64 audio */
-  private async tryChatWithInlineAudio(audioBase64: string, options: AsrOptions): Promise<AsrResult | null> {
-    const prompt = this.buildPrompt(options);
+    // Try input_audio format
     const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -215,10 +209,29 @@ Return valid JSON only, no markdown fences.`;
       }),
     });
 
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      const errText = await resp.text();
+      logger.warn("llm_audio_api_error", { status: resp.status, error: errText.slice(0, 200) });
+      return null;
+    }
+
     const result = await resp.json();
     const content = result.choices?.[0]?.message?.content ?? "";
-    return this.parseResult(content, options);
+
+    let parsed: { segments?: AsrSegment[]; fullText?: string; confidence?: number; language?: string };
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+    } catch {
+      parsed = { fullText: content, segments: [], confidence: undefined };
+    }
+
+    return {
+      language: parsed.language ?? options.language ?? "en-US",
+      confidence: parsed.confidence,
+      segments: parsed.segments ?? [],
+      fullText: parsed.fullText ?? content,
+    };
   }
 }
 
@@ -230,7 +243,6 @@ export function normalizeSpeakerRoles(
 ): AsrSegment[] {
   if (segments.length === 0) return segments;
 
-  // Collect unique speakers in order of first appearance
   const speakerOrder: string[] = [];
   for (const seg of segments) {
     if (!speakerOrder.includes(seg.speaker)) {
@@ -238,21 +250,17 @@ export function normalizeSpeakerRoles(
     }
   }
 
-  // Build role map
   const roleMap = new Map<string, string>();
 
   if (speakerOrder.length <= 2) {
     if (direction === "outbound") {
-      // Outbound: our agent called, so Speaker 1 = Agent
       roleMap.set(speakerOrder[0], "Agent");
       if (speakerOrder[1]) roleMap.set(speakerOrder[1], "Customer");
     } else {
-      // Inbound: caller speaks first = Customer
       roleMap.set(speakerOrder[0], "Customer");
       if (speakerOrder[1]) roleMap.set(speakerOrder[1], "Agent");
     }
   }
-  // If >2 speakers, keep originals
 
   return segments.map((seg) => ({
     ...seg,
@@ -264,11 +272,8 @@ export function normalizeSpeakerRoles(
 
 export function cleanTranscriptText(text: string): string {
   return text
-    // Collapse repeated words: "I I I" → "I"
     .replace(/\b(\w+)(?:\s+\1){2,}\b/gi, "$1")
-    // Collapse repeated fillers: "uh uh uh" → "uh"
     .replace(/\b(uh|um|ah|er|hmm)(?:\s+\1){1,}\b/gi, "$1")
-    // Collapse excessive whitespace
     .replace(/\s{2,}/g, " ")
     .trim();
 }
