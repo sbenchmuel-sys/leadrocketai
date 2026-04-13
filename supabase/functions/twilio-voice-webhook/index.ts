@@ -75,6 +75,12 @@ Deno.serve(async (req) => {
     });
 
     if (isRecordingEvent) {
+      // Recording callbacks often include CallStatus=completed + CallDuration.
+      // Process the call-status side first so the session gets updated,
+      // then handle the recording itself.
+      if (params.CallStatus) {
+        await handleCallStatus(supabase, params);
+      }
       await handleRecordingStatus(supabase, params);
     } else {
       await handleCallStatus(supabase, params);
@@ -136,19 +142,38 @@ async function handleCallStatus(
     }
   }
 
+  // ---- Resolve session: prefer parent session for child legs ----
+  const parentCallSid = params.ParentCallSid;
+  let sessionCallSid = callSid;
+
+  if (parentCallSid) {
+    // This is a child dial leg — find and update the parent session instead
+    const { data: parentSession } = await supabase
+      .from("call_sessions")
+      .select("id, workspace_id, call_sid")
+      .eq("call_sid", parentCallSid)
+      .maybeSingle();
+
+    if (parentSession) {
+      sessionCallSid = parentCallSid;
+      logger.info("child_leg_mapped_to_parent", { childSid: callSid, parentSid: parentCallSid });
+    }
+    // If parent session not found, fall through to create/update by child SID
+  }
+
   // Idempotent upsert: try update first, insert if not found
   const { data: existing } = await supabase
     .from("call_sessions")
     .select("id, workspace_id")
-    .eq("call_sid", callSid)
+    .eq("call_sid", sessionCallSid)
     .maybeSingle();
 
   if (existing) {
     await supabase
       .from("call_sessions")
       .update(updateFields)
-      .eq("call_sid", callSid);
-    logger.info("call_session_updated", { callSid, status });
+      .eq("call_sid", sessionCallSid);
+    logger.info("call_session_updated", { callSid: sessionCallSid, status });
   } else {
     // Resolve phone mapping for new sessions
     const mapping = await resolvePhoneMapping(supabase, fromNumber, toNumber, direction as "inbound" | "outbound");
@@ -160,7 +185,7 @@ async function handleCallStatus(
 
     // Insert — unique constraint on call_sid ensures idempotency on race
     const { error: insertErr } = await supabase.from("call_sessions").insert({
-      call_sid: callSid,
+      call_sid: sessionCallSid,
       workspace_id: mapping.workspaceId,
       direction,
       from_number: fromNumber,
@@ -174,18 +199,17 @@ async function handleCallStatus(
     });
 
     if (insertErr) {
-      // If unique violation, it's a duplicate — just update
       if (insertErr.code === "23505") {
         await supabase
           .from("call_sessions")
           .update(updateFields)
-          .eq("call_sid", callSid);
-        logger.info("call_session_upserted_on_conflict", { callSid, status });
+          .eq("call_sid", sessionCallSid);
+        logger.info("call_session_upserted_on_conflict", { callSid: sessionCallSid, status });
       } else {
-        logger.error("call_session_insert_error", { callSid, error: insertErr.message });
+        logger.error("call_session_insert_error", { callSid: sessionCallSid, error: insertErr.message });
       }
     } else {
-      logger.info("call_session_created", { callSid, status, workspaceId: mapping.workspaceId });
+      logger.info("call_session_created", { callSid: sessionCallSid, status, workspaceId: mapping.workspaceId });
     }
   }
 
@@ -196,7 +220,7 @@ async function handleCallStatus(
     const { data: sess } = await supabase
       .from("call_sessions")
       .select("id, workspace_id, lead_id, duration_sec, direction, started_at")
-      .eq("call_sid", callSid)
+      .eq("call_sid", sessionCallSid)
       .maybeSingle();
 
     if (sess?.lead_id && sess.workspace_id) {
