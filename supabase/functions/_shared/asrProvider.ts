@@ -25,10 +25,166 @@ export interface AsrOptions {
   allowedLanguages?: string[];
   diarization: boolean;
   timestamps: boolean;
+  channelCount?: number;
 }
 
 export interface AsrProvider {
   transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult>;
+}
+
+function durationStringToMs(value?: string): number {
+  if (!value) return 0;
+  const normalized = value.endsWith("s") ? value.slice(0, -1) : value;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? Math.round(parsed * 1000) : 0;
+}
+
+function averageConfidence(values: Array<number | undefined>): number | undefined {
+  const valid = values.filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
+  if (valid.length === 0) return undefined;
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+}
+
+interface GoogleSpeechWord {
+  startTime?: string;
+  endTime?: string;
+}
+
+interface GoogleSpeechAlternative {
+  transcript?: string;
+  confidence?: number;
+  words?: GoogleSpeechWord[];
+}
+
+interface GoogleSpeechResult {
+  alternatives?: GoogleSpeechAlternative[];
+  channelTag?: number;
+  languageCode?: string;
+  resultEndTime?: string;
+}
+
+export class GoogleSpeechAsrProvider implements AsrProvider {
+  private apiKey: string;
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  async transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult> {
+    const preferredLanguages = Array.from(new Set([
+      options.language,
+      ...(options.allowedLanguages ?? []),
+    ].filter((value): value is string => Boolean(value))));
+
+    const [primaryLanguage = "en-US", ...fallbackLanguages] = preferredLanguages;
+
+    const config: Record<string, unknown> = {
+      languageCode: primaryLanguage,
+      alternativeLanguageCodes: fallbackLanguages.slice(0, 3),
+      enableAutomaticPunctuation: true,
+      enableWordTimeOffsets: true,
+      model: "phone_call",
+      useEnhanced: true,
+    };
+
+    if ((options.channelCount ?? 1) > 1) {
+      config.audioChannelCount = options.channelCount;
+      config.enableSeparateRecognitionPerChannel = true;
+    } else if (options.diarization) {
+      config.diarizationConfig = {
+        enableSpeakerDiarization: true,
+        minSpeakerCount: 2,
+        maxSpeakerCount: 2,
+      };
+    }
+
+    const startResp = await fetch(`https://speech.googleapis.com/v1p1beta1/speech:longrunningrecognize?key=${this.apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        config,
+        audio: {
+          content: audioBase64,
+        },
+      }),
+    });
+
+    if (!startResp.ok) {
+      const errText = await startResp.text();
+      throw new Error(`Google Speech start failed: ${startResp.status} ${errText.slice(0, 300)}`);
+    }
+
+    const operation = await startResp.json();
+    const operationName = operation?.name as string | undefined;
+
+    if (!operationName) {
+      throw new Error("Google Speech did not return an operation name");
+    }
+
+    const results = await this.pollOperation(operationName);
+    return this.parseResults(results, options.language ?? primaryLanguage);
+  }
+
+  private async pollOperation(operationName: string): Promise<GoogleSpeechResult[]> {
+    const timeoutMs = 180_000;
+    const pollIntervalMs = 2_000;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+
+      const statusResp = await fetch(`https://speech.googleapis.com/v1/operations/${operationName}?key=${this.apiKey}`);
+      if (!statusResp.ok) {
+        const errText = await statusResp.text();
+        throw new Error(`Google Speech poll failed: ${statusResp.status} ${errText.slice(0, 300)}`);
+      }
+
+      const status = await statusResp.json();
+      if (!status?.done) continue;
+
+      if (status.error) {
+        throw new Error(`Google Speech operation failed: ${status.error.message ?? "unknown error"}`);
+      }
+
+      return (status.response?.results ?? []) as GoogleSpeechResult[];
+    }
+
+    throw new Error("Google Speech operation timed out");
+  }
+
+  private parseResults(results: GoogleSpeechResult[], fallbackLanguage: string): AsrResult {
+    const segments: AsrSegment[] = results
+      .map((result) => {
+        const alternative = result.alternatives?.[0];
+        const transcript = alternative?.transcript?.trim();
+        if (!transcript) return null;
+
+        const words = alternative.words ?? [];
+        const startMs = durationStringToMs(words[0]?.startTime);
+        const endMs = durationStringToMs(words[words.length - 1]?.endTime) || durationStringToMs(result.resultEndTime);
+
+        return {
+          startMs,
+          endMs: endMs > startMs ? endMs : startMs,
+          speaker: result.channelTag ? `Speaker ${result.channelTag}` : "Speaker 1",
+          text: transcript,
+        } satisfies AsrSegment;
+      })
+      .filter((segment): segment is AsrSegment => Boolean(segment))
+      .sort((a, b) => a.startMs - b.startMs);
+
+    const confidences = results.map((result) => result.alternatives?.[0]?.confidence);
+    const detectedLanguage = results.find((result) => result.languageCode)?.languageCode ?? fallbackLanguage;
+
+    return {
+      language: detectedLanguage,
+      confidence: averageConfidence(confidences),
+      segments,
+      fullText: segments.map((segment) => segment.text).join(" ").trim(),
+    };
+  }
 }
 
 // ---- Twilio Transcription Provider ----
