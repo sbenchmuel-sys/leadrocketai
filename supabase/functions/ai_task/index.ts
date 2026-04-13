@@ -1078,8 +1078,14 @@ serve(async (req) => {
     }
 
     // Extract latest inbound for signal-aware KB expansion and offer routing
-    const latestInbound = payload?.email_text ? String(payload.email_text) : (payload?.latest_inbound ? String(payload.latest_inbound) : undefined);
+    // Check cross-channel inbound first (SMS, WhatsApp), then fall back to email
+    const latestInbound = payload?.email_text ? String(payload.email_text)
+      : (payload?.latest_inbound ? String(payload.latest_inbound)
+      : undefined);
     const threadContext = payload?.thread_summary ? String(payload.thread_summary) : (payload?.previous_emails ? String(payload.previous_emails).slice(0, 1500) : undefined);
+    if (payload?.latest_inbound_channel && payload?.latest_inbound_channel !== "email") {
+      console.log(`[ai_task] Latest inbound source: ${payload.latest_inbound_channel} channel`);
+    }
 
     // ── COMMERCIAL INTENT CLASSIFICATION (runs early to influence KB + offer routing) ──
     let commercialDecision: ClassifiedDecision | undefined;
@@ -1380,6 +1386,17 @@ serve(async (req) => {
     const playbookId = String(enhancedPayload.playbook_id || "general");
     const hasInbound = enhancedPayload.has_latest_inbound === true;
 
+    // Inject cross-channel conversation history into the prompt context
+    // This ensures the AI sees SMS, WhatsApp, email, and call interactions
+    if (enhancedPayload.cross_channel_history) {
+      console.log(`[ai_task] ✅ Cross-channel history injected (${String(enhancedPayload.cross_channel_history).length} chars)`);
+    }
+
+    // If latest_inbound_channel is non-email, log it for debugging
+    if (enhancedPayload.latest_inbound_channel && enhancedPayload.latest_inbound_channel !== "email") {
+      console.log(`[ai_task] ✅ Latest inbound from ${enhancedPayload.latest_inbound_channel}: "${String(enhancedPayload.latest_inbound || "").slice(0, 100)}"`);
+    }
+
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
     // Gate meeting_link: only pass to cold outbound tasks if custom instructions explicitly request it
@@ -1618,6 +1635,13 @@ ${customInstructionsText}
     }
 
     if (offerBlock) promptParts.push(offerBlock);
+
+    // Cross-channel conversation history — injected near the end so it's close to the task body
+    if (enhancedPayload.cross_channel_history) {
+      promptParts.push(String(enhancedPayload.cross_channel_history));
+      console.log(`[ai_task] [15/CROSS_CHANNEL] Cross-channel history injected`);
+    }
+
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
