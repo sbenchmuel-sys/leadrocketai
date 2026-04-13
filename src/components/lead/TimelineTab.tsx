@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Plus, EyeOff, Eye, Undo2, Zap } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -17,11 +17,12 @@ interface TimelineTabProps {
 }
 
 /* ── Filter types ── */
-type TimelineFilter = "all" | "emails" | "whatsapp" | "meetings" | "calls" | "notes" | "automation";
+type TimelineFilter = "all" | "emails" | "sms" | "whatsapp" | "meetings" | "calls" | "notes" | "automation";
 
 const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "emails", label: "Emails" },
+  { value: "sms", label: "SMS" },
   { value: "whatsapp", label: "WhatsApp" },
   { value: "calls", label: "Calls" },
   { value: "meetings", label: "Meetings" },
@@ -31,6 +32,7 @@ const FILTER_OPTIONS: { value: TimelineFilter; label: string }[] = [
 
 function filterToChannel(filter: TimelineFilter): string | undefined {
   if (filter === "emails") return "email";
+  if (filter === "sms") return "sms";
   if (filter === "whatsapp") return "whatsapp";
   if (filter === "calls") return "voice";
   if (filter === "meetings") return "meeting";
@@ -139,6 +141,8 @@ function ChannelBadge({ item }: { item: TimelineItem }) {
     phone_call: { icon: <Phone className="h-3 w-3" />, label: "Call", className: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
     whatsapp_outbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
     whatsapp_inbound: { icon: <MessageSquare className="h-3 w-3" />, label: "WhatsApp", className: "text-green-600 bg-green-500/10 border-green-500/20" },
+    sms_outbound: { icon: <Smartphone className="h-3 w-3" />, label: "SMS Out", className: "text-sky-600 bg-sky-500/10 border-sky-500/20" },
+    sms_inbound: { icon: <Smartphone className="h-3 w-3" />, label: "SMS In", className: "text-teal-600 bg-teal-500/10 border-teal-500/20" },
     note: { icon: <StickyNote className="h-3 w-3" />, label: "Note", className: "text-muted-foreground bg-muted border-border" },
     system_note: { icon: <Settings2 className="h-3 w-3" />, label: "System", className: "text-muted-foreground bg-muted border-border" },
   };
@@ -147,6 +151,7 @@ function ChannelBadge({ item }: { item: TimelineItem }) {
   let key = eventType;
   if (!config[key]) {
     if (channel === "email") key = direction === "inbound" ? "email_inbound" : "email_outbound";
+    else if (channel === "sms") key = direction === "inbound" ? "sms_inbound" : "sms_outbound";
     else if (channel === "whatsapp") key = direction === "inbound" ? "whatsapp_inbound" : "whatsapp_outbound";
     else if (channel === "voice") key = "phone_call";
     else if (channel === "meeting") key = "meeting";
