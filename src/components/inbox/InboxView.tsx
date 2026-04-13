@@ -71,7 +71,9 @@ const SORT_OPTIONS: { key: InboxSort; label: string }[] = [
 // Only show channels that are actually implemented
 const CHANNEL_OPTIONS: { key: CanonicalChannel; label: string }[] = [
   { key: "email", label: "Email" },
+  { key: "sms", label: "SMS" },
   { key: "whatsapp", label: "WhatsApp" },
+  { key: "voice", label: "Voice" },
 ];
 
 // ── Main component ─────────────────────────────────────────────────────
