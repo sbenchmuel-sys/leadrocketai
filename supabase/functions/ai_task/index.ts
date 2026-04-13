@@ -1078,8 +1078,14 @@ serve(async (req) => {
     }
 
     // Extract latest inbound for signal-aware KB expansion and offer routing
-    const latestInbound = payload?.email_text ? String(payload.email_text) : (payload?.latest_inbound ? String(payload.latest_inbound) : undefined);
+    // Check cross-channel inbound first (SMS, WhatsApp), then fall back to email
+    const latestInbound = payload?.email_text ? String(payload.email_text)
+      : (payload?.latest_inbound ? String(payload.latest_inbound)
+      : undefined);
     const threadContext = payload?.thread_summary ? String(payload.thread_summary) : (payload?.previous_emails ? String(payload.previous_emails).slice(0, 1500) : undefined);
+    if (payload?.latest_inbound_channel && payload?.latest_inbound_channel !== "email") {
+      console.log(`[ai_task] Latest inbound source: ${payload.latest_inbound_channel} channel`);
+    }
 
     // ── COMMERCIAL INTENT CLASSIFICATION (runs early to influence KB + offer routing) ──
     let commercialDecision: ClassifiedDecision | undefined;
