@@ -75,6 +75,12 @@ Deno.serve(async (req) => {
     });
 
     if (isRecordingEvent) {
+      // Recording callbacks often include CallStatus=completed + CallDuration.
+      // Process the call-status side first so the session gets updated,
+      // then handle the recording itself.
+      if (params.CallStatus) {
+        await handleCallStatus(supabase, params);
+      }
       await handleRecordingStatus(supabase, params);
     } else {
       await handleCallStatus(supabase, params);
