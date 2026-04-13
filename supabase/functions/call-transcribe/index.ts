@@ -187,7 +187,15 @@ Deno.serve(async (req) => {
     // ---- §5 ASR with auto-detect always enabled ----
     const asr = new GeminiAsrProvider(lovableApiKey);
 
-    let asrResult;
+    // Generate a signed URL for the audio file (for URL-based ASR strategies)
+    const audioStoragePath = storagePath?.replace("call-recordings/", "") ?? "";
+    const { data: signedData } = await supabase.storage
+      .from("call-recordings")
+      .createSignedUrl(audioStoragePath, 3600);
+    if (signedData?.signedUrl) {
+      asr.setAudioUrl(signedData.signedUrl);
+    }
+
     try {
       asrResult = await asr.transcribe(base64Audio, {
         language: resolvedLanguage,
