@@ -1629,6 +1629,13 @@ ${customInstructionsText}
     }
 
     if (offerBlock) promptParts.push(offerBlock);
+
+    // Cross-channel conversation history — injected near the end so it's close to the task body
+    if (enhancedPayload.cross_channel_history) {
+      promptParts.push(String(enhancedPayload.cross_channel_history));
+      console.log(`[ai_task] [15/CROSS_CHANNEL] Cross-channel history injected`);
+    }
+
     if (diversityBlock) promptParts.push(diversityBlock);
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
