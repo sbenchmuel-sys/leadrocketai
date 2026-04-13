@@ -62,6 +62,9 @@ ${options.diarization ? "Identify and label different speakers consistently." : 
 ${options.timestamps ? "Provide accurate timestamps in milliseconds." : ""}
 Return valid JSON only, no markdown fences.`;
 
+    // Use inline_data format for Gemini audio via OpenAI-compatible gateway
+    const audioDataUri = `data:audio/wav;base64,${audioBase64}`;
+
     const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -75,8 +78,8 @@ Return valid JSON only, no markdown fences.`;
             role: "user",
             content: [
               {
-                type: "input_audio",
-                input_audio: { data: audioBase64, format: "wav" },
+                type: "image_url",
+                image_url: { url: audioDataUri },
               },
               { type: "text", text: prompt },
             ],
