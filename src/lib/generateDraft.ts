@@ -215,16 +215,40 @@ function buildAIPayload(
     has_latest_inbound: hasLatestInbound,
   };
 
+  // Cross-channel conversation history (SMS, WhatsApp, email, calls — everything)
+  // This ensures the AI sees ALL communication before generating a response
+  if (ctx.cross_channel_summary) {
+    payload.cross_channel_history = ctx.cross_channel_summary;
+  }
+
+  // If latest inbound is from a non-email channel (SMS, WhatsApp), pass it as latest_inbound
+  // so the AI knows to address it regardless of task type
+  if (ctx.last_inbound_any_channel) {
+    const anyInboundTime = new Date(ctx.last_inbound_any_channel.occurred_at).getTime();
+    const emailInboundTime = ctx.last_inbound_email?.occurred_at
+      ? new Date(ctx.last_inbound_email.occurred_at).getTime() : 0;
+    // If the latest inbound from any channel is newer than the latest email inbound,
+    // use it as the primary inbound context
+    if (anyInboundTime > emailInboundTime) {
+      payload.latest_inbound = ctx.last_inbound_any_channel.snippet;
+      payload.latest_inbound_channel = ctx.last_inbound_any_channel.channel;
+      payload.has_latest_inbound = true;
+    }
+  }
+
   // Thread context for replies
   if (ctx.thread_emails.length > 0 && taskType === "reply_to_thread") {
     payload.email_thread = ctx.thread_summary;
     // Staleness guard: only include latest_inbound if it's genuinely newer than last outbound
-    const inboundTime = ctx.last_inbound_email?.occurred_at;
-    const outboundTime = ctx.last_outbound_email?.occurred_at;
-    if (inboundTime && (!outboundTime || new Date(inboundTime) > new Date(outboundTime))) {
-      payload.latest_inbound = ctx.last_inbound_email?.body_text || "";
-    } else {
-      payload.latest_inbound = ""; // prevent AI from addressing stale inbound
+    // But don't overwrite if cross-channel inbound was already set above
+    if (!payload.latest_inbound) {
+      const inboundTime = ctx.last_inbound_email?.occurred_at;
+      const outboundTime = ctx.last_outbound_email?.occurred_at;
+      if (inboundTime && (!outboundTime || new Date(inboundTime) > new Date(outboundTime))) {
+        payload.latest_inbound = ctx.last_inbound_email?.body_text || "";
+      } else {
+        payload.latest_inbound = ""; // prevent AI from addressing stale inbound
+      }
     }
   }
 
