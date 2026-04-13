@@ -196,6 +196,7 @@ Deno.serve(async (req) => {
       asr.setAudioUrl(signedData.signedUrl);
     }
 
+    let asrResult;
     try {
       asrResult = await asr.transcribe(base64Audio, {
         language: resolvedLanguage,
