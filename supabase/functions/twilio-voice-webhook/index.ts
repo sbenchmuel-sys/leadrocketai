@@ -220,7 +220,7 @@ async function handleCallStatus(
     const { data: sess } = await supabase
       .from("call_sessions")
       .select("id, workspace_id, lead_id, duration_sec, direction, started_at")
-      .eq("call_sid", callSid)
+      .eq("call_sid", sessionCallSid)
       .maybeSingle();
 
     if (sess?.lead_id && sess.workspace_id) {
