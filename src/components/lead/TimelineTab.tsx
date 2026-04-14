@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, type TimelineItem } from "@/lib/supabaseQueries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap, Download, FileText } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -488,32 +488,122 @@ function WhatsAppEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHid
 
 /* ── Call Entry (from ledger) ── */
 function CallEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHide: (id: string, hidden: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const [callDetail, setCallDetail] = useState<{ summaryLong: string | null; transcript: string | null } | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const meta = item.metadata_json as any;
   const duration = meta?.duration_sec;
   const summary = meta?.summary_short;
+  const callSessionId = meta?.call_session_id;
+
+  const loadCallDetail = useCallback(async () => {
+    if (callDetail || !callSessionId) return;
+    setLoadingDetail(true);
+    try {
+      const [analysisRes, transcriptRes] = await Promise.all([
+        supabase.from("call_analyses").select("summary_long").eq("call_session_id", callSessionId).maybeSingle(),
+        supabase.from("call_transcripts").select("llm_formatted_text, full_text, clean_full_text").eq("call_session_id", callSessionId).maybeSingle(),
+      ]);
+      setCallDetail({
+        summaryLong: analysisRes.data?.summary_long || null,
+        transcript: transcriptRes.data?.llm_formatted_text || transcriptRes.data?.full_text || transcriptRes.data?.clean_full_text || null,
+      });
+    } catch (err) {
+      console.error("Failed to load call detail:", err);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, [callSessionId, callDetail]);
+
+  const handleToggle = (val: boolean) => {
+    setOpen(val);
+    if (val) loadCallDetail();
+  };
+
+  const downloadTranscript = () => {
+    if (!callDetail?.transcript) return;
+    const dateStr = format(new Date(item.occurred_at), "yyyy-MM-dd_HHmm");
+    const blob = new Blob([callDetail.transcript], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `call-transcript_${dateStr}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <div className={cn("group py-3 px-3 -mx-3", item.hidden && "opacity-50")}>
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <ChannelBadge item={item} />
-            <span className="text-[11px] text-muted-foreground">
-              {format(new Date(item.occurred_at), "MMM d · h:mm a")}
-            </span>
-            {duration && (
-              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full border border-border">
-                {Math.round(duration / 60)}m {duration % 60}s
-              </span>
+    <Collapsible open={open} onOpenChange={handleToggle}>
+      <div className={cn("group", item.hidden && "opacity-50")}>
+        <CollapsibleTrigger asChild>
+          <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <ChannelBadge item={item} />
+                  <span className="text-[11px] text-muted-foreground">
+                    {format(new Date(item.occurred_at), "MMM d · h:mm a")}
+                  </span>
+                  {duration && (
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full border border-border">
+                      {Math.round(duration / 60)}m {duration % 60}s
+                    </span>
+                  )}
+                </div>
+                {item.subject && <p className="text-sm font-medium text-foreground">{item.subject}</p>}
+                {!open && (summary || item.snippet_text) && (
+                  <p className="text-[13px] text-muted-foreground line-clamp-2">{summary || item.snippet_text}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-1 pt-1">
+                <HideButton itemId={item.id} isHidden={item.hidden} onToggle={onToggleHide} />
+                <span className="text-muted-foreground/50">
+                  {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </span>
+              </div>
+            </div>
+          </button>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent className="animate-accordion-down">
+          <div className="pl-3 pb-3 space-y-3">
+            {/* Full summary */}
+            {loadingDetail && (
+              <div className="flex items-center gap-2 text-[12px] text-muted-foreground py-2">
+                <div className="h-3 w-3 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+                Loading call details…
+              </div>
+            )}
+            {callDetail?.summaryLong && (
+              <div className="bg-accent/50 rounded-md px-3 py-2">
+                <p className="text-[11px] font-medium text-muted-foreground mb-1">Full Summary</p>
+                <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{callDetail.summaryLong}</p>
+              </div>
+            )}
+            {!callDetail?.summaryLong && !loadingDetail && (summary || item.snippet_text) && (
+              <p className="text-[13px] text-muted-foreground leading-relaxed">{summary || item.snippet_text}</p>
+            )}
+
+            {/* Transcript */}
+            {callDetail?.transcript && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+                    <FileText className="h-3 w-3" /> Transcript
+                  </p>
+                  <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 px-2" onClick={downloadTranscript}>
+                    <Download className="h-3 w-3" /> Download
+                  </Button>
+                </div>
+                <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-muted/30 rounded-lg p-3 font-mono leading-relaxed border border-border">
+                  {callDetail.transcript}
+                </pre>
+              </div>
             )}
           </div>
-          {item.subject && <p className="text-sm font-medium text-foreground">{item.subject}</p>}
-          {summary && <p className="text-[13px] text-muted-foreground line-clamp-2">{summary}</p>}
-          {item.snippet_text && !summary && <p className="text-[13px] text-muted-foreground line-clamp-2">{item.snippet_text}</p>}
-        </div>
-        <HideButton itemId={item.id} isHidden={item.hidden} onToggle={onToggleHide} />
+        </CollapsibleContent>
       </div>
-    </div>
+    </Collapsible>
   );
 }
 
