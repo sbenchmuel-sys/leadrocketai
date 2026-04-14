@@ -80,12 +80,16 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
 
     const config: Record<string, unknown> = {
       languageCode: primaryLanguage,
-      alternativeLanguageCodes: fallbackLanguages.slice(0, 3),
       enableAutomaticPunctuation: true,
       enableWordTimeOffsets: true,
-      model: "phone_call",
+      model: "latest_long",
       useEnhanced: true,
     };
+
+    // alternative_language_codes only supported on certain models
+    if (fallbackLanguages.length > 0) {
+      config.alternativeLanguageCodes = fallbackLanguages.slice(0, 3);
+    }
 
     if ((options.channelCount ?? 1) > 1) {
       config.audioChannelCount = options.channelCount;
