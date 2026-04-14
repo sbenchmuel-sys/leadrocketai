@@ -2,19 +2,64 @@
 
 ## Problem
 
-The `src/App.css` file contains leftover Vite boilerplate styles that set `max-width: 1280px`, `padding: 2rem`, and `text-align: center` on `#root`. This constrains the dashboard layout and makes it look "spread out" with unnecessary padding and centering.
+When importing Excel files, date columns (like "Last Contact Date") are parsed by the `read-excel-file` library as JavaScript `Date` objects. On line 397 of `parseLeadFile.ts`, `String(rows[i][idx])` is called, which invokes `.toString()` on the Date — producing output like `"Fri Aug 01 2025 03:00:00 GMT+0300 (Israel Daylight Time)"`. The Excel cell only contains `8/1/2025` (no time, no timezone), but the browser's local timezone bleeds in.
+
+This string then flows into:
+1. The context item **label** (`Last contacted: Fri Aug 01 2025 03:00:00 GMT+0300...`)
+2. The context item **raw value**
+3. The `tryParseDate` function (which also uses `new Date()`, doubling down on the problem)
 
 ## Plan
 
-### Step 1: Remove or clear App.css boilerplate
+### Step 1: Fix Excel date serialization in `parseLeadFile.ts`
 
-Remove all styles from `src/App.css` (or delete the file entirely and remove its import from wherever it's imported). These styles conflict with the full-width dashboard layout.
+On line 397, detect when a cell value is a `Date` object and format it as a clean `YYYY-MM-DD` string instead of calling `.toString()`:
 
-### Step 2: Verify App.css import
+```typescript
+// Before
+row[h] = String(rows[i][idx] ?? "").trim();
 
-Check if `App.css` is imported in `App.tsx` or elsewhere and remove the import if the file is deleted.
+// After — detect Date objects from Excel and format cleanly
+const cellVal = rows[i][idx];
+if (cellVal instanceof Date) {
+  // Use UTC to avoid timezone shift (Excel dates have no timezone)
+  const y = cellVal.getUTCFullYear();
+  const m = String(cellVal.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(cellVal.getUTCDate()).padStart(2, "0");
+  row[h] = `${y}-${m}-${d}`;
+} else {
+  row[h] = String(cellVal ?? "").trim();
+}
+```
 
-### Finding the Publish button
+### Step 2: Fix `tryParseDate` to use UTC-safe parsing
 
-The Publish button is part of the **Lovable editor UI**, not the app itself. On desktop, it's a globe/web icon in the **top right corner** of the editor. On mobile, tap the **"..." button** in the bottom-right corner → "Publish".
+Replace the `new Date(value)` call with explicit UTC parsing to prevent timezone shifts when storing the `context_date`:
+
+```typescript
+function tryParseDate(value: string): string | null {
+  if (!value) return null;
+  // Match YYYY-MM-DD or MM/DD/YYYY or DD/MM/YYYY patterns
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const d = new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3]));
+    if (!isNaN(d.getTime())) return d.toISOString();
+    return null;
+  }
+  // Fallback for other formats
+  const d = new Date(value);
+  if (!isNaN(d.getTime())) return d.toISOString();
+  return null;
+}
+```
+
+### Step 3: Fix label formatting
+
+On line 288, the label already uses the raw string value. After Step 1, this will naturally show `Last contacted: 2025-08-01` instead of the full timezone string — no additional change needed.
+
+### Impact
+
+- **New imports** will store clean date strings (`2025-08-01`) in labels, raw values, and context dates
+- **Existing imported leads** with the bad date strings will remain as-is (can be re-imported to fix)
+- Two files changed: `src/lib/parseLeadFile.ts` only
 
