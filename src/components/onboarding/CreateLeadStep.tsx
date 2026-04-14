@@ -8,7 +8,7 @@ import { createLead, setOnboardingStep } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, ArrowLeft, Upload, FileSpreadsheet, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { parseLeadFile, type ParsedLead } from "@/lib/parseLeadFile";
+import { parseLeadFile, extractLeadContextItems, type ParsedLead } from "@/lib/parseLeadFile";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface CreateLeadStepProps {
