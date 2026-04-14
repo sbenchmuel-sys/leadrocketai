@@ -261,6 +261,15 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
         } else if (code === 31009) {
           title = "Network error";
           desc = "Check your internet connection and try again.";
+        } else if (code === 21215 || code === 21214) {
+          title = "Geo-permission blocked";
+          desc = "Your Twilio account does not have permission to call this region. Enable it in Twilio Console → Voice → Geo Permissions.";
+        } else if (code === 13227 || code === 13224) {
+          title = "Number not verified";
+          desc = "Your Twilio account requires a verified Business Profile to call this number. Complete your profile at twilio.com/console.";
+        } else if (code === 20101) {
+          title = "Authentication expired";
+          desc = "Your call session expired. Please refresh the page and try again.";
         }
         toast.error(title, { description: desc });
         setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));

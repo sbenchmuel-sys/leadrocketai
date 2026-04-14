@@ -129,6 +129,12 @@ async function handleCallStatus(
     updated_at: new Date().toISOString(),
   };
 
+  // Capture Twilio error code when present (e.g. geo-permission blocks, carrier rejects)
+  if (params.ErrorCode) {
+    updateFields.error_code = params.ErrorCode;
+    logger.warn("twilio_call_error_code", { callSid, errorCode: params.ErrorCode, sipResponseCode: params.SipResponseCode });
+  }
+
   if (status === "initiated") {
     updateFields.started_at = new Date().toISOString();
   }
