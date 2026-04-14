@@ -264,34 +264,7 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
     return parsed;
   }
 
-  private async pollOperation(operationName: string): Promise<GoogleSpeechResult[]> {
-    const timeoutMs = 180_000;
-    const pollIntervalMs = 2_000;
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < timeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-
-      const statusResp = await fetch(`https://speech.googleapis.com/v1/operations/${operationName}?key=${this.apiKey}`);
-      if (!statusResp.ok) {
-        const errText = await statusResp.text();
-        throw new Error(`Google Speech poll failed: ${statusResp.status} ${errText.slice(0, 300)}`);
-      }
-
-      const status = await statusResp.json();
-      if (!status?.done) continue;
-
-      if (status.error) {
-        throw new Error(`Google Speech operation failed: ${status.error.message ?? "unknown error"}`);
-      }
-
-      return (status.response?.results ?? []) as GoogleSpeechResult[];
-    }
-
-    throw new Error("Google Speech operation timed out");
-  }
-
-  private parseResults(results: GoogleSpeechResult[], fallbackLanguage: string): AsrResult {
+  private parseResults(results: GoogleSpeechResult[], fallbackLanguage: string, offsetMs = 0): AsrResult {
     const segments: AsrSegment[] = results
       .map((result) => {
         const alternative = result.alternatives?.[0];
@@ -299,8 +272,8 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
         if (!transcript) return null;
 
         const words = alternative.words ?? [];
-        const startMs = durationStringToMs(words[0]?.startTime);
-        const endMs = durationStringToMs(words[words.length - 1]?.endTime) || durationStringToMs(result.resultEndTime);
+        const startMs = durationStringToMs(words[0]?.startTime) + offsetMs;
+        const endMs = (durationStringToMs(words[words.length - 1]?.endTime) || durationStringToMs(result.resultEndTime)) + offsetMs;
 
         return {
           startMs,
