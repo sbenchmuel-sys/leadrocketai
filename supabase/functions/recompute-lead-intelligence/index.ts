@@ -203,10 +203,26 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Fuzzy similarity: word-overlap Jaccard > 0.6 means "same milestone"
+    function findSimilarMilestoneKey(desc: string): string | null {
+      const words = new Set(desc.toLowerCase().trim().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2));
+      if (words.size === 0) return null;
+      for (const [key, _] of milestonesMap) {
+        const existingWords = new Set(key.replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2));
+        if (existingWords.size === 0) continue;
+        const intersection = [...words].filter(w => existingWords.has(w)).length;
+        const union = new Set([...words, ...existingWords]).size;
+        if (union > 0 && intersection / union > 0.6) return key;
+      }
+      return null;
+    }
+
     function addMilestone(desc: string, status: string, date: string | null, evidenceId: string, sourceType: string) {
       const key = desc.toLowerCase().trim();
-      const existing = milestonesMap.get(key);
-      if (existing) {
+      // Check exact match first, then fuzzy
+      const matchKey = milestonesMap.has(key) ? key : findSimilarMilestoneKey(desc);
+      if (matchKey) {
+        const existing = milestonesMap.get(matchKey)!;
         existing.evidence_ids.push(evidenceId);
         if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
       } else {
