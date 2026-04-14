@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2, CheckCircle, AlertTriangle, Trash2, Sparkles } from "lucide-react";
-import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
+
 
 interface RecommendationsTabProps {
   lead: LeadDetail;
