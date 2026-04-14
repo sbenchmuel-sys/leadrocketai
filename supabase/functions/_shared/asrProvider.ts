@@ -63,6 +63,96 @@ interface GoogleSpeechResult {
   resultEndTime?: string;
 }
 
+// ---- WAV audio chunking utilities ----
+
+interface WavInfo {
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  dataOffset: number;
+  dataSize: number;
+}
+
+function parseWavHeader(buffer: ArrayBuffer): WavInfo {
+  const view = new DataView(buffer);
+  // Find "fmt " chunk
+  let offset = 12; // skip RIFF header
+  let sampleRate = 8000;
+  let channels = 1;
+  let bitsPerSample = 16;
+  let dataOffset = 44;
+  let dataSize = buffer.byteLength - 44;
+
+  while (offset < buffer.byteLength - 8) {
+    const chunkId = String.fromCharCode(
+      view.getUint8(offset), view.getUint8(offset + 1),
+      view.getUint8(offset + 2), view.getUint8(offset + 3),
+    );
+    const chunkSize = view.getUint32(offset + 4, true);
+
+    if (chunkId === "fmt ") {
+      channels = view.getUint16(offset + 10, true);
+      sampleRate = view.getUint32(offset + 12, true);
+      bitsPerSample = view.getUint16(offset + 22, true);
+    } else if (chunkId === "data") {
+      dataOffset = offset + 8;
+      dataSize = chunkSize;
+      break;
+    }
+    offset += 8 + chunkSize;
+  }
+
+  return { sampleRate, channels, bitsPerSample, dataOffset, dataSize };
+}
+
+function buildWavChunk(
+  originalBuffer: ArrayBuffer,
+  info: WavInfo,
+  pcmStart: number,
+  pcmLength: number,
+): ArrayBuffer {
+  const headerSize = 44;
+  const wavBuffer = new ArrayBuffer(headerSize + pcmLength);
+  const view = new DataView(wavBuffer);
+  const bytesPerSec = info.sampleRate * info.channels * (info.bitsPerSample / 8);
+  const blockAlign = info.channels * (info.bitsPerSample / 8);
+
+  // RIFF header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + pcmLength, true);
+  writeString(view, 8, "WAVE");
+  // fmt chunk
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, info.channels, true);
+  view.setUint32(24, info.sampleRate, true);
+  view.setUint32(28, bytesPerSec, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, info.bitsPerSample, true);
+  // data chunk
+  writeString(view, 36, "data");
+  view.setUint32(40, pcmLength, true);
+
+  const src = new Uint8Array(originalBuffer, info.dataOffset + pcmStart, pcmLength);
+  new Uint8Array(wavBuffer, headerSize).set(src);
+  return wavBuffer;
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export class GoogleSpeechAsrProvider implements AsrProvider {
   private apiKey: string;
 
@@ -71,25 +161,77 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
   }
 
   async transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult> {
+    // Decode base64 to get the raw WAV buffer for chunking
+    const binaryString = atob(audioBase64);
+    const rawBuffer = new ArrayBuffer(binaryString.length);
+    const rawView = new Uint8Array(rawBuffer);
+    for (let i = 0; i < binaryString.length; i++) rawView[i] = binaryString.charCodeAt(i);
+
+    const wavInfo = parseWavHeader(rawBuffer);
+    const bytesPerSec = wavInfo.sampleRate * wavInfo.channels * (wavInfo.bitsPerSample / 8);
+    const totalDurationSec = wavInfo.dataSize / bytesPerSec;
+
+    const CHUNK_DURATION_SEC = 55; // stay under 60s limit
+
     const preferredLanguages = Array.from(new Set([
       options.language,
       ...(options.allowedLanguages ?? []),
-    ].filter((value): value is string => Boolean(value))));
+    ].filter((v): v is string => Boolean(v))));
+    const [primaryLanguage = "en-US"] = preferredLanguages;
 
-    const [primaryLanguage = "en-US", ...fallbackLanguages] = preferredLanguages;
+    if (totalDurationSec <= 59) {
+      // Short enough for a single synchronous recognize call
+      return this.recognizeSync(audioBase64, primaryLanguage, options, 0);
+    }
 
+    // Chunk the audio and transcribe each chunk
+    logger.info("audio_chunking", { totalDurationSec, chunkDuration: CHUNK_DURATION_SEC, chunks: Math.ceil(totalDurationSec / CHUNK_DURATION_SEC) });
+
+    const allSegments: AsrSegment[] = [];
+    const confidences: (number | undefined)[] = [];
+    let detectedLang = primaryLanguage;
+
+    const numChunks = Math.ceil(totalDurationSec / CHUNK_DURATION_SEC);
+    for (let i = 0; i < numChunks; i++) {
+      const startSec = i * CHUNK_DURATION_SEC;
+      const pcmStart = Math.floor(startSec * bytesPerSec);
+      const pcmLength = Math.min(
+        Math.floor(CHUNK_DURATION_SEC * bytesPerSec),
+        wavInfo.dataSize - pcmStart,
+      );
+      if (pcmLength <= 0) break;
+
+      const chunkBuf = buildWavChunk(rawBuffer, wavInfo, pcmStart, pcmLength);
+      const chunkB64 = arrayBufferToBase64(chunkBuf);
+      const offsetMs = startSec * 1000;
+
+      const result = await this.recognizeSync(chunkB64, primaryLanguage, options, offsetMs);
+      allSegments.push(...result.segments);
+      confidences.push(result.confidence);
+      if (result.language !== primaryLanguage) detectedLang = result.language;
+    }
+
+    return {
+      language: detectedLang,
+      confidence: averageConfidence(confidences),
+      segments: allSegments.sort((a, b) => a.startMs - b.startMs),
+      fullText: allSegments.map((s) => s.text).join(" ").trim(),
+    };
+  }
+
+  private async recognizeSync(
+    audioBase64: string,
+    language: string,
+    options: AsrOptions,
+    offsetMs: number,
+  ): Promise<AsrResult> {
     const config: Record<string, unknown> = {
-      languageCode: primaryLanguage,
+      languageCode: language,
       enableAutomaticPunctuation: true,
       enableWordTimeOffsets: true,
       model: "latest_long",
       useEnhanced: true,
     };
-
-    // alternative_language_codes only supported on certain models
-    if (fallbackLanguages.length > 0) {
-      config.alternativeLanguageCodes = fallbackLanguages.slice(0, 3);
-    }
 
     if ((options.channelCount ?? 1) > 1) {
       config.audioChannelCount = options.channelCount;
@@ -102,33 +244,24 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
       };
     }
 
-    const startResp = await fetch(`https://speech.googleapis.com/v1p1beta1/speech:longrunningrecognize?key=${this.apiKey}`, {
+    const resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${this.apiKey}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         config,
-        audio: {
-          content: audioBase64,
-        },
+        audio: { content: audioBase64 },
       }),
     });
 
-    if (!startResp.ok) {
-      const errText = await startResp.text();
-      throw new Error(`Google Speech start failed: ${startResp.status} ${errText.slice(0, 300)}`);
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Google Speech recognize failed: ${resp.status} ${errText.slice(0, 300)}`);
     }
 
-    const operation = await startResp.json();
-    const operationName = operation?.name as string | undefined;
-
-    if (!operationName) {
-      throw new Error("Google Speech did not return an operation name");
-    }
-
-    const results = await this.pollOperation(operationName);
-    return this.parseResults(results, options.language ?? primaryLanguage);
+    const data = await resp.json();
+    const results = (data.results ?? []) as GoogleSpeechResult[];
+    const parsed = this.parseResults(results, language, offsetMs);
+    return parsed;
   }
 
   private async pollOperation(operationName: string): Promise<GoogleSpeechResult[]> {
