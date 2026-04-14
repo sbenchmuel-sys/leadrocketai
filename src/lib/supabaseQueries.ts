@@ -868,7 +868,37 @@ export async function updateLeadMilestoneStatus(
 ): Promise<void> {
   if (!leadId) throw new Error('Missing leadId');
 
-  // Fetch current milestones
+  const now = new Date().toISOString();
+
+  // Update canonical lead_intelligence milestones (primary source)
+  const { data: intel, error: intelFetchErr } = await supabase
+    .from('lead_intelligence')
+    .select('milestones_json')
+    .eq('lead_id', leadId)
+    .maybeSingle();
+
+  if (!intelFetchErr && intel) {
+    const intelMilestones = (intel.milestones_json as unknown as MilestoneItem[] | null) ?? [];
+    if (milestoneIndex >= 0 && milestoneIndex < intelMilestones.length) {
+      const updatedIntel = intelMilestones.map((m, i) => {
+        if (i === milestoneIndex) {
+          return {
+            ...m,
+            status: completed ? 'completed' as const : 'pending' as const,
+            date: completed ? now.split('T')[0] : (m as any).date || null,
+            completedAt: completed ? now : undefined,
+          };
+        }
+        return m;
+      });
+      await supabase
+        .from('lead_intelligence')
+        .update({ milestones_json: updatedIntel as unknown as Database['public']['Tables']['lead_intelligence']['Update']['milestones_json'] })
+        .eq('lead_id', leadId);
+    }
+  }
+
+  // Also update legacy leads.milestones_json for backwards compatibility
   const { data: lead, error: fetchErr } = await supabase
     .from('leads')
     .select('milestones_json')
@@ -879,32 +909,29 @@ export async function updateLeadMilestoneStatus(
 
   const milestones = (lead?.milestones_json as unknown as MilestoneItem[] | null) ?? [];
   
-  if (milestoneIndex < 0 || milestoneIndex >= milestones.length) {
-    throw new Error('Invalid milestone index');
+  if (milestoneIndex >= 0 && milestoneIndex < milestones.length) {
+    const updatedMilestones = milestones.map((m, i) => {
+      if (i === milestoneIndex) {
+        return {
+          ...m,
+          status: completed ? 'completed' as const : 'pending' as const,
+          date: completed ? now.split('T')[0] : null,
+          completedAt: completed ? now : undefined,
+        };
+      }
+      return m;
+    });
+
+    const { error: updateErr } = await supabase
+      .from('leads')
+      .update({ 
+        milestones_json: updatedMilestones as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
+        last_activity_at: now
+      })
+      .eq('id', leadId);
+
+    if (updateErr) throw updateErr;
   }
-
-  const now = new Date().toISOString();
-  const updatedMilestones = milestones.map((m, i) => {
-    if (i === milestoneIndex) {
-      return {
-        ...m,
-        status: completed ? 'completed' as const : 'pending' as const,
-        date: completed ? now.split('T')[0] : null,
-        completedAt: completed ? now : undefined,
-      };
-    }
-    return m;
-  });
-
-  const { error: updateErr } = await supabase
-    .from('leads')
-    .update({ 
-      milestones_json: updatedMilestones as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
-      last_activity_at: now
-    })
-    .eq('id', leadId);
-
-  if (updateErr) throw updateErr;
 }
 
 export async function updateMeetingPackMilestoneStatus(
