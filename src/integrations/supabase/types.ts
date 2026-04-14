@@ -238,6 +238,7 @@ export type Database = {
           direction: string
           duration_sec: number | null
           ended_at: string | null
+          error_code: string | null
           from_number: string
           id: string
           lead_id: string | null
@@ -257,6 +258,7 @@ export type Database = {
           direction: string
           duration_sec?: number | null
           ended_at?: string | null
+          error_code?: string | null
           from_number: string
           id?: string
           lead_id?: string | null
@@ -276,6 +278,7 @@ export type Database = {
           direction?: string
           duration_sec?: number | null
           ended_at?: string | null
+          error_code?: string | null
           from_number?: string
           id?: string
           lead_id?: string | null

@@ -1,0 +1,1 @@
+ALTER TABLE public.call_sessions ADD COLUMN IF NOT EXISTS error_code text;
