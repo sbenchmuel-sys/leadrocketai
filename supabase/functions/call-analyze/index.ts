@@ -423,7 +423,7 @@ Deno.serve(async (req) => {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       logger.info("analyze_retry_attempt", { callSessionId, attempt });
 
-      const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
+      const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${lovableApiKey}`,
