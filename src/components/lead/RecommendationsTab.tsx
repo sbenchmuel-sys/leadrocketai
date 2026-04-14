@@ -138,10 +138,7 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
 
   return (
     <div className="space-y-6">
-      {/* Unified Intelligence Card — analysis + next step + risks/milestones summary */}
-      <UnifiedIntelligenceCard lead={lead} mode="full" onUpdated={onUpdate} />
-
-      {/* Deal Factors (full detail, only in this tab) */}
+      {/* Deal Factors (unique to Deep Analysis — not shown elsewhere) */}
       {dealFactors && (
         <Card>
           <CardHeader>
@@ -199,7 +196,7 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
         </Card>
       )}
 
-      {/* Detailed Milestones + Risks (interactive) */}
+      {/* Interactive Milestones + Risks (unique interactive controls not in the intelligence card) */}
       <div className="grid md:grid-cols-2 gap-6">
         {/* Milestones */}
         <Card>
@@ -239,6 +236,9 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
                         try {
                           await updateLeadMilestoneStatus(lead.id, i, !!checked);
                           toast.success(`Milestone ${checked ? "completed" : "reopened"}`);
+                          // Reload intelligence to reflect canonical update
+                          const updated = await getLeadIntelligence(lead.id);
+                          setIntelligence(updated);
                           onUpdate();
                         } catch (err) {
                           console.error(err);
