@@ -2,31 +2,37 @@
 
 ## Problem
 
-Calls to Canadian numbers (+1514...) fail instantly (0-second duration, status "failed") while calls to Israel (+972...) succeed. The Twilio account shows "Missing Business Profile" which restricts call capabilities.
+The onboarding import in `CreateLeadStep.tsx` spreads the entire `ParsedLead` object (including fields like `priority_label`, `owner_name`, `previous_owner`, `caution`, `competitor`, `objection`, `pain_point`, etc.) directly into the Supabase `leads.insert()` call. These fields don't exist as columns on the `leads` table, so the insert fails.
 
-## Root Cause
-
-Twilio restricts outbound calling capabilities on accounts without an approved Business Profile. This particularly affects domestic North American (NANPA +1) numbers. The code and phone number formatting are correct — E.164 normalization is working properly.
+The existing `LeadImportDialog.tsx` (used on the Leads page) already handles this correctly by stripping those extended fields and routing them to `personal_notes` and `lead_context_items`. The onboarding flow was never updated with this logic.
 
 ## Plan
 
-### Step 1: Twilio Account Fix (User Action Required)
-- Go to **Twilio Console → Account → Business Profiles** and create/submit a Business Profile
-- This removes the CPS=1 limitation and unlocks full North American calling
-- Approval typically takes 1-3 business days
+### Step 1: Fix the onboarding import to match LeadImportDialog logic
 
-### Step 2: Add Diagnostic Error Surfacing (Code Change)
-Improve `twilio-voice-inbound` and `BrowserCallProvider` to capture and display the actual Twilio error reason when a call fails, so future failures show a clear message (e.g., "Call rejected by carrier" or "Account restriction") instead of a generic WebSocket error.
+Update `src/components/onboarding/CreateLeadStep.tsx` `handleFileImport`:
 
-- **`twilio-voice-inbound`**: Add logging of the Twilio error code from status callbacks
-- **`twilio-voice-webhook`**: Store the Twilio `ErrorCode` field from status callbacks into `call_sessions` (add an `error_code` column)
-- **`BrowserCallProvider`**: Map known Twilio error codes (21215, 21214, 13227) to user-friendly messages
+- **Strip extended fields** before spreading into the insert payload (same destructuring pattern as `LeadImportDialog` lines 108-113)
+- **Build `personal_notes`** from supplementary fields (history, owner, priority, source, product, last contact date)
+- **Generate client-side UUIDs** for each lead so context items can reference them
+- **Map `next_step_text` → `next_step`** and validate `stage` against known values
+- **Preserve `raw_import_json`** for full data retention
 
-### Step 3: Verify After Profile Approval
-- Re-test calling a Canadian number once the Business Profile is approved
-- Confirm the call completes and the transcript/analysis pipeline triggers
+### Step 2: Extract and insert lead context items
 
-## Technical Details
+After the leads insert succeeds, call `extractLeadContextItems()` (already implemented in `parseLeadFile.ts`) for each lead and batch-insert into `lead_context_items`. This ensures caution flags, competitor intel, pain points, objections, and other extended data are stored for AI personalization.
 
-The call flow works correctly (token generation succeeds, TwiML is valid). The failure happens at Twilio's network layer before the child leg connects — this is why `twilio-voice-inbound` shows zero recent logs for Canadian calls and the call sessions show 0-second duration. Adding an `error_code` text column to `call_sessions` and parsing the `ErrorCode` parameter from Twilio status webhooks will make future debugging immediate.
+### Data Maximization
+
+Every column from the Excel file will be utilized:
+- **Core fields** (name, company, email, phone, job title, industry, country, city, state, website, LinkedIn URLs) → direct `leads` table columns
+- **Stage, next step** → mapped to `leads.stage` and `leads.next_step`
+- **History, owner, priority, source, product, last contact** → combined into `leads.personal_notes`
+- **Caution, competitor, objection, pain point** → extracted into `lead_context_items` for AI retrieval
+- **All unmapped columns** → captured in `raw_import_json` and also extracted as general context items
+- **No data is discarded** — everything is preserved either structurally or verbatim
+
+### Technical Details
+
+The fix mirrors the proven pattern from `LeadImportDialog.tsx` (lines 89-160), applying the same field stripping, personal notes aggregation, UUID generation, and context item extraction to the onboarding flow.
 
