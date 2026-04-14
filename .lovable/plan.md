@@ -2,32 +2,31 @@
 
 ## Problem
 
-Your call recordings were downloaded successfully (3 recordings with `status: downloaded`), but all 3 transcription attempts **failed** because they ran the old code that tried to use "lovable-ai" as the provider — which can't process audio. The code has since been updated to use Google Cloud Speech-to-Text (your API key is configured), but the failed transcripts are sitting there and won't automatically retry.
+Calls to Canadian numbers (+1514...) fail instantly (0-second duration, status "failed") while calls to Israel (+972...) succeed. The Twilio account shows "Missing Business Profile" which restricts call capabilities.
+
+## Root Cause
+
+Twilio restricts outbound calling capabilities on accounts without an approved Business Profile. This particularly affects domestic North American (NANPA +1) numbers. The code and phone number formatting are correct — E.164 normalization is working properly.
 
 ## Plan
 
-### Step 1: Retry failed transcripts
-- Delete the 3 failed `call_transcripts` rows so the pipeline treats them as fresh
-- Re-invoke `call-transcribe` for each of the 3 call sessions that have downloaded recordings:
-  - `240fa929-a4d0-4992-a43f-0dbbb6cc1363` (84s call)
-  - `8bf5b872-040d-4b33-835b-b2ada09f5fe4` (69s call)  
-  - `cde9279c-f0fd-4540-bda5-ec9eb04985db` (99s call)
+### Step 1: Twilio Account Fix (User Action Required)
+- Go to **Twilio Console → Account → Business Profiles** and create/submit a Business Profile
+- This removes the CPS=1 limitation and unlocks full North American calling
+- Approval typically takes 1-3 business days
 
-### Step 2: Verify pipeline completes
-- Check edge function logs for `call-transcribe` to confirm Google Speech API calls succeed
-- Verify `call_transcripts` rows update to `status: completed` with actual transcript text
-- Confirm `call-analyze` is triggered for calls meeting the 30s minimum duration
+### Step 2: Add Diagnostic Error Surfacing (Code Change)
+Improve `twilio-voice-inbound` and `BrowserCallProvider` to capture and display the actual Twilio error reason when a call fails, so future failures show a clear message (e.g., "Call rejected by carrier" or "Account restriction") instead of a generic WebSocket error.
 
-### Step 3: Verify UI display
-- The CallDetail page (`/app/calls/:id`) already has full UI for transcripts, analysis summaries, action items, sentiment, and audio playback
-- The lead timeline should update from generic "Phone call" to include the summary
-- No UI code changes needed — only the backend retry
+- **`twilio-voice-inbound`**: Add logging of the Twilio error code from status callbacks
+- **`twilio-voice-webhook`**: Store the Twilio `ErrorCode` field from status callbacks into `call_sessions` (add an `error_code` column)
+- **`BrowserCallProvider`**: Map known Twilio error codes (21215, 21214, 13227) to user-friendly messages
 
-## Technical details
+### Step 3: Verify After Profile Approval
+- Re-test calling a Canadian number once the Business Profile is approved
+- Confirm the call completes and the transcript/analysis pipeline triggers
 
-The `call-transcribe` function now correctly:
-- Requires `GOOGLE_SPEECH_API_KEY` (configured ✓)
-- Uses `longrunningrecognize` with polling for audio files
-- Supports diarization and speaker normalization
-- Chains to `call-analyze` after successful transcription
+## Technical Details
+
+The call flow works correctly (token generation succeeds, TwiML is valid). The failure happens at Twilio's network layer before the child leg connects — this is why `twilio-voice-inbound` shows zero recent logs for Canadian calls and the call sessions show 0-second duration. Adding an `error_code` text column to `call_sessions` and parsing the `ErrorCode` parameter from Twilio status webhooks will make future debugging immediate.
 
