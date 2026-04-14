@@ -92,17 +92,74 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
       const { data: { user }, error: authErr } = await supabase.auth.getUser();
       if (authErr || !user) throw new Error("Not logged in");
 
-      const leadsToInsert = parsedLeads.map((lead) => ({
-        ...lead,
-        owner_user_id: user.id,
-        workspace_id: workspaceId,
-        source_type: "csv_import",
-        motion: "outbound_prospecting",
-        strategy: "fast" as const,
-        last_activity_at: new Date().toISOString(),
-      }));
+      const validStages = ["new", "contacted", "engaged", "post_meeting", "closing", "closed_won", "closed_lost"];
+
+      const leadsToInsert = parsedLeads.map((lead) => {
+        // Build personal_notes from supplementary fields
+        const noteParts: string[] = [];
+        if (lead.history_notes) noteParts.push(`History: ${lead.history_notes}`);
+        if (lead.owner_name) noteParts.push(`Previous owner: ${lead.owner_name}`);
+        if (lead.previous_owner && lead.previous_owner !== lead.owner_name) noteParts.push(`Previous owner: ${lead.previous_owner}`);
+        if (lead.priority_label) noteParts.push(`Priority: ${lead.priority_label}`);
+        if (lead.source_label) noteParts.push(`Source: ${lead.source_label}`);
+        if (lead.product) noteParts.push(`Product: ${lead.product}`);
+        if (lead.last_contact_date) noteParts.push(`Last contact: ${lead.last_contact_date}`);
+        const personalNotes = noteParts.length > 0 ? noteParts.join(" | ") : undefined;
+
+        // Validate stage
+        const importedStage = lead.stage?.toLowerCase().replace(/[\s-]+/g, "_");
+        const resolvedStage = importedStage && validStages.includes(importedStage) ? importedStage : undefined;
+
+        // Strip extended fields that don't exist on leads table
+        const { stage: _s, priority_label: _p, source_label: _sl, product: _pr,
+          owner_name: _o, previous_owner: _po, last_contact_date: _lc,
+          next_step_text: _ns, history_notes: _h, raw_import_json: _raw,
+          caution: _ca, competitor: _co, objection: _ob, pain_point: _pp,
+          ...leadFields } = lead;
+
+        const leadId = crypto.randomUUID();
+
+        return {
+          id: leadId,
+          ...leadFields,
+          owner_user_id: user.id,
+          workspace_id: workspaceId,
+          source_type: "csv_import",
+          motion: "outbound_prospecting",
+          strategy: "fast" as const,
+          last_activity_at: new Date().toISOString(),
+          ...(personalNotes && { personal_notes: personalNotes }),
+          ...(resolvedStage && { stage: resolvedStage }),
+          ...(lead.next_step_text && { next_step: lead.next_step_text }),
+          ...(lead.raw_import_json && { raw_import_json: lead.raw_import_json }),
+        };
+      });
+
       const { error } = await supabase.from("leads").insert(leadsToInsert);
       if (error) throw error;
+
+      // Extract and insert lead context items (non-blocking)
+      try {
+        const allContextItems = leadsToInsert.flatMap((insertedLead, idx) => {
+          const parsedLead = parsedLeads[idx];
+          if (!parsedLead) return [];
+          return extractLeadContextItems(parsedLead, insertedLead.id, workspaceId);
+        });
+
+        if (allContextItems.length > 0) {
+          const { error: ctxErr } = await supabase
+            .from("lead_context_items")
+            .insert(allContextItems);
+          if (ctxErr) {
+            console.error("Failed to insert lead context items:", ctxErr);
+          } else {
+            console.log(`[onboarding-import] Inserted ${allContextItems.length} context items for ${leadsToInsert.length} leads`);
+          }
+        }
+      } catch (ctxErr) {
+        console.error("Lead context extraction failed (non-fatal):", ctxErr);
+      }
+
       await setOnboardingStep(4);
       toast.success(`Imported ${parsedLeads.length} leads!`);
       onNext();
