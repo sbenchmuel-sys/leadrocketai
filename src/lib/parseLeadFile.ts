@@ -370,6 +370,13 @@ export function extractLeadContextItems(
 }
 
 function tryParseDate(value: string): string | null {
+  if (!value) return null;
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const d = new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3]));
+    if (!isNaN(d.getTime())) return d.toISOString();
+    return null;
+  }
   try {
     const d = new Date(value);
     if (!isNaN(d.getTime())) return d.toISOString();
@@ -394,7 +401,15 @@ export function parseLeadFile(file: File): Promise<ParsedLead[]> {
         for (let i = 1; i < rows.length; i++) {
           const row: Record<string, string> = {};
           headers.forEach((h, idx) => {
-            row[h] = String(rows[i][idx] ?? "").trim();
+            const cellVal = rows[i][idx];
+            if (cellVal instanceof Date) {
+              const y = cellVal.getUTCFullYear();
+              const m = String(cellVal.getUTCMonth() + 1).padStart(2, "0");
+              const d = String(cellVal.getUTCDate()).padStart(2, "0");
+              row[h] = `${y}-${m}-${d}`;
+            } else {
+              row[h] = String(cellVal ?? "").trim();
+            }
           });
           leads.push(mapRowToLead(row));
         }
