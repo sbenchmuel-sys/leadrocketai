@@ -1,0 +1,2 @@
+ALTER TABLE public.leads DROP CONSTRAINT leads_motion_check;
+ALTER TABLE public.leads ADD CONSTRAINT leads_motion_check CHECK (motion = ANY (ARRAY['outbound_prospecting'::text, 'inbound_response'::text, 'pre_meeting'::text, 'post_meeting'::text, 'closing'::text, 'nurture'::text, 'closed'::text, 're_engagement'::text]));
