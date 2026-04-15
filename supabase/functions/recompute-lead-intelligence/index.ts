@@ -630,6 +630,7 @@ Rules:
         conversation_analyses: convoAnalyses.length,
         call_analyses: callAnalyses.length,
         meetings: meetings.length,
+        lead_context_items: contextItems.length,
       },
     };
 
@@ -651,7 +652,7 @@ Rules:
       last_ai_run_at: new Date().toISOString(),
     }).eq("id", lead_id);
 
-    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings, ${evidenceRegistry.length} evidence refs`);
+    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings, ${contextItems.length} context items, ${evidenceRegistry.length} evidence refs`);
 
     return respond({
       ok: true,
