@@ -484,7 +484,7 @@ Deno.serve(async (req) => {
 
         const prompt = `You are a sales intelligence engine. Synthesize the following multi-channel evidence for a B2B lead and return JSON ONLY.
 
-Lead: ${lead.name} at ${lead.company} | Stage: ${lead.stage} | Motion: ${lead.motion}
+Lead: ${lead.name} at ${lead.company} | Stage: ${lead.stage} | Motion: ${lead.motion} | Today's date: ${new Date().toISOString().slice(0, 10)}
 
 Lead Context (imported/manual — ${contextItems.length} items, ⚠️ = HIGH PRIORITY):
 ${contextSummary || "None"}
@@ -515,6 +515,7 @@ Return:
 
 Rules:
 - Items marked ⚠️ are high-priority context — they MUST influence your summary, risks, and next step recommendations (e.g. referrals, cautions, relationship history)
+- Today's date is provided above. NEVER recommend actions with dates in the past. If a context item references a past date, treat it as historical fact, not a pending action. Reframe past-due items as "overdue" or suggest an updated timeline.
 - Be specific to this lead, not generic
 - Synthesize across ALL conversation analyses, not just the most recent
 - Reference evidence from the data provided
