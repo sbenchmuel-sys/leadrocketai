@@ -475,9 +475,19 @@ Deno.serve(async (req) => {
           `Meeting "${m.meeting_title || "Untitled"}" (${m.id}): ${(m.summary_text || "").substring(0, 200)}`
         ).join("\n");
 
+        // Build context items section with priority weighting
+        const contextSummary = contextItems.slice(0, 20).map(ci => {
+          const isHighPriority = HIGH_PRIORITY_CATEGORIES.has(ci.category);
+          const prefix = isHighPriority ? "⚠️ " : "";
+          return `${prefix}${ci.category}: ${ci.content_text.substring(0, 200)}`;
+        }).join("\n");
+
         const prompt = `You are a sales intelligence engine. Synthesize the following multi-channel evidence for a B2B lead and return JSON ONLY.
 
 Lead: ${lead.name} at ${lead.company} | Stage: ${lead.stage} | Motion: ${lead.motion}
+
+Lead Context (imported/manual — ${contextItems.length} items, ⚠️ = HIGH PRIORITY):
+${contextSummary || "None"}
 
 Timeline (recent ${timelineItems.length} events):
 ${timelineSummary || "No timeline events"}
