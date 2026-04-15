@@ -29,6 +29,9 @@ export interface ParsedLead {
   competitor?: string;
   objection?: string;
   pain_point?: string;
+  referral_source?: string;
+  deal_value?: string;
+  next_milestone_date?: string;
   // Raw import preservation
   raw_import_json?: Record<string, string>;
 }
@@ -155,6 +158,33 @@ const KEY_ALIASES: Record<string, string> = {
   "pain points": "pain_point",
   "pain_points": "pain_point",
   "challenges": "pain_point",
+  // Referral columns
+  "referred by": "referral_source",
+  "reffered by": "referral_source",
+  "referral": "referral_source",
+  "referral source": "referral_source",
+  "referral_source": "referral_source",
+  // Deal value columns
+  "deal value": "deal_value",
+  "deal value / type": "deal_value",
+  "deal_value": "deal_value",
+  "deal value type": "deal_value",
+  // Industry segment aliases
+  "industry / segment": "industry",
+  "industry segment": "industry",
+  // Current stage aliases
+  "current stage": "stage",
+  // Status summary aliases
+  "status summary": "history_notes",
+  "status_summary": "history_notes",
+  // Next milestone date
+  "next milestone date": "next_milestone_date",
+  "next milestone": "next_milestone_date",
+  "next_milestone_date": "next_milestone_date",
+  "next_milestone": "next_milestone_date",
+  // Notes outcome
+  "notes outcome": "history_notes",
+  "notes (outcome)": "history_notes",
 };
 
 /** Normalize all row keys to canonical names for case/variation-insensitive lookup */
@@ -217,6 +247,9 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
     competitor: (r["competitor"] || "").trim() || undefined,
     objection: (r["objection"] || "").trim() || undefined,
     pain_point: (r["pain_point"] || "").trim() || undefined,
+    referral_source: (r["referral_source"] || "").trim() || undefined,
+    deal_value: (r["deal_value"] || "").trim() || undefined,
+    next_milestone_date: (r["next_milestone_date"] || "").trim() || undefined,
     // Raw preservation
     raw_import_json: Object.keys(rawImportJson).length > 0 ? rawImportJson : undefined,
   };
@@ -244,13 +277,16 @@ const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: str
   // Pain points / objections
   objection: { category: "commercial_signal", content_type: "known_objection" },
   pain_point: { category: "commercial_signal", content_type: "pain_point" },
+  referral_source: { category: "relationship_history", content_type: "prior_contact" },
+  deal_value: { category: "commercial_signal", content_type: "deal_value" },
+  next_milestone_date: { category: "historical_fact", content_type: "milestone" },
 };
 
 // Columns that are already mapped to core lead fields (no need to create context items)
 const MAPPED_CANONICAL_KEYS = new Set([
   "first_name", "last_name", "name", "company", "email", "job_title", "phone",
   "industry", "country", "website", "linkedin_url", "company_linkedin_url",
-  "city", "state", "street", "stage",
+  "city", "state", "street", "stage", "priority_label", "source_label",
 ]);
 
 export interface LeadContextItemInsert {
@@ -291,6 +327,9 @@ export function extractLeadContextItems(
     { key: "competitor", value: lead.competitor, label: `Competitor: ${lead.competitor}` },
     { key: "objection", value: lead.objection, label: `Known objection: ${lead.objection}` },
     { key: "pain_point", value: lead.pain_point, label: `Pain point: ${lead.pain_point}` },
+    { key: "referral_source", value: lead.referral_source, label: `Referred by: ${lead.referral_source}` },
+    { key: "deal_value", value: lead.deal_value, label: `Deal value/type: ${lead.deal_value}` },
+    { key: "next_milestone_date", value: lead.next_milestone_date, label: `Next milestone: ${lead.next_milestone_date}` },
   ];
 
   // Avoid duplicate: if owner_name === previous_owner, skip one
@@ -316,7 +355,7 @@ export function extractLeadContextItems(
       source_column_name: ext.key,
       confidence: null, // deterministic — no confidence needed
       author_name: authorName,
-      context_date: ext.key === "last_contact_date" ? tryParseDate(ext.value) : null,
+      context_date: (ext.key === "last_contact_date" || ext.key === "next_milestone_date") ? tryParseDate(ext.value) : null,
     });
   }
 
@@ -341,10 +380,16 @@ export function extractLeadContextItems(
   const extractedKeys = new Set(knownExtractions.map(e => e.key));
   extractedKeys.add("message");
 
+  // Suppressed columns — junk/internal data that should never become context items
+  const SUPPRESSED_COLUMNS = new Set(["unnamed: 0", "appears_in_both", "current stage.1"]);
+
   for (const [originalColName, value] of Object.entries(rawJson)) {
     if (!value || value.trim().length === 0) continue;
     const normalizedKey = originalColName.trim().toLowerCase().replace(/[\s_-]+/g, " ");
     const canonicalKey = KEY_ALIASES[normalizedKey] || KEY_ALIASES[normalizedKey.replace(/ /g, "_")] || normalizedKey;
+
+    // Skip suppressed columns
+    if (SUPPRESSED_COLUMNS.has(normalizedKey)) continue;
 
     // Skip if it's a core mapped field or already extracted
     if (MAPPED_CANONICAL_KEYS.has(canonicalKey) || extractedKeys.has(canonicalKey)) continue;
