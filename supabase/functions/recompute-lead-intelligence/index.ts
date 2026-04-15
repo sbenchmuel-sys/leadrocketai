@@ -457,7 +457,7 @@ Deno.serve(async (req) => {
     let modelUsed: string | null = null;
     let nextStepEvidenceIds: string[] = [...nextStepEvidence];
 
-    if (lovableKey && (timelineItems.length > 0 || convoAnalyses.length > 0 || callAnalyses.length > 0)) {
+    if (lovableKey && (timelineItems.length > 0 || convoAnalyses.length > 0 || callAnalyses.length > 0 || contextItems.length > 0)) {
       try {
         const timelineSummary = timelineItems.slice(0, 15).map(t =>
           `[${t.channel}/${t.direction || ""}] ${t.subject || ""}: ${(t.snippet_text || "").substring(0, 150)}`
