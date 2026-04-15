@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
     evidenceRegistry.length = 0;
 
     // ── 2. Parallel fetch all evidence sources ──
-    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes] = await Promise.all([
+    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes, contextItemsRes] = await Promise.all([
       admin.from("lead_timeline_items")
         .select("id, channel, direction, event_type, occurred_at, snippet_text, subject, metadata_json, source_table, source_id")
         .eq("lead_id", lead_id)
@@ -170,6 +170,14 @@ Deno.serve(async (req) => {
         .eq("lead_id", lead_id)
         .order("sent_at", { ascending: false })
         .limit(5),
+
+      // Lead context items (imported data, manual notes, referrals, cautions)
+      admin.from("lead_context_items")
+        .select("id, category, content_type, content_text, original_snippet, source_type, source_column_name, confidence, author_name, context_date, is_active")
+        .eq("lead_id", lead_id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true })
+        .limit(30),
     ]);
 
     const timelineItems = timelineRes.data ?? [];
