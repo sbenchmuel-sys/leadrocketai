@@ -1,65 +1,25 @@
+## ✅ Completed: Include Lead Context in AI Intelligence with Freshness & Weighting
 
+### What was done
 
-## Problem
+**1. Database migration — Auto-invalidation trigger**
+- Created `invalidate_lead_intelligence_on_context()` trigger function
+- Trigger fires on INSERT/UPDATE/DELETE of `lead_context_items`
+- Deletes stale `lead_intelligence` and `lead_context_cache` rows, forcing fresh recomputation
 
-When importing Excel files, date columns (like "Last Contact Date") are parsed by the `read-excel-file` library as JavaScript `Date` objects. On line 397 of `parseLeadFile.ts`, `String(rows[i][idx])` is called, which invokes `.toString()` on the Date — producing output like `"Fri Aug 01 2025 03:00:00 GMT+0300 (Israel Daylight Time)"`. The Excel cell only contains `8/1/2025` (no time, no timezone), but the browser's local timezone bleeds in.
+**2. Edge function — `recompute-lead-intelligence/index.ts`**
+- Added parallel fetch for `lead_context_items` (active, up to 30 items)
+- Registered context items as evidence with `source_type: "lead_context"`
+- High-priority categories (`caution`, `relationship_history`) get `⚠️ HIGH PRIORITY` prefix
+- Caution items automatically added as high-level risks
+- Context items injected into LLM prompt with explicit weighting instruction
+- Updated `source_counts_json` to include `lead_context_items` count
+- LLM trigger condition expanded to include context items
 
-This string then flows into:
-1. The context item **label** (`Last contacted: Fri Aug 01 2025 03:00:00 GMT+0300...`)
-2. The context item **raw value**
-3. The `tryParseDate` function (which also uses `new Date()`, doubling down on the problem)
+### Priority weighting
 
-## Plan
-
-### Step 1: Fix Excel date serialization in `parseLeadFile.ts`
-
-On line 397, detect when a cell value is a `Date` object and format it as a clean `YYYY-MM-DD` string instead of calling `.toString()`:
-
-```typescript
-// Before
-row[h] = String(rows[i][idx] ?? "").trim();
-
-// After — detect Date objects from Excel and format cleanly
-const cellVal = rows[i][idx];
-if (cellVal instanceof Date) {
-  // Use UTC to avoid timezone shift (Excel dates have no timezone)
-  const y = cellVal.getUTCFullYear();
-  const m = String(cellVal.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(cellVal.getUTCDate()).padStart(2, "0");
-  row[h] = `${y}-${m}-${d}`;
-} else {
-  row[h] = String(cellVal ?? "").trim();
-}
-```
-
-### Step 2: Fix `tryParseDate` to use UTC-safe parsing
-
-Replace the `new Date(value)` call with explicit UTC parsing to prevent timezone shifts when storing the `context_date`:
-
-```typescript
-function tryParseDate(value: string): string | null {
-  if (!value) return null;
-  // Match YYYY-MM-DD or MM/DD/YYYY or DD/MM/YYYY patterns
-  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) {
-    const d = new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3]));
-    if (!isNaN(d.getTime())) return d.toISOString();
-    return null;
-  }
-  // Fallback for other formats
-  const d = new Date(value);
-  if (!isNaN(d.getTime())) return d.toISOString();
-  return null;
-}
-```
-
-### Step 3: Fix label formatting
-
-On line 288, the label already uses the raw string value. After Step 1, this will naturally show `Last contacted: 2025-08-01` instead of the full timezone string — no additional change needed.
-
-### Impact
-
-- **New imports** will store clean date strings (`2025-08-01`) in labels, raw values, and context dates
-- **Existing imported leads** with the bad date strings will remain as-is (can be re-imported to fix)
-- Two files changed: `src/lib/parseLeadFile.ts` only
-
+| Category | Weight | Effect |
+|----------|--------|--------|
+| `caution` | ⚠️ HIGH | Auto-added as risk + flagged in prompt |
+| `relationship_history` | ⚠️ HIGH | Flagged in prompt (referrals, warm intros) |
+| All others | Normal | Included in prompt without flag |
