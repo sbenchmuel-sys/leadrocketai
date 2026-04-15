@@ -514,6 +514,7 @@ Return:
 }
 
 Rules:
+- Items marked ⚠️ are high-priority context — they MUST influence your summary, risks, and next step recommendations (e.g. referrals, cautions, relationship history)
 - Be specific to this lead, not generic
 - Synthesize across ALL conversation analyses, not just the most recent
 - Reference evidence from the data provided
