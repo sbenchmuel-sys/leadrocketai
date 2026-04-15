@@ -355,7 +355,7 @@ export function extractLeadContextItems(
       source_column_name: ext.key,
       confidence: null, // deterministic — no confidence needed
       author_name: authorName,
-      context_date: ext.key === "last_contact_date" ? tryParseDate(ext.value) : null,
+      context_date: (ext.key === "last_contact_date" || ext.key === "next_milestone_date") ? tryParseDate(ext.value) : null,
     });
   }
 
@@ -380,10 +380,16 @@ export function extractLeadContextItems(
   const extractedKeys = new Set(knownExtractions.map(e => e.key));
   extractedKeys.add("message");
 
+  // Suppressed columns — junk/internal data that should never become context items
+  const SUPPRESSED_COLUMNS = new Set(["unnamed: 0", "appears_in_both", "current stage.1"]);
+
   for (const [originalColName, value] of Object.entries(rawJson)) {
     if (!value || value.trim().length === 0) continue;
     const normalizedKey = originalColName.trim().toLowerCase().replace(/[\s_-]+/g, " ");
     const canonicalKey = KEY_ALIASES[normalizedKey] || KEY_ALIASES[normalizedKey.replace(/ /g, "_")] || normalizedKey;
+
+    // Skip suppressed columns
+    if (SUPPRESSED_COLUMNS.has(normalizedKey)) continue;
 
     // Skip if it's a core mapped field or already extracted
     if (MAPPED_CANONICAL_KEYS.has(canonicalKey) || extractedKeys.has(canonicalKey)) continue;
