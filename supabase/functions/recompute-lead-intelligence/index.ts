@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
     evidenceRegistry.length = 0;
 
     // ── 2. Parallel fetch all evidence sources ──
-    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes] = await Promise.all([
+    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes, contextItemsRes] = await Promise.all([
       admin.from("lead_timeline_items")
         .select("id, channel, direction, event_type, occurred_at, snippet_text, subject, metadata_json, source_table, source_id")
         .eq("lead_id", lead_id)
@@ -170,12 +170,40 @@ Deno.serve(async (req) => {
         .eq("lead_id", lead_id)
         .order("sent_at", { ascending: false })
         .limit(5),
+
+      // Lead context items (imported data, manual notes, referrals, cautions)
+      admin.from("lead_context_items")
+        .select("id, category, content_type, content_text, original_snippet, source_type, source_column_name, confidence, author_name, context_date, is_active")
+        .eq("lead_id", lead_id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true })
+        .limit(30),
     ]);
 
     const timelineItems = timelineRes.data ?? [];
     const convoAnalyses = convoAnalysisRes.data ?? [];
     const callAnalyses = callAnalysisRes.data ?? [];
     const meetings = meetingRes.data ?? [];
+    const contextItems = contextItemsRes.data ?? [];
+
+    // ── Priority categories for lead context items ──
+    const HIGH_PRIORITY_CATEGORIES = new Set(["caution", "relationship_history"]);
+
+    // ── Register evidence from lead context items ──
+    for (const ci of contextItems) {
+      const isHighPriority = HIGH_PRIORITY_CATEGORIES.has(ci.category);
+      const prefix = isHighPriority ? "⚠️ HIGH PRIORITY — " : "";
+      const evId = registerEvidence(
+        "lead_context", ci.id,
+        `${prefix}${ci.category}: ${ci.content_text}`,
+        undefined, ci.context_date || undefined,
+      );
+
+      // Route context items into risk/milestone/objection maps where applicable
+      if (ci.category === "caution") {
+        addRisk(ci.content_text, "high", evId, "lead_context");
+      }
+    }
 
     // ── 3. Build evidence-linked aggregation ──
 
@@ -429,7 +457,7 @@ Deno.serve(async (req) => {
     let modelUsed: string | null = null;
     let nextStepEvidenceIds: string[] = [...nextStepEvidence];
 
-    if (lovableKey && (timelineItems.length > 0 || convoAnalyses.length > 0 || callAnalyses.length > 0)) {
+    if (lovableKey && (timelineItems.length > 0 || convoAnalyses.length > 0 || callAnalyses.length > 0 || contextItems.length > 0)) {
       try {
         const timelineSummary = timelineItems.slice(0, 15).map(t =>
           `[${t.channel}/${t.direction || ""}] ${t.subject || ""}: ${(t.snippet_text || "").substring(0, 150)}`
@@ -447,9 +475,19 @@ Deno.serve(async (req) => {
           `Meeting "${m.meeting_title || "Untitled"}" (${m.id}): ${(m.summary_text || "").substring(0, 200)}`
         ).join("\n");
 
+        // Build context items section with priority weighting
+        const contextSummary = contextItems.slice(0, 20).map(ci => {
+          const isHighPriority = HIGH_PRIORITY_CATEGORIES.has(ci.category);
+          const prefix = isHighPriority ? "⚠️ " : "";
+          return `${prefix}${ci.category}: ${ci.content_text.substring(0, 200)}`;
+        }).join("\n");
+
         const prompt = `You are a sales intelligence engine. Synthesize the following multi-channel evidence for a B2B lead and return JSON ONLY.
 
 Lead: ${lead.name} at ${lead.company} | Stage: ${lead.stage} | Motion: ${lead.motion}
+
+Lead Context (imported/manual — ${contextItems.length} items, ⚠️ = HIGH PRIORITY):
+${contextSummary || "None"}
 
 Timeline (recent ${timelineItems.length} events):
 ${timelineSummary || "No timeline events"}
@@ -476,6 +514,7 @@ Return:
 }
 
 Rules:
+- Items marked ⚠️ are high-priority context — they MUST influence your summary, risks, and next step recommendations (e.g. referrals, cautions, relationship history)
 - Be specific to this lead, not generic
 - Synthesize across ALL conversation analyses, not just the most recent
 - Reference evidence from the data provided
@@ -591,6 +630,7 @@ Rules:
         conversation_analyses: convoAnalyses.length,
         call_analyses: callAnalyses.length,
         meetings: meetings.length,
+        lead_context_items: contextItems.length,
       },
     };
 
@@ -612,7 +652,7 @@ Rules:
       last_ai_run_at: new Date().toISOString(),
     }).eq("id", lead_id);
 
-    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings, ${evidenceRegistry.length} evidence refs`);
+    console.log(`[recompute-lead-intelligence] ✅ Lead ${lead_id}: ${timelineItems.length} timeline, ${convoAnalyses.length} convos, ${callAnalyses.length} calls, ${meetings.length} meetings, ${contextItems.length} context items, ${evidenceRegistry.length} evidence refs`);
 
     return respond({
       ok: true,
