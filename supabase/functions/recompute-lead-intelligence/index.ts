@@ -184,6 +184,26 @@ Deno.serve(async (req) => {
     const convoAnalyses = convoAnalysisRes.data ?? [];
     const callAnalyses = callAnalysisRes.data ?? [];
     const meetings = meetingRes.data ?? [];
+    const contextItems = contextItemsRes.data ?? [];
+
+    // ── Priority categories for lead context items ──
+    const HIGH_PRIORITY_CATEGORIES = new Set(["caution", "relationship_history"]);
+
+    // ── Register evidence from lead context items ──
+    for (const ci of contextItems) {
+      const isHighPriority = HIGH_PRIORITY_CATEGORIES.has(ci.category);
+      const prefix = isHighPriority ? "⚠️ HIGH PRIORITY — " : "";
+      const evId = registerEvidence(
+        "lead_context", ci.id,
+        `${prefix}${ci.category}: ${ci.content_text}`,
+        undefined, ci.context_date || undefined,
+      );
+
+      // Route context items into risk/milestone/objection maps where applicable
+      if (ci.category === "caution") {
+        addRisk(ci.content_text, "high", evId, "lead_context");
+      }
+    }
 
     // ── 3. Build evidence-linked aggregation ──
 
