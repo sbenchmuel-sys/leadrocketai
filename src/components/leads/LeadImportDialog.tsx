@@ -176,9 +176,10 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
 
       handleClose(false);
       onImportComplete();
-    } catch (err) {
-      console.error("Import failed:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to import leads");
+    } catch (err: any) {
+      const detail = err?.message || err?.details || err?.hint || JSON.stringify(err);
+      console.error("Import failed:", detail, err);
+      toast.error(detail || "Failed to import leads");
     } finally {
       setIsImporting(false);
     }

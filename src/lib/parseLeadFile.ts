@@ -191,7 +191,7 @@ const KEY_ALIASES: Record<string, string> = {
 function normalizeRow(row: Record<string, string>): Record<string, string> {
   const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(row)) {
-    const lowerKey = key.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+    const lowerKey = key.trim().toLowerCase().replace(/[:;]+$/, "").replace(/[\s_-]+/g, " ");
     const canonical = KEY_ALIASES[lowerKey] || KEY_ALIASES[lowerKey.replace(/ /g, "_")] || lowerKey;
     // Only set if not already set (first match wins)
     if (!normalized[canonical]) {
