@@ -27,6 +27,7 @@ interface SendEmailButtonProps {
   variant?: "default" | "outline" | "ghost" | "secondary";
   size?: "default" | "sm" | "lg" | "icon";
   showDialog?: boolean;
+  motionType?: StyleMotion;
 }
 
 export function SendEmailButton({
