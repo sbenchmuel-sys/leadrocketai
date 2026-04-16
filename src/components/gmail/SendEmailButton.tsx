@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Send, Loader2 } from "lucide-react";
 import { useMailSync } from "@/hooks/useMailSync";
 import { toast } from "sonner";
+import { captureStyleExample, StyleMotion } from "@/lib/styleCapture";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   Dialog,
   DialogContent,
