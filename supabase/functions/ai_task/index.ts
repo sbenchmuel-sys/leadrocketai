@@ -1710,6 +1710,35 @@ ${customInstructionsText}
     }
 
     if (diversityBlock) promptParts.push(diversityBlock);
+
+    // ── STYLE LEARNING: inject user's writing style as soft constraints ──
+    if (styleProfile && STYLE_AWARE_TASKS.has(task)) {
+      const styleLines: string[] = ["=== YOUR WRITING STYLE (learned from your past messages) ==="];
+      if (styleProfile.directive_text) {
+        styleLines.push(`Voice directive: ${styleProfile.directive_text}`);
+      }
+      const pj = styleProfile.profile_json;
+      if (pj.preferred_opening) styleLines.push(`- Opening style: ${pj.preferred_opening}`);
+      if (pj.tone) styleLines.push(`- Tone: ${pj.tone}`);
+      if (pj.structure) styleLines.push(`- Structure: ${pj.structure}`);
+      if (pj.cta_style) styleLines.push(`- CTA style: ${pj.cta_style}`);
+      if (pj.personalization) styleLines.push(`- Personalization: ${pj.personalization}`);
+      if (pj.greeting_style) styleLines.push(`- Greeting: ${pj.greeting_style}`);
+      if (pj.avg_length_chars) styleLines.push(`- Typical length: ~${pj.avg_length_chars} characters`);
+      if (pj.uses_emoji !== undefined) styleLines.push(`- Emoji: ${pj.uses_emoji ? "yes" : "no"}`);
+      if (Array.isArray(pj.tone_markers) && pj.tone_markers.length > 0) {
+        styleLines.push(`- Tone markers: ${(pj.tone_markers as string[]).join(", ")}`);
+      }
+      if (Array.isArray(pj.anti_patterns) && pj.anti_patterns.length > 0) {
+        styleLines.push(`- NEVER do: ${(pj.anti_patterns as string[]).join("; ")}`);
+      }
+      styleLines.push(`(Based on ${styleProfile.example_count} past messages)`);
+      styleLines.push("These are SOFT constraints. Follow them unless they conflict with the task objective or campaign instructions.");
+      styleLines.push("===");
+      promptParts.push(styleLines.join("\n"));
+      console.log(`[ai_task] [16/STYLE_LEARNING] Injected user style profile (${styleProfile.example_count} examples)`);
+    }
+
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");
