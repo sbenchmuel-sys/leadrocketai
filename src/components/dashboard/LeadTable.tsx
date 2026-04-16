@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle, MessageSquare } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle, MessageSquare, Wand2, Check } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -46,6 +46,8 @@ import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "da
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 // Format last email date with color coding
 function formatLastEmail(dateStr: string | null): { text: string; className: string } {
