@@ -111,11 +111,26 @@ export default function CreateLeadStep({ onNext, onBack }: CreateLeadStepProps) 
         const resolvedStage = importedStage && validStages.includes(importedStage) ? importedStage : undefined;
 
         // Strip extended fields that don't exist on leads table
-        const { stage: _s, priority_label: _p, source_label: _sl, product: _pr,
-          owner_name: _o, previous_owner: _po, last_contact_date: _lc,
-          next_step_text: _ns, history_notes: _h, raw_import_json: _raw,
-          caution: _ca, competitor: _co, objection: _ob, pain_point: _pp,
-          ...leadFields } = lead;
+        const {
+          stage: _s,
+          priority_label: _p,
+          source_label: _sl,
+          product: _pr,
+          owner_name: _o,
+          previous_owner: _po,
+          last_contact_date: _lc,
+          next_step_text: _ns,
+          history_notes: _h,
+          raw_import_json: _raw,
+          caution: _ca,
+          competitor: _co,
+          objection: _ob,
+          pain_point: _pp,
+          referral_source: _rs,
+          deal_value: _dv,
+          next_milestone_date: _nmd,
+          ...leadFields
+        } = lead;
 
         const leadId = crypto.randomUUID();
 
