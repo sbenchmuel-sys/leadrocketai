@@ -7,8 +7,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Mail, FileText, Eye, Send, X, RefreshCw } from "lucide-react";
+import { Mail, FileText, Eye, Send, X, RefreshCw, Wand2, Loader2, Check } from "lucide-react";
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage, RevenueState } from "@/lib/dashboardUtils";
+import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
+import { EmailActionDialog } from "./EmailActionDialog";
+import { dismissLeadAction } from "@/lib/supabaseQueries";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { dismissLeadAction } from "@/lib/supabaseQueries";
 import { toast } from "sonner";
