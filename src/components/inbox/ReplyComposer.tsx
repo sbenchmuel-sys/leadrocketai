@@ -1,5 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
-import { Send, X, Pencil, Check, Loader2, Sparkles } from "lucide-react";
+import { Send, X, Pencil, Check, Loader2, Sparkles, ThumbsUp, ThumbsDown } from "lucide-react";
+import { captureStyleExample, type StyleChannel, type StyleMotion } from "@/lib/styleCapture";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
