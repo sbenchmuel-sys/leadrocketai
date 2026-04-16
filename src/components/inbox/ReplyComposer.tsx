@@ -1,5 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
-import { Send, X, Pencil, Check, Loader2, Sparkles } from "lucide-react";
+import { Send, X, Pencil, Check, Loader2, Sparkles, ThumbsUp, ThumbsDown } from "lucide-react";
+import { captureStyleExample, type StyleChannel, type StyleMotion } from "@/lib/styleCapture";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -37,6 +39,7 @@ type Props = {
 };
 
 export function ReplyComposer({ conversation, recommendedChannel, suggestions, leadId, onSent }: Props) {
+  const { workspaceId } = useWorkspace();
   // Derive available channels — only email and whatsapp are implemented
   const [leadFields, setLeadFields] = useState<{
     email?: string | null;
@@ -250,8 +253,22 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
       }
 
       // Clear after successful send
+      const sentBody = body.trim();
       setBody("");
       setPersonalizedSuggestions([]);
+
+      // Capture style example (non-blocking)
+      if (workspaceId && sentBody) {
+        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : "email";
+        const styleMotion: StyleMotion = "reply_to_thread";
+        captureStyleExample({
+          channel: styleChannel,
+          motionType: styleMotion,
+          bodyText: sentBody,
+          subject: channel === "email" ? `Re: ${conversation.contact_name}` : undefined,
+          workspaceId,
+        }).catch(() => {});
+      }
 
       // Best-effort post-send hooks
       try { onSent?.(); } catch (_) { /* non-blocking */ }
@@ -295,6 +312,40 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                 >
                   <span className="flex items-center gap-1.5">
                     {icon} {label}
+                    <ThumbsUp
+                      className="h-3 w-3 opacity-40 hover:opacity-100 hover:text-emerald-600 dark:hover:text-emerald-400"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (workspaceId) {
+                          captureStyleExample({
+                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            motionType: "reply_to_thread",
+                            bodyText: displayText,
+                            feedback: "liked",
+                            workspaceId,
+                          }).catch(() => {});
+                          toast({ title: "👍 Style noted", description: "We'll learn from this." });
+                        }
+                      }}
+                    />
+                    <ThumbsDown
+                      className="h-3 w-3 opacity-40 hover:opacity-100 hover:text-destructive"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const comment = prompt("What didn't you like? (optional)");
+                        if (workspaceId) {
+                          captureStyleExample({
+                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            motionType: "reply_to_thread",
+                            bodyText: displayText,
+                            feedback: "disliked",
+                            feedbackComment: comment || undefined,
+                            workspaceId,
+                          }).catch(() => {});
+                          toast({ title: "👎 Anti-pattern noted", description: "We'll avoid this style." });
+                        }
+                      }}
+                    />
                     <Pencil
                       className="h-3 w-3 opacity-50 hover:opacity-100"
                       onClick={(e) => {

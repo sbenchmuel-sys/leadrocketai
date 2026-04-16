@@ -1300,8 +1300,75 @@ serve(async (req) => {
       })();
     }
 
-    const [kbResult, , leadSignals, cachedContext, diversityConstraints, offerResult] = await Promise.all([
-      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise,
+    // ── STYLE LEARNING: fetch user's style profile for this channel+motion ──
+    const STYLE_AWARE_TASKS = new Set([
+      "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup",
+      "email_intro_fast", "email_intro_nurture", "re_engagement_intro",
+      "reply_to_thread", "answer_questions",
+      "post_meeting_followup_email", "post_meeting_followup_personalized",
+      "nurture_email_single", "nurture_sequence",
+      "sms_message", "whatsapp_message", "whatsapp_reply",
+    ]);
+
+    interface StyleProfileData {
+      profile_json: Record<string, unknown>;
+      example_count: number;
+      directive_text?: string;
+    }
+
+    let styleProfilePromise: Promise<StyleProfileData | null> = Promise.resolve(null);
+    if (STYLE_AWARE_TASKS.has(task) && resolvedUserId !== "service-role") {
+      styleProfilePromise = (async () => {
+        try {
+          const styleClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          // Determine channel and motion from task
+          const styleChannel = /sms/i.test(task) ? "sms" : /whatsapp/i.test(task) ? "whatsapp" : "email";
+          const styleMotion = /reply|answer|thread/i.test(task) ? "reply_to_thread"
+            : /nurture/i.test(task) ? "nurture"
+            : /followup|follow_up/i.test(task) ? "follow_up"
+            : "outbound_cold";
+
+          // Fetch profile and directive in parallel
+          const [profileResult, directiveResult] = await Promise.all([
+            styleClient.from("user_style_profiles")
+              .select("profile_json, example_count")
+              .eq("user_id", resolvedUserId)
+              .eq("channel", styleChannel)
+              .eq("motion_type", styleMotion)
+              .maybeSingle(),
+            styleClient.from("user_style_directives")
+              .select("directive_text, learning_paused")
+              .eq("user_id", resolvedUserId)
+              .maybeSingle(),
+          ]);
+
+          // If learning is paused, skip style injection
+          if (directiveResult.data?.learning_paused) {
+            console.log(`[ai_task] Style learning paused for user ${resolvedUserId}`);
+            return null;
+          }
+
+          const profile = profileResult.data;
+          if (!profile || profile.example_count < 5) {
+            console.log(`[ai_task] Style profile: insufficient examples (${profile?.example_count ?? 0}/5 needed) for ${styleChannel}/${styleMotion}`);
+            return null;
+          }
+
+          console.log(`[ai_task] ✅ Style profile loaded: ${styleChannel}/${styleMotion}, ${profile.example_count} examples`);
+          return {
+            profile_json: profile.profile_json as Record<string, unknown>,
+            example_count: profile.example_count,
+            directive_text: directiveResult.data?.directive_text || undefined,
+          };
+        } catch (err) {
+          console.error("[ai_task] Style profile fetch failed:", err);
+          return null;
+        }
+      })();
+    }
+
+    const [kbResult, , leadSignals, cachedContext, diversityConstraints, offerResult, styleProfile] = await Promise.all([
+      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise, styleProfilePromise,
     ]);
 
     // ── LEAD CONTEXT ITEMS: structured prior knowledge ──
@@ -1643,6 +1710,35 @@ ${customInstructionsText}
     }
 
     if (diversityBlock) promptParts.push(diversityBlock);
+
+    // ── STYLE LEARNING: inject user's writing style as soft constraints ──
+    if (styleProfile && STYLE_AWARE_TASKS.has(task)) {
+      const styleLines: string[] = ["=== YOUR WRITING STYLE (learned from your past messages) ==="];
+      if (styleProfile.directive_text) {
+        styleLines.push(`Voice directive: ${styleProfile.directive_text}`);
+      }
+      const pj = styleProfile.profile_json;
+      if (pj.preferred_opening) styleLines.push(`- Opening style: ${pj.preferred_opening}`);
+      if (pj.tone) styleLines.push(`- Tone: ${pj.tone}`);
+      if (pj.structure) styleLines.push(`- Structure: ${pj.structure}`);
+      if (pj.cta_style) styleLines.push(`- CTA style: ${pj.cta_style}`);
+      if (pj.personalization) styleLines.push(`- Personalization: ${pj.personalization}`);
+      if (pj.greeting_style) styleLines.push(`- Greeting: ${pj.greeting_style}`);
+      if (pj.avg_length_chars) styleLines.push(`- Typical length: ~${pj.avg_length_chars} characters`);
+      if (pj.uses_emoji !== undefined) styleLines.push(`- Emoji: ${pj.uses_emoji ? "yes" : "no"}`);
+      if (Array.isArray(pj.tone_markers) && pj.tone_markers.length > 0) {
+        styleLines.push(`- Tone markers: ${(pj.tone_markers as string[]).join(", ")}`);
+      }
+      if (Array.isArray(pj.anti_patterns) && pj.anti_patterns.length > 0) {
+        styleLines.push(`- NEVER do: ${(pj.anti_patterns as string[]).join("; ")}`);
+      }
+      styleLines.push(`(Based on ${styleProfile.example_count} past messages)`);
+      styleLines.push("These are SOFT constraints. Follow them unless they conflict with the task objective or campaign instructions.");
+      styleLines.push("===");
+      promptParts.push(styleLines.join("\n"));
+      console.log(`[ai_task] [16/STYLE_LEARNING] Injected user style profile (${styleProfile.example_count} examples)`);
+    }
+
     if (playbookContext) promptParts.push(playbookContext);
     promptParts.push(taskBody);
     const userPrompt = promptParts.join("\n\n");

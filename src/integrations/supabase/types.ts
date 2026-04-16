@@ -2820,6 +2820,56 @@ export type Database = {
         }
         Relationships: []
       }
+      style_examples: {
+        Row: {
+          body_text: string
+          channel: string
+          created_at: string
+          feedback: string
+          feedback_comment: string | null
+          id: string
+          motion_type: string
+          style_features_json: Json | null
+          subject: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          body_text: string
+          channel?: string
+          created_at?: string
+          feedback?: string
+          feedback_comment?: string | null
+          id?: string
+          motion_type?: string
+          style_features_json?: Json | null
+          subject?: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          body_text?: string
+          channel?: string
+          created_at?: string
+          feedback?: string
+          feedback_comment?: string | null
+          id?: string
+          motion_type?: string
+          style_features_json?: Json | null
+          subject?: string | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "style_examples_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       unmatched_meeting_summaries: {
         Row: {
           created_at: string
@@ -2869,6 +2919,91 @@ export type Database = {
             columns: ["resolved_lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_style_directives: {
+        Row: {
+          created_at: string
+          directive_text: string
+          id: string
+          learning_paused: boolean
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          directive_text?: string
+          id?: string
+          learning_paused?: boolean
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          directive_text?: string
+          id?: string
+          learning_paused?: boolean
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_style_directives_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_style_profiles: {
+        Row: {
+          channel: string
+          created_at: string
+          example_count: number
+          id: string
+          last_synthesized_at: string
+          motion_type: string
+          profile_json: Json
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          channel?: string
+          created_at?: string
+          example_count?: number
+          id?: string
+          last_synthesized_at?: string
+          motion_type?: string
+          profile_json?: Json
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          channel?: string
+          created_at?: string
+          example_count?: number
+          id?: string
+          last_synthesized_at?: string
+          motion_type?: string
+          profile_json?: Json
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_style_profiles_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]

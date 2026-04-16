@@ -5,6 +5,7 @@ import { WhatsAppAutomationCard } from "@/components/settings/WhatsAppAutomation
 import { RepProfileCard } from "@/components/settings/RepProfileCard";
 import { SignaturesCard } from "@/components/settings/SignaturesCard";
 import { WorkspaceProfileCard } from "@/components/settings/WorkspaceProfileCard";
+import { WritingStyleCard } from "@/components/settings/WritingStyleCard";
 import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
 import { OutlookConnectionCard } from "@/components/settings/OutlookConnectionCard";
 import { WorkspaceMembersCard } from "@/components/settings/WorkspaceMembersCard";
@@ -19,7 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users } from "lucide-react";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles } from "lucide-react";
 
 export default function Settings() {
   const { workspaceId } = useWorkspace();
@@ -75,6 +76,21 @@ export default function Settings() {
           <AccordionContent className="space-y-6">
             <RepProfileCard />
             <SignaturesCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="writing-style" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Writing Style</div>
+                <div className="text-sm text-muted-foreground font-normal">AI learns your voice from sent messages and feedback</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <WritingStyleCard />
           </AccordionContent>
         </AccordionItem>
 
