@@ -79,6 +79,21 @@ export default function Settings() {
           </AccordionContent>
         </AccordionItem>
 
+        <AccordionItem value="writing-style" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Writing Style</div>
+                <div className="text-sm text-muted-foreground font-normal">AI learns your voice from sent messages and feedback</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <WritingStyleCard />
+          </AccordionContent>
+        </AccordionItem>
+
         <AccordionItem value="integrations" className="border rounded-lg px-4">
           <AccordionTrigger className="hover:no-underline">
             <div className="flex items-center gap-3">
