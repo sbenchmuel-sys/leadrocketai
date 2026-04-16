@@ -80,6 +80,9 @@ export function SendEmailButton({
     );
     if (result.ok) {
       setDialogOpen(false);
+      if (workspaceId) {
+        captureStyleExample({ channel: "email", motionType, bodyText: editedBody.trim(), subject: editedSubject.trim(), workspaceId }).catch(() => {});
+      }
       onSent?.();
     }
   };
