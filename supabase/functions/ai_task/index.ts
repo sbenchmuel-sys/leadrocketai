@@ -1367,8 +1367,8 @@ serve(async (req) => {
       })();
     }
 
-    const [kbResult, , leadSignals, cachedContext, diversityConstraints, offerResult] = await Promise.all([
-      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise,
+    const [kbResult, , leadSignals, cachedContext, diversityConstraints, offerResult, styleProfile] = await Promise.all([
+      kbSearchPromise, cadencePromise, signalsPromise, contextCachePromise, diversityPromise, offerPromise, styleProfilePromise,
     ]);
 
     // ── LEAD CONTEXT ITEMS: structured prior knowledge ──
