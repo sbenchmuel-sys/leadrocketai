@@ -259,13 +259,14 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
       // Capture style example (non-blocking)
       if (workspaceId && sentBody) {
-        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : "email";
+        const ch = channel as string;
+        const styleChannel: StyleChannel = ch === "whatsapp" ? "whatsapp" : ch === "sms" ? "sms" : "email";
         const styleMotion: StyleMotion = "reply_to_thread";
         captureStyleExample({
           channel: styleChannel,
           motionType: styleMotion,
           bodyText: sentBody,
-          subject: channel === "email" ? `Re: ${conversation.contact_name}` : undefined,
+          subject: ch === "email" ? `Re: ${conversation.contact_name}` : undefined,
           workspaceId,
         }).catch(() => {});
       }
@@ -318,7 +319,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                         e.stopPropagation();
                         if (workspaceId) {
                           captureStyleExample({
-                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            channel: (channel as string) === "whatsapp" ? "whatsapp" : (channel as string) === "sms" ? "sms" : "email",
                             motionType: "reply_to_thread",
                             bodyText: displayText,
                             feedback: "liked",
@@ -335,7 +336,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                         const comment = prompt("What didn't you like? (optional)");
                         if (workspaceId) {
                           captureStyleExample({
-                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            channel: (channel as string) === "whatsapp" ? "whatsapp" : (channel as string) === "sms" ? "sms" : "email",
                             motionType: "reply_to_thread",
                             bodyText: displayText,
                             feedback: "disliked",

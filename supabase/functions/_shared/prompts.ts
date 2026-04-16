@@ -1390,3 +1390,43 @@ export const CLASSIFY_MESSAGE_PROMPT = `Classify this sales message. Return JSON
 
 Message:
 `;
+
+export const EXTRACT_STYLE_FEATURES_PROMPT = `You are a writing style analyst. Extract stylistic features from this sales message.
+
+Channel: {{CHANNEL}}
+
+Return JSON ONLY matching one of these schemas based on channel:
+
+For email:
+{
+  "opening_style": "direct_question|observation|trigger_event|compliment|reference_to_context",
+  "closing_style": "soft_cta|hard_cta|open_question|sign_off_only",
+  "tone_markers": ["informal", "confident", ...],
+  "avg_paragraph_count": number,
+  "uses_bullets": boolean,
+  "personalization_density": "high|medium|low|none",
+  "cta_pattern": "question_based|link_drop|meeting_request|permission_based|none",
+  "signature_style": "first_name_only|full_name|title_included|none"
+}
+
+For sms:
+{
+  "avg_length_chars": number,
+  "uses_emoji": boolean,
+  "tone_markers": ["casual", "urgent", ...],
+  "cta_pattern": "link_drop|question|direct_ask|none",
+  "greeting_style": "first_name|hey|none"
+}
+
+For whatsapp:
+{
+  "avg_length_chars": number,
+  "uses_emoji": boolean,
+  "multi_message": boolean,
+  "tone_markers": ["friendly", "professional", ...],
+  "cta_pattern": "direct_ask|question|link_drop|none",
+  "greeting_style": "first_name|hey|none"
+}
+
+Message:
+`;

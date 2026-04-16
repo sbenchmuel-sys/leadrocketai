@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 // Import from shared modules
-import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT } from "../_shared/prompts.ts";
+import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT, EXTRACT_STYLE_FEATURES_PROMPT } from "../_shared/prompts.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
@@ -941,6 +941,72 @@ serve(async (req) => {
       return new Response(JSON.stringify({ ok: false, error: "Missing or invalid task" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ── EXTRACT_STYLE_FEATURES: standalone task, early return ──
+    if (task === "extract_style_features") {
+      const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+      if (!LOVABLE_API_KEY) {
+        return new Response(JSON.stringify({ ok: false, error: "AI gateway not configured" }), {
+          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { example_id, body_text, channel, subject } = payload || {};
+      if (!example_id || !body_text || !channel) {
+        return new Response(JSON.stringify({ ok: false, error: "Missing example_id, body_text, or channel" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const prompt = EXTRACT_STYLE_FEATURES_PROMPT.replace("{{CHANNEL}}", channel)
+        + (subject ? `Subject: ${subject}\n\n` : "") + body_text.slice(0, 3000);
+
+      try {
+        const aiRes = await fetch("https://ai.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: "You are a writing style analyst. Output only valid JSON." },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+
+        if (!aiRes.ok) {
+          console.error(`[ai_task] extract_style_features AI error: ${aiRes.status}`);
+          return new Response(JSON.stringify({ ok: false, error: "AI extraction failed" }), {
+            status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        const aiData = await aiRes.json();
+        const content = aiData.choices?.[0]?.message?.content || "";
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+
+        if (jsonMatch) {
+          const features = JSON.parse(jsonMatch[0]);
+          const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+          await adminClient.from("style_examples")
+            .update({ style_features_json: features })
+            .eq("id", example_id);
+          console.log(`[ai_task] extract_style_features: saved features for ${example_id}`);
+          return new Response(JSON.stringify({ ok: true, features }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({ ok: false, error: "No valid JSON in AI response" }), {
+          status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        console.error("[ai_task] extract_style_features error:", err);
+        return new Response(JSON.stringify({ ok: false, error: "Internal error" }), {
+          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     const taskPrompt = PROMPTS[task];
