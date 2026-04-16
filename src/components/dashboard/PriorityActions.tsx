@@ -192,6 +192,43 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
                     </span>
                   </Link>
 
+                  {/* Pre-generate draft button */}
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {(() => {
+                          const draftStatus = getStatus(lead.id);
+                          return (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className={cn(
+                                "h-7 w-7 shrink-0",
+                                draftStatus?.status === "ready" && "text-success"
+                              )}
+                              onClick={(e) => handlePreGenerate(lead, e)}
+                              disabled={draftStatus?.status === "generating"}
+                            >
+                              {draftStatus?.status === "generating" ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : draftStatus?.status === "ready" ? (
+                                <Check className="h-3.5 w-3.5" />
+                              ) : (
+                                <Wand2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          );
+                        })()}
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        {(() => {
+                          const ds = getStatus(lead.id);
+                          return ds?.status === "generating" ? "Generating draft…" : ds?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft";
+                        })()}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
                   <div className="shrink-0">{getActionButton(lead)}</div>
 
                   <DropdownMenu>
