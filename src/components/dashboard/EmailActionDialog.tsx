@@ -35,8 +35,12 @@ import {
   Calendar,
   MessageSquare,
   Undo2,
-  Palette
+  Palette,
+  ThumbsUp,
+  ThumbsDown
 } from "lucide-react";
+import { captureStyleExample, type StyleMotion } from "@/lib/styleCapture";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -255,6 +259,8 @@ export function EmailActionDialog({
   
   // One-click action loading states
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [feedbackGiven, setFeedbackGiven] = useState<"liked" | "disliked" | null>(null);
+  const { workspaceId } = useWorkspace();
 
   // Playbook recommendation state (logged in header)
   const [resolvedIntent, setResolvedIntent] = useState<string | null>(null);
@@ -410,6 +416,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     setBody("");
     setSubject("");
     setKnowledgeUsed(false);
+    setFeedbackGiven(null);
     setReplyThreadId(null);
     setReplyToMessageId(null);
 
@@ -914,6 +921,42 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
                   placeholder="Email body"
                   className="min-h-[200px] text-base leading-relaxed"
                 />
+              )}
+
+              {/* Feedback bar */}
+              {body && !isGenerating && (
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-xs text-muted-foreground">Rate this draft:</span>
+                  <button
+                    type="button"
+                    className={`p-1 rounded hover:bg-muted transition-colors ${feedbackGiven === "liked" ? "text-emerald-500" : "text-muted-foreground hover:text-emerald-500"}`}
+                    onClick={() => {
+                      setFeedbackGiven("liked");
+                      if (workspaceId) {
+                        const motion: StyleMotion = resolvedIntent === "reply_to_thread" ? "reply_to_thread" : "outbound_cold";
+                        captureStyleExample({ channel: "email", motionType: motion, bodyText: body, subject, feedback: "liked", workspaceId }).catch(() => {});
+                      }
+                      toast.success("Thanks! This helps the AI learn your style.");
+                    }}
+                  >
+                    <ThumbsUp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`p-1 rounded hover:bg-muted transition-colors ${feedbackGiven === "disliked" ? "text-destructive" : "text-muted-foreground hover:text-destructive"}`}
+                    onClick={() => {
+                      const comment = prompt("What didn't you like? (optional)");
+                      setFeedbackGiven("disliked");
+                      if (workspaceId) {
+                        const motion: StyleMotion = resolvedIntent === "reply_to_thread" ? "reply_to_thread" : "outbound_cold";
+                        captureStyleExample({ channel: "email", motionType: motion, bodyText: body, subject, feedback: "disliked", feedbackComment: comment || undefined, workspaceId }).catch(() => {});
+                      }
+                      toast.success("Got it — noted for future drafts.");
+                    }}
+                  >
+                    <ThumbsDown className="h-4 w-4" />
+                  </button>
+                </div>
               )}
             </div>
 
