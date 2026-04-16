@@ -259,7 +259,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
       // Capture style example (non-blocking)
       if (workspaceId && sentBody) {
-        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : "email";
+        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : channel === "sms" ? "sms" : "email";
         const styleMotion: StyleMotion = "reply_to_thread";
         captureStyleExample({
           channel: styleChannel,
@@ -318,7 +318,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                         e.stopPropagation();
                         if (workspaceId) {
                           captureStyleExample({
-                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            channel: channel === "whatsapp" ? "whatsapp" : channel === "sms" ? "sms" : "email",
                             motionType: "reply_to_thread",
                             bodyText: displayText,
                             feedback: "liked",
@@ -335,7 +335,7 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                         const comment = prompt("What didn't you like? (optional)");
                         if (workspaceId) {
                           captureStyleExample({
-                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            channel: channel === "whatsapp" ? "whatsapp" : channel === "sms" ? "sms" : "email",
                             motionType: "reply_to_thread",
                             bodyText: displayText,
                             feedback: "disliked",
