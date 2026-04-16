@@ -40,8 +40,10 @@ export function SendEmailButton({
   variant = "default",
   size = "sm",
   showDialog = true,
+  motionType = "outbound_cold",
 }: SendEmailButtonProps) {
   const { isConnected, isLoading: isLoadingConnection, sendEmail, isSyncing, providerLabel } = useMailSync();
+  const { workspaceId } = useWorkspace();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editedTo, setEditedTo] = useState(to);
   const [editedSubject, setEditedSubject] = useState(subject);
