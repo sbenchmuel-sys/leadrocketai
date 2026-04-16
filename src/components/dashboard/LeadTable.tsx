@@ -1082,6 +1082,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
           lead={selectedLead}
           open={dialogOpen}
           initialInstructions={currentInstructions}
+          prefilledSubject={(selectedLead as any)._prefilledSubject || undefined}
+          prefilledBody={(selectedLead as any)._prefilledBody || undefined}
           onOpenChange={(open) => {
             setDialogOpen(open);
             if (!open) {
