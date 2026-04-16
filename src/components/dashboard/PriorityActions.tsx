@@ -44,6 +44,29 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
   const navigate = useNavigate();
   const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  const handlePreGenerate = (lead: EnrichedLead, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const status = getStatus(lead.id);
+    if (status?.status === "generating") return;
+    if (status?.status === "ready") {
+      const entry = consume(lead.id);
+      if (entry?.result) {
+        setSelectedLead({
+          ...lead,
+          _prefilledBody: entry.result.draft_text,
+          _prefilledSubject: entry.result.suggested_subject || entry.subject,
+        } as any);
+        setDialogOpen(true);
+      }
+      return;
+    }
+    enqueue(lead.id);
+  };
 
   const actionLeads = useMemo(() => {
     const isActionable = (l: EnrichedLead) =>
