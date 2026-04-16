@@ -39,7 +39,7 @@ export async function captureStyleExample({
       if (directive?.learning_paused) return;
     }
 
-    await supabase.from("style_examples").insert({
+    const { data: inserted } = await supabase.from("style_examples").insert({
       user_id: user.id,
       workspace_id: workspaceId,
       channel,
@@ -48,7 +48,17 @@ export async function captureStyleExample({
       subject: subject?.slice(0, 500) || null,
       feedback,
       feedback_comment: feedbackComment?.slice(0, 500) || null,
-    });
+    }).select("id").single();
+
+    // Fire-and-forget: extract style features for this example
+    if (inserted?.id) {
+      supabase.functions.invoke("ai_task", {
+        body: {
+          task: "extract_style_features",
+          payload: { example_id: inserted.id, body_text: bodyText.slice(0, 3000), channel, subject },
+        },
+      }).catch(() => {});
+    }
 
     // Check if we should trigger synthesis (every 5 new examples)
     const { count } = await supabase
