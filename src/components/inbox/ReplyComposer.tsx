@@ -39,6 +39,7 @@ type Props = {
 };
 
 export function ReplyComposer({ conversation, recommendedChannel, suggestions, leadId, onSent }: Props) {
+  const { workspaceId } = useWorkspace();
   // Derive available channels — only email and whatsapp are implemented
   const [leadFields, setLeadFields] = useState<{
     email?: string | null;
