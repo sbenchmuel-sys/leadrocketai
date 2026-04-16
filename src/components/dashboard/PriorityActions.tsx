@@ -277,6 +277,22 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
           onSuccess={onLeadUpdated}
         />
       )}
+
+      {selectedLead && (
+        <EmailActionDialog
+          lead={selectedLead}
+          open={dialogOpen}
+          prefilledSubject={(selectedLead as any)._prefilledSubject || undefined}
+          prefilledBody={(selectedLead as any)._prefilledBody || undefined}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) {
+              setSelectedLead(null);
+              onLeadUpdated?.();
+            }
+          }}
+        />
+      )}
     </>
   );
 }
