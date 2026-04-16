@@ -104,6 +104,9 @@ export function SendEmailButton({
     
     const result = await sendEmail(to.trim(), subject.trim(), body.trim(), leadId, draftId);
     if (result.ok) {
+      if (workspaceId) {
+        captureStyleExample({ channel: "email", motionType, bodyText: body.trim(), subject: subject.trim(), workspaceId }).catch(() => {});
+      }
       onSent?.();
     }
   };
