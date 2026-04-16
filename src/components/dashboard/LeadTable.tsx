@@ -32,7 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle, MessageSquare } from "lucide-react";
+import { Mail, FileText, Eye, Plus, Send, Lightbulb, Sparkles, ChevronRight, ChevronDown, Loader2, Zap, RefreshCw, Trash2, Leaf, Search, AlertTriangle, MessageSquare, Wand2, Check } from "lucide-react";
 import { EnrichedLead, STAGE_LABELS, DealStage, getActionType, STAGE_ORDER, SOURCE_TYPE_LABELS, SOURCE_TYPE_COLORS, SourceType } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
@@ -46,6 +46,8 @@ import { formatDistanceToNow, isToday, isYesterday, differenceInHours } from "da
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 // Format last email date with color coding
 function formatLastEmail(dateStr: string | null): { text: string; className: string } {
@@ -213,6 +215,30 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
   const navigate = useNavigate();
+  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  // Pre-generate button handler
+  const handlePreGenerate = useCallback((lead: EnrichedLead, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const status = getStatus(lead.id);
+    if (status?.status === "generating") return; // already generating
+    if (status?.status === "ready") {
+      // Draft is ready — open dialog with prefilled content
+      const entry = consume(lead.id);
+      if (entry?.result) {
+        setCurrentInstructions("");
+        setSelectedLead({
+          ...lead,
+          _prefilledBody: entry.result.draft_text,
+          _prefilledSubject: entry.result.suggested_subject || entry.subject,
+        } as any);
+        setDialogOpen(true);
+      }
+      return;
+    }
+    // Start background generation
+    enqueue(lead.id);
+  }, [getStatus, consume, enqueue]);
 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
   const someSelected = selectedLeads.size > 0 && selectedLeads.size < leads.length;
@@ -926,6 +952,39 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                           ) : (
                             <span className="text-[10px] text-muted-foreground">Off</span>
                           )}
+                          {/* Pre-generate draft button */}
+                          {(() => {
+                            const draftStatus = getStatus(lead.id);
+                            return (
+                              <TooltipProvider delayDuration={200}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className={cn(
+                                        "h-5 w-5 p-0",
+                                        draftStatus?.status === "ready" && "text-success"
+                                      )}
+                                      onClick={(e) => handlePreGenerate(lead, e)}
+                                      disabled={draftStatus?.status === "generating"}
+                                    >
+                                      {draftStatus?.status === "generating" ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : draftStatus?.status === "ready" ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Wand2 className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-xs">
+                                    {draftStatus?.status === "generating" ? "Generating draft…" : draftStatus?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft"}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
+                          })()}
                           {revenueStateFilter !== "action_required" && revenueStateFilter !== "heating_up" && (
                             <Button
                               size="sm"
@@ -946,7 +1005,44 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
 
                     {/* Action button for action_required / heating_up */}
                     {revenueStateFilter === "action_required" && (
-                      <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
+                      <TableCell className="py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          {/* Pre-generate icon */}
+                          {(() => {
+                            const draftStatus = getStatus(lead.id);
+                            return (
+                              <TooltipProvider delayDuration={200}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className={cn(
+                                        "h-7 w-7 p-0",
+                                        draftStatus?.status === "ready" && "text-success"
+                                      )}
+                                      onClick={(e) => handlePreGenerate(lead, e)}
+                                      disabled={draftStatus?.status === "generating"}
+                                    >
+                                      {draftStatus?.status === "generating" ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      ) : draftStatus?.status === "ready" ? (
+                                        <Check className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Wand2 className="h-3.5 w-3.5" />
+                                      )}
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-xs">
+                                    {draftStatus?.status === "generating" ? "Generating draft…" : draftStatus?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft"}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
+                          })()}
+                          {getActionButton(lead)}
+                        </div>
+                      </TableCell>
                     )}
                     {isHeatingUp && (
                       <TableCell className="py-2 text-right w-[80px] min-w-[80px]" onClick={(e) => e.stopPropagation()}>
@@ -986,6 +1082,8 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
           lead={selectedLead}
           open={dialogOpen}
           initialInstructions={currentInstructions}
+          prefilledSubject={(selectedLead as any)._prefilledSubject || undefined}
+          prefilledBody={(selectedLead as any)._prefilledBody || undefined}
           onOpenChange={(open) => {
             setDialogOpen(open);
             if (!open) {

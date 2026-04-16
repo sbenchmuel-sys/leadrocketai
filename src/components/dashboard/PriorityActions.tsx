@@ -7,11 +7,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Mail, FileText, Eye, Send, X, RefreshCw } from "lucide-react";
+import { Mail, FileText, Eye, Send, X, RefreshCw, Wand2, Loader2, Check } from "lucide-react";
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage, RevenueState } from "@/lib/dashboardUtils";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
+import { EmailActionDialog } from "./EmailActionDialog";
 import { dismissLeadAction } from "@/lib/supabaseQueries";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+
 
 const SNOOZE_OPTIONS = [
   { days: 1, label: "Snooze 1 day" },
@@ -39,6 +44,29 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
   const navigate = useNavigate();
   const [nurtureSwitchLead, setNurtureSwitchLead] = useState<EnrichedLead | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [selectedLead, setSelectedLead] = useState<EnrichedLead | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  const handlePreGenerate = (lead: EnrichedLead, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const status = getStatus(lead.id);
+    if (status?.status === "generating") return;
+    if (status?.status === "ready") {
+      const entry = consume(lead.id);
+      if (entry?.result) {
+        setSelectedLead({
+          ...lead,
+          _prefilledBody: entry.result.draft_text,
+          _prefilledSubject: entry.result.suggested_subject || entry.subject,
+        } as any);
+        setDialogOpen(true);
+      }
+      return;
+    }
+    enqueue(lead.id);
+  };
 
   const actionLeads = useMemo(() => {
     const isActionable = (l: EnrichedLead) =>
@@ -164,6 +192,43 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
                     </span>
                   </Link>
 
+                  {/* Pre-generate draft button */}
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {(() => {
+                          const draftStatus = getStatus(lead.id);
+                          return (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className={cn(
+                                "h-7 w-7 shrink-0",
+                                draftStatus?.status === "ready" && "text-success"
+                              )}
+                              onClick={(e) => handlePreGenerate(lead, e)}
+                              disabled={draftStatus?.status === "generating"}
+                            >
+                              {draftStatus?.status === "generating" ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : draftStatus?.status === "ready" ? (
+                                <Check className="h-3.5 w-3.5" />
+                              ) : (
+                                <Wand2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          );
+                        })()}
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        {(() => {
+                          const ds = getStatus(lead.id);
+                          return ds?.status === "generating" ? "Generating draft…" : ds?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft";
+                        })()}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
                   <div className="shrink-0">{getActionButton(lead)}</div>
 
                   <DropdownMenu>
@@ -210,6 +275,22 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
           leadId={nurtureSwitchLead.id}
           leadName={nurtureSwitchLead.name}
           onSuccess={onLeadUpdated}
+        />
+      )}
+
+      {selectedLead && (
+        <EmailActionDialog
+          lead={selectedLead}
+          open={dialogOpen}
+          prefilledSubject={(selectedLead as any)._prefilledSubject || undefined}
+          prefilledBody={(selectedLead as any)._prefilledBody || undefined}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) {
+              setSelectedLead(null);
+              onLeadUpdated?.();
+            }
+          }}
         />
       )}
     </>
