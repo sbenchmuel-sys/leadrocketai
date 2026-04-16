@@ -416,6 +416,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     setBody("");
     setSubject("");
     setKnowledgeUsed(false);
+    setFeedbackGiven(null);
     setReplyThreadId(null);
     setReplyToMessageId(null);
 
