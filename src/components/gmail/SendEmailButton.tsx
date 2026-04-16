@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Send, Loader2 } from "lucide-react";
 import { useMailSync } from "@/hooks/useMailSync";
 import { toast } from "sonner";
+import { captureStyleExample, StyleMotion } from "@/lib/styleCapture";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +27,7 @@ interface SendEmailButtonProps {
   variant?: "default" | "outline" | "ghost" | "secondary";
   size?: "default" | "sm" | "lg" | "icon";
   showDialog?: boolean;
+  motionType?: StyleMotion;
 }
 
 export function SendEmailButton({
@@ -37,8 +40,10 @@ export function SendEmailButton({
   variant = "default",
   size = "sm",
   showDialog = true,
+  motionType = "outbound_cold",
 }: SendEmailButtonProps) {
   const { isConnected, isLoading: isLoadingConnection, sendEmail, isSyncing, providerLabel } = useMailSync();
+  const { workspaceId } = useWorkspace();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editedTo, setEditedTo] = useState(to);
   const [editedSubject, setEditedSubject] = useState(subject);
@@ -75,6 +80,9 @@ export function SendEmailButton({
     );
     if (result.ok) {
       setDialogOpen(false);
+      if (workspaceId) {
+        captureStyleExample({ channel: "email", motionType, bodyText: editedBody.trim(), subject: editedSubject.trim(), workspaceId }).catch(() => {});
+      }
       onSent?.();
     }
   };
@@ -96,6 +104,9 @@ export function SendEmailButton({
     
     const result = await sendEmail(to.trim(), subject.trim(), body.trim(), leadId, draftId);
     if (result.ok) {
+      if (workspaceId) {
+        captureStyleExample({ channel: "email", motionType, bodyText: body.trim(), subject: subject.trim(), workspaceId }).catch(() => {});
+      }
       onSent?.();
     }
   };
