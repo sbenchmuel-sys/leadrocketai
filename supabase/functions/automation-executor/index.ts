@@ -1137,6 +1137,26 @@ serve(async (req) => {
           // Do NOT skip — the email was sent, so proceed with post-send state update
         }
 
+        // ── STYLE LEARNING: capture auto-sent message for style engine ──
+        try {
+          const styleChannel = resolvedChannel === "sms" ? "sms" : resolvedChannel === "whatsapp" ? "whatsapp" : "email";
+          const styleMotion = aiTask === "nurture_email_single" ? "nurture"
+            : aiTask === "reply_to_thread" ? "reply_to_thread"
+            : lead.next_action_key?.includes("follow") ? "follow_up"
+            : "outbound_cold";
+          await supabase.from("style_examples").insert({
+            user_id: lead.owner_user_id,
+            workspace_id: lead.workspace_id,
+            channel: styleChannel,
+            motion_type: styleMotion,
+            body_text: draftBody.slice(0, 5000),
+            subject: subject?.slice(0, 500) || null,
+            feedback: "sent",
+          });
+        } catch (styleErr) {
+          console.warn("[automation-executor] Style capture failed (non-blocking):", styleErr);
+        }
+
         // --- POST-SEND STATE UPDATE ---
         const postUpdate: Record<string, unknown> = {
           needs_action: false,
