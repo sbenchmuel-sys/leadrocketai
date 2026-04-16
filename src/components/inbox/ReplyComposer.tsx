@@ -312,6 +312,40 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
                 >
                   <span className="flex items-center gap-1.5">
                     {icon} {label}
+                    <ThumbsUp
+                      className="h-3 w-3 opacity-40 hover:opacity-100 hover:text-green-500"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (workspaceId) {
+                          captureStyleExample({
+                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            motionType: "reply_to_thread",
+                            bodyText: displayText,
+                            feedback: "liked",
+                            workspaceId,
+                          }).catch(() => {});
+                          toast({ title: "👍 Style noted", description: "We'll learn from this." });
+                        }
+                      }}
+                    />
+                    <ThumbsDown
+                      className="h-3 w-3 opacity-40 hover:opacity-100 hover:text-red-500"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const comment = prompt("What didn't you like? (optional)");
+                        if (workspaceId) {
+                          captureStyleExample({
+                            channel: channel === "whatsapp" ? "whatsapp" : "email",
+                            motionType: "reply_to_thread",
+                            bodyText: displayText,
+                            feedback: "disliked",
+                            feedbackComment: comment || undefined,
+                            workspaceId,
+                          }).catch(() => {});
+                          toast({ title: "👎 Anti-pattern noted", description: "We'll avoid this style." });
+                        }
+                      }}
+                    />
                     <Pencil
                       className="h-3 w-3 opacity-50 hover:opacity-100"
                       onClick={(e) => {
