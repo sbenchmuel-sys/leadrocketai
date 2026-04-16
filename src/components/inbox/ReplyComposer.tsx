@@ -253,8 +253,22 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
       }
 
       // Clear after successful send
+      const sentBody = body.trim();
       setBody("");
       setPersonalizedSuggestions([]);
+
+      // Capture style example (non-blocking)
+      if (workspaceId && sentBody) {
+        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : channel === "sms" ? "sms" : "email";
+        const styleMotion: StyleMotion = "reply_to_thread";
+        captureStyleExample({
+          channel: styleChannel,
+          motionType: styleMotion,
+          bodyText: sentBody,
+          subject: channel === "email" ? `Re: ${conversation.contact_name}` : undefined,
+          workspaceId,
+        }).catch(() => {});
+      }
 
       // Best-effort post-send hooks
       try { onSent?.(); } catch (_) { /* non-blocking */ }
