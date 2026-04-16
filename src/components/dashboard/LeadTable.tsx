@@ -952,6 +952,39 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                           ) : (
                             <span className="text-[10px] text-muted-foreground">Off</span>
                           )}
+                          {/* Pre-generate draft button */}
+                          {(() => {
+                            const draftStatus = getStatus(lead.id);
+                            return (
+                              <TooltipProvider delayDuration={200}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className={cn(
+                                        "h-5 w-5 p-0",
+                                        draftStatus?.status === "ready" && "text-success"
+                                      )}
+                                      onClick={(e) => handlePreGenerate(lead, e)}
+                                      disabled={draftStatus?.status === "generating"}
+                                    >
+                                      {draftStatus?.status === "generating" ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : draftStatus?.status === "ready" ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Wand2 className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-xs">
+                                    {draftStatus?.status === "generating" ? "Generating draft…" : draftStatus?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft"}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
+                          })()}
                           {revenueStateFilter !== "action_required" && revenueStateFilter !== "heating_up" && (
                             <Button
                               size="sm"
