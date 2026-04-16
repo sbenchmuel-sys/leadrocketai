@@ -215,6 +215,30 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
   const navigate = useNavigate();
+  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  // Pre-generate button handler
+  const handlePreGenerate = useCallback((lead: EnrichedLead, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const status = getStatus(lead.id);
+    if (status?.status === "generating") return; // already generating
+    if (status?.status === "ready") {
+      // Draft is ready — open dialog with prefilled content
+      const entry = consume(lead.id);
+      if (entry?.result) {
+        setCurrentInstructions("");
+        setSelectedLead({
+          ...lead,
+          _prefilledBody: entry.result.draft_text,
+          _prefilledSubject: entry.result.suggested_subject || entry.subject,
+        } as any);
+        setDialogOpen(true);
+      }
+      return;
+    }
+    // Start background generation
+    enqueue(lead.id);
+  }, [getStatus, consume, enqueue]);
 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
   const someSelected = selectedLeads.size > 0 && selectedLeads.size < leads.length;
