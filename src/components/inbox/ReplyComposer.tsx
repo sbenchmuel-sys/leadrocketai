@@ -259,7 +259,8 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
 
       // Capture style example (non-blocking)
       if (workspaceId && sentBody) {
-        const styleChannel: StyleChannel = channel === "whatsapp" ? "whatsapp" : channel === "sms" ? "sms" : "email";
+        const ch = channel as string;
+        const styleChannel: StyleChannel = ch === "whatsapp" ? "whatsapp" : ch === "sms" ? "sms" : "email";
         const styleMotion: StyleMotion = "reply_to_thread";
         captureStyleExample({
           channel: styleChannel,
