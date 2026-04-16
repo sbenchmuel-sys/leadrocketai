@@ -1005,7 +1005,44 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
 
                     {/* Action button for action_required / heating_up */}
                     {revenueStateFilter === "action_required" && (
-                      <TableCell className="py-2 text-right">{getActionButton(lead)}</TableCell>
+                      <TableCell className="py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          {/* Pre-generate icon */}
+                          {(() => {
+                            const draftStatus = getStatus(lead.id);
+                            return (
+                              <TooltipProvider delayDuration={200}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className={cn(
+                                        "h-7 w-7 p-0",
+                                        draftStatus?.status === "ready" && "text-success"
+                                      )}
+                                      onClick={(e) => handlePreGenerate(lead, e)}
+                                      disabled={draftStatus?.status === "generating"}
+                                    >
+                                      {draftStatus?.status === "generating" ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      ) : draftStatus?.status === "ready" ? (
+                                        <Check className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Wand2 className="h-3.5 w-3.5" />
+                                      )}
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-xs">
+                                    {draftStatus?.status === "generating" ? "Generating draft…" : draftStatus?.status === "ready" ? "Draft ready — click to open" : "Pre-generate draft"}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
+                          })()}
+                          {getActionButton(lead)}
+                        </div>
+                      </TableCell>
                     )}
                     {isHeatingUp && (
                       <TableCell className="py-2 text-right w-[80px] min-w-[80px]" onClick={(e) => e.stopPropagation()}>
