@@ -16,9 +16,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
-import { dismissLeadAction } from "@/lib/supabaseQueries";
-import { toast } from "sonner";
+
 
 const SNOOZE_OPTIONS = [
   { days: 1, label: "Snooze 1 day" },
