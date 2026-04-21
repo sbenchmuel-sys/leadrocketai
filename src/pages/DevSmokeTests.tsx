@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Play, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { smokeTests, runAllSmokeTests, type SmokeResult } from "@/lib/smokeTests";
+import TimelineDriftPanel from "@/components/admin/TimelineDriftPanel";
 
 const statusIcon = {
   pass: <CheckCircle2 className="h-4 w-4 text-green-500" />,
@@ -47,6 +48,8 @@ export default function DevSmokeTests() {
       {ranAt && (
         <p className="text-xs text-muted-foreground">Last run: {ranAt}</p>
       )}
+
+      <TimelineDriftPanel />
 
       <div className="space-y-2">
         {(results.length > 0 ? results : smokeTests.map((t) => ({ name: t.name, status: "pending" as any, detail: "—", durationMs: 0 }))).map((r, i) => (
