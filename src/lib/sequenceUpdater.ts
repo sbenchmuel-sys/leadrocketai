@@ -2,7 +2,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { AITaskType } from "@/hooks/useAITask";
 import { calculateClosingPower } from "@/lib/closingPowerUtils";
-import { getLeadDetail } from "@/lib/supabaseQueries";
+import { getLeadDetail, insertSystemNote } from "@/lib/supabaseQueries";
 import { addDays } from "date-fns";
 import { fetchCampaignForLead } from "@/lib/campaignQueries";
 import {
@@ -233,16 +233,14 @@ export async function updateSequenceState(
 
   console.log("[updateSequenceState] Lead updated:", updatePayload);
 
-  // Log motion override event if applicable
+  // Log motion override event if applicable (canonical: timeline + legacy mirror)
   if (motionOverride) {
     try {
-      await supabase.from("interactions").insert({
-        lead_id: leadId,
-        type: "system_note",
-        source: "composer",
-        body_text: `Motion override → "${motionOverride}" (sequence reset)`,
-        occurred_at: new Date().toISOString(),
-      });
+      await insertSystemNote(
+        leadId,
+        `Motion override → "${motionOverride}" (sequence reset)`,
+        'composer'
+      );
       console.log("[updateSequenceState] Motion override event logged");
     } catch (logErr) {
       console.warn("[updateSequenceState] Failed to log motion override:", logErr);
@@ -358,15 +356,9 @@ export async function updateSequenceState(
     const chosenLabel = INTENT_DISPLAY_NAMES[overrideIntent] || overrideIntent;
     const humanMessage = `Sequence override: suggested "${suggestedLabel}" → chose "${chosenLabel}"`;
 
-    // Record as an interaction for audit trail
+    // Record as canonical timeline event (with legacy interactions mirror)
     try {
-      await supabase.from("interactions").insert({
-        lead_id: leadId,
-        type: "system_note",
-        source: "pipeline",
-        body_text: humanMessage,
-        occurred_at: new Date().toISOString(),
-      });
+      await insertSystemNote(leadId, humanMessage, 'pipeline');
       overrideLogged = true;
     } catch (err) {
       console.warn("[updateSequenceState] Failed to log override:", err);

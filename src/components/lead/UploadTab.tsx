@@ -242,7 +242,11 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         if (result.ok && result.content) {
           try {
             const parsed = JSON.parse(result.content);
-            // Update the interaction with AI analysis
+            // TODO(cleanup): AI annotation columns (ai_intent/ai_summary/ai_reply_worthy)
+            // currently live only on `interactions`. When these are migrated onto
+            // `lead_timeline_items.metadata_json`, route this update through a shared
+            // helper. For now this enriches the row that `insertInteraction` just
+            // wrote (and projected to the timeline) above.
             const { data: interactions } = await supabase
               .from("interactions")
               .select("id")

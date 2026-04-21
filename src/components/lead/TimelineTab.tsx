@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, type TimelineItem } from "@/lib/supabaseQueries";
+import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, insertInteraction, type TimelineItem } from "@/lib/supabaseQueries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -649,43 +649,18 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
     if (!replyText.trim()) return;
     setIsSavingReply(true);
     try {
-      // Write to legacy interactions (bridge path — kept until interactions table is removed)
+      // Canonical write: insertInteraction projects to lead_timeline_items AND
+      // mirrors to legacy interactions in one shared helper. No more inline
+      // dual-write here.
       const occurredAt = new Date().toISOString();
-      const { data: interactionRow } = await supabase.from("interactions").insert({
-        lead_id: leadId,
+      await insertInteraction(leadId, {
         type: "whatsapp_inbound",
         source: "manual",
         body_text: replyText.trim(),
         direction: "inbound",
+        channel: "whatsapp",
         occurred_at: occurredAt,
-      }).select("id").single();
-
-      // Also project to canonical lead_timeline_items ledger
-      if (interactionRow) {
-        // Get lead's workspace_id for the timeline item
-        const { data: leadData } = await supabase
-          .from("leads")
-          .select("workspace_id")
-          .eq("id", leadId)
-          .single();
-
-        if (leadData?.workspace_id) {
-          const dedupeKey = `wa:inbound:manual:${interactionRow.id}`;
-          await supabase.from("lead_timeline_items").upsert({
-            workspace_id: leadData.workspace_id,
-            lead_id: leadId,
-            channel: "whatsapp",
-            provider: "manual",
-            direction: "inbound",
-            event_type: "whatsapp_inbound",
-            occurred_at: occurredAt,
-            source_table: "interactions",
-            source_id: interactionRow.id,
-            snippet_text: replyText.trim().substring(0, 500),
-            dedupe_key: dedupeKey,
-          }, { onConflict: "lead_id,dedupe_key" });
-        }
-      }
+      });
 
       await supabase.from("leads").update({
         last_inbound_at: occurredAt,

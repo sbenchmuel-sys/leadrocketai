@@ -465,21 +465,60 @@ export interface InsertInteractionInput {
   from_email?: string;
   to_email?: string;
   body_text: string;
+  /** Optional override; auto-derived from `type` when omitted (inbound/outbound/null). */
+  direction?: 'inbound' | 'outbound' | null;
+  /** Optional channel override; auto-derived from `type` when omitted. */
+  channel?: string;
+  /** When false, skip the canonical `lead_timeline_items` projection (rare; default true). */
+  projectToTimeline?: boolean;
 }
 
+// ------------------------------------------------------------
+// Channel/direction inference for legacy `interactions.type` strings.
+// Mirrors the mapping used in `src/lib/leadActivity.ts`.
+// ------------------------------------------------------------
+function inferChannelFromType(type: string): string {
+  if (type.includes('email')) return 'email';
+  if (type.includes('whatsapp')) return 'whatsapp';
+  if (type.includes('sms')) return 'sms';
+  if (type.includes('call') || type.includes('voice')) return 'voice';
+  if (type.includes('meeting')) return 'meeting';
+  return 'system';
+}
+
+function inferDirectionFromType(type: string): 'inbound' | 'outbound' | null {
+  if (type.includes('inbound')) return 'inbound';
+  if (type.includes('outbound')) return 'outbound';
+  return null;
+}
+
+/**
+ * Canonical lead-activity write helper.
+ *
+ * Writes to legacy `interactions` (preserved for backward compatibility) AND
+ * projects the same event into `lead_timeline_items` so reads are immediately
+ * coherent with the canonical adapter (`getLeadActivityFeed`).
+ *
+ * The timeline projection is best-effort and never fails the primary write.
+ *
+ * TODO(cleanup): once all readers move off `interactions`, flip the order so
+ * the timeline write becomes primary and the legacy mirror becomes optional.
+ */
 export async function insertInteraction(leadId: string, form: InsertInteractionInput): Promise<{ id: string; lead_id: string }> {
   if (isDemoMode()) return { id: 'demo-blocked', lead_id: leadId };
   if (!leadId) throw new Error('Missing leadId');
 
+  const occurredAt = form.occurred_at || new Date().toISOString();
   const payload = {
     lead_id: leadId,
     type: form.type,
     source: form.source || 'manual',
-    occurred_at: form.occurred_at || new Date().toISOString(),
+    occurred_at: occurredAt,
     subject: form.subject || null,
     from_email: form.from_email || null,
     to_email: form.to_email || null,
     body_text: form.body_text?.trim() || '',
+    direction: form.direction ?? inferDirectionFromType(form.type),
   };
 
   if (!payload.body_text) throw new Error('Missing body_text');
@@ -492,6 +531,42 @@ export async function insertInteraction(leadId: string, form: InsertInteractionI
 
   if (error) throw error;
 
+  // --- Canonical timeline projection (best-effort) ---------------------
+  if (form.projectToTimeline !== false) {
+    try {
+      const { data: leadRow } = await supabase
+        .from('leads')
+        .select('workspace_id')
+        .eq('id', leadId)
+        .single();
+
+      if (leadRow?.workspace_id) {
+        const channel = form.channel || inferChannelFromType(form.type);
+        const direction = payload.direction;
+        const dedupeKey = `interaction:${data.id}`;
+        await supabase.from('lead_timeline_items').upsert(
+          {
+            workspace_id: leadRow.workspace_id,
+            lead_id: leadId,
+            channel,
+            provider: payload.source,
+            direction,
+            event_type: form.type,
+            occurred_at: occurredAt,
+            source_table: 'interactions',
+            source_id: data.id,
+            subject: payload.subject,
+            snippet_text: payload.body_text.slice(0, 500),
+            dedupe_key: dedupeKey,
+          },
+          { onConflict: 'lead_id,dedupe_key' }
+        );
+      }
+    } catch (projErr) {
+      console.warn('[insertInteraction] timeline projection failed (non-fatal)', projErr);
+    }
+  }
+
   // Update lead's last_activity_at
   await supabase
     .from('leads')
@@ -499,6 +574,27 @@ export async function insertInteraction(leadId: string, form: InsertInteractionI
     .eq('id', leadId);
 
   return data;
+}
+
+/**
+ * Canonical writer for non-communication audit events (motion overrides,
+ * sequence overrides, manual notes). Projects to `lead_timeline_items` as
+ * `channel='system'` and mirrors into legacy `interactions` for back-compat.
+ */
+export async function insertSystemNote(
+  leadId: string,
+  body: string,
+  source: string = 'system'
+): Promise<{ id: string } | null> {
+  if (isDemoMode()) return null;
+  if (!leadId || !body?.trim()) return null;
+  return insertInteraction(leadId, {
+    type: 'system_note',
+    source,
+    body_text: body.trim(),
+    direction: null,
+    channel: 'system',
+  });
 }
 
 // ============================================
