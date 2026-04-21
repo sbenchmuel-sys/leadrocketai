@@ -346,7 +346,7 @@ async function loadFullMissingList(
   const missing: DriftSampleRow[] = [];
   for (const i of ints ?? []) {
     if (missing.length >= maxRepairs) break;
-    if (seen.has(i.id) || seen.has(`interaction:${i.id}`)) continue;
+    if (seen.has(i.id) || seen.has(interactionDedupeKey(i.id))) continue;
     missing.push({
       id: i.id,
       lead_id: i.lead_id,
