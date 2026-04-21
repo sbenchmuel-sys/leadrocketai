@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { Json } from "@/integrations/supabase/types";
 import { getWorkspaceProfile } from "@/lib/workspaceProfileQueries";
+import { getLeadActivityFeed } from "@/lib/leadActivity";
 
 export interface SyncResult {
   ok: boolean;
@@ -288,18 +289,22 @@ export function useGmailSync() {
 
     if (pendingMilestones.length === 0) return 0;
 
-    // Get recent outbound interactions (last 24 hours)
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: recentEmails, error: emailsErr } = await supabase
-      .from("interactions")
-      .select("subject, body_text, direction")
-      .eq("lead_id", leadId)
-      .eq("direction", "outbound")
-      .gte("occurred_at", oneDayAgo)
-      .order("occurred_at", { ascending: false })
-      .limit(5);
+    // Timeline-first: read recent outbound emails via the canonical lead activity
+    // adapter (lead_timeline_items, with legacy interactions fallback baked in).
+    // Preserves the original 24h window + 5-item cap + outbound-only semantics.
+    const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+    let recentEmails: Array<{ subject: string | null; body_text: string | null }> = [];
+    try {
+      const activity = await getLeadActivityFeed(leadId, { channel: "email", limit: 30 });
+      recentEmails = activity
+        .filter((a) => a.direction === "outbound" && new Date(a.occurred_at).getTime() >= oneDayAgoMs)
+        .slice(0, 5)
+        .map((a) => ({ subject: a.subject, body_text: a.snippet_text }));
+    } catch (err) {
+      console.warn("[Gmail Sync] Activity feed read failed for milestone matching:", err);
+    }
 
-    if (emailsErr || !recentEmails || recentEmails.length === 0) return 0;
+    if (recentEmails.length === 0) return 0;
 
     // Combine recent outbound emails for analysis
     const emailsText = recentEmails
