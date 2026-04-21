@@ -474,23 +474,16 @@ export interface InsertInteractionInput {
 }
 
 // ------------------------------------------------------------
-// Channel/direction inference for legacy `interactions.type` strings.
-// Mirrors the mapping used in `src/lib/leadActivity.ts`.
+// Channel/direction inference + timeline projection now live in
+// `src/lib/timelineProjection.ts` (single source of truth shared
+// with the drift-audit/repair path). Local re-exports keep prior
+// callers compiling without churn.
 // ------------------------------------------------------------
-function inferChannelFromType(type: string): string {
-  if (type.includes('email')) return 'email';
-  if (type.includes('whatsapp')) return 'whatsapp';
-  if (type.includes('sms')) return 'sms';
-  if (type.includes('call') || type.includes('voice')) return 'voice';
-  if (type.includes('meeting')) return 'meeting';
-  return 'system';
-}
-
-function inferDirectionFromType(type: string): 'inbound' | 'outbound' | null {
-  if (type.includes('inbound')) return 'inbound';
-  if (type.includes('outbound')) return 'outbound';
-  return null;
-}
+import {
+  inferChannelFromInteractionType as inferChannelFromType,
+  inferDirectionFromInteractionType as inferDirectionFromType,
+  buildTimelineProjectionFromInteraction,
+} from './timelineProjection';
 
 /**
  * Canonical lead-activity write helper.
