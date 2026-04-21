@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
-import { LeadDetail, getLeadDrafts, saveDraft, getLeadInteractions, getLeadMeetingPacks, updateDraftStatus, createMeetingPack, appendLeadMilestones, MilestoneItem } from "@/lib/supabaseQueries";
+import { LeadDetail, getLeadDrafts, saveDraft, getLeadMeetingPacks, updateDraftStatus, createMeetingPack, appendLeadMilestones, MilestoneItem } from "@/lib/supabaseQueries";
+import { getLeadActivityFeed } from "@/lib/leadActivity";
 import type { AITaskType } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { updateSequenceState } from "@/lib/sequenceUpdater";
@@ -226,15 +227,17 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
   useEffect(() => {
     const checkOutboundAfterMeeting = async () => {
       try {
-        const [interactions, packs] = await Promise.all([
-          getLeadInteractions(lead.id),
+        const [activity, packs] = await Promise.all([
+          getLeadActivityFeed(lead.id, { limit: 50 }),
           getLeadMeetingPacks(lead.id),
         ]);
         if (packs.length > 0) {
           const lastMeetingDate = new Date(packs[0].meeting_date || packs[0].created_at);
-          const hasOutbound = interactions.some(
-            (i) => (i.type === "email_outbound" || i.type === "note") &&
-              new Date(i.occurred_at) > lastMeetingDate
+          const hasOutbound = activity.some(
+            (a) =>
+              ((a.channel === "email" && a.direction === "outbound") ||
+                a.event_type === "note") &&
+              new Date(a.occurred_at) > lastMeetingDate
           );
           setHasOutboundAfterMeeting(hasOutbound);
         }
