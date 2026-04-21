@@ -264,33 +264,28 @@ export async function repairTimelineDrift(
       continue;
     }
 
-    const channel = inferChannelFromType(full.type);
-    const direction = (full.direction as "inbound" | "outbound" | null)
-      ?? inferDirectionFromType(full.type);
-    const dedupeKey = `interaction:${full.id}`;
+    const { payload: tlPayload } = buildTimelineProjectionFromInteraction(
+      {
+        id: full.id,
+        lead_id: full.lead_id,
+        type: full.type,
+        source: full.source,
+        occurred_at: full.occurred_at,
+        subject: full.subject,
+        body_text: full.body_text,
+        direction: (full.direction as "inbound" | "outbound" | null) ?? null,
+      },
+      ws,
+    );
 
     if (dryRun) {
       repaired += 1;
       continue;
     }
 
-    const { error } = await supabase.from("lead_timeline_items").upsert(
-      {
-        workspace_id: ws,
-        lead_id: full.lead_id,
-        channel,
-        provider: full.source ?? "manual",
-        direction,
-        event_type: full.type,
-        occurred_at: full.occurred_at,
-        source_table: "interactions",
-        source_id: full.id,
-        subject: full.subject,
-        snippet_text: (full.body_text ?? "").slice(0, 500),
-        dedupe_key: dedupeKey,
-      },
-      { onConflict: "lead_id,dedupe_key" },
-    );
+    const { error } = await supabase
+      .from("lead_timeline_items")
+      .upsert(tlPayload, { onConflict: "lead_id,dedupe_key" });
 
     if (error) {
       skippedErrors += 1;
