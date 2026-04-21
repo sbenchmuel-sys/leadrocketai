@@ -26,25 +26,15 @@
 // ============================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import {
+  buildTimelineProjectionFromInteraction,
+  inferChannelFromInteractionType as inferChannelFromType,
+  interactionDedupeKey,
+} from "./timelineProjection";
 
-// ---------- Inference (aligned with supabaseQueries.ts) ----------
-
-function inferChannelFromType(type: string): string {
-  if (!type) return "system";
-  if (type.includes("email")) return "email";
-  if (type.includes("whatsapp")) return "whatsapp";
-  if (type.includes("sms")) return "sms";
-  if (type.includes("call") || type.includes("voice")) return "voice";
-  if (type.includes("meeting")) return "meeting";
-  return "system";
-}
-
-function inferDirectionFromType(type: string): "inbound" | "outbound" | null {
-  if (!type) return null;
-  if (type.includes("inbound")) return "inbound";
-  if (type.includes("outbound")) return "outbound";
-  return null;
-}
+// NOTE: channel/direction inference and timeline payload shape now live
+// in `src/lib/timelineProjection.ts` (single source of truth shared with
+// `insertInteraction`). Do not re-introduce local copies here.
 
 // ---------- Types ----------
 
