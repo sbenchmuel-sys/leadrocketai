@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, type TimelineItem } from "@/lib/supabaseQueries";
+import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, insertInteraction, type TimelineItem } from "@/lib/supabaseQueries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
