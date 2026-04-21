@@ -534,26 +534,23 @@ export async function insertInteraction(leadId: string, form: InsertInteractionI
         .single();
 
       if (leadRow?.workspace_id) {
-        const channel = form.channel || inferChannelFromType(form.type);
-        const direction = payload.direction;
-        const dedupeKey = `interaction:${data.id}`;
-        await supabase.from('lead_timeline_items').upsert(
+        const { payload: tlPayload } = buildTimelineProjectionFromInteraction(
           {
-            workspace_id: leadRow.workspace_id,
+            id: data.id,
             lead_id: leadId,
-            channel,
-            provider: payload.source,
-            direction,
-            event_type: form.type,
+            type: form.type,
+            source: payload.source,
             occurred_at: occurredAt,
-            source_table: 'interactions',
-            source_id: data.id,
             subject: payload.subject,
-            snippet_text: payload.body_text.slice(0, 500),
-            dedupe_key: dedupeKey,
+            body_text: payload.body_text,
+            direction: payload.direction,
           },
-          { onConflict: 'lead_id,dedupe_key' }
+          leadRow.workspace_id,
+          { channel: form.channel },
         );
+        await supabase
+          .from('lead_timeline_items')
+          .upsert(tlPayload, { onConflict: 'lead_id,dedupe_key' });
       }
     } catch (projErr) {
       console.warn('[insertInteraction] timeline projection failed (non-fatal)', projErr);
