@@ -1,6 +1,7 @@
 // Context Resolver — fetches and assembles all lead context for draft generation
-import type { LeadDetail, MeetingPackItem, EmailThreadItem, InteractionItem, TimelineItem } from "@/lib/supabaseQueries";
-import { getLeadDetail, getLeadEmailThread, getLeadMeetingPacks, getLeadInteractions, getLeadTimeline } from "@/lib/supabaseQueries";
+import type { LeadDetail, MeetingPackItem, EmailThreadItem } from "@/lib/supabaseQueries";
+import { getLeadDetail, getLeadEmailThread, getLeadMeetingPacks } from "@/lib/supabaseQueries";
+import { getLeadActivityFeed, type LeadActivityItem } from "@/lib/leadActivity";
 import { getRepProfile, getKnowledgeDocuments, type RepProfile, type KnowledgeDocument } from "@/lib/repProfileQueries";
 import { getWorkspaceProfile, type WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { calculateClosingPower, SIGNAL_PATTERNS } from "@/lib/closingPowerUtils";
@@ -194,8 +195,7 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     lead,
     emailThread,
     meetingPacks,
-    interactions,
-    timelineItems,
+    activityItems,
     repProfile,
     workspaceProfile,
     knowledgeDocs,
@@ -203,8 +203,9 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     getLeadDetail(leadId),
     getLeadEmailThread(leadId, 10),
     getLeadMeetingPacks(leadId),
-    getLeadInteractions(leadId),
-    getLeadTimeline(leadId, { limit: 20 }),
+    // Canonical lead activity feed (timeline-first, with legacy fallback).
+    // Replaces the previous parallel fetch of getLeadInteractions + getLeadTimeline.
+    getLeadActivityFeed(leadId, { limit: 30 }),
     needsRepProfile ? getRepProfile().catch(() => null) : Promise.resolve(prefetched!.repProfile ?? null),
     needsWorkspaceProfile ? getWorkspaceProfile().catch(() => null) : Promise.resolve(prefetched!.workspaceProfile ?? null),
     needsKnowledgeDocs ? getKnowledgeDocuments().catch(() => [] as KnowledgeDocument[]) : Promise.resolve(prefetched!.knowledgeDocs ?? [] as KnowledgeDocument[]),
@@ -217,22 +218,24 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
   const lastOutbound = emailThread.emails.find(e => e.direction === "outbound") || null;
   const lastInbound = emailThread.emails.find(e => e.direction === "inbound") || null;
 
-  // Build cross-channel conversation summary from lead_timeline_items
-  // This includes SMS, WhatsApp, email, calls — everything
-  const crossChannelLines = timelineItems
-    .filter(t => !t.hidden && t.snippet_text)
+  // Build cross-channel conversation summary from canonical activity feed.
+  // Includes SMS, WhatsApp, email, calls — everything.
+  const crossChannelLines = activityItems
+    .filter((a: LeadActivityItem) => !a.hidden && a.snippet_text)
     .slice(0, 15)
-    .map((t) => {
-      const dir = t.direction === "inbound" ? "IN" : t.direction === "outbound" ? "OUT" : "";
-      const dateStr = new Date(t.occurred_at).toISOString().split("T")[0];
-      return `[${dir}] [${t.channel}] ${dateStr}: ${(t.snippet_text || "").slice(0, 300)}`;
+    .map((a: LeadActivityItem) => {
+      const dir = a.direction === "inbound" ? "IN" : a.direction === "outbound" ? "OUT" : "";
+      const dateStr = new Date(a.occurred_at).toISOString().split("T")[0];
+      return `[${dir}] [${a.channel}] ${dateStr}: ${(a.snippet_text || "").slice(0, 300)}`;
     });
   const crossChannelSummary = crossChannelLines.length > 0
     ? `=== FULL CONVERSATION HISTORY (all channels, most recent first) ===\n${crossChannelLines.join("\n")}\n===`
     : "";
 
   // Find latest inbound from ANY channel
-  const latestInboundAny = timelineItems.find(t => t.direction === "inbound" && !t.hidden && t.snippet_text);
+  const latestInboundAny = activityItems.find(
+    (a: LeadActivityItem) => a.direction === "inbound" && !a.hidden && a.snippet_text
+  );
   const lastInboundAnyChannel = latestInboundAny
     ? { channel: latestInboundAny.channel, snippet: latestInboundAny.snippet_text || "", occurred_at: latestInboundAny.occurred_at }
     : null;
@@ -346,7 +349,7 @@ export async function contextResolver(leadId: string, prefetched?: ContextPrefet
     riskSignals: riskSignals.length,
     engagementLevel: resolved.engagement_level,
     closingPower: cpResult.total,
-    crossChannelItems: timelineItems.length,
+    crossChannelItems: activityItems.length,
     lastInboundChannel: lastInboundAnyChannel?.channel || "none",
   });
 

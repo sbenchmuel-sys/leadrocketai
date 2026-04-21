@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
 import {
   Motion, DealStage, getDisplayPhase,
 } from "@/lib/dashboardUtils";
-import { getLeadMeetingPacks, getLeadInteractions, MeetingPackItem } from "@/lib/supabaseQueries";
+import { getLeadMeetingPacks, MeetingPackItem } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
+import { getLeadActivityFeed } from "@/lib/leadActivity";
 import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 import NurturePreviewCard from "@/components/lead/NurturePreviewCard";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -91,15 +92,18 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
   useEffect(() => {
     const load = async () => {
       try {
-        const [packs, interactions] = await Promise.all([
+        const [packs, activity] = await Promise.all([
           getLeadMeetingPacks(lead.id),
-          getLeadInteractions(lead.id),
+          getLeadActivityFeed(lead.id, { limit: 50 }),
         ]);
         if (packs.length > 0) {
           setLastMeeting(packs[0]);
           const meetingDate = new Date(packs[0].meeting_date || packs[0].created_at);
-          const outboundAfter = interactions.find(
-            (i) => i.type === "email_outbound" && new Date(i.occurred_at) > meetingDate
+          const outboundAfter = activity.find(
+            (a) =>
+              a.channel === "email" &&
+              a.direction === "outbound" &&
+              new Date(a.occurred_at) > meetingDate
           );
           if (outboundAfter) {
             setRecapAlreadySent(true);
