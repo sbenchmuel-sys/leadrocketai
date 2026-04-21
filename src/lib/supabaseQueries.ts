@@ -1037,35 +1037,120 @@ export interface EmailThreadItem {
   gmail_message_id: string | null;
 }
 
+/**
+ * Canonical email thread for a lead — timeline-first.
+ *
+ * Reads `lead_timeline_items` (channel='email') as the source of truth, then
+ * merges any orphaned legacy `interactions` rows that were never bridged.
+ * Mirrors the dedupe strategy used in `getLeadActivityFeed` (see
+ * src/lib/leadActivity.ts) so AI drafting and lead UI see one coherent
+ * communication history.
+ *
+ * Output shape preserved for caller compatibility (contextResolver, etc.).
+ *
+ * TODO(cleanup): Once `interactions` is fully back-filled into
+ * `lead_timeline_items`, drop the legacy fallback branch below.
+ */
 export async function getLeadEmailThread(
-  leadId: string, 
+  leadId: string,
   limit = 10
 ): Promise<{ emails: EmailThreadItem[]; threadSummary: string }> {
   if (!leadId) throw new Error('Missing leadId');
 
-  const { data, error } = await supabase
-    .from('interactions')
-    .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id')
-    .eq('lead_id', leadId)
-    .in('type', ['email_inbound', 'email_outbound'])
-    .order('occurred_at', { ascending: false })
-    .limit(limit);
+  // Fetch a wider window than `limit` so we can dedupe across sources before slicing.
+  const fetchWindow = Math.max(limit * 3, 30);
 
-  if (error) throw error;
+  // 1) Canonical: timeline (channel='email')
+  const timelineRows = await getLeadTimeline(leadId, {
+    channel: 'email',
+    limit: fetchWindow,
+  });
 
-  const emails: EmailThreadItem[] = (data ?? []).map(row => ({
-    id: row.id,
-    direction: row.type === 'email_inbound' ? 'inbound' : 'outbound',
-    from_email: row.from_email,
-    to_email: row.to_email,
-    subject: row.subject,
-    body_text: row.body_text,
-    occurred_at: row.occurred_at,
-    gmail_thread_id: row.gmail_thread_id,
-    gmail_message_id: row.gmail_message_id,
-  }));
+  const timelineEmails: EmailThreadItem[] = timelineRows
+    .filter(t => t.direction === 'inbound' || t.direction === 'outbound')
+    .map(t => {
+      const meta = (t.metadata_json as Record<string, unknown>) || {};
+      return {
+        id: t.id,
+        direction: t.direction as 'inbound' | 'outbound',
+        from_email: (meta.from_email as string | null) ?? null,
+        to_email: (meta.to_email as string | null) ?? null,
+        subject: t.subject,
+        body_text: t.snippet_text ?? '',
+        occurred_at: t.occurred_at,
+        gmail_thread_id: (meta.gmail_thread_id as string | null) ?? null,
+        gmail_message_id: (meta.gmail_message_id as string | null) ?? null,
+      };
+    });
 
-  // Build thread summary for AI context
+  // Dedupe key set built from timeline (mirrors leadActivity adapter strategy).
+  const seen = new Set<string>();
+  for (const t of timelineRows) {
+    if (t.source_id) seen.add(`sid:${t.source_id}`);
+    const gid = (t.metadata_json as Record<string, unknown> | null)?.gmail_message_id;
+    if (gid) seen.add(`gmail:${gid}`);
+    if (t.snippet_text) {
+      const ts = new Date(t.occurred_at).toISOString().slice(0, 19);
+      seen.add(`soft:email:${ts}:${t.snippet_text.slice(0, 80)}`);
+    }
+  }
+
+  // 2) Fallback: orphaned legacy interactions (no timeline mirror).
+  let fallbackUsed = 0;
+  let fallbackEmails: EmailThreadItem[] = [];
+  try {
+    const { data: legacy, error: legacyErr } = await supabase
+      .from('interactions')
+      .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id')
+      .eq('lead_id', leadId)
+      .in('type', ['email_inbound', 'email_outbound'])
+      .order('occurred_at', { ascending: false })
+      .limit(fetchWindow);
+
+    if (legacyErr) throw legacyErr;
+
+    for (const row of legacy ?? []) {
+      const keys: string[] = [`sid:${row.id}`];
+      if (row.gmail_message_id) keys.push(`gmail:${row.gmail_message_id}`);
+      if (row.body_text) {
+        const ts = new Date(row.occurred_at).toISOString().slice(0, 19);
+        keys.push(`soft:email:${ts}:${row.body_text.slice(0, 80)}`);
+      }
+      if (keys.some(k => seen.has(k))) continue;
+
+      fallbackEmails.push({
+        id: row.id,
+        direction: row.type === 'email_inbound' ? 'inbound' : 'outbound',
+        from_email: row.from_email,
+        to_email: row.to_email,
+        subject: row.subject,
+        body_text: row.body_text,
+        occurred_at: row.occurred_at,
+        gmail_thread_id: row.gmail_thread_id,
+        gmail_message_id: row.gmail_message_id,
+      });
+      for (const k of keys) seen.add(k);
+      fallbackUsed += 1;
+    }
+  } catch (err) {
+    // Non-fatal — timeline is canonical, legacy is best-effort.
+    console.warn('[getLeadEmailThread] legacy interactions fallback failed', err);
+  }
+
+  if (fallbackUsed > 0 && import.meta.env.DEV) {
+    console.info(
+      `[getLeadEmailThread] lead=${leadId} timeline=${timelineEmails.length} ` +
+        `legacy_fallback=${fallbackUsed} (orphaned email interactions merged)`
+    );
+  }
+
+  // Merge + sort newest-first + apply caller-requested limit.
+  const merged = [...timelineEmails, ...fallbackEmails].sort(
+    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+  );
+  const emails = merged.slice(0, limit);
+
+  // Build thread summary for AI context (unchanged format).
   const threadSummary = emails
     .map(e => `[${e.direction.toUpperCase()}] ${e.from_email} → ${e.to_email}\nSubject: ${e.subject || 'No subject'}\n${e.body_text?.slice(0, 500) || ''}`)
     .join('\n\n---\n\n');
