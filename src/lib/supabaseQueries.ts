@@ -1195,9 +1195,29 @@ export interface EmailPreviewSnippet {
   subject: string | null;
 }
 
+/**
+ * Latest inbound email snippet — timeline-first.
+ * Falls back to legacy interactions only if timeline has no inbound email yet.
+ *
+ * TODO(cleanup): Remove fallback once interactions back-fill is verified.
+ */
 export async function getLatestInboundEmail(leadId: string): Promise<EmailPreviewSnippet | null> {
   if (!leadId) throw new Error('Missing leadId');
 
+  // 1) Canonical: timeline (channel='email', inbound)
+  const timelineRows = await getLeadTimeline(leadId, { channel: 'email', limit: 25 });
+  const inbound = timelineRows.find(t => t.direction === 'inbound');
+  if (inbound) {
+    const meta = (inbound.metadata_json as Record<string, unknown>) || {};
+    return {
+      body_text: inbound.snippet_text ?? '',
+      from_email: (meta.from_email as string | null) ?? null,
+      occurred_at: inbound.occurred_at,
+      subject: inbound.subject,
+    };
+  }
+
+  // 2) Legacy fallback
   const { data, error } = await supabase
     .from('interactions')
     .select('body_text, from_email, occurred_at, subject')
@@ -1208,6 +1228,9 @@ export async function getLatestInboundEmail(leadId: string): Promise<EmailPrevie
     .maybeSingle();
 
   if (error) throw error;
+  if (data && import.meta.env.DEV) {
+    console.info(`[getLatestInboundEmail] lead=${leadId} legacy_fallback=1 (no timeline inbound)`);
+  }
   return data;
 }
 
