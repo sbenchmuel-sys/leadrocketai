@@ -26,25 +26,15 @@
 // ============================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import {
+  buildTimelineProjectionFromInteraction,
+  inferChannelFromInteractionType as inferChannelFromType,
+  interactionDedupeKey,
+} from "./timelineProjection";
 
-// ---------- Inference (aligned with supabaseQueries.ts) ----------
-
-function inferChannelFromType(type: string): string {
-  if (!type) return "system";
-  if (type.includes("email")) return "email";
-  if (type.includes("whatsapp")) return "whatsapp";
-  if (type.includes("sms")) return "sms";
-  if (type.includes("call") || type.includes("voice")) return "voice";
-  if (type.includes("meeting")) return "meeting";
-  return "system";
-}
-
-function inferDirectionFromType(type: string): "inbound" | "outbound" | null {
-  if (!type) return null;
-  if (type.includes("inbound")) return "inbound";
-  if (type.includes("outbound")) return "outbound";
-  return null;
-}
+// NOTE: channel/direction inference and timeline payload shape now live
+// in `src/lib/timelineProjection.ts` (single source of truth shared with
+// `insertInteraction`). Do not re-introduce local copies here.
 
 // ---------- Types ----------
 
@@ -150,7 +140,7 @@ export async function auditTimelineDrift(
   const byAge: DriftAuditReport["by_age_bucket"] = { "24h": 0, "7d": 0, "30d": 0, older: 0 };
 
   for (const i of ints) {
-    const expectedKey = `interaction:${i.id}`;
+    const expectedKey = interactionDedupeKey(i.id);
     const hasMirror = tlBySourceId.has(i.id) || tlByDedupeKey.has(expectedKey);
     if (hasMirror) continue;
     missing.push(i);
@@ -274,33 +264,28 @@ export async function repairTimelineDrift(
       continue;
     }
 
-    const channel = inferChannelFromType(full.type);
-    const direction = (full.direction as "inbound" | "outbound" | null)
-      ?? inferDirectionFromType(full.type);
-    const dedupeKey = `interaction:${full.id}`;
+    const { payload: tlPayload } = buildTimelineProjectionFromInteraction(
+      {
+        id: full.id,
+        lead_id: full.lead_id,
+        type: full.type,
+        source: full.source,
+        occurred_at: full.occurred_at,
+        subject: full.subject,
+        body_text: full.body_text,
+        direction: (full.direction as "inbound" | "outbound" | null) ?? null,
+      },
+      ws,
+    );
 
     if (dryRun) {
       repaired += 1;
       continue;
     }
 
-    const { error } = await supabase.from("lead_timeline_items").upsert(
-      {
-        workspace_id: ws,
-        lead_id: full.lead_id,
-        channel,
-        provider: full.source ?? "manual",
-        direction,
-        event_type: full.type,
-        occurred_at: full.occurred_at,
-        source_table: "interactions",
-        source_id: full.id,
-        subject: full.subject,
-        snippet_text: (full.body_text ?? "").slice(0, 500),
-        dedupe_key: dedupeKey,
-      },
-      { onConflict: "lead_id,dedupe_key" },
-    );
+    const { error } = await supabase
+      .from("lead_timeline_items")
+      .upsert(tlPayload, { onConflict: "lead_id,dedupe_key" });
 
     if (error) {
       skippedErrors += 1;
@@ -361,7 +346,7 @@ async function loadFullMissingList(
   const missing: DriftSampleRow[] = [];
   for (const i of ints ?? []) {
     if (missing.length >= maxRepairs) break;
-    if (seen.has(i.id) || seen.has(`interaction:${i.id}`)) continue;
+    if (seen.has(i.id) || seen.has(interactionDedupeKey(i.id))) continue;
     missing.push({
       id: i.id,
       lead_id: i.lead_id,
