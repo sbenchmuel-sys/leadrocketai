@@ -140,7 +140,7 @@ export async function auditTimelineDrift(
   const byAge: DriftAuditReport["by_age_bucket"] = { "24h": 0, "7d": 0, "30d": 0, older: 0 };
 
   for (const i of ints) {
-    const expectedKey = `interaction:${i.id}`;
+    const expectedKey = interactionDedupeKey(i.id);
     const hasMirror = tlBySourceId.has(i.id) || tlByDedupeKey.has(expectedKey);
     if (hasMirror) continue;
     missing.push(i);
