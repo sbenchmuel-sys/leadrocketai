@@ -486,23 +486,51 @@ import {
 } from './timelineProjection';
 
 /**
- * Canonical lead-activity write helper.
+ * Canonical lead-activity write helper — TIMELINE-FIRST.
  *
- * Writes to legacy `interactions` (preserved for backward compatibility) AND
- * projects the same event into `lead_timeline_items` so reads are immediately
- * coherent with the canonical adapter (`getLeadActivityFeed`).
+ * Write ordering (canonical-first):
+ *   1. Mint a stable interaction id client-side (crypto.randomUUID).
+ *      Safe because `interactions.id` defaults to `gen_random_uuid()` and
+ *      `lead_timeline_items.source_id` is `text` with no FK to interactions.
+ *   2. Upsert into `lead_timeline_items` — the canonical ledger. This is
+ *      the PRIMARY write. If it fails, the whole call fails.
+ *   3. Insert into legacy `interactions` using the same explicit id, so
+ *      `dedupe_key = 'interaction:<id>'` keeps pointing to a real row.
+ *      This is now a MIRROR — failures are logged but non-fatal so legacy
+ *      readers degrade gracefully while the canonical record exists.
  *
- * The timeline projection is best-effort and never fails the primary write.
+ * Why this matters: canonical write success no longer depends on the legacy
+ * table. Drift audit/repair semantics are unchanged (same dedupe_key shape,
+ * same source_id, same `(lead_id, dedupe_key)` upsert key).
  *
- * TODO(cleanup): once all readers move off `interactions`, flip the order so
- * the timeline write becomes primary and the legacy mirror becomes optional.
+ * Caller contract is preserved: returns `{ id, lead_id }` exactly as before.
+ *
+ * Edge cases:
+ *   - `projectToTimeline: false` falls back to legacy-only writes (kept for
+ *     rare callers that want to bypass the canonical path; currently unused).
+ *   - Missing `workspace_id` (orphan lead) falls back to legacy-only with
+ *     a warning — we never silently drop the write.
  */
 export async function insertInteraction(leadId: string, form: InsertInteractionInput): Promise<{ id: string; lead_id: string }> {
   if (isDemoMode()) return { id: 'demo-blocked', lead_id: leadId };
   if (!leadId) throw new Error('Missing leadId');
 
   const occurredAt = form.occurred_at || new Date().toISOString();
-  const payload = {
+  const direction = form.direction ?? inferDirectionFromType(form.type);
+  const bodyText = form.body_text?.trim() || '';
+  if (!bodyText) throw new Error('Missing body_text');
+
+  // Stable identity minted up front — shared by both writes.
+  const interactionId =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : // Fallback for ancient environments: defer to DB default by
+        // letting legacy insert generate; in that branch we cannot
+        // pre-write the timeline, so we degrade to legacy-first.
+        '';
+
+  const legacyPayload = {
+    ...(interactionId ? { id: interactionId } : {}),
     lead_id: leadId,
     type: form.type,
     source: form.source || 'manual',
@@ -510,60 +538,85 @@ export async function insertInteraction(leadId: string, form: InsertInteractionI
     subject: form.subject || null,
     from_email: form.from_email || null,
     to_email: form.to_email || null,
-    body_text: form.body_text?.trim() || '',
-    direction: form.direction ?? inferDirectionFromType(form.type),
+    body_text: bodyText,
+    direction,
   };
 
-  if (!payload.body_text) throw new Error('Missing body_text');
+  // ---- Resolve workspace_id (needed for the canonical write) ----------
+  let workspaceId: string | null = null;
+  if (form.projectToTimeline !== false && interactionId) {
+    const { data: leadRow } = await supabase
+      .from('leads')
+      .select('workspace_id')
+      .eq('id', leadId)
+      .single();
+    workspaceId = leadRow?.workspace_id ?? null;
+  }
 
-  const { data, error } = await supabase
+  // ---- Step 1: CANONICAL write (lead_timeline_items) ------------------
+  // Throws on failure — this is the new source of truth.
+  if (workspaceId) {
+    const { payload: tlPayload } = buildTimelineProjectionFromInteraction(
+      {
+        id: interactionId,
+        lead_id: leadId,
+        type: form.type,
+        source: legacyPayload.source,
+        occurred_at: occurredAt,
+        subject: legacyPayload.subject,
+        body_text: bodyText,
+        direction,
+      },
+      workspaceId,
+      { channel: form.channel },
+    );
+    const { error: tlErr } = await supabase
+      .from('lead_timeline_items')
+      .upsert(tlPayload, { onConflict: 'lead_id,dedupe_key' });
+    if (tlErr) {
+      console.error('[insertInteraction] CANONICAL timeline write failed', tlErr);
+      throw tlErr;
+    }
+  } else if (form.projectToTimeline !== false) {
+    // No workspace resolvable — fall back to legacy-only with a loud warning.
+    console.warn(
+      '[insertInteraction] missing workspace_id for lead — falling back to legacy-only write',
+      { leadId },
+    );
+  }
+
+  // ---- Step 2: LEGACY MIRROR write (interactions) ---------------------
+  // Non-fatal when the canonical write succeeded above. Using the same
+  // explicit id keeps `dedupe_key='interaction:<id>'` pointing at a real
+  // row and keeps the drift audit happy.
+  const { data: legacyRow, error: legacyErr } = await supabase
     .from('interactions')
-    .insert(payload)
+    .insert(legacyPayload)
     .select('id, lead_id')
     .single();
 
-  if (error) throw error;
-
-  // --- Canonical timeline projection (best-effort) ---------------------
-  if (form.projectToTimeline !== false) {
-    try {
-      const { data: leadRow } = await supabase
-        .from('leads')
-        .select('workspace_id')
-        .eq('id', leadId)
-        .single();
-
-      if (leadRow?.workspace_id) {
-        const { payload: tlPayload } = buildTimelineProjectionFromInteraction(
-          {
-            id: data.id,
-            lead_id: leadId,
-            type: form.type,
-            source: payload.source,
-            occurred_at: occurredAt,
-            subject: payload.subject,
-            body_text: payload.body_text,
-            direction: payload.direction,
-          },
-          leadRow.workspace_id,
-          { channel: form.channel },
-        );
-        await supabase
-          .from('lead_timeline_items')
-          .upsert(tlPayload, { onConflict: 'lead_id,dedupe_key' });
-      }
-    } catch (projErr) {
-      console.warn('[insertInteraction] timeline projection failed (non-fatal)', projErr);
+  if (legacyErr) {
+    if (workspaceId) {
+      // Canonical record exists; mirror failed. Log but don't break the UI.
+      console.warn(
+        '[insertInteraction] legacy mirror write failed (canonical timeline row exists)',
+        { interactionId, leadId, error: legacyErr },
+      );
+    } else {
+      // No canonical write happened either — this is a hard failure.
+      throw legacyErr;
     }
   }
 
-  // Update lead's last_activity_at
+  // Update lead's last_activity_at (best-effort).
   await supabase
     .from('leads')
     .update({ last_activity_at: new Date().toISOString() })
     .eq('id', leadId);
 
-  return data;
+  // Preserve caller contract. Prefer the legacy id when present (covers the
+  // no-crypto fallback); otherwise return the id we minted.
+  return legacyRow ?? { id: interactionId, lead_id: leadId };
 }
 
 /**
