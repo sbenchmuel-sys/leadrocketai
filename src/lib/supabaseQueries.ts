@@ -640,6 +640,101 @@ export async function insertSystemNote(
   });
 }
 
+// ------------------------------------------------------------
+// AI annotation patch (intent / summary / reply_worthy)
+// ------------------------------------------------------------
+//
+// Canonical-first: writes the AI annotation onto the projected
+// `lead_timeline_items` row using exact identity
+// (`lead_id` + `dedupe_key='interaction:<id>'`). This is the row
+// `insertInteraction` just upserted, so no fuzzy "latest by
+// occurred_at" lookup is needed.
+//
+// Mirrors to legacy `interactions.ai_*` columns as a non-fatal
+// back-compat write — `getLeadTimeline` and `mapInteractionToActivity`
+// still read those for any rows that haven't been bridged yet, and
+// we don't want to break legacy readers mid-migration.
+//
+// Reader alignment (already in place — no UI changes needed):
+//   • TimelineTab reads `metadata_json.ai_intent`,
+//     `metadata_json.ai_summary`, `status_json.ai_reply_worthy`.
+//   • `getLeadTimeline` projects legacy `ai_*` into the same
+//     status_json/metadata_json shape for un-bridged rows.
+//
+// TODO(cleanup): once legacy `interactions.ai_*` has no remaining
+// readers (audit + admin panels confirm), drop the mirror branch.
+export interface AIAnnotationInput {
+  intent?: string | null;
+  summary?: string | null;
+  reply_worthy?: boolean | null;
+}
+
+export async function annotateInteractionAI(
+  leadId: string,
+  interactionId: string,
+  annotation: AIAnnotationInput,
+): Promise<void> {
+  if (isDemoMode()) return;
+  if (!leadId || !interactionId) return;
+
+  const { intent = null, summary = null, reply_worthy = null } = annotation;
+
+  // ---- PRIMARY: canonical timeline row patch (exact identity) ----------
+  // Read existing metadata_json/status_json so we merge instead of clobber.
+  const dedupeKey = `interaction:${interactionId}`;
+  const { data: tlRow, error: tlReadErr } = await supabase
+    .from('lead_timeline_items')
+    .select('id, metadata_json, status_json')
+    .eq('lead_id', leadId)
+    .eq('dedupe_key', dedupeKey)
+    .maybeSingle();
+
+  if (tlReadErr) {
+    console.warn('[annotateInteractionAI] timeline read failed', tlReadErr);
+  }
+
+  if (tlRow?.id) {
+    const prevMeta = (tlRow.metadata_json as Record<string, unknown> | null) ?? {};
+    const prevStatus = (tlRow.status_json as Record<string, unknown> | null) ?? {};
+    const nextMeta = { ...prevMeta, ai_intent: intent, ai_summary: summary };
+    const nextStatus = { ...prevStatus, ai_reply_worthy: reply_worthy, ai_intent: intent };
+
+    const { error: tlUpdErr } = await supabase
+      .from('lead_timeline_items')
+      .update({ metadata_json: nextMeta, status_json: nextStatus })
+      .eq('id', tlRow.id);
+
+    if (tlUpdErr) {
+      console.error('[annotateInteractionAI] CANONICAL timeline annotation failed', tlUpdErr);
+      // Don't throw — caller flow (UploadTab) shouldn't break on annotation.
+      // Surfaced via console for dev visibility; a later cleanup can decide
+      // whether to escalate.
+    }
+  } else if (import.meta.env.DEV) {
+    console.warn(
+      '[annotateInteractionAI] no canonical timeline row found for interaction',
+      { leadId, interactionId, dedupeKey },
+    );
+  }
+
+  // ---- MIRROR: legacy interactions.ai_* (back-compat, non-fatal) -------
+  const { error: legacyErr } = await supabase
+    .from('interactions')
+    .update({
+      ai_intent: intent,
+      ai_summary: summary,
+      ai_reply_worthy: reply_worthy,
+    })
+    .eq('id', interactionId);
+
+  if (legacyErr) {
+    console.warn(
+      '[annotateInteractionAI] legacy mirror annotation failed (canonical write may have succeeded)',
+      { interactionId, error: legacyErr },
+    );
+  }
+}
+
 // ============================================
 // DRAFTS QUERIES
 // ============================================
