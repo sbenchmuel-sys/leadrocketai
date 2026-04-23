@@ -20,9 +20,11 @@
 //   - we need preview + execute + report semantics with sample rows,
 //     which doesn't fit either of the above.
 //
-// TODO(cleanup): once repair is run and residual drift is ~0, flip
-// `insertInteraction` to write timeline-first and demote the
-// `interactions` mirror to optional best-effort.
+// STATUS: `insertInteraction` is now timeline-first (canonical write to
+// `lead_timeline_items` succeeds before the legacy `interactions` mirror).
+// This audit/repair tool remains useful for backfilling pre-flip rows and
+// for catching residual mirror-only failures. Once historical drift is ~0,
+// the legacy mirror can be removed entirely.
 // ============================================================
 
 import { supabase } from "@/integrations/supabase/client";
