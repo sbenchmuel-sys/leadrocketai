@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { insertInteraction, getLeadDetail, getKnowledgeChunks } from "@/lib/supabaseQueries";
+import { insertInteraction, getLeadDetail, getKnowledgeChunks, annotateInteractionAI } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -163,8 +163,10 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
     setIsSubmitting(true);
 
     try {
-      // Insert the interaction
-      await insertInteraction(leadId, {
+      // Insert the interaction — canonical timeline-first write. The returned
+      // id is the stable identity used for both the timeline row
+      // (dedupe_key='interaction:<id>') and the legacy mirror.
+      const inserted = await insertInteraction(leadId, {
         type,
         subject: subject || undefined,
         from_email: fromEmail || undefined,
@@ -242,28 +244,17 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         if (result.ok && result.content) {
           try {
             const parsed = JSON.parse(result.content);
-            // TODO(cleanup): AI annotation columns (ai_intent/ai_summary/ai_reply_worthy)
-            // currently live only on `interactions`. When these are migrated onto
-            // `lead_timeline_items.metadata_json`, route this update through a shared
-            // helper. For now this enriches the row that `insertInteraction` just
-            // wrote (and projected to the timeline) above.
-            const { data: interactions } = await supabase
-              .from("interactions")
-              .select("id")
-              .eq("lead_id", leadId)
-              .order("occurred_at", { ascending: false })
-              .limit(1);
-
-            if (interactions && interactions[0]) {
-              await supabase
-                .from("interactions")
-                .update({
-                  ai_intent: parsed.intent_primary,
-                  ai_summary: `${parsed.tone} tone, ${parsed.urgency} urgency. Strategy: ${parsed.suggested_strategy}`,
-                  ai_reply_worthy: parsed.reply_worthy,
-                })
-                .eq("id", interactions[0].id);
-            }
+            // Canonical-first AI annotation. Targets the exact row
+            // `insertInteraction` just wrote (no fuzzy "latest by
+            // occurred_at" lookup). Helper writes
+            // `lead_timeline_items.metadata_json` / `status_json` as
+            // primary, mirrors to legacy `interactions.ai_*` for
+            // back-compat. See `annotateInteractionAI` for details.
+            await annotateInteractionAI(leadId, inserted.id, {
+              intent: parsed.intent_primary,
+              summary: `${parsed.tone} tone, ${parsed.urgency} urgency. Strategy: ${parsed.suggested_strategy}`,
+              reply_worthy: parsed.reply_worthy,
+            });
             toast.success(`Email analyzed: ${parsed.intent_primary}, ${parsed.reply_worthy ? "reply needed" : "no reply needed"}`);
           } catch {
             console.error("Failed to parse intent router response");
