@@ -62,12 +62,18 @@ export default function Leads() {
     source_type: "manual_entry",
   });
 
-  const handleReconnectGmail = async () => {
+  const handleReconnectMail = async () => {
     setIsReconnecting(true);
     try {
-      await connectGmail("/leads");
+      if (provider === "outlook") {
+        navigate("/app/settings");
+        toast.info("Reconnect Outlook from Settings");
+      } else {
+        await connectGmail("/leads");
+      }
     } catch (err) {
-      toast.error("Failed to start Gmail reconnection");
+      toast.error(`Failed to start ${providerLabel} reconnection`);
+    } finally {
       setIsReconnecting(false);
     }
   };
@@ -395,14 +401,14 @@ export default function Leads() {
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription className="flex items-center justify-between">
                 <span>
-                  {isGmailConnected 
-                    ? "Gmail access has expired. Please reconnect to continue syncing emails."
-                    : "Gmail is not connected. Please connect your Gmail account to sync emails."}
+                  {isMailConnected
+                    ? `${providerLabel} access has expired. Please reconnect to continue syncing emails.`
+                    : `No inbox is connected. Please connect Gmail or Outlook to sync emails.`}
                 </span>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={handleReconnectGmail}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleReconnectMail}
                   disabled={isReconnecting}
                   className="ml-4"
                 >
@@ -414,7 +420,7 @@ export default function Leads() {
                   ) : (
                     <>
                       <ExternalLink className="h-4 w-4 mr-2" />
-                      {isGmailConnected ? "Reconnect Gmail" : "Connect Gmail"}
+                      {isMailConnected ? `Reconnect ${providerLabel}` : `Connect ${providerLabel}`}
                     </>
                   )}
                 </Button>
