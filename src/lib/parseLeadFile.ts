@@ -405,7 +405,13 @@ export function extractLeadContextItems(
     if (seenValues.has(normalizedVal)) continue;
     seenValues.add(normalizedVal);
 
-    const rule = COLUMN_CONTEXT_RULES[ext.key] || { category: "imported_note", content_type: "general" };
+    let rule = COLUMN_CONTEXT_RULES[ext.key] || { category: "imported_note", content_type: "general" };
+
+    // Heuristic upgrade: history_notes that mention prior contact → relationship_history
+    if (ext.key === "history_notes" && isRelationshipNote(ext.value)) {
+      rule = { category: "relationship_history", content_type: "prior_contact" };
+    }
+
     const authorName = (ext.key === "previous_owner" || ext.key === "owner_name") ? ext.value : null;
 
     items.push({
@@ -419,17 +425,19 @@ export function extractLeadContextItems(
       source_column_name: ext.key,
       confidence: null, // deterministic — no confidence needed
       author_name: authorName,
-      context_date: (ext.key === "last_contact_date" || ext.key === "next_milestone_date") ? tryParseDate(ext.value) : null,
+      context_date: (ext.key === "last_contact_date" || ext.key === "next_milestone_date" || ext.key === "next_step_text") ? tryParseDate(ext.value) : null,
     });
   }
 
-  // 2. Extract initial_message / notes as imported_note
+  // 2. Extract initial_message / notes — promote to relationship_history if it implies prior contact
   if (lead.initial_message) {
+    const isRelationship = isRelationshipNote(lead.initial_message);
+    const isPlannedOutreach = isPlannedOutreachNote(lead.initial_message);
     items.push({
       lead_id: leadId,
       workspace_id: workspaceId,
-      category: "imported_note",
-      content_type: "general",
+      category: isRelationship ? "relationship_history" : (isPlannedOutreach ? "historical_fact" : "imported_note"),
+      content_type: isRelationship ? "prior_contact" : (isPlannedOutreach ? "next_step" : "general"),
       content_text: lead.initial_message,
       original_snippet: lead.initial_message,
       source_type: "csv_import",
@@ -460,11 +468,16 @@ export function extractLeadContextItems(
     // Skip priority_label and source_label (already in personal_notes)
     if (canonicalKey === "priority_label" || canonicalKey === "source_label") continue;
 
+    // Try to classify the unmapped column by name (Opportunity Size → commercial_signal, etc.)
+    const inferred = classifyUnmappedColumn(originalColName);
+    const category = inferred?.category ?? "imported_note";
+    const contentType = inferred?.content_type ?? "general";
+
     items.push({
       lead_id: leadId,
       workspace_id: workspaceId,
-      category: "imported_note", // safe default for unmapped columns
-      content_type: "general",
+      category,
+      content_type: contentType,
       content_text: `${originalColName}: ${value}`,
       original_snippet: value,
       source_type: "csv_import",
