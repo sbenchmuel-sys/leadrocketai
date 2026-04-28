@@ -35,12 +35,14 @@ import { SOURCE_TYPE_LABELS, SourceType } from "@/lib/dashboardUtils";
 import { SourceDropdown } from "@/components/dashboard/SourceDropdown";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useMailSync } from "@/hooks/useMailSync";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export default function Leads() {
   const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
   const { connectGmail, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
+  const { provider, providerLabel, isConnected: isMailConnected, isLoading: isMailLoading } = useMailSync();
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -137,11 +139,11 @@ export default function Leads() {
   const handleBulkSync = async () => {
     if (selectedIds.size === 0) return;
 
-    // Check Gmail connection before attempting sync
-    if (!isGmailConnected) {
+    // Check that *some* mail provider is connected
+    if (!isMailConnected) {
       setShowReconnectPrompt(true);
-      toast.error("Gmail not connected", {
-        description: "Please connect your Gmail account to sync emails"
+      toast.error("Inbox not connected", {
+        description: "Connect Gmail or Outlook to sync emails",
       });
       return;
     }
@@ -154,10 +156,12 @@ export default function Leads() {
     let totalProcessed = 0;
     let firstError: string | null = null;
 
+    const fnName = provider === "outlook" ? "outlook-bulk-sync" : "gmail-bulk-sync";
+
     try {
       for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
         const batchIds = leadIds.slice(i, i + BATCH_SIZE);
-        const { data, error } = await supabase.functions.invoke("gmail-bulk-sync", {
+        const { data, error } = await supabase.functions.invoke(fnName, {
           body: { leadIds: batchIds },
         });
 
@@ -165,8 +169,8 @@ export default function Leads() {
           const errorMsg = error.message || "Failed to sync emails";
           if (isReconnectError(errorMsg)) {
             setShowReconnectPrompt(true);
-            toast.error("Gmail needs reconnection", {
-              description: "Go to Settings to reconnect your Gmail account"
+            toast.error(`${providerLabel} needs reconnection`, {
+              description: `Go to Settings to reconnect your ${providerLabel} account`,
             });
             return;
           }
@@ -176,8 +180,8 @@ export default function Leads() {
 
         if (data?.needsReconnect || isReconnectError(data?.error || "")) {
           setShowReconnectPrompt(true);
-          toast.error("Gmail needs reconnection", {
-            description: "Go to Settings to reconnect your Gmail account"
+          toast.error(`${providerLabel} needs reconnection`, {
+            description: `Go to Settings to reconnect your ${providerLabel} account`,
           });
           return;
         }
@@ -211,8 +215,8 @@ export default function Leads() {
       const errorMsg = err instanceof Error ? err.message : "Failed to sync emails";
       if (isReconnectError(errorMsg)) {
         setShowReconnectPrompt(true);
-        toast.error("Gmail needs reconnection", {
-          description: "Go to Settings to reconnect your Gmail account"
+        toast.error(`${providerLabel} needs reconnection`, {
+          description: `Go to Settings to reconnect your ${providerLabel} account`,
         });
       } else {
         toast.error(errorMsg);
@@ -369,11 +373,11 @@ export default function Leads() {
                   variant="outline"
                   size="sm"
                   onClick={handleBulkSync}
-                  disabled={isSyncing || isGmailLoading}
-                  title={!isGmailConnected ? "Connect Gmail first" : undefined}
+                  disabled={isSyncing || isGmailLoading || isMailLoading}
+                  title={!isMailConnected ? "Connect Gmail or Outlook first" : undefined}
                 >
                   <RefreshCw className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
-                  {isSyncing ? "Syncing..." : `Sync Gmail (${selectedIds.size})`}
+                  {isSyncing ? "Syncing..." : `Sync ${providerLabel} (${selectedIds.size})`}
                 </Button>
                 <Button
                   variant="destructive"
