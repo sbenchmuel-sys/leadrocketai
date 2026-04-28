@@ -1,192 +1,65 @@
+## Outlook ↔ Gmail Feature Parity Implementation
 
-## Style Learning Engine (Email, SMS, WhatsApp)
+Closes the two biggest gaps from the audit so Outlook users get the same multi-lead sync and onboarding flow as Gmail users.
 
-### Goal
-The platform learns each rep's writing style across **all text channels** (email, SMS, WhatsApp) and injects it as soft constraints into AI draft generation — improving over time with every sent message and explicit feedback.
+### What gets built
 
----
+**1. New edge function: `outlook-bulk-sync`**
+- Mirror of `gmail-bulk-sync` but for Microsoft Graph
+- Input: `{ leadIds: string[], maxResults?: number, mail_account_id?: string }`
+- Resolves the user's workspace → finds the connected Outlook `mail_accounts` row → gets a fresh token via existing `getFreshOutlookToken` middleware
+- For each lead, runs the exact same pipeline as `outlook-sync` (the per-lead function already implements all safeguards: direction filter, bounce, OOO, defer, meeting confirmation, unsubscribe, milestones, stage/action derivation)
+- Updates `mail_accounts.last_sync_at` after the run
+- Returns `{ ok, totalSynced, leadsProcessed, results, errors, needsReconnect? }` — same shape as `gmail-bulk-sync` so the UI can stay generic
+- Registered in `supabase/config.toml` with `verify_jwt = false` (consistent with `outlook-sync`)
+- Refactor: extract the per-lead pipeline currently in `outlook-sync/index.ts` into a small shared helper so both functions call the same code (avoids drift)
 
-### 1. Data Model (3 new tables)
+**2. UI wiring on `src/pages/Leads.tsx`**
+- Use `useMailSync` to detect the active provider instead of hard-coding Gmail
+- Bulk "Sync" button label becomes provider-aware: "Sync Gmail (N)" or "Sync Outlook (N)"
+- Routes the call to `gmail-bulk-sync` or `outlook-bulk-sync` based on provider
+- Reconnect prompt routes to `/settings` for Outlook, OAuth flow for Gmail (same pattern as `GmailSyncButton`)
+- Disabled-state copy: "Connect Gmail or Outlook first"
 
-**`style_examples`** — stores sent/liked/disliked messages
-| Column | Type | Notes |
-|--------|------|-------|
-| id | uuid PK | |
-| user_id | uuid FK auth.users | per-user learning |
-| workspace_id | uuid FK workspaces | RLS scoping |
-| channel | text | `email`, `sms`, `whatsapp` |
-| motion_type | text | `outbound_cold`, `reply_to_thread`, `nurture`, `follow_up` |
-| subject | text | nullable (email only) |
-| body_text | text | the actual message |
-| feedback | text | `sent` (passive), `liked`, `disliked` |
-| feedback_comment | text | optional user note on dislike |
-| style_features_json | jsonb | AI-extracted features (populated async) |
-| created_at | timestamptz | |
+**3. Onboarding parity check**
+- `ConnectInboxStep` already exposes both Gmail and Outlook cards — no change needed there
+- Verified: `OutlookConnectButton` + `outlook-health` polling already wired
 
-**`user_style_profiles`** — condensed style guide per user+channel+motion
-| Column | Type | Notes |
-|--------|------|-------|
-| id | uuid PK | |
-| user_id | uuid FK | |
-| workspace_id | uuid FK | |
-| channel | text | `email`, `sms`, `whatsapp` |
-| motion_type | text | `outbound_cold`, `reply_to_thread`, etc. |
-| profile_json | jsonb | synthesized style rules |
-| example_count | int | how many examples fed into this profile |
-| last_synthesized_at | timestamptz | |
-| created_at / updated_at | timestamptz | |
+### Technical details
 
-Unique constraint: `(user_id, channel, motion_type)`
+```text
+src/pages/Leads.tsx
+  └─ replaces useGmailConnection with useMailSync
+  └─ handleBulkSync → invokes outlook-bulk-sync when provider === "outlook"
 
-**`user_style_directives`** — free-text anchor per user
-| Column | Type | Notes |
-|--------|------|-------|
-| id | uuid PK | |
-| user_id | uuid FK | |
-| workspace_id | uuid FK | |
-| directive_text | text | e.g. "I write like a busy founder — no fluff" |
-| created_at / updated_at | timestamptz | |
+supabase/functions/outlook-bulk-sync/index.ts   [NEW]
+  ├─ auth + workspace resolution
+  ├─ fetch mail_accounts row (provider=outlook, status=connected)
+  ├─ getFreshOutlookToken(accountId)
+  ├─ for each lead: runOutlookLeadSync(...)  ← shared helper
+  └─ update mail_accounts.last_sync_at
 
----
+supabase/functions/_shared/outlookLeadSync.ts   [NEW]
+  └─ extracted per-lead Graph fetch + safeguards pipeline
+     (currently inline in outlook-sync/index.ts)
 
-### 2. Style Feature Extraction (per channel)
+supabase/functions/outlook-sync/index.ts
+  └─ refactored to call the shared helper (no behavior change)
 
-New AI task `extract_style_features` in `ai_task` edge function. Channel-aware feature schema:
-
-**Email features:**
-```json
-{
-  "opening_style": "direct_question",
-  "closing_style": "soft_cta",
-  "tone_markers": ["informal", "confident"],
-  "avg_paragraph_count": 2,
-  "uses_bullets": false,
-  "personalization_density": "high",
-  "cta_pattern": "question_based",
-  "signature_style": "first_name_only"
-}
+supabase/config.toml
+  └─ [functions.outlook-bulk-sync]  verify_jwt = false
 ```
 
-**SMS features:**
-```json
-{
-  "avg_length_chars": 120,
-  "uses_emoji": true,
-  "tone_markers": ["casual", "urgent"],
-  "cta_pattern": "link_drop",
-  "greeting_style": "none"
-}
-```
+### Testing
 
-**WhatsApp features:**
-```json
-{
-  "avg_length_chars": 200,
-  "uses_emoji": true,
-  "multi_message": false,
-  "tone_markers": ["friendly", "professional"],
-  "cta_pattern": "direct_ask",
-  "greeting_style": "first_name"
-}
-```
+After deploy:
+1. Connect an Outlook account (or use Cliff's existing connection)
+2. On `/app/leads`, select 2–3 leads, click "Sync Outlook (N)"
+3. Tail `outlook-bulk-sync` logs to confirm: messages found, interactions created, `last_sync_at` updated
+4. Verify lead timeline shows historical Outlook emails
+5. Verify Gmail bulk sync still works for Gmail users (no regression)
 
----
+### Out of scope
 
-### 3. Profile Synthesis
-
-New edge function **`synthesize-style-profile`**:
-- Triggered after every 5 new examples for a given `(user, channel, motion)` combo
-- Uses rolling window of last **50 examples** (weighted: disliked×3, liked×2, sent×1)
-- Merges with `user_style_directives` as anchoring constraint
-- Outputs a condensed `profile_json` like:
-
-```json
-{
-  "channel": "email",
-  "motion": "outbound_cold",
-  "preferred_opening": "direct_question (68%)",
-  "tone": "direct, slightly informal",
-  "structure": "2-3 short paragraphs, no bullets",
-  "cta_style": "question_based, never 'let me know'",
-  "anti_patterns": ["never uses 'I hope this finds you well'", "avoids exclamation marks"],
-  "personalization": "always references company-specific context in first sentence",
-  "example_count": 23,
-  "confidence": "high"
-}
-```
-
----
-
-### 4. Injection into Draft Generation
-
-Modify `ai_task/index.ts` — for tasks `outbound_sequence`, `reply_to_thread`, `sms_message`, `whatsapp_reply`:
-1. Determine channel + motion from task context
-2. Fetch matching `user_style_profiles` row
-3. If found (and `example_count >= 5`), append style block to system prompt:
-```
-## Your Writing Style (learned from user's past messages)
-{profile_json formatted as bullet rules}
-These are SOFT constraints. Follow them unless they conflict with the task objective.
-```
-4. If `user_style_directives` exists, prepend it as highest-priority anchor
-
----
-
-### 5. Capture Points (Frontend)
-
-**Passive capture (all channels):**
-- `ReplyComposer.tsx` — after successful send on email, WhatsApp, or SMS
-- `SendEmailButton.tsx` — after outbound email send
-- `automation-executor` — after automated sends (tagged `feedback: 'auto_sent'`)
-
-**Explicit feedback:**
-- Add 👍/👎 buttons to AI suggestion chips in `ReplyComposer.tsx`
-- 👎 opens a small text input for optional comment
-- Both insert into `style_examples` with `feedback: 'liked'|'disliked'`
-
----
-
-### 6. Settings UI — `WritingStyleCard.tsx`
-
-Added to Settings page:
-- **Style directive** — editable textarea ("Describe your writing voice…")
-- **Detected traits** — read-only display of current profile per channel/motion
-- **Learning stats** — "23 emails learned, 8 WhatsApp, 3 SMS"
-- **Pause learning** toggle — stops passive capture
-- **Reset style** button — deletes all examples + profiles, confirms with dialog
-- **Channel tabs**: Email | SMS | WhatsApp — each showing motion-specific profiles
-
----
-
-### 7. Safety & Drift Prevention
-
-| Risk | Mitigation |
-|------|-----------|
-| Style drift over time | Rolling 50-example window, older examples age out |
-| Bad examples pollute profile | Disliked examples create anti-patterns, not positive rules |
-| Profile goes off track | Reset button clears everything; Pause toggle stops capture |
-| Conflicting motion styles | Separate profiles per (channel, motion) — outreach ≠ reply |
-| Low confidence early | Profile not injected until ≥5 examples for that combo |
-| Over-constraining the AI | Rules injected as "SOFT constraints" — task objective wins |
-
----
-
-### 8. Files Changed
-
-| File | Change |
-|------|--------|
-| **Migration** | Create 3 tables + RLS policies + unique constraints |
-| `supabase/functions/ai_task/index.ts` | Add `extract_style_features` task; inject style profile into all draft tasks |
-| `supabase/functions/synthesize-style-profile/index.ts` | **New** — profile synthesis logic |
-| `src/components/inbox/ReplyComposer.tsx` | Passive capture on send (all channels); 👍/👎 on suggestion chips |
-| `src/components/settings/WritingStyleCard.tsx` | **New** — style management UI with channel tabs |
-| `src/pages/Settings.tsx` | Add WritingStyleCard |
-
-### 9. Implementation Order
-1. DB migration (tables + RLS)
-2. `extract_style_features` task in ai_task
-3. `synthesize-style-profile` edge function
-4. Capture hooks in ReplyComposer + SendEmailButton
-5. Style injection in ai_task draft generation
-6. WritingStyleCard settings UI
-7. Test end-to-end with email, then SMS, then WhatsApp
+- Cron-based Outlook polling (Graph webhooks already deliver real-time push, so a cron isn't strictly needed; can add later if push fails)
+- Microsoft Entra app audience update for personal `@hotmail`/`@outlook` accounts — that's a configuration task for you in the Azure portal, not a code change
