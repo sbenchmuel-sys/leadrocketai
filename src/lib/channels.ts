@@ -105,8 +105,10 @@ export function getAvailableChannelsForLead({
 
   // Determine availability
   const emailOk = !!lead.email;
-  const waOk =
-    !!workspace.whatsapp_enabled && !!lead.wa_opted_in && !!lead.whatsapp_number;
+  // PILOT: WhatsApp recommendations are temporarily disabled to avoid surfacing
+  // a channel reps aren't actively using during the live pilot.
+  const waOk = false;
+  // Original: !!workspace.whatsapp_enabled && !!lead.wa_opted_in && !!lead.whatsapp_number;
   const smsOk = !!workspace.sms_enabled && !!lead.sms_opted_in && !!lead.phone;
   const voiceOk = !!workspace.voice_enabled && !!lead.phone;
   const meetingOk = !!workspace.meetings_enabled;
