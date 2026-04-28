@@ -235,11 +235,21 @@ serve(async (req) => {
       body: JSON.stringify(sendPayload),
     });
 
-    // 404 retry: if thread/message was deleted, retry as fresh email
-    if (!sendResp.ok && sendResp.status === 404 && threadId) {
-      logger.info("mail.outlook.thread_not_found_retry", {
+    // Retry as fresh email when:
+    // - 404: thread/message was deleted
+    // - 400 ConversationId: threadId was a conversationId, not a message ID
+    const shouldRetryFresh =
+      !sendResp.ok &&
+      threadId &&
+      (sendResp.status === 404 ||
+        (sendResp.status === 400 &&
+          (await sendResp.clone().text()).includes("ConversationId")));
+
+    if (shouldRetryFresh) {
+      logger.info("mail.outlook.thread_retry_as_fresh", {
         mail_account_id,
         thread_id: threadId,
+        original_status: sendResp.status,
       });
       const retryPayload = {
         message: {
