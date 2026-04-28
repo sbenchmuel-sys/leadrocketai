@@ -479,8 +479,8 @@ async function processInboundMessage(
       engagement_score: (matchedLead.engagement_score ?? 0) + 10,
       wa_opted_in: true,
       needs_action: true,
-      next_action_key: "whatsapp_reply",
-      next_action_label: "Reply to WhatsApp message",
+      next_action_key: "reply_now",
+      next_action_label: "Reply",
     } as any).eq("id", matchedLead.id);
   }
 
