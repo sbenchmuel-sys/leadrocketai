@@ -177,12 +177,21 @@ serve(async (req) => {
     const syncStartMs = syncStartDate.getTime();
     const filterDate = syncStartDate.toISOString();
 
-    // Graph API: search for messages to/from lead email, requesting internet headers
-    const filter = `(from/emailAddress/address eq '${leadEmailNorm}' or (toRecipients/any(r: r/emailAddress/address eq '${leadEmailNorm}'))) and receivedDateTime ge ${filterDate}`;
-    const graphUrl = `${GRAPH_BASE}/me/messages?$filter=${encodeURIComponent(filter)}&$top=${maxResults}&$orderby=receivedDateTime desc&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
+    // Graph API: use $search (KQL) to find any message involving the lead email.
+    // Microsoft Graph does NOT allow combining $filter on toRecipients/any(...) with
+    // other filters — it returns ErrorInvalidUrlQueryFilter. $search works across
+    // from/to/cc/bcc and is the supported way to query participants.
+    // Note: $search cannot be combined with $filter or $orderby. We sort + date-filter
+    // client-side below (already done in the loop).
+    const searchKql = `"participants:${leadEmailNorm}"`;
+    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
-      headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.body-content-type="text"' },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Prefer: 'outlook.body-content-type="text"',
+        ConsistencyLevel: "eventual",
+      },
     });
 
     if (!searchResp.ok) {
@@ -241,9 +250,10 @@ serve(async (req) => {
           continue;
         }
 
-        // Server-side date guard
-        const msgTimestamp = new Date(msg.receivedDateTime).getTime();
-        if (msgTimestamp < syncStartMs) continue;
+        // Server-side date guard (use whichever timestamp Graph provides)
+        const tsRaw = msg.receivedDateTime || msg.sentDateTime;
+        const msgTimestamp = tsRaw ? new Date(tsRaw).getTime() : NaN;
+        if (Number.isFinite(msgTimestamp) && msgTimestamp < syncStartMs) continue;
 
         const subject = msg.subject || "(no subject)";
         const occurredAt = msg.sentDateTime || msg.receivedDateTime;
