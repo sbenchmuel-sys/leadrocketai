@@ -111,7 +111,7 @@ export function IntelligencePanel({ contactId, analysis }: Props) {
       </div>
 
       {/* Recommended Channel */}
-      {analysis?.recommended_reply_channel && (
+      {analysis?.recommended_reply_channel && analysis.recommended_reply_channel !== "whatsapp" && (
         <>
           <Separator />
           <div>

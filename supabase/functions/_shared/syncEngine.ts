@@ -268,11 +268,41 @@ export function htmlToPlainText(html: string): string {
   return text.trim();
 }
 
-/** Check if email body contains closing-stage keywords. */
+/** Negative-intent / lost-deal phrases. If present, the lead is NOT closing. */
+export function containsLostIntent(text: string): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  const phrases = [
+    "no opportunity", "not an opportunity", "don't have an opportunity", "do not have an opportunity",
+    "doesn't look like we have an opportunity", "does not look like we have an opportunity",
+    "went with another", "went with someone else", "chose another", "selected another vendor",
+    "we have decided to go with", "decided to go with another", "going with another",
+    "not interested", "no longer interested", "not a fit", "not the right fit",
+    "passing on this", "we'll pass", "we will pass", "please remove me", "unsubscribe",
+    "keep in touch for potential future", "future opportunities",
+    "already have a solution", "already have a vendor", "already partnered",
+    "closed with someone else", "signed with another",
+  ];
+  return phrases.some((p) => t.includes(p));
+}
+
+/** Check if email body contains closing-stage keywords (forward-motion only). */
 export function containsClosingKeywords(text: string): boolean {
-  const keywords = ["pricing", "contract", "procurement", "security review", "legal", "proposal", "quote", "budget"];
+  if (!text) return false;
+  // Require explicit forward-motion phrasing — single-word matches like
+  // "pricing" or "proposal" appearing in rejection or recap emails caused
+  // false-positive "closing" stage promotions.
+  const phrases = [
+    "send the contract", "sign the contract", "redline", "redlines",
+    "security review", "security questionnaire", "vendor onboarding",
+    "procurement process", "procurement team", "legal review",
+    "send pricing", "send a quote", "send the quote", "approved budget",
+    "ready to move forward", "move forward with the proposal",
+    "purchase order", "issue a po", "statement of work", "msa",
+  ];
   const lowerText = text.toLowerCase();
-  return keywords.some(kw => lowerText.includes(kw));
+  if (containsLostIntent(lowerText)) return false;
+  return phrases.some((kw) => lowerText.includes(kw));
 }
 
 /** Dynamic CORS based on allowed origins. */
