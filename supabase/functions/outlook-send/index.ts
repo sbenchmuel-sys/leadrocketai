@@ -204,15 +204,26 @@ serve(async (req) => {
       saveToSentItems: true,
     };
 
-    if (threadId) {
-      // threadId in Outlook context = Graph message ID to reply to
+    // Graph message IDs are long (typically 100+ chars, start with "AAMkA").
+    // ConversationIds are shorter (~30 chars). /reply only accepts message IDs —
+    // passing a conversationId returns 400 "ConversationId isn't supported".
+    const looksLikeGraphMessageId = !!threadId && threadId.length > 80 && threadId.startsWith("AAMk");
+
+    if (threadId && looksLikeGraphMessageId) {
+      // threadId is a Graph message ID — safe to use /reply
       sendUrl = `https://graph.microsoft.com/v1.0/me/messages/${threadId}/reply`;
       sendPayload = {
         message: {
           body: { contentType: "HTML", content: bodyHtml },
+          toRecipients: [{ emailAddress: { address: to } }],
         },
         comment: "",
       };
+    } else if (threadId) {
+      logger.info("mail.outlook.thread_id_not_message_id_fallback", {
+        mail_account_id,
+        thread_id_len: threadId.length,
+      });
     }
 
     let sendResp = await fetch(sendUrl, {
@@ -224,11 +235,21 @@ serve(async (req) => {
       body: JSON.stringify(sendPayload),
     });
 
-    // 404 retry: if thread/message was deleted, retry as fresh email
-    if (!sendResp.ok && sendResp.status === 404 && threadId) {
-      logger.info("mail.outlook.thread_not_found_retry", {
+    // Retry as fresh email when:
+    // - 404: thread/message was deleted
+    // - 400 ConversationId: threadId was a conversationId, not a message ID
+    const shouldRetryFresh =
+      !sendResp.ok &&
+      threadId &&
+      (sendResp.status === 404 ||
+        (sendResp.status === 400 &&
+          (await sendResp.clone().text()).includes("ConversationId")));
+
+    if (shouldRetryFresh) {
+      logger.info("mail.outlook.thread_retry_as_fresh", {
         mail_account_id,
         thread_id: threadId,
+        original_status: sendResp.status,
       });
       const retryPayload = {
         message: {
