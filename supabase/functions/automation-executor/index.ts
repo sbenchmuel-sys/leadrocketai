@@ -218,8 +218,8 @@ serve(async (req) => {
         // Flag as needing action: WhatsApp reply pending
         await supabase.from("leads").update({
           needs_action: true,
-          next_action_key: "whatsapp_reply",
-          next_action_label: "Reply via WhatsApp",
+          next_action_key: "reply_now",
+          next_action_label: "Reply",
           action_reason_code: "REPLY_PENDING",
         } as any).eq("id", lead.id);
 
