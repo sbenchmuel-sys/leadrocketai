@@ -250,9 +250,10 @@ serve(async (req) => {
           continue;
         }
 
-        // Server-side date guard
-        const msgTimestamp = new Date(msg.receivedDateTime).getTime();
-        if (msgTimestamp < syncStartMs) continue;
+        // Server-side date guard (use whichever timestamp Graph provides)
+        const tsRaw = msg.receivedDateTime || msg.sentDateTime;
+        const msgTimestamp = tsRaw ? new Date(tsRaw).getTime() : NaN;
+        if (Number.isFinite(msgTimestamp) && msgTimestamp < syncStartMs) continue;
 
         const subject = msg.subject || "(no subject)";
         const occurredAt = msg.sentDateTime || msg.receivedDateTime;
