@@ -259,6 +259,70 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
 // LEAD CONTEXT EXTRACTION (deterministic, no AI)
 // ============================================
 
+/** Phrases in free-text notes that promote category to relationship_history */
+const RELATIONSHIP_HISTORY_PHRASES = [
+  "existing contact",
+  "ready to be contacted",
+  "knows me",
+  "warm intro",
+  "warm introduction",
+  "referred by",
+  "referral from",
+  "prior contact",
+  "previously worked with",
+  "previously contacted",
+  "introduced by",
+  "met at",
+  "met with",
+  "spoke with before",
+  "had a call with",
+  "former colleague",
+  "ex-colleague",
+];
+
+/** Detect if a free-text note implies prior relationship */
+function isRelationshipNote(text: string): boolean {
+  const lower = text.toLowerCase();
+  return RELATIONSHIP_HISTORY_PHRASES.some((p) => lower.includes(p));
+}
+
+/** Detect a planned-outreach phrase like "Initial comms wk-of 03/23" or future-dated next step */
+function isPlannedOutreachNote(text: string): boolean {
+  const lower = text.toLowerCase();
+  return /\b(wk[- ]of|week of|initial comms|planned outreach|reach out (on|by)|follow up (on|by)|contact (on|by))\b/.test(lower)
+    || /\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/.test(lower);
+}
+
+/** Heuristic mapping for unmapped raw column names → category/content_type */
+function classifyUnmappedColumn(rawColName: string): { category: string; content_type: string } | null {
+  const k = rawColName.trim().toLowerCase();
+  // Commercial / opportunity columns
+  if (/(opportunity|opp[\s_-]?size|deal[\s_-]?size|deal[\s_-]?value|annual[\s_-]?value|arr|mrr|contract[\s_-]?value|quota|revenue[\s_-]?potential|probability|win[\s_-]?probability)/.test(k)) {
+    return { category: "commercial_signal", content_type: "deal_value" };
+  }
+  if (/(projected[\s_-]?close|estimated[\s_-]?close|close[\s_-]?date|expected[\s_-]?close|target[\s_-]?close|forecast[\s_-]?(date|close)|close[\s_-]?quarter)/.test(k)) {
+    return { category: "commercial_signal", content_type: "close_timing" };
+  }
+  if (/(product[\s_-]?(line|category|type)|solution[\s_-]?of[\s_-]?interest|sku|model|safe[\s_-]?type)/.test(k)) {
+    return { category: "commercial_signal", content_type: "product_owned" };
+  }
+  if (/(budget|spend|fiscal|fy[\s_-]?budget)/.test(k)) {
+    return { category: "commercial_signal", content_type: "budget" };
+  }
+  if (/(decision[\s_-]?maker|champion|economic[\s_-]?buyer|stakeholder)/.test(k)) {
+    return { category: "commercial_signal", content_type: "decision_maker" };
+  }
+  // Historical / factual columns
+  if (/(last[\s_-]?(touch|activity|meeting|call)|account[\s_-]?since|customer[\s_-]?since|signup[\s_-]?date|first[\s_-]?contact|onboarded)/.test(k)) {
+    return { category: "historical_fact", content_type: "prior_contact" };
+  }
+  // Relationship signals
+  if (/(referred|referral|introduced|prior[\s_-]?rep|previous[\s_-]?owner|account[\s_-]?owner|csm|relationship[\s_-]?owner)/.test(k)) {
+    return { category: "relationship_history", content_type: "prior_contact" };
+  }
+  return null; // unknown — fall back to imported_note
+}
+
 /** Category + content_type classification rules for known column types */
 const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: string }> = {
   previous_owner: { category: "relationship_history", content_type: "prior_contact" },
@@ -266,7 +330,7 @@ const COLUMN_CONTEXT_RULES: Record<string, { category: string; content_type: str
   product: { category: "commercial_signal", content_type: "product_owned" },
   history_notes: { category: "imported_note", content_type: "prior_rep_notes" },
   last_contact_date: { category: "historical_fact", content_type: "prior_contact" },
-  next_step_text: { category: "imported_note", content_type: "next_step" },
+  next_step_text: { category: "historical_fact", content_type: "next_step" },
   priority_label: { category: "imported_note", content_type: "general" },
   source_label: { category: "historical_fact", content_type: "general" },
   message: { category: "imported_note", content_type: "general" },
