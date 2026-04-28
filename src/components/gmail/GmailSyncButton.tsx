@@ -4,6 +4,7 @@ import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { formatDistanceToNow } from "date-fns";
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -25,22 +26,30 @@ interface GmailSyncButtonProps {
   showLastSync?: boolean;
 }
 
-export function GmailSyncButton({ 
-  leadId, 
-  leadEmail, 
+export function GmailSyncButton({
+  leadId,
+  leadEmail,
   onSyncComplete,
   variant = "outline",
   size = "sm",
-  showLastSync = true
+  showLastSync = true,
 }: GmailSyncButtonProps) {
-  const { connection, isConnected: isGmailConnected, isLoading: isLoadingConnection, connectGmail, refetch } = useGmailConnection();
-  const { syncLead, isSyncing, isConnected: isMailConnected, providerLabel } = useMailSync();
-  const isConnected = isMailConnected || isGmailConnected;
+  const navigate = useNavigate();
+  const { connectGmail } = useGmailConnection();
+  const {
+    syncLead,
+    isSyncing,
+    isConnected,
+    isLoading,
+    provider,
+    providerLabel,
+    activeAccount,
+  } = useMailSync();
+
   const [justSynced, setJustSynced] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
 
-  // Reset "just synced" indicator after 3 seconds
   useEffect(() => {
     if (justSynced) {
       const timer = setTimeout(() => setJustSynced(false), 3000);
@@ -53,7 +62,6 @@ export function GmailSyncButton({
     const result = await syncLead(leadId, leadEmail);
     if (result.ok) {
       setJustSynced(true);
-      refetch();
       onSyncComplete?.();
     } else if (result.needsReconnect) {
       setNeedsReconnect(true);
@@ -63,14 +71,20 @@ export function GmailSyncButton({
   const handleReconnect = async () => {
     setIsReconnecting(true);
     try {
-      await connectGmail(window.location.pathname);
-    } catch (err) {
+      if (provider === "outlook") {
+        navigate("/settings");
+        toast.info("Reconnect Outlook from Settings");
+      } else {
+        await connectGmail(window.location.pathname);
+      }
+    } catch {
       toast.error("Failed to start reconnection");
+    } finally {
       setIsReconnecting(false);
     }
   };
 
-  if (isLoadingConnection) {
+  if (isLoading) {
     return (
       <Button variant={variant} size={size} disabled>
         <Loader2 className="h-4 w-4 animate-spin" />
@@ -82,8 +96,8 @@ export function GmailSyncButton({
     return null;
   }
 
-  const lastSyncAt = connection?.last_sync_at;
-  const lastSyncText = lastSyncAt 
+  const lastSyncAt = activeAccount?.last_sync_at;
+  const lastSyncText = lastSyncAt
     ? `Last synced ${formatDistanceToNow(new Date(lastSyncAt), { addSuffix: true })}`
     : "Never synced";
 
@@ -94,11 +108,11 @@ export function GmailSyncButton({
           <Alert variant="destructive" className="py-2">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="flex items-center justify-between gap-2 text-xs">
-              <span>Gmail access expired</span>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleReconnect} 
+              <span>{providerLabel} access expired</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReconnect}
                 disabled={isReconnecting}
                 className="h-6 text-xs"
               >
@@ -110,7 +124,7 @@ export function GmailSyncButton({
                 ) : (
                   <>
                     <ExternalLink className="h-3 w-3 mr-1" />
-                    Reconnect Gmail
+                    Reconnect {providerLabel}
                   </>
                 )}
               </Button>
@@ -151,7 +165,7 @@ export function GmailSyncButton({
               <p>{lastSyncText}</p>
             </TooltipContent>
           </Tooltip>
-          
+
           {showLastSync && lastSyncAt && !isSyncing && !justSynced && (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock className="h-3 w-3" />
