@@ -67,7 +67,7 @@ export default function Dashboard() {
       const m = await getDashboardMetrics();
       setMetrics(m);
       setLastRefreshedAt(new Date());
-      if (getDashboardState().revenueStateFilter === "active" && m.revenueStateCounts.action_required > 0) {
+      if (!getDashboardState().filterTouched && getDashboardState().revenueStateFilter === "active" && m.revenueStateCounts.action_required > 0) {
         handleFilterChange("action_required");
       }
     } catch (err) {
