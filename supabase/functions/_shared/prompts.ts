@@ -514,7 +514,8 @@ GROUNDING RULES (MANDATORY — read before writing):
 8. If SECTION B and C have weak data (no relationship, no commercial context, no signals, no angles), DO NOT mention any business problem at all. Only reference: role, company type, industry, or ask one neutral use-case question.
 
 WHAT TO DO WHEN INTELLIGENCE IS WEAK (STRICT):
-- No signals + no recommended angles + low confidence on company context = LOW-INTEL MODE
+- No signals + no recommended angles + no relationship_history + no commercial_signal + low confidence on company context = LOW-INTEL MODE
+- IF SECTION B has relationship_history OR commercial_signal OR known facts → you are NOT in LOW-INTEL MODE. Use those facts.
 - In LOW-INTEL MODE you may ONLY reference:
   a) Their role / job title
   b) Their company name and type of business
