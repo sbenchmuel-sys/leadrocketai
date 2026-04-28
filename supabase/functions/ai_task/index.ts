@@ -291,7 +291,29 @@ function buildLeadContextBlock(items: Array<{
 
   // Build with char budget: caution+relationship unlimited, others capped
   const parts: string[] = ["=== LEAD CONTEXT (from import/notes — NOT from live conversation) ==="];
-  let totalChars = 0;
+
+  // ─── STRONG-EVIDENCE HEADER ────────────────────────────────────────
+  // If we have any high-signal facts (relationship/commercial/historical),
+  // surface them ABOVE the categorized dump so the model can't miss them.
+  const strongEvidence: string[] = [];
+  for (const item of sorted) {
+    if (
+      item.category === "relationship_history" ||
+      item.category === "commercial_signal" ||
+      item.category === "historical_fact"
+    ) {
+      strongEvidence.push(`• ${item.content_text}`);
+    }
+  }
+  if (strongEvidence.length > 0) {
+    parts.push(
+      "\n⚡ STRONG EVIDENCE — YOU MUST GROUND THE EMAIL IN THESE FACTS (do NOT write a generic cold opener):",
+      ...strongEvidence.slice(0, 8),
+      "\nIf two or more of these facts exist, weave at least TWO of them into the email. Reference the relationship, the opportunity, and/or the planned timing explicitly. Do NOT pivot to a generic seller-product question.",
+    );
+  }
+
+  let totalChars = parts.join("\n").length;
   const MAX_CHARS = 1500;
 
   for (const category of LEAD_CONTEXT_CATEGORY_PRIORITY) {
@@ -325,11 +347,18 @@ function buildLeadContextBlock(items: Array<{
   }
   if (groups.has("commercial_signal")) {
     const signals = groups.get("commercial_signal")!.join(" ").toLowerCase();
+    rules.push("- This lead has KNOWN commercial context (deal size, opportunity, product interest). Reference the OPPORTUNITY in your email — do NOT write a generic discovery question.");
     if (signals.includes("product")) {
       rules.push("- This lead already owns/uses a product. Do NOT re-pitch what they already have.");
     }
     if (signals.includes("competitor")) {
       rules.push("- Competitor intel exists. You may differentiate, but do NOT bash competitors.");
+    }
+  }
+  if (groups.has("historical_fact")) {
+    const facts = groups.get("historical_fact")!.join(" ").toLowerCase();
+    if (/wk-of|week of|connect|outreach|follow.?up|next step/.test(facts)) {
+      rules.push("- A PLANNED outreach date or next-step exists. Reference that planned timing in the email (acknowledge if it has slipped past).");
     }
   }
   if (groups.has("caution")) {
