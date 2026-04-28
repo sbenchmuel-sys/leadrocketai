@@ -504,11 +504,14 @@ Lead Context Cache (company summary, recommended angles):
 === END CONTEXT SEPARATION ===
 
 GROUNDING RULES (MANDATORY — read before writing):
-1. Your opening sentence MUST reference something from SECTION B (their company, role, industry) or SECTION C (a signal or recommended angle)
-2. Your question MUST be about THEIR world — not about your product category
-3. You may use SECTION A ONLY to pick which angle to take. Example: if you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding or crew uniforms — NOT about sublimation or printing.
-4. If SECTION C has recommended angles, prefer those. They were generated specifically for this lead.
-5. If SECTION B and C have weak data (no industry, no signals, no angles), DO NOT mention any business problem at all. Only reference: role, company type, industry, or ask one neutral use-case question.
+1. PRIOR RELATIONSHIP CHECK: If SECTION B contains a "PRIOR RELATIONSHIP" block (e.g. "existing contact", "warm intro", "referred by", "previous owner"), you MUST acknowledge it in paragraph 1. Do NOT open as if they are completely cold. Use phrases like "Reconnecting on..." or "Following up from our prior conversation..." or reference the prior context directly. NEVER write a generic cold opener.
+2. COMMERCIAL CONTEXT CHECK: If SECTION B contains "COMMERCIAL CONTEXT" (deal size, opportunity, product interest, projected close), you MUST reference at least one specific fact (e.g. the opportunity, the timing, the product) in paragraph 1 or in your question. Do NOT write a generic "how do you handle X" opener that ignores known deal context.
+3. KNOWN FACTS CHECK: If SECTION B contains "KNOWN FACTS" with planned outreach dates (e.g. "Initial comms wk-of 03/23"), reference the planned/agreed timing explicitly (e.g. "Circling back per our planned March outreach...").
+4. Your opening sentence MUST reference something from SECTION B (relationship, commercial context, known facts, company, role, industry) or SECTION C (a signal or recommended angle). SECTION B facts beat generic industry questions every time.
+5. Your question MUST be about THEIR world — not about your product category
+6. You may use SECTION A ONLY to pick which angle to take. Example: if you sell sublimation supplies and the lead runs a crane rental company, ask about fleet branding or crew uniforms — NOT about sublimation or printing.
+7. If SECTION C has recommended angles, prefer those. They were generated specifically for this lead.
+8. If SECTION B and C have weak data (no relationship, no commercial context, no signals, no angles), DO NOT mention any business problem at all. Only reference: role, company type, industry, or ask one neutral use-case question.
 
 WHAT TO DO WHEN INTELLIGENCE IS WEAK (STRICT):
 - No signals + no recommended angles + low confidence on company context = LOW-INTEL MODE
