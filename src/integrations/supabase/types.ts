@@ -1091,6 +1091,7 @@ export type Database = {
           gmail_email: string
           id: string
           last_sync_at: string | null
+          lookback_seed_completed_at: string | null
           refresh_token_encrypted: string | null
           token_expires_at: string
           updated_at: string
@@ -1102,6 +1103,7 @@ export type Database = {
           gmail_email: string
           id?: string
           last_sync_at?: string | null
+          lookback_seed_completed_at?: string | null
           refresh_token_encrypted?: string | null
           token_expires_at: string
           updated_at?: string
@@ -1113,6 +1115,7 @@ export type Database = {
           gmail_email?: string
           id?: string
           last_sync_at?: string | null
+          lookback_seed_completed_at?: string | null
           refresh_token_encrypted?: string | null
           token_expires_at?: string
           updated_at?: string
@@ -2040,6 +2043,7 @@ export type Database = {
           id: string
           is_default: boolean
           last_sync_at: string | null
+          lookback_seed_completed_at: string | null
           provider: string
           refresh_token: string | null
           status: string
@@ -2057,6 +2061,7 @@ export type Database = {
           id?: string
           is_default?: boolean
           last_sync_at?: string | null
+          lookback_seed_completed_at?: string | null
           provider: string
           refresh_token?: string | null
           status?: string
@@ -2074,6 +2079,7 @@ export type Database = {
           id?: string
           is_default?: boolean
           last_sync_at?: string | null
+          lookback_seed_completed_at?: string | null
           provider?: string
           refresh_token?: string | null
           status?: string
@@ -3473,6 +3479,7 @@ export type Database = {
           created_at: string
           default_sms_number: string | null
           id: string
+          lookback_seed_window_days: number
           name: string
           plan: string
           sms_enabled: boolean
@@ -3483,6 +3490,7 @@ export type Database = {
           created_at?: string
           default_sms_number?: string | null
           id?: string
+          lookback_seed_window_days?: number
           name: string
           plan?: string
           sms_enabled?: boolean
@@ -3493,6 +3501,7 @@ export type Database = {
           created_at?: string
           default_sms_number?: string | null
           id?: string
+          lookback_seed_window_days?: number
           name?: string
           plan?: string
           sms_enabled?: boolean
