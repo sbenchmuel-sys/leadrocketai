@@ -356,7 +356,7 @@ async function scanGmail(
   // Process INBOX messages (inbound signals only)
   for (const msgId of inboxIds) {
     try {
-      const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=From,To,Subject,Date,Auto-Submitted,List-Unsubscribe`;
+      const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Auto-Submitted&metadataHeaders=List-Unsubscribe`;
       const msgResp = await fetch(msgUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!msgResp.ok) continue;
 
