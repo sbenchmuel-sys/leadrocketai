@@ -1,0 +1,1 @@
+UPDATE public.mail_accounts SET lookback_seed_completed_at = NULL WHERE id = 'ea046f87-69d6-47b3-8b37-980fb63359c3';
