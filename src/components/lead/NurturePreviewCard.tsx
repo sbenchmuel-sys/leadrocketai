@@ -388,7 +388,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => handleSendNow("next")}
+                onClick={() => setConfirmSendTarget("next")}
                 disabled={isSending}
                 className="flex-1 text-xs h-7"
               >
@@ -427,7 +427,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => handleSendNow("following")}
+                onClick={() => setConfirmSendTarget("following")}
                 disabled={isSending}
                 className="flex-1 text-xs h-7"
               >
