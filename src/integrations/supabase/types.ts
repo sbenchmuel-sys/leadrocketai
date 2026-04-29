@@ -1366,6 +1366,87 @@ export type Database = {
           },
         ]
       }
+      lead_candidates: {
+        Row: {
+          ai_reason: string | null
+          ai_score: number | null
+          body_snippet: string | null
+          company_domain: string | null
+          contact_email: string
+          contact_name: string | null
+          created_at: string
+          email_count: number
+          first_seen_at: string
+          id: string
+          last_email_at: string
+          owner_user_id: string | null
+          resolved_at: string | null
+          resolved_lead_id: string | null
+          source: string
+          status: string
+          subject_snippet: string | null
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          ai_reason?: string | null
+          ai_score?: number | null
+          body_snippet?: string | null
+          company_domain?: string | null
+          contact_email: string
+          contact_name?: string | null
+          created_at?: string
+          email_count?: number
+          first_seen_at?: string
+          id?: string
+          last_email_at?: string
+          owner_user_id?: string | null
+          resolved_at?: string | null
+          resolved_lead_id?: string | null
+          source: string
+          status?: string
+          subject_snippet?: string | null
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          ai_reason?: string | null
+          ai_score?: number | null
+          body_snippet?: string | null
+          company_domain?: string | null
+          contact_email?: string
+          contact_name?: string | null
+          created_at?: string
+          email_count?: number
+          first_seen_at?: string
+          id?: string
+          last_email_at?: string
+          owner_user_id?: string | null
+          resolved_at?: string | null
+          resolved_lead_id?: string | null
+          source?: string
+          status?: string
+          subject_snippet?: string | null
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_candidates_resolved_lead_id_fkey"
+            columns: ["resolved_lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_candidates_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_context_cache: {
         Row: {
           context_json: Json
@@ -3150,6 +3231,102 @@ export type Database = {
           workspace_id?: string
         }
         Relationships: []
+      }
+      workspace_dismissed_domains: {
+        Row: {
+          created_at: string
+          dismissed_by_user_id: string | null
+          domain: string
+          id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          dismissed_by_user_id?: string | null
+          domain: string
+          id?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          dismissed_by_user_id?: string | null
+          domain?: string
+          id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_dismissed_domains_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workspace_dismissed_emails: {
+        Row: {
+          created_at: string
+          dismissed_by_user_id: string | null
+          email: string
+          id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          dismissed_by_user_id?: string | null
+          email: string
+          id?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          dismissed_by_user_id?: string | null
+          email?: string
+          id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_dismissed_emails_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workspace_internal_domains: {
+        Row: {
+          added_by_user_id: string | null
+          created_at: string
+          domain: string
+          id: string
+          workspace_id: string
+        }
+        Insert: {
+          added_by_user_id?: string | null
+          created_at?: string
+          domain: string
+          id?: string
+          workspace_id: string
+        }
+        Update: {
+          added_by_user_id?: string | null
+          created_at?: string
+          domain?: string
+          id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_internal_domains_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       workspace_invitations: {
         Row: {
