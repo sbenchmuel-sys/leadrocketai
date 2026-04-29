@@ -454,9 +454,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
           // Smart reply-all default: if the last inbound had Cc'd participants,
           // pre-fill the Cc field and check the reply-all toggle. The user can
           // still toggle off or edit before sending.
-          const lastInboundFromThread = ctx.thread_emails.findLast?.(
-            (m: EmailThreadItem) => m.direction === "inbound"
-          ) ?? [...ctx.thread_emails].reverse().find(
+          const lastInboundFromThread = [...ctx.thread_emails].reverse().find(
             (m: EmailThreadItem) => m.direction === "inbound"
           );
           const inboundCc = (lastInboundFromThread?.cc_emails ?? [])
