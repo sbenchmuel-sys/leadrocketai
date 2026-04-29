@@ -375,7 +375,86 @@ export async function getLeadTimeline(
 
   const { data, error } = await query;
   if (error) throw error;
-  return (data ?? []) as TimelineItem[];
+  const timeline = (data ?? []) as TimelineItem[];
+
+  // Legacy fallback: merge orphaned `interactions` rows that were never
+  // projected into `lead_timeline_items` (e.g. older Gmail sync writes,
+  // recently-approved candidate leads where the bridge hasn't run yet).
+  // Mirrors the dedupe + channel-filter strategy in `leadActivity.ts`.
+  try {
+    const legacy = await getLeadInteractions(leadId, options?.includeHidden ?? false);
+    if (legacy.length === 0) return timeline;
+
+    const seen = new Set<string>();
+    for (const t of timeline) {
+      if (t.source_id) seen.add(`sid:${t.source_id}`);
+      const gmId = (t.metadata_json as { gmail_message_id?: string } | null)?.gmail_message_id;
+      if (gmId) seen.add(`gmail:${gmId}`);
+      if (t.dedupe_key) seen.add(`dk:${t.dedupe_key}`);
+    }
+
+    const fallbackItems: TimelineItem[] = [];
+    for (const i of legacy) {
+      const keys: string[] = [`sid:${i.id}`];
+      if (i.gmail_message_id) keys.push(`gmail:${i.gmail_message_id}`);
+      if (keys.some(k => seen.has(k))) continue;
+
+      const channel = i.type?.includes('email')
+        ? 'email'
+        : i.type?.includes('whatsapp')
+        ? 'whatsapp'
+        : i.type?.includes('sms')
+        ? 'sms'
+        : i.type?.includes('call') || i.type?.includes('voice')
+        ? 'voice'
+        : 'system';
+
+      if (options?.channel && channel !== options.channel) continue;
+
+      const direction = i.type?.includes('inbound')
+        ? 'inbound'
+        : i.type?.includes('outbound')
+        ? 'outbound'
+        : null;
+
+      fallbackItems.push({
+        id: i.id,
+        lead_id: i.lead_id,
+        channel,
+        provider: i.source ?? null,
+        direction,
+        event_type: i.type,
+        occurred_at: i.occurred_at,
+        source_table: 'interactions',
+        source_id: i.id,
+        snippet_text: i.body_text ?? null,
+        subject: i.subject ?? null,
+        status_json: { ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
+        metadata_json: {
+          gmail_message_id: i.gmail_message_id,
+          from_email: i.from_email,
+          to_email: i.to_email,
+          ai_summary: i.ai_summary,
+        },
+        dedupe_key: i.gmail_message_id ?? i.id,
+        contact_id: null,
+        conversation_id: null,
+        hidden: i.hidden ?? false,
+      });
+
+      for (const k of keys) seen.add(k);
+    }
+
+    if (fallbackItems.length === 0) return timeline;
+
+    const merged = [...timeline, ...fallbackItems].sort(
+      (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
+    );
+    return merged.slice(0, options?.limit ?? 200);
+  } catch (err) {
+    console.warn('[getLeadTimeline] legacy interactions fallback failed', err);
+    return timeline;
+  }
 }
 
 export async function hideTimelineItem(itemId: string): Promise<void> {
