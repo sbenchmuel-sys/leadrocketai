@@ -1185,6 +1185,7 @@ export type Database = {
           ai_reply_worthy: boolean | null
           ai_summary: string | null
           body_text: string
+          cc_emails: string[]
           dedupe_key: string | null
           direction: string | null
           from_email: string | null
@@ -1197,6 +1198,7 @@ export type Database = {
           source: string
           subject: string | null
           to_email: string | null
+          to_emails: string[]
           type: string
         }
         Insert: {
@@ -1204,6 +1206,7 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text: string
+          cc_emails?: string[]
           dedupe_key?: string | null
           direction?: string | null
           from_email?: string | null
@@ -1216,6 +1219,7 @@ export type Database = {
           source?: string
           subject?: string | null
           to_email?: string | null
+          to_emails?: string[]
           type: string
         }
         Update: {
@@ -1223,6 +1227,7 @@ export type Database = {
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
           body_text?: string
+          cc_emails?: string[]
           dedupe_key?: string | null
           direction?: string | null
           from_email?: string | null
@@ -1235,6 +1240,7 @@ export type Database = {
           source?: string
           subject?: string | null
           to_email?: string | null
+          to_emails?: string[]
           type?: string
         }
         Relationships: [
