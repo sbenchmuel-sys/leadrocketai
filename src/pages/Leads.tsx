@@ -363,6 +363,18 @@ export default function Leads() {
         </div>
       </div>
 
+      <Tabs defaultValue="all" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="all">All Leads</TabsTrigger>
+          <TabsTrigger value="pending" className="gap-2">
+            Pending
+            {pendingCount > 0 && (
+              <Badge variant="secondary" className="ml-1">{pendingCount}</Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="all">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-4">
@@ -526,6 +538,12 @@ export default function Leads() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="pending">
+          <PendingLeadsTab onApproved={loadLeads} />
+        </TabsContent>
+      </Tabs>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
