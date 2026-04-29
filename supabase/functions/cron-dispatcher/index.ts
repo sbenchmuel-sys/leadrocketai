@@ -32,6 +32,7 @@ const ALLOWED_TARGETS = new Set([
   "compute-manager-analytics",
   "whatsapp-events-processor",
   "detect-lead-candidates",
+  "score-lead-candidate",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)
