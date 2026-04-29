@@ -37,6 +37,8 @@ import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import PendingLeadsTab, { usePendingCandidatesCount } from "@/components/leads/PendingLeadsTab";
 
 export default function Leads() {
   const navigate = useNavigate();
@@ -281,6 +283,8 @@ export default function Leads() {
     }
   };
 
+  const pendingCount = usePendingCandidatesCount();
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -361,6 +365,18 @@ export default function Leads() {
         </div>
       </div>
 
+      <Tabs defaultValue="all" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="all">All Leads</TabsTrigger>
+          <TabsTrigger value="pending" className="gap-2">
+            Pending
+            {pendingCount > 0 && (
+              <Badge variant="secondary" className="ml-1">{pendingCount}</Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="all">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-4">
@@ -524,6 +540,12 @@ export default function Leads() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="pending">
+          <PendingLeadsTab onApproved={loadLeads} />
+        </TabsContent>
+      </Tabs>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
