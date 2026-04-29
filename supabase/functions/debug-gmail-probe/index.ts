@@ -59,14 +59,23 @@ serve(async (req) => {
     headers: { Authorization: `Bearer ${accessToken}` }
   }).then(r => r.json());
 
-  const ids = (list.messages ?? []).slice(0, 30).map((m:any)=>m.id);
+  const ids = (list.messages ?? []).slice(0, 5).map((m:any)=>m.id);
+  const dump: any[] = [];
+  for (const id of ids) {
+    const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From,To,Cc,Subject,Date`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const status = r.status;
+    const msg = await r.json();
+    dump.push({ id, status, error: msg.error, labelIds: msg.labelIds, snippet: (msg.snippet||"").slice(0,100), headers: msg.payload?.headers, payloadKeys: msg.payload ? Object.keys(msg.payload) : null });
+  }
+  return new Response(JSON.stringify({ scopes: tokens.scope, listCount: list.messages?.length, dump }, null, 2), { headers: { ...corsHeaders, "Content-Type":"application/json" } });
+  // unreachable below
   const reasons: Record<string, number> = { passed:0, fromMismatch:0, internal:0, dismissed:0, existingLead:0, mass:0 };
   const samples: any[] = [];
 
-  for (const id of ids) {
-    const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From,To,Cc,Subject`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    }).then(r => r.json());
+  for (const id of [] as string[]) {
+    const msg: any = {};
     const headers = msg.payload?.headers ?? [];
     const get = (n:string) => headers.find((h:any)=>h.name.toLowerCase()===n.toLowerCase())?.value ?? "";
     const from = get("From"), toRaw = get("To"), ccRaw = get("Cc");
