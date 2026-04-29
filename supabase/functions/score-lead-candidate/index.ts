@@ -100,7 +100,7 @@ async function scoreOne(
   const userPrompt = buildUserPrompt(candidate);
   let resp: Response;
   try {
-    resp = await fetch("https://ai.lovable.dev/v1/chat/completions", {
+    resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
