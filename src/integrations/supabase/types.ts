@@ -1846,6 +1846,9 @@ export type Database = {
           last_outbound_at: string | null
           last_read_at: string | null
           linkedin_url: string | null
+          manual_mode: boolean
+          manual_mode_reason: string | null
+          manual_mode_set_at: string | null
           meeting_link: string | null
           meeting_summary_count: number
           milestones_json: Json | null
@@ -1915,6 +1918,9 @@ export type Database = {
           last_outbound_at?: string | null
           last_read_at?: string | null
           linkedin_url?: string | null
+          manual_mode?: boolean
+          manual_mode_reason?: string | null
+          manual_mode_set_at?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
@@ -1984,6 +1990,9 @@ export type Database = {
           last_outbound_at?: string | null
           last_read_at?: string | null
           linkedin_url?: string | null
+          manual_mode?: boolean
+          manual_mode_reason?: string | null
+          manual_mode_set_at?: string | null
           meeting_link?: string | null
           meeting_summary_count?: number
           milestones_json?: Json | null
