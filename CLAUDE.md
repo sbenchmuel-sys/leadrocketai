@@ -65,9 +65,26 @@ When in doubt: grep for the function name in `cron-dispatcher` allowlists, in `c
 - `admin_tuning` flag in `src/lib/featureFlags.ts` — defined but never checked.
 - The migration `20260106083245_*.sql` references a different Supabase project (`umqhdxjtgarwkdpwsxrm`) and a non-existent `gmail-background-sync` function. Verify no live `cron.job` row matches `gmail-background-sync-job` before deletion.
 
+## Lovable migration workflow (confirmed 2026-04-29)
+
+External PRs (from Claude/VS Code) land migration files as SQL in `supabase/migrations/`. **Lovable does NOT auto-apply these.** After a PR is merged, tell Lovable in its chat: "Apply migration `<filename>`." Lovable runs it against the live Supabase database AND regenerates `src/integrations/supabase/types.ts`. Both steps happen together — do not regenerate types separately.
+
+When Lovable applies a migration, it creates its own copy with a `<timestamp>_<uuid>.sql` filename (same SQL, different name). This is expected.
+
+## Lead Candidates pipeline (started 2026-04-29)
+
+Build sequence tracking (spec: GitHub issue #3):
+- ✅ PR #3/4 — data layer (`lead_candidates` + dismiss-list tables, RLS). Applied via Lovable.
+- ✅ PR #4 (this) — detection hook (`detect-lead-candidates` edge fn, `_shared/leadCandidateDetection.ts`, cron migration).
+- ⬜ PR #5 — AI scoring (`score-lead-candidate` or extension to `ai_task`).
+- ⬜ PR #6 — Lookback seed (30-day retroactive scan on first mail-account connect).
+- ⬜ PR #7–10 — UI + bulk actions + digest + settings (Lovable).
+
+`detect-lead-candidates` was added to `cron-dispatcher`'s `ALLOWED_TARGETS`. Its cron job is in `20260430000000_add_detect_lead_candidates_cron.sql` and must be applied via Lovable migration tool.
+
 ## Open hazards (separately tracked)
 
-- **Supabase anon key is hardcoded in 9 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 9 crons must be updated together OR they all break silently.
+- **Supabase anon key is hardcoded in 10 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 10 crons must be updated together OR they all break silently.
 - **Demo data fall-through in `src/lib/demoData.ts` (736 lines)** — imported by production query paths. If `VITE_DEMO_MODE` is misconfigured in prod, real users could see demo numbers. Gate explicitly.
 - **Lead scoring exists client-side AND server-side** with no sync — `closingPowerUtils.ts` (client) vs `recompute-lead-intelligence` (server). Pick server as canonical.
 - **Email send paths are duplicated 3x** — `ReplyComposer.tsx`, `mailProviders/GmailProvider.ts`, `useMailSync.ts`. Funnel through the provider.
