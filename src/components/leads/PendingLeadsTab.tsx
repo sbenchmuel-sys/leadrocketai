@@ -138,9 +138,9 @@ async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extr
   // Allowed: outbound_prospecting | contact_form | gmail_inbound | event_lead |
   //          referral | csv_import | manual_entry | whatsapp_inbound
   const sourceType =
-    c.source === "lookback_seed" || c.source === "outbound_detection"
+    c.source === "lookback_seed" || c.source === "outbound" || c.source === "outbound_detection"
       ? "outbound_prospecting"
-      : c.source === "inbound_reply" || c.source === "manual_inbox"
+      : c.source === "inbound_reply" || c.source === "inbound" || c.source === "manual_inbox"
       ? "gmail_inbound"
       : "manual_entry";
   const payload: any = {
