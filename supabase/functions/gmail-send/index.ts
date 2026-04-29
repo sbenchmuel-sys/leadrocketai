@@ -4,6 +4,7 @@ import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isInternalCaller, assertLeadAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
+import { plainTextToHtml } from "../_shared/emailUtils.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -27,6 +28,7 @@ function encodeBase64Url(str: string): string {
   const base64 = btoa(unescape(encodeURIComponent(str)));
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+
 
 // deno-lint-ignore no-explicit-any
 async function refreshTokenIfNeeded(

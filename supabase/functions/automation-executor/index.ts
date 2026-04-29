@@ -16,6 +16,7 @@ import {
   resolveStepDelay,
   type ExecutionSettings,
 } from "../_shared/executionSettings.ts";
+import { plainTextToHtml } from "../_shared/emailUtils.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -1054,7 +1055,7 @@ serve(async (req) => {
             }),
           });
         } else if (mailProvider === "outlook" && mailAccountId) {
-          const bodyHtml = draftBody.replace(/\n/g, "<br>");
+          const bodyHtml = plainTextToHtml(draftBody);
           sendResponse = await fetch(`${supabaseUrl}/functions/v1/outlook-send`, {
             method: "POST",
             headers: {
