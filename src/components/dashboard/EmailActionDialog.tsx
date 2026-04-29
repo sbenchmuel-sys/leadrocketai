@@ -216,6 +216,9 @@ export function EmailActionDialog({
   actionKey,
 }: EmailActionDialogProps) {
   const [to, setTo] = useState(lead.email);
+  const [cc, setCc] = useState("");                  // comma-separated CC addresses
+  const [replyAll, setReplyAll] = useState(false);   // true when Cc was auto-populated from last inbound
+  const [lastInboundCc, setLastInboundCc] = useState<string[]>([]);  // remembered for the toggle
   const [subject, setSubject] = useState(prefilledSubject || "");
   const [body, setBody] = useState(prefilledBody || "");
   const [instructions, setInstructions] = useState(initialInstructions);
@@ -296,6 +299,9 @@ export function EmailActionDialog({
   useEffect(() => {
     if (open) {
       setTo(lead.email);
+      setCc("");
+      setReplyAll(false);
+      setLastInboundCc([]);
       setInstructions(initialInstructions);
 
       if (prefilledSubject || prefilledBody) {
@@ -443,6 +449,22 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
           if (latestInbound) {
             setReplyThreadId(latestInbound.gmail_thread_id);
             setReplyToMessageId(latestInbound.gmail_message_id);
+          }
+
+          // Smart reply-all default: if the last inbound had Cc'd participants,
+          // pre-fill the Cc field and check the reply-all toggle. The user can
+          // still toggle off or edit before sending.
+          const lastInboundFromThread = ctx.thread_emails.findLast?.(
+            (m: EmailThreadItem) => m.direction === "inbound"
+          ) ?? [...ctx.thread_emails].reverse().find(
+            (m: EmailThreadItem) => m.direction === "inbound"
+          );
+          const inboundCc = (lastInboundFromThread?.cc_emails ?? [])
+            .filter(addr => addr && addr.toLowerCase() !== lead.email.toLowerCase());
+          if (inboundCc.length > 0) {
+            setLastInboundCc(inboundCc);
+            setReplyAll(true);
+            setCc(inboundCc.join(", "));
           }
 
           // Update resolved intent badge
@@ -598,6 +620,12 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
       return;
     }
 
+    // Parse Cc string into a clean array (comma-separated; whitespace + duplicates dropped)
+    const ccArr = cc
+      .split(/[,;]+/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+
     const fullBody = getFullEmailBody();
     const result = await sendEmail(
       to.trim(),
@@ -606,7 +634,8 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
       lead.id,
       undefined,
       replyThreadId || undefined,
-      replyToMessageId || undefined
+      replyToMessageId || undefined,
+      ccArr.length > 0 ? ccArr : undefined
     );
 
     if (!result.ok && activeMailProvider === "outlook" && isOutlookAuthError(result.error)) {
@@ -777,7 +806,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
             {lead.next_action_label || "Prepare and send an email"}
           </DialogDescription>
           
-          {/* To and Subject fields in header */}
+          {/* To, Cc, Subject fields in header */}
           <div className="grid gap-3 pt-3">
             <div className="flex items-center gap-2">
               <Label htmlFor="to" className="w-16 text-right text-sm">To:</Label>
@@ -788,6 +817,36 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
                 placeholder="recipient@example.com"
                 className="flex-1"
               />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="cc" className="w-16 text-right text-sm">Cc:</Label>
+              <Input
+                id="cc"
+                value={cc}
+                onChange={(e) => {
+                  setCc(e.target.value);
+                  // If user manually edits, drop the smart-toggle state so we
+                  // don't fight them on subsequent re-fills.
+                  if (replyAll) setReplyAll(false);
+                }}
+                placeholder="comma-separated, optional"
+                className="flex-1"
+              />
+              {lastInboundCc.length > 0 && (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={replyAll}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setReplyAll(next);
+                      setCc(next ? lastInboundCc.join(", ") : "");
+                    }}
+                    className="h-3.5 w-3.5"
+                  />
+                  Reply-all ({lastInboundCc.length})
+                </label>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="subject" className="w-16 text-right text-sm">Subject:</Label>

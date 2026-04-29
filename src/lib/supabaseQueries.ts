@@ -133,7 +133,14 @@ export type LeadDetail = Pick<Lead,
   'nurture_cadence' | 'mode_changed_at' | 'nurture_status' | 'nurture_mode' | 'nurture_theme' |
   'wa_opted_in' | 'automation_mode' | 'action_instructions' |
   'website' | 'linkedin_url' | 'company_linkedin_url' | 'city' | 'state'
->;
+> & {
+  // Phase 1 multi-contact thread support — populated by automation-executor when
+  // a thread becomes multi-participant. Optional because Lovable will regenerate
+  // types.ts on the next migration apply; this widens the type until then.
+  manual_mode?: boolean;
+  manual_mode_reason?: string | null;
+  manual_mode_set_at?: string | null;
+};
 
 export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
   if (!leadId) throw new Error('Missing leadId');
@@ -156,7 +163,7 @@ export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
 
   const { data: lead, error: leadErr } = await supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode, action_instructions, website, linkedin_url, company_linkedin_url, city, state')
+    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode, action_instructions, website, linkedin_url, company_linkedin_url, city, state, manual_mode, manual_mode_reason, manual_mode_set_at')
     .eq('id', leadId)
     .single();
   if (leadErr) throw leadErr;
@@ -1343,6 +1350,10 @@ export interface EmailThreadItem {
   direction: 'inbound' | 'outbound';
   from_email: string | null;
   to_email: string | null;
+  /** Full To header recipients (lowercase). Includes the primary to_email. */
+  to_emails: string[];
+  /** Full Cc header recipients (lowercase). */
+  cc_emails: string[];
   subject: string | null;
   body_text: string;
   occurred_at: string;
@@ -1388,6 +1399,8 @@ export async function getLeadEmailThread(
         direction: t.direction as 'inbound' | 'outbound',
         from_email: (meta.from_email as string | null) ?? null,
         to_email: (meta.to_email as string | null) ?? null,
+        to_emails: Array.isArray(meta.to_emails) ? (meta.to_emails as string[]) : [],
+        cc_emails: Array.isArray(meta.cc_emails) ? (meta.cc_emails as string[]) : [],
         subject: t.subject,
         body_text: t.snippet_text ?? '',
         occurred_at: t.occurred_at,
@@ -1414,7 +1427,7 @@ export async function getLeadEmailThread(
   try {
     const { data: legacy, error: legacyErr } = await supabase
       .from('interactions')
-      .select('id, type, from_email, to_email, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id')
+      .select('id, type, from_email, to_email, to_emails, cc_emails, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id')
       .eq('lead_id', leadId)
       .in('type', ['email_inbound', 'email_outbound'])
       .order('occurred_at', { ascending: false })
@@ -1422,7 +1435,7 @@ export async function getLeadEmailThread(
 
     if (legacyErr) throw legacyErr;
 
-    for (const row of legacy ?? []) {
+    for (const row of (legacy as any[]) ?? []) {
       const keys: string[] = [`sid:${row.id}`];
       if (row.gmail_message_id) keys.push(`gmail:${row.gmail_message_id}`);
       if (row.body_text) {
@@ -1436,6 +1449,8 @@ export async function getLeadEmailThread(
         direction: row.type === 'email_inbound' ? 'inbound' : 'outbound',
         from_email: row.from_email,
         to_email: row.to_email,
+        to_emails: Array.isArray(row.to_emails) ? row.to_emails : [],
+        cc_emails: Array.isArray(row.cc_emails) ? row.cc_emails : [],
         subject: row.subject,
         body_text: row.body_text,
         occurred_at: row.occurred_at,

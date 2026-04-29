@@ -195,6 +195,15 @@ export default function LeadDetailHeader({
                 OOO until {new Date((lead as any).ooo_until).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               </span>
             )}
+            {lead.manual_mode === true && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 shrink-0"
+                title={lead.manual_mode_reason || "Automation paused"}
+              >
+                <Pause className="h-2.5 w-2.5" />
+                Automation paused
+              </span>
+            )}
             {contextFlags.hasCaution && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/20 shrink-0">
                 <AlertTriangle className="h-2.5 w-2.5" />

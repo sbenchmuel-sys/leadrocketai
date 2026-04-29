@@ -251,13 +251,14 @@ export function useMailSync() {
   // sendEmail — routes to the correct send edge function
   // ============================================================
   const sendEmail = async (
-    to: string,
+    to: string | string[],
     subject: string,
     body: string,
     leadId?: string,
     draftId?: string,
     threadId?: string,
-    replyToMessageId?: string
+    replyToMessageId?: string,
+    cc?: string[]
   ): Promise<SendResult> => {
     try {
       setIsSyncing(true);
@@ -274,6 +275,11 @@ export function useMailSync() {
         return { ok: false, error: errorMsg };
       }
 
+      // Normalize: callers may still pass a single string for legacy paths.
+      // Edge functions accept either shape; we forward as-is plus optional cc[].
+      const toPayload: string | string[] = to;
+      const ccPayload: string[] | undefined = cc && cc.length > 0 ? cc : undefined;
+
       let sendFunction: string;
       let sendBody: Record<string, unknown>;
 
@@ -281,7 +287,8 @@ export function useMailSync() {
         sendFunction = "outlook-send";
         sendBody = {
           mail_account_id: activeAccount.id,
-          to,
+          to: toPayload,
+          ...(ccPayload ? { cc: ccPayload } : {}),
           subject,
           bodyHtml: body,
           threadId: threadId ?? null,
@@ -289,7 +296,16 @@ export function useMailSync() {
         };
       } else {
         sendFunction = "gmail-send";
-        sendBody = { to, subject, body, leadId, draftId, threadId, replyToMessageId };
+        sendBody = {
+          to: toPayload,
+          ...(ccPayload ? { cc: ccPayload } : {}),
+          subject,
+          body,
+          leadId,
+          draftId,
+          threadId,
+          replyToMessageId,
+        };
       }
 
       const response = await fetch(`${supabaseUrl}/functions/v1/${sendFunction}`, {

@@ -212,6 +212,9 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
   const isAutomation = item.provider === "automation" || meta?.source === "automation";
   const aiReplyWorthy = (item.status_json as any)?.ai_reply_worthy;
   const aiSummary = meta?.ai_summary;
+  const toEmails = Array.isArray(meta?.to_emails) ? (meta.to_emails as string[]) : [];
+  const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
+  const showParticipants = item.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -246,6 +249,16 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
                   <p className={cn("text-sm font-medium text-foreground leading-snug truncate", item.hidden && "line-through")}>
                     {item.subject}
                   </p>
+                )}
+                {showParticipants && open && (
+                  <div className="text-[11px] text-muted-foreground/80 leading-snug space-y-0.5">
+                    {toEmails.length > 1 && (
+                      <p className="truncate"><span className="font-medium">To:</span> {toEmails.join(", ")}</p>
+                    )}
+                    {ccEmails.length > 0 && (
+                      <p className="truncate"><span className="font-medium">Cc:</span> {ccEmails.join(", ")}</p>
+                    )}
+                  </div>
                 )}
                 {!open && item.snippet_text && (
                   <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
@@ -299,6 +312,9 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
   const meta = latest.metadata_json as any;
   const aiReplyWorthy = (latest.status_json as any)?.ai_reply_worthy;
   const aiSummary = meta?.ai_summary;
+  const toEmails = Array.isArray(meta?.to_emails) ? (meta.to_emails as string[]) : [];
+  const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
+  const showParticipants = latest.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -330,6 +346,16 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
                   <p className={cn("text-sm font-medium text-foreground leading-snug truncate", latest.hidden && "line-through")}>
                     {latest.subject}
                   </p>
+                )}
+                {showParticipants && open && (
+                  <div className="text-[11px] text-muted-foreground/80 leading-snug space-y-0.5">
+                    {toEmails.length > 1 && (
+                      <p className="truncate"><span className="font-medium">To:</span> {toEmails.join(", ")}</p>
+                    )}
+                    {ccEmails.length > 0 && (
+                      <p className="truncate"><span className="font-medium">Cc:</span> {ccEmails.join(", ")}</p>
+                    )}
+                  </div>
                 )}
                 {!open && (
                   <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
