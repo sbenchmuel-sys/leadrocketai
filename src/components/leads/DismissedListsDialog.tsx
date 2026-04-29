@@ -45,7 +45,7 @@ const domainSchema = z
 
 const emailSchema = z.string().trim().toLowerCase().email("Invalid email").max(255);
 
-function ListEditor({ kind, title, description, placeholder }: {
+export function ListEditor({ kind, title, description, placeholder }: {
   kind: ListKind;
   title: string;
   description: string;
