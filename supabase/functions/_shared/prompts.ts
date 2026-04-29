@@ -1121,8 +1121,9 @@ CONSTRAINTS
 - Use Knowledge Context to provide accurate information
 - No medical or performance claims
 - Keep tone professional but warm
-- Sign off with the Rep's first name (extract from Rep Context below) - NEVER use placeholders like [Your Name]
-- Return EMAIL BODY ONLY (no subject line, no greetings like "Dear X,", start with content)
+- GREETING: Start with "Hi" + the prospect's first name (extract from Lead Context) on the first line, followed by a blank line, then the body
+- SIGN-OFF: End with "Best," on its own line, then the Rep's first name (extract from Rep Context) on the next line — NEVER use placeholders like [Your Name]
+- Return COMPLETE EMAIL BODY ONLY (no subject line). Always finish your final sentence — never cut off mid-thought.
 
 INPUTS
 Lead Context:

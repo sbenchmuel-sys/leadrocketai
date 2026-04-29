@@ -131,13 +131,13 @@ const OUTREACH_TASKS = new Set([
   "whatsapp_message", "linkedin_connect", "linkedin_followup",
 ]);
 
-// Email tasks that must start with "Hi {FirstName}," — excludes reply_to_thread (mid-thread)
-// and non-email channels. Used by the greeting safety-net after reasoning stripping.
+// Email tasks that must start with "Hi {FirstName},". Used by the greeting
+// safety-net after reasoning stripping to ensure no email goes out without a greeting.
 const EMAIL_BODY_TASKS = new Set([
   "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup",
   "pre_email_4_breakup", "nurture_email_single", "re_engagement_intro",
   "email_intro_fast", "email_intro_nurture", "inbound_intro",
-  "post_meeting_followup_email",
+  "post_meeting_followup_email", "reply_to_thread",
 ]);
 
 interface DiversityConstraints {
@@ -1988,6 +1988,7 @@ ${customInstructionsText}
                   { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
                   { role: "user", content: regenPromptParts.join("\n\n") },
                 ],
+                max_tokens: hasCustomInstructions ? 4096 : 2048,
               }),
             });
             if (regenResponse.ok) {
@@ -2145,6 +2146,7 @@ ${customInstructionsText}
                     { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
                     { role: "user", content: regenPromptParts.join("\n\n") },
                   ],
+                  max_tokens: hasCustomInstructions ? 4096 : 2048,
                 }),
               });
 
