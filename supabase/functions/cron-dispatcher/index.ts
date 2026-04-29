@@ -33,6 +33,7 @@ const ALLOWED_TARGETS = new Set([
   "whatsapp-events-processor",
   "detect-lead-candidates",
   "score-lead-candidate",
+  "lookback-seed-candidates",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)
