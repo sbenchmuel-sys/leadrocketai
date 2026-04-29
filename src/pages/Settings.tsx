@@ -20,7 +20,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles } from "lucide-react";
+import { LeadDetectionCard } from "@/components/settings/LeadDetectionCard";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles, Inbox } from "lucide-react";
 
 export default function Settings() {
   const { workspaceId } = useWorkspace();
@@ -212,6 +213,21 @@ export default function Settings() {
           </AccordionTrigger>
           <AccordionContent>
             <CallSettingsCard workspaceId={workspaceId ?? undefined} />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="lead-detection" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Inbox className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Lead Detection</div>
+                <div className="text-sm text-muted-foreground font-normal">Lookback window and reject lists for auto-suggested leads</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <LeadDetectionCard />
           </AccordionContent>
         </AccordionItem>
 
