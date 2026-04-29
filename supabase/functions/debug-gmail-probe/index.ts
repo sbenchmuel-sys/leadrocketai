@@ -71,7 +71,11 @@ serve(async (req) => {
     const get = (n:string) => headers.find((h:any)=>h.name.toLowerCase()===n.toLowerCase())?.value ?? "";
     const from = get("From"), toRaw = get("To"), ccRaw = get("Cc");
     const fromEmails = extractEmailsFromHeader(from);
-    if (!fromEmails.includes(targetEmail.toLowerCase())) { reasons.fromMismatch++; continue; }
+    if (!fromEmails.includes(targetEmail.toLowerCase())) {
+      reasons.fromMismatch++;
+      if (samples.length < 10) samples.push({ from, fromParsed: fromEmails, subject: get("Subject") });
+      continue;
+    }
     const allTo = [...extractEmailsFromHeader(toRaw), ...extractEmailsFromHeader(ccRaw)];
     if (allTo.length > 10) { reasons.mass++; continue; }
     for (const e of allTo) {
