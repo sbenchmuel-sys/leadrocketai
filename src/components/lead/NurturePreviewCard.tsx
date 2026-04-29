@@ -76,6 +76,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [confirmSendTarget, setConfirmSendTarget] = useState<"next" | "following" | null>(null);
 
   const mode = ((lead as any).nurture_mode as NurtureMode) || "review";
   const status = ((lead as any).nurture_status as NurtureStatus) || "inactive";
