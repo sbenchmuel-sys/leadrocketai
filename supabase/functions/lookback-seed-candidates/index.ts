@@ -354,7 +354,7 @@ async function scanOutlookLookback(
 
   let nextUrl: string | null =
     `${GRAPH_BASE}/me/mailFolders/sentItems/messages` +
-    `?$filter=sentDateTime ge '${filterDate}'` +
+    `?$filter=sentDateTime ge ${filterDate}` +
     `&$top=${OUTLOOK_PAGE_SIZE}` +
     `&$orderby=sentDateTime desc` +
     `&$select=id,subject,bodyPreview,from,toRecipients,ccRecipients,sentDateTime`;

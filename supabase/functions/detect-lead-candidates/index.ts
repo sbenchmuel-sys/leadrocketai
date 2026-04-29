@@ -436,7 +436,7 @@ async function scanOutlook(
   // Sent items
   const sentUrl =
     `${GRAPH_BASE}/me/mailFolders/sentItems/messages` +
-    `?$filter=sentDateTime ge '${filterDate}'` +
+    `?$filter=sentDateTime ge ${filterDate}` +
     `&$top=${MAX_MESSAGES_PER_RUN}` +
     `&$select=id,subject,bodyPreview,from,toRecipients,ccRecipients,sentDateTime,internetMessageHeaders`;
 
