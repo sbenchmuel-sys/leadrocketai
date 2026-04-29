@@ -1,0 +1,3 @@
+UPDATE public.gmail_connections
+SET lookback_seed_completed_at = NULL
+WHERE gmail_email = 'shai.benchmuel@binah.ai';
