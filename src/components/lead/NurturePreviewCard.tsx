@@ -6,6 +6,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Sprout, Pause, Play, Loader2, Eye, Wand2, Zap, CheckCircle2, Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -72,6 +76,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [confirmSendTarget, setConfirmSendTarget] = useState<"next" | "following" | null>(null);
 
   const mode = ((lead as any).nurture_mode as NurtureMode) || "review";
   const status = ((lead as any).nurture_status as NurtureStatus) || "inactive";
@@ -383,7 +388,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => handleSendNow("next")}
+                onClick={() => setConfirmSendTarget("next")}
                 disabled={isSending}
                 className="flex-1 text-xs h-7"
               >
@@ -422,7 +427,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => handleSendNow("following")}
+                onClick={() => setConfirmSendTarget("following")}
                 disabled={isSending}
                 className="flex-1 text-xs h-7"
               >
@@ -590,6 +595,32 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Confirm Send Now */}
+      <AlertDialog open={confirmSendTarget !== null} onOpenChange={(open) => !open && setConfirmSendTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send nurture email now?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will send the nurture email to <strong>{lead.name || lead.email || "this lead"}</strong> immediately.
+              This action cannot be undone once the email leaves your inbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isSending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isSending}
+              onClick={async () => {
+                const target = confirmSendTarget;
+                setConfirmSendTarget(null);
+                if (target) await handleSendNow(target);
+              }}
+            >
+              {isSending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />}
+              Send now
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

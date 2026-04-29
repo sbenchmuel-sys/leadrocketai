@@ -682,62 +682,85 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                   Enable Automation
                 </Button>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8"
-                  disabled={bulkUpdating || bulkDeleting}
-                  onClick={async () => {
-                    const selectedIds = Array.from(selectedLeads);
-                    if (selectedIds.length === 0) return;
-                    setBulkUpdating(true);
-                    try {
-                      const { getNurtureCadenceDays } = await import("@/lib/cadenceSettingsTypes");
-                      const gapDays = getNurtureCadenceDays("biweekly");
-                      let eligibleAt = new Date();
-                      eligibleAt.setDate(eligibleAt.getDate() + gapDays);
-                      eligibleAt.setHours(9, 30, 0, 0);
-                      if (eligibleAt.getTime() <= Date.now()) {
-                        eligibleAt.setDate(eligibleAt.getDate() + 1);
-                      }
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      disabled={bulkUpdating || bulkDeleting || selectedLeads.size === 0}
+                    >
+                      <Leaf className="h-4 w-4 mr-1" />
+                      Move to Nurture
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        Move {selectedLeads.size} lead{selectedLeads.size === 1 ? "" : "s"} to nurture?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Each selected lead will be switched to the <strong>biweekly nurture cadence</strong> in <strong>review mode</strong>.
+                        The first nurture email will be queued for review (not auto-sent). You can change cadence or stop nurture per lead afterwards.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={bulkUpdating}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={async () => {
+                          const selectedIds = Array.from(selectedLeads);
+                          if (selectedIds.length === 0) return;
+                          setBulkUpdating(true);
+                          try {
+                            const { getNurtureCadenceDays } = await import("@/lib/cadenceSettingsTypes");
+                            const gapDays = getNurtureCadenceDays("biweekly");
+                            let eligibleAt = new Date();
+                            eligibleAt.setDate(eligibleAt.getDate() + gapDays);
+                            eligibleAt.setHours(9, 30, 0, 0);
+                            if (eligibleAt.getTime() <= Date.now()) {
+                              eligibleAt.setDate(eligibleAt.getDate() + 1);
+                            }
 
-                      const updates = selectedIds.map((id) =>
-                        supabase
-                          .from("leads")
-                          .update({
-                            motion: "nurture",
-                            nurture_status: "active",
-                            nurture_mode: "review",
-                            nurture_cadence: "biweekly",
-                            needs_action: false,
-                            next_action_key: "nurture_1",
-                            next_action_label: "Nurture Email 1",
-                            eligible_at: eligibleAt.toISOString(),
-                            action_reason_code: "NURTURE_DUE",
-                            mode_changed_at: new Date().toISOString(),
-                          })
-                          .eq("id", id)
-                      );
-                      const results = await Promise.all(updates);
-                      const errors = results.filter((r) => r.error);
-                      if (errors.length > 0) {
-                        toast.error(`Failed to update ${errors.length} lead(s)`);
-                      } else {
-                        toast.success(`${selectedIds.length} lead${selectedIds.length > 1 ? "s" : ""} moved to Nurture`);
-                      }
-                      setSelectedLeads(new Set());
-                      onLeadUpdated?.();
-                    } catch (err) {
-                      console.error("Bulk nurture failed:", err);
-                      toast.error("Failed to move leads to nurture");
-                    } finally {
-                      setBulkUpdating(false);
-                    }
-                  }}
-                >
-                  <Leaf className="h-4 w-4 mr-1" />
-                  Move to Nurture
-                </Button>
+                            const updates = selectedIds.map((id) =>
+                              supabase
+                                .from("leads")
+                                .update({
+                                  motion: "nurture",
+                                  nurture_status: "active",
+                                  nurture_mode: "review",
+                                  nurture_cadence: "biweekly",
+                                  needs_action: false,
+                                  next_action_key: "nurture_1",
+                                  next_action_label: "Nurture Email 1",
+                                  eligible_at: eligibleAt.toISOString(),
+                                  action_reason_code: "NURTURE_DUE",
+                                  mode_changed_at: new Date().toISOString(),
+                                })
+                                .eq("id", id)
+                            );
+                            const results = await Promise.all(updates);
+                            const errors = results.filter((r) => r.error);
+                            if (errors.length > 0) {
+                              toast.error(`Failed to update ${errors.length} lead(s)`);
+                            } else {
+                              toast.success(`${selectedIds.length} lead${selectedIds.length > 1 ? "s" : ""} moved to Nurture`);
+                            }
+                            setSelectedLeads(new Set());
+                            onLeadUpdated?.();
+                          } catch (err) {
+                            console.error("Bulk nurture failed:", err);
+                            toast.error("Failed to move leads to nurture");
+                          } finally {
+                            setBulkUpdating(false);
+                          }
+                        }}
+                      >
+                        <Leaf className="h-4 w-4 mr-1" />
+                        Move to Nurture
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
                 
                 {(bulkUpdating || bulkDeleting || bulkSourceUpdating) && <Loader2 className="h-4 w-4 animate-spin" />}
               </div>
