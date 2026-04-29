@@ -241,12 +241,13 @@ serve(async (req) => {
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone")
+      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
       .in("status", ["active", "new"])
       .eq("unsubscribed", false)
+      .eq("manual_mode", false) // Skip leads in manual mode (multi-participant threads)
       .neq("next_action_key", "ooo_return_followup") // OOO returns are handled above — no email needed
       .limit(20);
 
@@ -432,6 +433,40 @@ serve(async (req) => {
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
           continue;
+        }
+
+        // ── MULTI-PARTICIPANT GUARD ─────────────────────────────────
+        // If the most recent inbound email has more than one participant
+        // (To+Cc total > 1), flip the lead into manual_mode and skip.
+        // The user takes over from here via the reply-all UI.
+        const { data: lastInbound } = await supabase
+          .from("interactions")
+          .select("to_emails, cc_emails")
+          .eq("lead_id", lead.id)
+          .eq("direction", "inbound")
+          .order("occurred_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (lastInbound) {
+          const toCount = (lastInbound.to_emails as string[] | null)?.length ?? 0;
+          const ccCount = (lastInbound.cc_emails as string[] | null)?.length ?? 0;
+          if (toCount + ccCount > 1) {
+            console.log(`[automation-executor] Lead ${lead.id}: multi-participant thread (${toCount + ccCount}) — pausing automation`);
+            await supabase.from("leads").update({
+              manual_mode: true,
+              manual_mode_reason: "Multi-participant thread",
+              manual_mode_set_at: new Date().toISOString(),
+              needs_action: false,
+              eligible_at: null,
+            }).eq("id", lead.id);
+            logEntry.status = "skipped";
+            logEntry.error_message = "Multi-participant thread — manual mode";
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            skipped++;
+            continue;
+          }
         }
 
         // ── MIN GAP CHECK ───────────────────────────────────────────

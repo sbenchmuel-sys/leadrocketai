@@ -152,9 +152,20 @@ serve(async (req) => {
       userId = user.id;
     }
 
-    const { to, subject, body, leadId, draftId, threadId, replyToMessageId, skipStateUpdate } = (req as any)._parsedBody || await req.json();
-    
-    if (!to || !subject || !body) {
+    const { to, cc, subject, body, leadId, draftId, threadId, replyToMessageId, skipStateUpdate } = (req as any)._parsedBody || await req.json();
+
+    // Normalize recipients: accept either legacy `to: string` or new `to: string[]`,
+    // plus optional `cc: string[]`. The first To address remains the canonical
+    // primary recipient for legacy code paths that read `to_email`.
+    const toArr: string[] = Array.isArray(to)
+      ? to.map((s) => String(s).trim()).filter(Boolean)
+      : (typeof to === "string" && to.trim() ? [to.trim()] : []);
+    const ccArr: string[] = Array.isArray(cc)
+      ? cc.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+    const primaryTo = toArr[0] ?? "";
+
+    if (toArr.length === 0 || !subject || !body) {
       return new Response(JSON.stringify({ ok: false, error: "Missing to, subject, or body" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -193,20 +204,26 @@ serve(async (req) => {
 
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
-    // Build RFC 2822 email with threading headers if replying
+    // Build RFC 2822 email with threading headers if replying.
+    // To/Cc are comma-separated per RFC 2822; Gmail API accepts the raw header.
     const emailLines = [
-      `To: ${to}`,
+      `To: ${toArr.join(", ")}`,
+    ];
+    if (ccArr.length > 0) {
+      emailLines.push(`Cc: ${ccArr.join(", ")}`);
+    }
+    emailLines.push(
       `Subject: ${subject}`,
       `Content-Type: text/plain; charset=utf-8`,
-    ];
-    
+    );
+
     // Add In-Reply-To and References headers for threading
     if (replyToMessageId) {
       emailLines.push(`In-Reply-To: <${replyToMessageId}>`);
       emailLines.push(`References: <${replyToMessageId}>`);
       console.log(`[gmail-send] Adding threading headers for reply to message: ${replyToMessageId}`);
     }
-    
+
     emailLines.push(``, body);
     const rawEmail = emailLines.join("\r\n");
     const encodedEmail = encodeBase64Url(rawEmail);
@@ -314,11 +331,9 @@ serve(async (req) => {
               occurred_at: interactionOccurredAt,
               subject,
               from_email: connection.gmail_email,
-              to_email: to,
-              // Phase 1: single recipient → one-element to_emails array.
-              // PR 1.2 will pass full multi-recipient arrays through.
-              to_emails: [to],
-              cc_emails: [],
+              to_email: primaryTo,
+              to_emails: toArr,
+              cc_emails: ccArr,
               body_text: body,
               gmail_message_id: sendData.id,
               gmail_thread_id: sendData.threadId || threadId || null,
@@ -342,7 +357,7 @@ serve(async (req) => {
               source_id: interactionRow.id,
               snippet_text: body?.substring(0, 500),
               subject,
-              metadata_json: { gmail_message_id: sendData.id, from_email: connection.gmail_email, to_email: to, to_emails: [to], cc_emails: [] },
+              metadata_json: { gmail_message_id: sendData.id, from_email: connection.gmail_email, to_email: primaryTo, to_emails: toArr, cc_emails: ccArr },
               dedupe_key: emailDedupeKey("gmail", sendData.id, interactionRow.id),
             }).catch(e => console.warn("[gmail-send] Timeline projection failed:", e));
           }

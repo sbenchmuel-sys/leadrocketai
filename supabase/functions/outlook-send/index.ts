@@ -73,7 +73,18 @@ serve(async (req) => {
 
     // Parse body first (req.json() can only be called once)
     const body = await req.json();
-    const { mail_account_id, to, subject, bodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+    const { mail_account_id, to, cc, subject, bodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+
+    // Normalize recipients: accept either legacy `to: string` or new `to: string[]`,
+    // plus optional `cc: string[]`. The first To address remains the canonical
+    // primary recipient for legacy code paths that read `to_email`.
+    const toArr: string[] = Array.isArray(to)
+      ? to.map((s: unknown) => String(s).trim()).filter(Boolean)
+      : (typeof to === "string" && to.trim() ? [to.trim()] : []);
+    const ccArr: string[] = Array.isArray(cc)
+      ? cc.map((s: unknown) => String(s).trim()).filter(Boolean)
+      : [];
+    const primaryTo = toArr[0] ?? "";
 
     // Auth check
     let userId: string;
@@ -100,7 +111,7 @@ serve(async (req) => {
       userId = user.id;
     }
 
-    if (!mail_account_id || !to || !subject || !bodyHtml) {
+    if (!mail_account_id || toArr.length === 0 || !subject || !bodyHtml) {
       return new Response(
         JSON.stringify({ ok: false, error: "mail_account_id, to, subject, bodyHtml are required" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
@@ -193,13 +204,17 @@ serve(async (req) => {
       );
     }
 
-    // Build Graph sendMail payload
+    // Build Graph sendMail payload — multi-recipient via toRecipients[] + ccRecipients[]
+    const toRecipientsPayload = toArr.map((addr) => ({ emailAddress: { address: addr } }));
+    const ccRecipientsPayload = ccArr.map((addr) => ({ emailAddress: { address: addr } }));
+
     let sendUrl = "https://graph.microsoft.com/v1.0/me/sendMail";
     let sendPayload: Record<string, unknown> = {
       message: {
         subject,
         body: { contentType: "HTML", content: bodyHtml },
-        toRecipients: [{ emailAddress: { address: to } }],
+        toRecipients: toRecipientsPayload,
+        ...(ccRecipientsPayload.length > 0 ? { ccRecipients: ccRecipientsPayload } : {}),
       },
       saveToSentItems: true,
     };
@@ -215,7 +230,8 @@ serve(async (req) => {
       sendPayload = {
         message: {
           body: { contentType: "HTML", content: bodyHtml },
-          toRecipients: [{ emailAddress: { address: to } }],
+          toRecipients: toRecipientsPayload,
+          ...(ccRecipientsPayload.length > 0 ? { ccRecipients: ccRecipientsPayload } : {}),
         },
         comment: "",
       };
@@ -255,7 +271,8 @@ serve(async (req) => {
         message: {
           subject,
           body: { contentType: "HTML", content: bodyHtml },
-          toRecipients: [{ emailAddress: { address: to } }],
+          toRecipients: toRecipientsPayload,
+          ...(ccRecipientsPayload.length > 0 ? { ccRecipients: ccRecipientsPayload } : {}),
         },
         saveToSentItems: true,
       };
@@ -300,7 +317,8 @@ serve(async (req) => {
     // 202 Accepted = success (no body from Graph sendMail)
     logger.info("mail.outlook.email_sent", {
       mail_account_id,
-      to,
+      to: toArr,
+      cc: ccArr,
       subject,
       has_thread: !!threadId,
       has_lead: !!leadId,
@@ -329,11 +347,9 @@ serve(async (req) => {
               occurred_at: interactionOccurredAt,
               subject,
               from_email: accountEmail,
-              to_email: to,
-              // Phase 1: single recipient → one-element to_emails array.
-              // PR 1.2 will pass full multi-recipient arrays through.
-              to_emails: [to],
-              cc_emails: [],
+              to_email: primaryTo,
+              to_emails: toArr,
+              cc_emails: ccArr,
               body_text: bodyPlainText.substring(0, 10000),
               direction: "outbound",
             })
@@ -354,7 +370,7 @@ serve(async (req) => {
               source_id: interactionRow.id,
               snippet_text: bodyPlainText?.substring(0, 500),
               subject,
-              metadata_json: { from_email: accountEmail, to_email: to, to_emails: [to], cc_emails: [] },
+              metadata_json: { from_email: accountEmail, to_email: primaryTo, to_emails: toArr, cc_emails: ccArr },
               dedupe_key: emailDedupeKey("outlook", null, interactionRow.id),
             }).catch(e => logger.warn("mail.outlook.timeline_projection_failed", { error: String(e) }));
           }
