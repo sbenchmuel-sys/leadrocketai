@@ -595,6 +595,32 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Confirm Send Now */}
+      <AlertDialog open={confirmSendTarget !== null} onOpenChange={(open) => !open && setConfirmSendTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send nurture email now?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will send the nurture email to <strong>{lead.name || lead.email || "this lead"}</strong> immediately.
+              This action cannot be undone once the email leaves your inbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isSending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isSending}
+              onClick={async () => {
+                const target = confirmSendTarget;
+                setConfirmSendTarget(null);
+                if (target) await handleSendNow(target);
+              }}
+            >
+              {isSending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />}
+              Send now
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
