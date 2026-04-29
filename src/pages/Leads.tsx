@@ -37,6 +37,8 @@ import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import PendingLeadsTab, { usePendingCandidatesCount } from "@/components/leads/PendingLeadsTab";
 
 export default function Leads() {
   const navigate = useNavigate();
