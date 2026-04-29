@@ -89,12 +89,25 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 3b) Load rep profile for greeting/sign-off in generated emails ──
+    let repFirstName = "";
+    const { data: repProfile } = await admin
+      .from("rep_profiles")
+      .select("full_name")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (repProfile?.full_name) {
+      repFirstName = repProfile.full_name.split(" ")[0];
+    }
+
     // ── 4) Build context from canonical intelligence + lead data ──
     const nextStep = intelligence?.recommended_next_step || lead.next_step;
     const nextStepReason = intelligence?.next_step_reason || lead.next_step_reason;
     const risks = intelligence?.risks_json?.length ? (intelligence.risks_json as any[]).slice(0, 2) : [];
     const milestones = intelligence?.milestones_json?.length ? (intelligence.milestones_json as any[]).slice(0, 2) : [];
     const objections = intelligence?.objections_json?.length ? (intelligence.objections_json as string[]).slice(0, 2) : [];
+
+    const leadFirstName = lead.name?.split(" ")[0] ?? "";
 
     const contextBlock = [
       `Lead: ${lead.name} at ${lead.company}`,
@@ -106,13 +119,19 @@ Deno.serve(async (req) => {
       milestones.length > 0 ? `Milestones: ${milestones.map((m: any) => m.description).join("; ")}` : null,
       objections.length > 0 ? `Objections: ${objections.join("; ")}` : null,
       topSignals.length > 0 ? `Company signals: ${topSignals.map((s) => s.signal).join(", ")}` : null,
+      lead.personal_notes ? `Personal notes: ${lead.personal_notes}` : null,
       user_draft ? `User's current draft: ${user_draft}` : null,
     ].filter(Boolean).join("\n");
 
     // ── 5) Channel-specific prompt ──
     let formatInstruction: string;
     if (channel === "email") {
-      formatInstruction = `Return a JSON array of exactly 3 email suggestions. Each must have: {"subject": "...", "body": "..."} where body is 3-6 sentences. No markdown in body.`;
+      const signOff = repFirstName ? `Best,\\n${repFirstName}` : `Best,\\n[your first name]`;
+      formatInstruction = `Return a JSON array of exactly 3 email suggestions. Each must have: {"subject": "...", "body": "..."} where body:
+- Starts with "Hi ${leadFirstName || "[first name]"}," on its own line
+- Contains 3-6 sentences (no markdown)
+- Ends with "${signOff}"
+Return valid JSON array only, no markdown fences.`;
     } else if (channel === "whatsapp" || channel === "sms") {
       formatInstruction = `Return a JSON array of exactly 3 short message suggestions. Each must be: {"text": "..."} where text is 1-2 lines max. Conversational, no formatting.`;
     } else {

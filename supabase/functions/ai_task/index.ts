@@ -103,12 +103,13 @@ function stripLeakedReasoning(text: string): string {
   // 2. Also strip extended chain-of-thought blocks without explicit headers
   //    Look for patterns like "Let me...", "Okay, I need to...", "Let's re-evaluate..."
   //    followed eventually by a greeting
-  const cotPattern = /^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's|I will|I need to|Looking at|Given the|The goal|Since the)[^\n]*\n)+[\s\S]*?\n\n/im;
+  // Require ≥3 consecutive reasoning lines; exclude common email-opener words to avoid
+  // over-stripping ("Given the", "Looking at", "Since the" appear in legitimate email bodies).
+  const cotPattern = /^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's|I will|I need to)[^\n]*\n){3,}[\s\S]*?\n\n/im;
   const cotMatch = text.match(cotPattern);
   if (cotMatch && cotMatch[0].length > 200) {
     const remainder = text.substring(cotMatch[0].length).trim();
-    // Verify remainder looks like an email (starts with greeting or name)
-    if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:|[A-Z][a-z]{1,20},)/i.test(remainder)) {
+    if (remainder.length > 30 && /^(?:Hi|Hey|Hello|Dear|Thanks|Subject:|[A-Z][a-z]{1,20},)/i.test(remainder)) {
       return remainder;
     }
   }
@@ -128,6 +129,15 @@ const OUTREACH_TASKS = new Set([
   "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro", "re_engagement_intro",
   "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
   "whatsapp_message", "linkedin_connect", "linkedin_followup",
+]);
+
+// Email tasks that must start with "Hi {FirstName}," — excludes reply_to_thread (mid-thread)
+// and non-email channels. Used by the greeting safety-net after reasoning stripping.
+const EMAIL_BODY_TASKS = new Set([
+  "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup",
+  "pre_email_4_breakup", "nurture_email_single", "re_engagement_intro",
+  "email_intro_fast", "email_intro_nurture", "inbound_intro",
+  "post_meeting_followup_email",
 ]);
 
 interface DiversityConstraints {
@@ -1927,6 +1937,18 @@ ${customInstructionsText}
     }
 
     content = stripLeakedReasoning(content);
+
+    // Safety net: if an outbound email task is missing its greeting, prepend it.
+    // This catches cases where reasoning stripping consumed the first line, or the
+    // model simply omitted the greeting despite the prompt instruction.
+    if (content && EMAIL_BODY_TASKS.has(task)) {
+      const nameMatch = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m);
+      const leadFirst = nameMatch?.[1] ?? "";
+      if (leadFirst && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(content)) {
+        console.warn(`[ai_task] [${task}] Missing greeting — prepending "Hi ${leadFirst},"`);
+        content = `Hi ${leadFirst},\n\n${content}`;
+      }
+    }
 
     if (!content) {
       console.error("[ai_task] Empty response after retry");

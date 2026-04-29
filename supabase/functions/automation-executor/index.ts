@@ -17,6 +17,13 @@ import {
   type ExecutionSettings,
 } from "../_shared/executionSettings.ts";
 
+// Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
+// Must run before the real signature block is appended to avoid duplication.
+function stripAISignOff(body: string): string {
+  const pattern = /\n\n(?:Best regards?|Best|Thanks|Thank you|Kind regards?|Warm regards?|Regards|Cheers|Sincerely),?\s*\n[^\n]{1,40}\s*$/i;
+  return body.replace(pattern, "").trimEnd();
+}
+
 /** @deprecated — Use resolveCampaignInstruction() instead for new code.
  *  Kept temporarily for any edge case not yet migrated to the resolver. */
 function buildStepInstructions(actionInstructions: string | null | undefined, nextActionKey: string | null | undefined): string | null {
@@ -937,6 +944,7 @@ serve(async (req) => {
 
           // Append signature + footer only for email channel
           if (resolvedChannel === "email") {
+            draftBody = stripAISignOff(draftBody);
             if (repSignature?.signature_text) {
               draftBody += `\n\n${repSignature.signature_text}`;
             } else if (repProfile?.full_name) {
