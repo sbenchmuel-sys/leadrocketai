@@ -7,6 +7,7 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
+import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import {
   type CadenceSettingsV1,
   type LeadMetrics,
@@ -325,6 +326,9 @@ serve(async (req) => {
         // Extract headers needed for direction filter and subsequent processing
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
+        const cc = getHeader(headers, "Cc") || "";
+        const toEmailsArr = extractEmailsFromHeader(to);
+        const ccEmailsArr = extractEmailsFromHeader(cc);
 
         // STRICT DIRECTION FILTER: Only sync emails that are directly between the rep and the lead.
         // Skip 3rd-party emails (newsletters, notifications, etc.) that happen to be addressed to the lead.
@@ -606,6 +610,8 @@ serve(async (req) => {
           subject,
           from_email: from,
           to_email: to,
+          to_emails: toEmailsArr,
+          cc_emails: ccEmailsArr,
           gmail_message_id: gmailMessageId,
           gmail_thread_id: threadId,
           workspace_id: leadData?.workspace_id ?? null,

@@ -315,6 +315,10 @@ serve(async (req) => {
               subject,
               from_email: connection.gmail_email,
               to_email: to,
+              // Phase 1: single recipient → one-element to_emails array.
+              // PR 1.2 will pass full multi-recipient arrays through.
+              to_emails: [to],
+              cc_emails: [],
               body_text: body,
               gmail_message_id: sendData.id,
               gmail_thread_id: sendData.threadId || threadId || null,
@@ -338,7 +342,7 @@ serve(async (req) => {
               source_id: interactionRow.id,
               snippet_text: body?.substring(0, 500),
               subject,
-              metadata_json: { gmail_message_id: sendData.id, from_email: connection.gmail_email, to_email: to },
+              metadata_json: { gmail_message_id: sendData.id, from_email: connection.gmail_email, to_email: to, to_emails: [to], cc_emails: [] },
               dedupe_key: emailDedupeKey("gmail", sendData.id, interactionRow.id),
             }).catch(e => console.warn("[gmail-send] Timeline projection failed:", e));
           }

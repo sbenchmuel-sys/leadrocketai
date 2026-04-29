@@ -1,4 +1,24 @@
 /**
+ * Extracts every email address from an RFC 2822 header value such as
+ *   "Stuart Mills <stuart@acme.com>, bob@acme.com, \"Lisa\" <lisa@acme.com>"
+ *
+ * Returns lowercase, trimmed addresses. Used by sync paths to populate the
+ * full to_emails / cc_emails arrays on interactions.
+ */
+export function extractEmailsFromHeader(header: string | null | undefined): string[] {
+  if (!header) return [];
+  const results: string[] = [];
+  const re = /<([^>]+@[^>]+)>|([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(header)) !== null) {
+    const addr = (m[1] || m[2]).toLowerCase().trim();
+    if (addr) results.push(addr);
+  }
+  // De-duplicate while preserving order
+  return Array.from(new Set(results));
+}
+
+/**
  * Converts AI-generated plain text (with \n\n paragraph separators) to clean HTML.
  *
  * Used to produce the HTML body for both Gmail (multipart/alternative) and

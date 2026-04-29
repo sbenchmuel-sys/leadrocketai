@@ -330,6 +330,10 @@ serve(async (req) => {
               subject,
               from_email: accountEmail,
               to_email: to,
+              // Phase 1: single recipient → one-element to_emails array.
+              // PR 1.2 will pass full multi-recipient arrays through.
+              to_emails: [to],
+              cc_emails: [],
               body_text: bodyPlainText.substring(0, 10000),
               direction: "outbound",
             })
@@ -350,7 +354,7 @@ serve(async (req) => {
               source_id: interactionRow.id,
               snippet_text: bodyPlainText?.substring(0, 500),
               subject,
-              metadata_json: { from_email: accountEmail, to_email: to },
+              metadata_json: { from_email: accountEmail, to_email: to, to_emails: [to], cc_emails: [] },
               dedupe_key: emailDedupeKey("outlook", null, interactionRow.id),
             }).catch(e => logger.warn("mail.outlook.timeline_projection_failed", { error: String(e) }));
           }

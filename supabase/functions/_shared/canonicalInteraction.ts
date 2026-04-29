@@ -30,6 +30,10 @@ export interface CanonicalInteractionInput {
   subject?: string | null;
   from_email?: string | null;
   to_email?: string | null;
+  // Full participant arrays (To + Cc). Both default to []; the primary
+  // to_email is also expected to appear inside to_emails.
+  to_emails?: string[] | null;
+  cc_emails?: string[] | null;
   gmail_message_id?: string | null;
   gmail_thread_id?: string | null;
   ai_intent?: string | null;
@@ -193,6 +197,8 @@ export async function createCanonicalInteraction(
     subject: input.subject ?? null,
     from_email: input.from_email ?? null,
     to_email: input.to_email ?? null,
+    to_emails: input.to_emails ?? [],
+    cc_emails: input.cc_emails ?? [],
     gmail_message_id: input.gmail_message_id ?? null,
     gmail_thread_id: input.gmail_thread_id ?? null,
     ai_intent: input.ai_intent ?? null,
@@ -257,6 +263,8 @@ export async function createCanonicalInteraction(
           gmail_thread_id: input.gmail_thread_id ?? undefined,
           from_email: input.from_email ?? undefined,
           to_email: input.to_email ?? undefined,
+          to_emails: input.to_emails ?? undefined,
+          cc_emails: input.cc_emails ?? undefined,
           ai_summary: input.ai_summary ?? undefined,
           source: input.source,
         },

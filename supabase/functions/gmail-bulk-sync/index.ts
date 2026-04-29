@@ -6,6 +6,7 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -421,6 +422,9 @@ async function syncLeadEmails(
 
       const from = getHeader(headers, "From") || "";
       const to = getHeader(headers, "To") || "";
+      const cc = getHeader(headers, "Cc") || "";
+      const toEmailsArr = extractEmailsFromHeader(to);
+      const ccEmailsArr = extractEmailsFromHeader(cc);
       const subject = getHeader(headers, "Subject") || "(no subject)";
       const date = getHeader(headers, "Date");
       const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
@@ -428,7 +432,7 @@ async function syncLeadEmails(
       const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
       const direction = isFromLead ? "inbound" : "outbound";
       const type = isFromLead ? "email_inbound" : "email_outbound";
-      
+
       const bodyText = getMessageBody(message);
 
       if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
@@ -574,6 +578,8 @@ async function syncLeadEmails(
         subject,
         from_email: from,
         to_email: to,
+        to_emails: toEmailsArr,
+        cc_emails: ccEmailsArr,
         gmail_message_id: gmailMessageId,
         gmail_thread_id: threadId,
         provider: "gmail",
@@ -618,6 +624,9 @@ async function syncLeadEmails(
 
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
+        const cc = getHeader(headers, "Cc") || "";
+        const toEmailsArr = extractEmailsFromHeader(to);
+        const ccEmailsArr = extractEmailsFromHeader(cc);
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
@@ -625,7 +634,7 @@ async function syncLeadEmails(
         const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
         const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
-        
+
         const bodyText = getMessageBody(message);
 
         if (direction === "inbound" && containsClosingKeywords(bodyText + " " + subject)) {
@@ -751,6 +760,7 @@ async function syncLeadEmails(
           lead_id: leadId, type, source: "gmail",
           body_text: bodyText.substring(0, 10000), occurred_at: occurredAt, direction,
           subject, from_email: from, to_email: to,
+          to_emails: toEmailsArr, cc_emails: ccEmailsArr,
           gmail_message_id: gmailMessageId, gmail_thread_id: threadId,
           provider: "gmail",
           dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),

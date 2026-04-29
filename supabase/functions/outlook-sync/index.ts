@@ -237,6 +237,7 @@ serve(async (req) => {
       try {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
+        const ccEmails = (msg.ccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
 
         // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
         const isFromLead = fromEmail === leadEmailNorm;
@@ -450,6 +451,8 @@ serve(async (req) => {
           subject,
           from_email: msg.from?.emailAddress?.address || "",
           to_email: toEmails.join(", "),
+          to_emails: toEmails as string[],
+          cc_emails: ccEmails as string[],
           gmail_message_id: messageId,
           gmail_thread_id: msg.conversationId,
           workspace_id: leadData?.workspace_id ?? null,

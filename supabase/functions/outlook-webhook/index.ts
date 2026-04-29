@@ -153,12 +153,13 @@ async function processNotification(
   let conversationId: string | null = null;
   let bodyText = "";
   let toRecipients: string[] = [];
+  let ccRecipients: string[] = [];
   let internetMessageHeaders: Array<{ name: string; value: string }> = [];
 
   try {
     const accessToken = await getFreshOutlookToken(mailAccountId, serviceClient);
     const msgResp = await fetch(
-      `https://graph.microsoft.com/v1.0/me/messages/${providerMessageId}?$select=id,subject,from,toRecipients,conversationId,receivedDateTime,internetMessageId,body,internetMessageHeaders`,
+      `https://graph.microsoft.com/v1.0/me/messages/${providerMessageId}?$select=id,subject,from,toRecipients,ccRecipients,conversationId,receivedDateTime,internetMessageId,body,internetMessageHeaders`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
 
@@ -175,8 +176,12 @@ async function processNotification(
           : msg.body.content;
       }
 
-      // Extract to recipients
+      // Extract to + cc recipients (full participant set for reply-all)
       toRecipients = (msg.toRecipients || []).map(
+        (r: { emailAddress?: { address?: string } }) =>
+          r.emailAddress?.address?.toLowerCase() ?? ""
+      ).filter(Boolean);
+      ccRecipients = (msg.ccRecipients || []).map(
         (r: { emailAddress?: { address?: string } }) =>
           r.emailAddress?.address?.toLowerCase() ?? ""
       ).filter(Boolean);
@@ -446,6 +451,8 @@ async function processNotification(
     subject: messageSubject,
     from_email: senderEmail,
     to_email: repEmail,
+    to_emails: toRecipients,
+    cc_emails: ccRecipients,
     workspace_id: lead.workspace_id ?? null,
     provider: "outlook",
     metadata_json: { provider_message_id: providerMessageId, conversation_id: conversationId },
