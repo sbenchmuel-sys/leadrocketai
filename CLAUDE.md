@@ -77,14 +77,14 @@ Build sequence tracking (spec: GitHub issue #3):
 - ✅ PR #3/4 — data layer (`lead_candidates` + dismiss-list tables, RLS). Applied via Lovable.
 - ✅ PR #4 — detection hook (`detect-lead-candidates` edge fn, `_shared/leadCandidateDetection.ts`, cron migration).
 - ✅ PR #5 — AI scoring (`score-lead-candidate` edge fn, 10-min cron, Lovable AI gateway w/ Gemini Flash Lite). Advisory only in V1 — never auto-dismisses.
-- ⬜ PR #6 — Lookback seed (30-day retroactive scan on first mail-account connect).
+- ✅ PR #6 — Lookback seed (`lookback-seed-candidates` edge fn, hourly cron). Adds `lookback_seed_completed_at` column to `gmail_connections` + `mail_accounts`; adds `lookback_seed_window_days` (default 30) to `workspaces`. Existing accounts are backfilled as already-seeded so only future connects trigger a scan.
 - ⬜ PR #7–10 — UI + bulk actions + digest + settings (Lovable).
 
 `detect-lead-candidates` was added to `cron-dispatcher`'s `ALLOWED_TARGETS`. Its cron job is in `20260430000000_add_detect_lead_candidates_cron.sql` and must be applied via Lovable migration tool.
 
 ## Open hazards (separately tracked)
 
-- **Supabase anon key is hardcoded in 11 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 11 crons must be updated together OR they all break silently.
+- **Supabase anon key is hardcoded in 12 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 12 crons must be updated together OR they all break silently.
 - **Demo data fall-through in `src/lib/demoData.ts` (736 lines)** — imported by production query paths. If `VITE_DEMO_MODE` is misconfigured in prod, real users could see demo numbers. Gate explicitly.
 - **Lead scoring exists client-side AND server-side** with no sync — `closingPowerUtils.ts` (client) vs `recompute-lead-intelligence` (server). Pick server as canonical.
 - **Email send paths are duplicated 3x** — `ReplyComposer.tsx`, `mailProviders/GmailProvider.ts`, `useMailSync.ts`. Funnel through the provider.
