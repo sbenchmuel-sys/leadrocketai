@@ -134,13 +134,22 @@ export function usePendingCandidatesCount() {
 async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extraNotes?: string) {
   const ownerUserId = c.owner_user_id || ownerFallback;
   const company = c.company_domain || c.contact_email.split("@")[1] || "Unknown";
+  // Map candidate source -> allowed leads.source_type values
+  // Allowed: outbound_prospecting | contact_form | gmail_inbound | event_lead |
+  //          referral | csv_import | manual_entry | whatsapp_inbound
+  const sourceType =
+    c.source === "lookback_seed" || c.source === "outbound_detection"
+      ? "outbound_prospecting"
+      : c.source === "inbound_reply" || c.source === "manual_inbox"
+      ? "gmail_inbound"
+      : "manual_entry";
   const payload: any = {
     name: deriveName(c),
     company,
     email: c.contact_email.toLowerCase(),
     strategy: "fast",
     motion: "outbound_prospecting",
-    source_type: "lead_candidate",
+    source_type: sourceType,
     owner_user_id: ownerUserId,
     workspace_id: c.workspace_id,
     stage: "new",
@@ -151,6 +160,7 @@ async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extr
   if (error) throw error;
   return data.id as string;
 }
+
 
 export default function PendingLeadsTab({ onApproved }: { onApproved?: () => void }) {
   const { workspaceId } = useWorkspace();
