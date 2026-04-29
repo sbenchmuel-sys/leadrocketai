@@ -220,83 +220,116 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
         <p className="text-xs text-muted-foreground">
           Enable to auto-schedule follow-ups. System pauses on reply or meeting.
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={async () => {
-            setIsEnabling(true);
-            try {
-              let updateFields: Record<string, any>;
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isEnabling}
+              className="w-full text-xs h-7"
+            >
+              {isEnabling ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <Zap className="h-3 w-3 mr-1" />
+              )}
+              Enable Automation
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Enable automation for this lead?</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-sm">
+                  <p>
+                    The system will start sending <strong>{motion === "nurture" ? "nurture emails" : "follow-up emails"}</strong> to{" "}
+                    <strong>{lead.name || lead.email || "this lead"}</strong> automatically.
+                  </p>
+                  <p className="text-muted-foreground">
+                    Automation pauses on reply, meeting booked, or opt-out. You can stop it any time from this card.
+                  </p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isEnabling}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  setIsEnabling(true);
+                  try {
+                    let updateFields: Record<string, any>;
 
-              if (motion === "nurture") {
-                const cadence = (lead as any).nurture_cadence || "biweekly";
-                const gapDays = getNurtureCadenceDays(cadence);
-                const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
-                let eligibleAt = addDays(new Date(), gapDays);
-                eligibleAt.setHours(9, 30, 0, 0);
-                if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+                    if (motion === "nurture") {
+                      const cadence = (lead as any).nurture_cadence || "biweekly";
+                      const gapDays = getNurtureCadenceDays(cadence);
+                      const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
+                      let eligibleAt = addDays(new Date(), gapDays);
+                      eligibleAt.setHours(9, 30, 0, 0);
+                      if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
 
-                updateFields = {
-                  needs_action: true,
-                  next_action_key: `nurture_${stepNum}`,
-                  next_action_label: `Nurture Email ${stepNum}`,
-                  eligible_at: eligibleAt.toISOString(),
-                  action_reason_code: "NURTURE_DUE",
-                  nurture_status: "active",
-                  nurture_mode: (lead as any).nurture_mode || "review",
-                };
-              } else {
-                const hasOutbound = !!(lead as any).last_outbound_at;
-                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                const nextLabel = stepLabels[nextKey] || "Intro Email";
-                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-                const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                  ? intervals[stepIdx] - intervals[stepIdx - 1]
-                  : (hasOutbound ? intervals[1] - intervals[0] : 0);
-                
-                let eligibleAt: Date;
-                if (gapDays === 0) {
-                  eligibleAt = new Date();
-                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-                } else {
-                  eligibleAt = addDays(new Date(), gapDays);
-                  eligibleAt.setHours(9, 30, 0, 0);
-                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                }
+                      updateFields = {
+                        needs_action: true,
+                        next_action_key: `nurture_${stepNum}`,
+                        next_action_label: `Nurture Email ${stepNum}`,
+                        eligible_at: eligibleAt.toISOString(),
+                        action_reason_code: "NURTURE_DUE",
+                        nurture_status: "active",
+                        nurture_mode: (lead as any).nurture_mode || "review",
+                      };
+                    } else {
+                      const hasOutbound = !!(lead as any).last_outbound_at;
+                      const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+                      const nextLabel = stepLabels[nextKey] || "Intro Email";
+                      const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+                      const gapDays = stepIdx > 0 && stepIdx < intervals.length
+                        ? intervals[stepIdx] - intervals[stepIdx - 1]
+                        : (hasOutbound ? intervals[1] - intervals[0] : 0);
 
-                updateFields = {
-                  needs_action: true,
-                  next_action_key: nextKey,
-                  next_action_label: nextLabel,
-                  eligible_at: eligibleAt.toISOString(),
-                  action_reason_code: "FOLLOWUP_DUE",
-                };
-              }
+                      let eligibleAt: Date;
+                      if (gapDays === 0) {
+                        eligibleAt = new Date();
+                        eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+                      } else {
+                        eligibleAt = addDays(new Date(), gapDays);
+                        eligibleAt.setHours(9, 30, 0, 0);
+                        if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
+                      }
 
-              await supabase
-                .from("leads")
-                .update(updateFields)
-                .eq("id", lead.id);
+                      updateFields = {
+                        needs_action: true,
+                        next_action_key: nextKey,
+                        next_action_label: nextLabel,
+                        eligible_at: eligibleAt.toISOString(),
+                        action_reason_code: "FOLLOWUP_DUE",
+                      };
+                    }
 
-              toast.success("Automation enabled. Next step scheduled.");
-              onUpdate();
-            } catch (err) {
-              console.error("Failed to enable automation:", err);
-              toast.error("Failed to enable automation");
-            } finally {
-              setIsEnabling(false);
-            }
-          }}
-          disabled={isEnabling}
-          className="w-full text-xs h-7"
-        >
-          {isEnabling ? (
-            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-          ) : (
-            <Zap className="h-3 w-3 mr-1" />
-          )}
-          Enable Automation
-        </Button>
+                    await supabase
+                      .from("leads")
+                      .update(updateFields)
+                      .eq("id", lead.id);
+
+                    toast.success("Automation enabled. Next step scheduled.");
+                    onUpdate();
+                  } catch (err) {
+                    console.error("Failed to enable automation:", err);
+                    toast.error("Failed to enable automation");
+                  } finally {
+                    setIsEnabling(false);
+                  }
+                }}
+                disabled={isEnabling}
+              >
+                {isEnabling ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Zap className="h-3 w-3 mr-1" />
+                )}
+                Enable automation
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <Separator className="bg-border/40" />
       </div>
     );
