@@ -279,7 +279,7 @@ async function scanGmailLookback(
 
       const metaResults = await Promise.all(batch.map(id =>
         fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From,To,Cc,Subject,Date`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`,
           { headers: { Authorization: `Bearer ${accessToken}` } },
         ).then(r => r.ok ? r.json() : null).catch(() => null)
       ));
