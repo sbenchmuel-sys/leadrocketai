@@ -283,6 +283,8 @@ export default function Leads() {
     }
   };
 
+  const pendingCount = usePendingCandidatesCount();
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
