@@ -1955,7 +1955,38 @@ ${customInstructionsText}
       }
     }
 
+    const preStripLength = content.length;
     content = stripLeakedReasoning(content);
+
+    // If the stripper had to remove a leaked reasoning block AND the result
+    // is too thin to be a real email, retry once with the cheaper/faster model
+    // and a hardened "no reasoning" reminder. This catches cases where the
+    // model produced reasoning + only a sign-off ("Best, Shai") and the
+    // stripper correctly returned empty.
+    if (preStripLength > 200 && (!content || content.length < 40) && EMAIL_BODY_TASKS.has(task)) {
+      console.warn(`[ai_task] [${task}] Stripper removed leaked reasoning leaving no body (pre=${preStripLength}, post=${content.length}). Retrying...`);
+      const hardenedPrompt = `${promptParts.join("\n\n")}\n\nABSOLUTE RULE: Output ONLY the final email body. Start with "Hi {Name}," or "Subject:". Do NOT write any reasoning, planning, analysis, or notes. Reasoning is forbidden.`;
+      const retryResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash-lite",
+          messages: [
+            { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+            { role: "user", content: hardenedPrompt },
+          ],
+          max_tokens: 2048,
+        }),
+      });
+      if (retryResp.ok) {
+        const retryJson = await retryResp.json();
+        const retryContent = retryJson.choices?.[0]?.message?.content || "";
+        const cleaned = stripLeakedReasoning(retryContent);
+        if (cleaned && cleaned.length >= 40) {
+          content = cleaned;
+        }
+      }
+    }
 
     // Safety net: if an outbound email task is missing its greeting, prepend it.
     // This catches cases where reasoning stripping consumed the first line, or the
