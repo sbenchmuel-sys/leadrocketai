@@ -286,7 +286,7 @@ export async function deleteLead(leadId: string): Promise<void> {
 
 export type InteractionItem = Pick<Interaction,
   'id' | 'lead_id' | 'type' | 'source' | 'occurred_at' | 'subject' |
-  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id' | 'hidden'
+  'from_email' | 'to_email' | 'to_emails' | 'cc_emails' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id' | 'gmail_thread_id' | 'hidden'
 >;
 
 export async function getLeadInteractions(leadId: string, includeHidden = false): Promise<InteractionItem[]> {
@@ -298,7 +298,7 @@ export async function getLeadInteractions(leadId: string, includeHidden = false)
 
   let query = supabase
     .from('interactions')
-    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, hidden')
+    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, to_emails, cc_emails, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, gmail_thread_id, hidden')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false })
     .limit(100);
@@ -439,8 +439,11 @@ export async function getLeadTimeline(
         status_json: { ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
         metadata_json: {
           gmail_message_id: i.gmail_message_id,
+          gmail_thread_id: (i as { gmail_thread_id?: string | null }).gmail_thread_id ?? null,
           from_email: i.from_email,
           to_email: i.to_email,
+          to_emails: Array.isArray((i as { to_emails?: string[] }).to_emails) ? (i as { to_emails?: string[] }).to_emails : [],
+          cc_emails: Array.isArray((i as { cc_emails?: string[] }).cc_emails) ? (i as { cc_emails?: string[] }).cc_emails : [],
           ai_summary: i.ai_summary,
         },
         dedupe_key: i.gmail_message_id ?? i.id,
