@@ -129,6 +129,7 @@ function computeAutomationFields(lead: EnrichedLead) {
     next_action_label: nextLabel,
     eligible_at: eligibleAt.toISOString(),
     action_reason_code: "FOLLOWUP_DUE",
+    automation_mode: "auto", // explicit user consent — required by executor consent gate
   };
 }
 
