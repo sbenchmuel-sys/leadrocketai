@@ -51,60 +51,63 @@ import {
 function stripLeakedReasoning(text: string): string {
   if (!text) return text;
 
-  // 1. Remove any block that starts with a reasoning header
-  //    Match: INTERNAL REASONING:, INTERNAL REFLECTION:, INTERNAL ANALYSIS:
-  //    These can appear at the start or after whitespace
-  const reasoningHeaderPattern = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS)\s*:?\s*\n/i;
-  
-  if (reasoningHeaderPattern.test(text)) {
-    // Strategy: find the email body by looking for a greeting pattern
-    // Greetings: Hi X, Hey X, Hello X, Dear X, Thanks X, Subject:, or just "Name,"
-    // The email body typically starts after a double newline following reasoning
-    
-    // Try to find a standard greeting after reasoning
-    const greetingPatterns = [
-      // Standard greetings
-      /\n((?:Hi|Hey|Hello|Dear|Thanks|Thank you|Subject:)\s*[^\n]*)/i,
-      // Name-comma pattern (e.g., "Eldad," or "Shai,") — must be a short line
-      /\n([A-Z][a-z]{1,20},\s*\n)/,
-      // Fallback: find the last double-newline and take everything after
-    ];
+  // Reasoning header markers (case-insensitive). May appear with optional
+  // parenthetical e.g. "INTERNAL REASONING (DO NOT SHOW THIS TO USER)".
+  const reasoningHeaderRe = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT)\b[^\n]*\n/i;
 
-    for (const pattern of greetingPatterns) {
-      const match = text.match(pattern);
-      if (match && match.index !== undefined) {
-        // Verify this isn't inside the reasoning (must be after significant text)
-        const beforeMatch = text.substring(0, match.index);
-        // Only strip if there's substantial reasoning before (>200 chars)
-        if (beforeMatch.length > 200) {
-          text = text.substring(match.index).trim();
-          return text;
+  // Pattern that identifies a real email greeting line on its own.
+  const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thanks[, ]|Thank you[, ]|[A-Z][a-z]{1,20},)\s*$/i;
+
+  if (reasoningHeaderRe.test(text)) {
+    // Find the position of the FIRST reasoning header.
+    const headerMatch = text.match(reasoningHeaderRe);
+    if (headerMatch && headerMatch.index !== undefined) {
+      const headerStart = headerMatch.index;
+      const afterHeader = text.substring(headerStart);
+
+      // Look for the LAST greeting line in the entire text — this is most
+      // likely the start of the actual final email (the model often re-prints
+      // the greeting after its reasoning block).
+      const lines = text.split("\n");
+      let lastGreetingLineIdx = -1;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const trimmed = lines[i].trim();
+        if (!trimmed) continue;
+        if (greetingLineRe.test(trimmed)) {
+          // Make sure this greeting is AFTER the reasoning header
+          const charsBefore = lines.slice(0, i).join("\n").length;
+          if (charsBefore >= headerStart) {
+            lastGreetingLineIdx = i;
+            break;
+          }
         }
       }
-    }
-    
-    // Fallback: split on the last occurrence of double newline before short line
-    const lines = text.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      // Look for a greeting-like line
-      if (/^(?:Hi|Hey|Hello|Dear|Thanks|Subject:)\b/i.test(line) ||
-          /^[A-Z][a-z]{1,20},\s*$/.test(line)) {
-        // Check there's reasoning before this
-        const beforeLines = lines.slice(0, i).join('\n');
-        if (beforeLines.length > 200 && reasoningHeaderPattern.test(beforeLines)) {
-          text = lines.slice(i).join('\n').trim();
-          return text;
-        }
+
+      if (lastGreetingLineIdx >= 0) {
+        const result = lines.slice(lastGreetingLineIdx).join("\n").trim();
+        if (result.length > 20) return result;
       }
+
+      // Fallback: scan forward from the header for any greeting
+      const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thanks|Thank you)\s+[^\n]*)/i;
+      const fwd = afterHeader.match(fwdGreetingRe);
+      if (fwd && fwd.index !== undefined) {
+        const result = afterHeader.substring(fwd.index).trim();
+        if (result.length > 20) return result;
+      }
+
+      // Last resort: drop everything from header to end if we can't find a body
+      // (better empty than leak). Return the text BEFORE the header if it looks
+      // like a complete email (has a greeting + sign-off), otherwise empty string.
+      const before = text.substring(0, headerStart).trim();
+      if (before.length > 30 && /^(?:Hi|Hey|Hello|Dear|Subject:)/i.test(before)) {
+        return before;
+      }
+      return "";
     }
   }
 
   // 2. Also strip extended chain-of-thought blocks without explicit headers
-  //    Look for patterns like "Let me...", "Okay, I need to...", "Let's re-evaluate..."
-  //    followed eventually by a greeting
-  // Require ≥3 consecutive reasoning lines; exclude common email-opener words to avoid
-  // over-stripping ("Given the", "Looking at", "Since the" appear in legitimate email bodies).
   const cotPattern = /^[\s\S]*?(?:(?:KB Insight|Constraint Check|Final plan|Let me|Okay,|Let's|I will|I need to)[^\n]*\n){3,}[\s\S]*?\n\n/im;
   const cotMatch = text.match(cotPattern);
   if (cotMatch && cotMatch[0].length > 200) {
