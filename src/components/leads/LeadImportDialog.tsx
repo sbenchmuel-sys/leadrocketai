@@ -86,7 +86,59 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       const isReactivation = selectedSource === "reactivation";
       const reactivationMotion = preset.motion; // "re_engagement" for reactivation
 
-      const leadsToInsert = parsedLeads.map((lead) => {
+      // ---- Deduplication ----
+      // 1) Within-file: collapse rows sharing the same email (case-insensitive).
+      // 2) Against workspace: skip emails that already exist on a lead in this workspace.
+      const seenEmails = new Set<string>();
+      const dedupedInFile: ParsedLead[] = [];
+      let inFileDupes = 0;
+      for (const lead of parsedLeads) {
+        const e = (lead.email || "").trim().toLowerCase();
+        if (!e) {
+          // Keep emailless rows (rare) — they can't collide on email
+          dedupedInFile.push(lead);
+          continue;
+        }
+        if (seenEmails.has(e)) { inFileDupes++; continue; }
+        seenEmails.add(e);
+        dedupedInFile.push(lead);
+      }
+
+      const emailList = Array.from(seenEmails);
+      let existingEmails = new Set<string>();
+      if (emailList.length > 0) {
+        // Chunk to stay under URL limits on .in() filters
+        const chunkSize = 200;
+        for (let i = 0; i < emailList.length; i += chunkSize) {
+          const chunk = emailList.slice(i, i + chunkSize);
+          const { data: existing, error: existErr } = await supabase
+            .from("leads")
+            .select("email")
+            .eq("workspace_id", workspaceId)
+            .in("email", chunk);
+          if (existErr) {
+            console.error("Dedup lookup failed (continuing without workspace dedup):", existErr);
+            break;
+          }
+          for (const row of existing || []) {
+            if (row.email) existingEmails.add(row.email.toLowerCase());
+          }
+        }
+      }
+
+      const finalParsedLeads = dedupedInFile.filter((lead) => {
+        const e = (lead.email || "").trim().toLowerCase();
+        return !e || !existingEmails.has(e);
+      });
+      const workspaceDupes = dedupedInFile.length - finalParsedLeads.length;
+
+      if (finalParsedLeads.length === 0) {
+        toast.error(`All ${parsedLeads.length} leads already exist in this workspace — nothing to import.`);
+        setIsImporting(false);
+        return;
+      }
+
+      const leadsToInsert = finalParsedLeads.map((lead) => {
         // Item 4: Build personal_notes from supplementary import fields
         const noteParts: string[] = [];
         if (lead.history_notes) noteParts.push(`History: ${lead.history_notes}`);
@@ -161,7 +213,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       if (leadsToInsert.length > 0) {
         try {
           const allContextItems = leadsToInsert.flatMap((insertedLead, idx) => {
-            const parsedLead = parsedLeads[idx];
+            const parsedLead = finalParsedLeads[idx];
             if (!parsedLead) return [];
             return extractLeadContextItems(parsedLead, insertedLead.id, workspaceId);
           });
@@ -181,12 +233,17 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
         }
       }
 
+      const skipped = inFileDupes + workspaceDupes;
+      const skipNote = skipped > 0
+        ? ` (skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}${workspaceDupes > 0 ? ` — ${workspaceDupes} already in workspace` : ""})`
+        : "";
+
       if (autoSendIntro && isOutbound) {
-        toast.success(`Imported ${count} leads — intro emails will be queued`, {
+        toast.success(`Imported ${count} leads${skipNote} — intro emails will be queued`, {
           description: "Drafts will be generated for each lead automatically.",
         });
       } else {
-        toast.success(`Successfully imported ${count} leads!`);
+        toast.success(`Successfully imported ${count} leads${skipNote}`);
       }
 
       handleClose(false);

@@ -191,10 +191,19 @@ const KEY_ALIASES: Record<string, string> = {
 function normalizeRow(row: Record<string, string>): Record<string, string> {
   const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(row)) {
-    const lowerKey = key.trim().toLowerCase().replace(/[:;]+$/, "").replace(/[\s_-]+/g, " ");
-    const canonical = KEY_ALIASES[lowerKey] || KEY_ALIASES[lowerKey.replace(/ /g, "_")] || lowerKey;
-    // Only set if not already set (first match wins)
-    if (!normalized[canonical]) {
+    // Strip form-builder suffixes like "First Name|name-1", "Email Address|email-1", "Phone|phone-1", "Submission Date|hidden-1"
+    // Also strip parenthetical hints like "Country (optional)" and trailing colons/semicolons
+    const cleaned = key
+      .split("|")[0]
+      .replace(/\([^)]*\)/g, "")
+      .trim()
+      .toLowerCase()
+      .replace(/[:;]+$/, "")
+      .replace(/[\s_-]+/g, " ")
+      .trim();
+    const canonical = KEY_ALIASES[cleaned] || KEY_ALIASES[cleaned.replace(/ /g, "_")] || cleaned;
+    // Only set if not already set (first match wins) and value is non-empty
+    if (!normalized[canonical] && value != null && String(value).trim() !== "") {
       normalized[canonical] = value;
     }
   }
@@ -205,12 +214,23 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
   const r = normalizeRow(row);
   const firstName = (r["first_name"] || "").trim();
   const lastName = (r["last_name"] || "").trim();
-  const name = firstName && lastName
-    ? `${firstName} ${lastName}`
-    : (r["name"] || firstName || "Unknown").trim();
+  const email = (r["email"] || "").trim().toLowerCase();
+  let name: string;
+  if (firstName && lastName) name = `${firstName} ${lastName}`;
+  else if (r["name"]) name = r["name"].trim();
+  else if (firstName) name = firstName;
+  else if (lastName) name = lastName;
+  else if (email) {
+    // Derive a friendly name from the email local-part as a last resort
+    const local = email.split("@")[0].replace(/[._-]+/g, " ").trim();
+    name = local
+      ? local.split(" ").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ")
+      : "Unknown";
+  } else {
+    name = "Unknown";
+  }
 
   const company = (r["company"] || "").trim();
-  const email = (r["email"] || "").trim().toLowerCase();
 
   // Preserve ALL original columns verbatim (before normalization)
   const rawImportJson: Record<string, string> = {};
