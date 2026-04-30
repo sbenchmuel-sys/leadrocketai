@@ -883,7 +883,7 @@ serve(async (req) => {
           const campaignInput: CampaignResolverInput = {
             lead_id: lead.id,
             action_key: lead.next_action_key,
-            motion: lead.motion,
+            motion: isInboundLead ? "inbound_response" : lead.motion,
             outbound_tone: (lead as any).outbound_tone || "direct",
             action_instructions: lead.action_instructions,
             structured_campaign: structuredCampaign,
@@ -916,9 +916,10 @@ serve(async (req) => {
               task: aiTask,
               payload: {
                 lead_id: lead.id,
-                motion: lead.motion,
+                motion: isInboundLead ? "inbound_response" : lead.motion,
+                source_type: lead.source_type || "manual_entry",
                 outbound_tone: (lead as any).outbound_tone || "direct",
-                lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${lead.motion}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
+                lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${isInboundLead ? "inbound_response" : lead.motion}\nSource: ${lead.source_type || "manual_entry"}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
                 meeting_link: repProfile?.calendar_link || "",
                 custom_instructions: resolvedInstructions,
