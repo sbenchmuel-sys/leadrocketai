@@ -249,12 +249,45 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
   const someSelected = selectedLeads.size > 0 && selectedLeads.size < leads.length;
 
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedLeads(new Set(leads.map(l => l.id)));
-    } else {
-      setSelectedLeads(new Set());
+  // Filtered + sorted leads (search + heating_up sort)
+  const visibleLeads = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    let arr = leads;
+    if (q) {
+      arr = arr.filter((l) => l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q));
     }
+    if (revenueStateFilter === "heating_up") {
+      arr = [...arr].sort((a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0));
+    }
+    return arr;
+  }, [leads, searchQuery, revenueStateFilter, scoreMap]);
+
+  const totalCount = visibleLeads.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const safePageIndex = Math.min(pageIndex, totalPages - 1);
+  const pageLeads = useMemo(() => {
+    if (showAll) return visibleLeads;
+    const start = safePageIndex * PAGE_SIZE;
+    return visibleLeads.slice(start, start + PAGE_SIZE);
+  }, [visibleLeads, safePageIndex, showAll]);
+
+  const pageIds = useMemo(() => new Set(pageLeads.map((l) => l.id)), [pageLeads]);
+  const selectedOnPage = useMemo(() => pageLeads.filter((l) => selectedLeads.has(l.id)).length, [pageLeads, selectedLeads]);
+  const allOnPageSelected = pageLeads.length > 0 && selectedOnPage === pageLeads.length;
+  const someOnPageSelected = selectedOnPage > 0 && selectedOnPage < pageLeads.length;
+
+  const handleSelectAll = (checked: boolean) => {
+    const next = new Set(selectedLeads);
+    if (checked) {
+      pageIds.forEach((id) => next.add(id));
+    } else {
+      pageIds.forEach((id) => next.delete(id));
+    }
+    setSelectedLeads(next);
+  };
+
+  const handleSelectAllFiltered = () => {
+    setSelectedLeads(new Set(visibleLeads.map((l) => l.id)));
   };
 
   const handleSelectLead = (leadId: string, checked: boolean) => {
