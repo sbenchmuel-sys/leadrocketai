@@ -71,9 +71,10 @@ function resolveChannel(actionKey: string | null, explicit?: CanonicalChannel): 
 
 // ── Framework selection ─────────────────────────────────────────────
 
-type EmailFramework = "neutral_observation" | "observation" | "hypothesis" | "ultra_short" | "value_add" | "breakup";
+type EmailFramework = "neutral_observation" | "observation" | "hypothesis" | "ultra_short" | "value_add" | "breakup" | "inbound_response";
 
 function resolveEmailFramework(step: number, motion: string, hasSignals: boolean): EmailFramework {
+  if (motion === "inbound_response") return "inbound_response";
   if (step === 4) return "breakup";
   if (step === 3) return "value_add";
   if (motion === "nurture") return "value_add";
@@ -291,7 +292,14 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
   const objective = deriveObjective(channel, stepNumber, input.motion);
   const sequenceContext = buildSequenceContext(input, stepNumber);
   const maxWordCount = resolveWordCount(channel, stepNumber, hasCustomInstructions);
-  const hardRules = buildHardRules(channel, stepNumber, legacy, input.outbound_tone || "direct");
+  const hardRules = input.motion === "inbound_response" && channel === "email"
+    ? [
+      "Warm inbound response — they contacted us first",
+      "Thank them for reaching out through the website/form if source indicates contact_form",
+      "Briefly explain relevant company value from approved context",
+      "Ask for a meeting or availability; do not use cold-observation framing",
+    ]
+    : buildHardRules(channel, stepNumber, legacy, input.outbound_tone || "direct");
   const ctaType = resolveCTA(
     channel, stepNumber,
     input.include_meeting_cta ?? false,
@@ -301,10 +309,14 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
 
   // Generation hints: tactical guidance the AI can use or ignore
   const hints: string[] = [];
-  if (stepNumber === 1) hints.push("Prove you know who they are in the first sentence");
-  if (stepNumber === 2) hints.push("Reference previous email briefly, then pivot to a NEW angle");
-  if (stepNumber === 3) hints.push("Lead with proof or a concrete result");
-  if (stepNumber === 4) hints.push("No guilt, no urgency — direct yes/no question");
+  if (input.motion === "inbound_response" && channel === "email") {
+    hints.push("Open by acknowledging their inbound interest, then move toward a meeting");
+  } else {
+    if (stepNumber === 1) hints.push("Prove you know who they are in the first sentence");
+    if (stepNumber === 2) hints.push("Reference previous email briefly, then pivot to a NEW angle");
+    if (stepNumber === 3) hints.push("Lead with proof or a concrete result");
+    if (stepNumber === 4) hints.push("No guilt, no urgency — direct yes/no question");
+  }
   if (channel === "sms") hints.push("One sentence max. 160 chars.");
   if (channel === "whatsapp") hints.push("Casual, like a work friend texting. Max 50 words.");
   if (channel === "voice") hints.push("Talk track, not a script. 3 bullets max.");

@@ -445,7 +445,8 @@ Custom Instructions:
 CONSTRAINTS
 - 100–150 words
 - Warm, responsive tone — they came to YOU
-- MUST acknowledge their specific message or interest area directly in the opening
+- If Source is contact_form or the initial message is missing, open by thanking them for contacting/reaching out through the website
+- If a specific initial message or interest area exists, acknowledge it directly in the opening
 - Provide ONE relevant value point from Knowledge Context (if available)
 - End with a clear next step: propose a meeting (use Meeting Link if available) OR ask a qualifying question
 - Do NOT pitch cold — they already showed interest

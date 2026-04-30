@@ -125,6 +125,7 @@ function resolveChannel(actionKey: string | null, explicit?: CanonicalChannel): 
 
 function resolveFramework(channel: CanonicalChannel, step: number, motion: string, isNurture: boolean): string {
   if (channel !== "email") return channel;
+  if (motion === "inbound_response") return "inbound_response";
   if (isNurture) {
     if (step === 1) return "value_add";
     if (step === 2) return "value_add";
@@ -162,6 +163,16 @@ function resolveWordCount(channel: CanonicalChannel, step: number, hasCustom: bo
 function getHardRules(channel: CanonicalChannel, step: number): string[] {
   const constraints = CHANNEL_CONSTRAINTS[channel];
   return constraints?.[step]?.hard_rules || [];
+}
+
+function getInboundHardRules(channel: CanonicalChannel): string[] {
+  if (channel !== "email") return [];
+  return [
+    "Warm inbound response — they contacted us first",
+    "Thank them for reaching out through the website/form if source indicates contact_form",
+    "Briefly explain relevant company value from approved context",
+    "Ask for a meeting or availability; do not use cold-observation framing",
+  ];
 }
 
 function buildHints(channel: CanonicalChannel, step: number, tone?: string): string[] {
@@ -220,7 +231,7 @@ export function resolveStepPreview(input: ClientCampaignResolverInput): Resolved
     objective: deriveObjective(channel, step, input.motion),
     max_word_count: resolveWordCount(channel, step, hasCustom),
     cta_type: CTA_DEFAULTS[channel]?.[step] || "question",
-    hard_rules: getHardRules(channel, step),
+    hard_rules: input.motion === "inbound_response" ? getInboundHardRules(channel) : getHardRules(channel, step),
     generation_hints: buildHints(channel, step, input.outbound_tone),
     step_type: resolveStepType(input.motion, step),
   };

@@ -80,6 +80,7 @@ function buildLeadContext(ctx: ResolvedContext): string {
     `Company: ${lead.company}`,
     `Email: ${lead.email}`,
     `Motion: ${(lead as any).motion || "outbound_prospecting"}`,
+    `Source: ${(lead as any).source_type || "manual_entry"}`,
     `Stage: ${lead.stage}`,
     lead.job_title ? `Title: ${lead.job_title}` : "",
     lead.industry ? `Industry: ${lead.industry}` : "",
@@ -203,6 +204,7 @@ function buildAIPayload(
   const payload: Record<string, unknown> = {
     lead_id: lead.id,
     lead_context: buildLeadContext(ctx),
+    lead_card_message: lead.initial_message || "",
     rep_context: buildRepContext(ctx),
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
@@ -331,6 +333,7 @@ function deriveSubject(ctx: ResolvedContext, taskType: AITaskType): string {
   if (taskType === "post_meeting_followup_email") {
     return `Following up on our conversation${company ? ` - ${company}` : ""}`;
   }
+  if (taskType === "inbound_intro") return company ? `Thanks for reaching out - ${company}` : `Thanks for reaching out, ${leadFirstName}`;
   if (taskType === "re_engagement_intro") return `Reconnecting - ${leadFirstName}`;
   if (taskType === "pre_email_2_followup") return `Following up - ${leadFirstName}`;
   if (taskType === "pre_email_3_followup") return `Checking in - ${leadFirstName}`;
@@ -459,6 +462,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   if (motion_override && motion_override !== resolvedContext.motion) {
     console.log("[streamDraft] Motion override:", resolvedContext.motion, "→", motion_override);
     (resolvedContext as any).motion = motion_override;
+    (resolvedContext.lead as any).motion = motion_override;
   }
 
   // Step 2: Determine playbook (channel-aware)
@@ -478,7 +482,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
     const campaignFields = buildCampaignPayloadFields({
       action_key: inferActionKey(finalIntent, resolvedContext),
-      motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+      motion: resolvedContext.motion || (resolvedContext.lead as any).motion || "outbound_prospecting",
       channel: channel === "linkedin" ? "email" : channel,
       outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
       action_instructions: leadInstructions,
@@ -635,6 +639,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   if (motion_override && motion_override !== resolvedContext.motion) {
     console.log("[generateDraft] Motion override:", resolvedContext.motion, "→", motion_override);
     (resolvedContext as any).motion = motion_override;
+    (resolvedContext.lead as any).motion = motion_override;
   }
 
   // Step 2: Determine playbook (channel-aware)
@@ -661,7 +666,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
   const campaignFields2 = buildCampaignPayloadFields({
     action_key: inferActionKey(finalIntent, resolvedContext),
-    motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+    motion: resolvedContext.motion || (resolvedContext.lead as any).motion || "outbound_prospecting",
     channel: channel === "linkedin" ? "email" : channel,
     outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
     action_instructions: leadInstructions2,
