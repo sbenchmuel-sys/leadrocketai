@@ -1,84 +1,85 @@
-# Filterable, Paginated Lead Table
+# Stop ghost automation queueing — root cause + permanent fix
 
-## Goal
-Make the Active / Long Cycle / Automation tabs efficient for bulk triage:
-- Default view = list (table), remembered per tab
-- Filter by Phase, Last Activity (direction + recency), Next Action group, Automation on/off
-- Page through results in batches of 25 with Next/Prev + a "Show all" toggle
-- Bulk-select the visible page (or all filtered) → existing Enable Automation / Move to Nurture flows
+## What actually happened
 
-## Scope (per your answers)
-- **Filter bar visible on**: Active, Long Cycle, Automation tabs only. Action Required and Heating Up keep their curated layouts untouched.
-- **Default view**: Per-tab persistence. New users see table view on the 3 supported tabs; queue stays the default elsewhere. User toggles are remembered per tab in localStorage.
-- **Last Activity filter**: Direction + recency combined chips: `Recent inbound (≤7d)`, `Recent outbound (≤7d)`, `Stale (>14d)`, `Never contacted`.
-- **Next Action filter**: Action-type groups from `getActionType()` — Reply, Follow-up, Recap, Nurture, Closing, None.
+Yes — **5 more emails fired in Cliff's workspace at 09:00 UTC today (2026-04-30)** before my previous fix landed at 12:14 UTC:
 
-## UI
+| Recipient | Sent at (UTC) | Status |
+|---|---|---|
+| darrell.coffin@garda.com | 09:00:27 | sent |
+| keith.desnayers@garda.com | 09:00:36 | sent |
+| jay.waxman@clearcard.ca | 09:00:41 | sent |
+| stephane.mally@garda.com | 09:00:55 | sent |
+| seanm@respondnm.com | 09:01:05 | sent |
 
-```text
-┌─ Command Strip (Active | Action Required | Heating Up | Long Cycle | Automation) ─┐
-│                                                                                    │
-│ [Search...]  [Phase ▾] [Activity ▾] [Next Action ▾] [Automation ▾]  [Clear]  ⊞ ☰  │
-│                                                                                    │
-│ ┌─ 12 selected ── [Move to stage] [Source] [Enable Automation] [Nurture] [Delete] ─┐│
-│ │                                                                                  ││
-│ ├──────────────────────────── Lead Table (25 rows) ──────────────────────────────┤│
-│ │ ☐ Lead    Phase    Last Activity    Next Action    Automation                  ││
-│ │ ...                                                                            ││
-│ └──────────────────────────── 1–25 of 187 ── ‹ Prev  Next ›  [Show all] ────────┘│
-└────────────────────────────────────────────────────────────────────────────────────┘
+These were "send_pre_2" follow-ups that had been queued the day before. The previous consent-gate fix (`automation_mode IS NOT NULL`) was added 3 hours later — it caught **future** sends but not the queue already armed for the 9 AM window.
+
+## The deeper bug — why leads keep showing as "in automation"
+
+The executor consent gate is in place, BUT the queue itself is still being populated by another path:
+
+- **`supabase/functions/_shared/syncEngine.ts`** (called every Gmail/Outlook sync) writes `eligible_at` + `needs_action=true` on leads based purely on inbound/outbound timing — **with no check on `automation_mode`**.
+- It runs continuously as part of mail sync. So every lead Cliff has ever exchanged email with gets re-armed: `eligible_at` set, `needs_action` set, `next_action_key=send_pre_2` etc.
+- The executor's consent gate now blocks the actual SEND, but the dashboard still shows these leads as "in automation" because the surfaced state looks identical to a real automation lead.
+- Cliff is now manually clicking "stop" on each one, but the next mail sync re-queues them.
+
+This is also what allowed today's 9 AM batch to fire: those leads were queued by syncEngine on Apr 29 (before the consent gate existed in the executor).
+
+## Fix — three layers
+
+### 1. Block syncEngine from arming sends without consent (the actual root cause)
+
+In `supabase/functions/_shared/syncEngine.ts`, before returning any action that sets `eligible_at` for an outbound send (`send_pre_*`, `send_nurture_*`, `reengage`, `closing_followup`, `post_meeting_followup`, `switch_to_nurture`, `generate_post_meeting_recap`), check the lead's `automation_mode`:
+
+- If `automation_mode IS NULL` → return a "suggestion" state: `needs_action=true` (so it surfaces in the UI as "Suggested action") but **`eligible_at=null`** (so the executor never picks it up, and the UI doesn't show it as scheduled).
+- If `automation_mode` is set → keep current behavior.
+
+This is the single chokepoint. Fix it here and the ghost queue stops.
+
+### 2. Lock down the OOO surfacer in `automation-executor`
+
+The OOO-return block at lines 148-190 promotes leads from `needs_action=false → true` whenever `eligible_at <= now AND ooo_until <= now`, regardless of `automation_mode`. Add the same `automation_mode IS NOT NULL` guard here so we never auto-promote a non-consented lead into the executor's main queue.
+
+### 3. Clean up Cliff's workspace right now
+
+Run via migration:
+```sql
+UPDATE leads
+SET eligible_at = NULL,
+    needs_action = false,
+    next_action_key = NULL,
+    next_action_label = NULL,
+    action_reason_code = NULL
+WHERE workspace_id = 'a8e1d905-297c-42f2-83cf-681f0cbf4ce5'
+  AND automation_mode IS NULL;
 ```
 
-Filters render as `Select` dropdowns (multi-select where it makes sense, e.g., Phase). Active filters show a count badge on the trigger; "Clear" appears when any filter is set.
+Same for **every other workspace** (audit-and-clean, since this bug affected all pilot users):
+```sql
+UPDATE leads
+SET eligible_at = NULL,
+    needs_action = false,
+    next_action_key = NULL,
+    next_action_label = NULL,
+    action_reason_code = NULL
+WHERE automation_mode IS NULL
+  AND eligible_at IS NOT NULL;
+```
 
-## Behavior details
+I will report the count of cleaned rows per workspace before applying.
 
-**Filter logic** (all AND-combined, applied before pagination):
-- **Phase**: multi-select of `DisplayPhase` values present in current tab (Prospecting, Engaged, Post-Meeting, Closing, Nurture, Closed). Uses `lead.displayPhase`.
-- **Activity**: single-select chip:
-  - `Recent inbound (≤7d)` → `last_inbound_at` within 7d AND `last_inbound_at > last_outbound_at`
-  - `Recent outbound (≤7d)` → `last_outbound_at` within 7d AND `last_outbound_at >= last_inbound_at`
-  - `Stale (>14d)` → no activity in 14d (uses existing `getStaleLeads` rule)
-  - `Never contacted` → `!first_outbound_at && !last_inbound_at`
-- **Next Action**: multi-select of action-type groups; maps via `getActionType(lead.next_action_key)`. "None" = `!needs_action`.
-- **Automation**: `On` (`eligible_at && needs_action`, OR `nurture_mode='auto' && nurture_status='active'`) / `Off` / `All`.
+## Why this is the last time
 
-**Pagination**:
-- Page size = 25 (constant, no per-page selector to keep it simple). "Show all" link toggles to render the entire filtered set on one page.
-- Page state resets to 1 when filters or search change.
-- Page state is **NOT** persisted across navigation (avoids stale pages on data refresh). Filter state IS persisted per tab.
-
-**Select-all semantics**:
-- Header checkbox selects all rows on the current page.
-- When selections exist beyond the current page (e.g., user selected, then navigated), a banner appears: `12 selected on this page — [Select all 187 filtered]`.
-- Bulk action toolbar already in `LeadTable` is reused unchanged. Existing `BulkAutomationDialog` accepts the selected `EnrichedLead[]` and continues to enforce its own eligibility flags (already replied, closed, etc.) — so the new filters don't bypass any consent guardrails.
-
-**Default view per tab**:
-- For the 3 supported tabs, default view = `table`.
-- Queue/Table toggle is shown (today it's behind `flags.ui_v2`); we'll show it unconditionally on these tabs.
-- Choice persists in `localStorage` keyed by tab (e.g., `dashboard_view_mode_v2.active = "table"`).
+After this fix, **only one path** can arm a send: a user explicitly clicks "Enable Automation" in `BulkAutomationDialog` or `AutomationPreviewCard`, which sets `automation_mode='auto'`. Mail sync, OOO detection, webhooks, and cron jobs are all blocked from setting `eligible_at` on a lead without that flag.
 
 ## Files to change
 
-| File | Change |
-|---|---|
-| `src/lib/dashboardStateCache.ts` | Add localStorage persistence; `viewMode` becomes `Record<RevenueState, ViewMode>`; add per-tab filter state (`phaseFilter[]`, `activityFilter`, `nextActionFilter[]`, `automationFilter`); add `pageIndex` (transient, not persisted). |
-| `src/components/dashboard/FilterBar.tsx` (new) | Renders the 4 dropdowns + Clear button. Self-contained, takes current state + onChange callbacks. |
-| `src/components/dashboard/LeadTable.tsx` | (1) Accept `filters` + `pagination` props OR consume the cache directly. (2) Apply filters in the existing `.filter().sort()` chain inside the `<TableBody>`. (3) Slice rows for current page. (4) Add `<TableFooter>` with `1–25 of N · ‹ Prev  Next ›  [Show all]`. (5) Update select-all to operate on visible page + show "select all filtered" banner when partial. |
-| `src/pages/Dashboard.tsx` | (1) Read per-tab default view mode from cache. (2) Render `<FilterBar>` above the table for `active` / `long_cycle` / `automation` tabs. (3) Always show queue/table toggle on those tabs (drop the `flags.ui_v2` gate there only). (4) Pass `filteredLeads` (post-filter) to `LeadTable`; let table handle pagination internally. |
+- `supabase/functions/_shared/syncEngine.ts` — add `automation_mode` check before returning `eligible_at` for send actions
+- `supabase/functions/automation-executor/index.ts` — add consent guard to OOO surfacer (lines 148-190)
+- New migration — clean stale `eligible_at` across all workspaces
 
-No backend / RLS / migration changes — all logic is client-side over the already-fetched `metrics.leads` array.
+## What I will NOT do
 
-## Out of scope (not changing now)
-- Action Required / Heating Up tab layouts.
-- Server-side pagination (current dashboard fetches all leads in one call; if scale becomes an issue we'd revisit).
-- Saved filter presets (can add later, mirroring `inboxStateCache.savedViews`).
-- New filter dimensions (channel, source, owner) — easy to add later in the same FilterBar component.
-
-## Acceptance check
-1. Open Active tab → list view, 25 rows, page controls, all 4 filters render.
-2. Apply Phase=Engaged + Automation=Off → rows update, count badge shows on filter triggers, page resets to 1.
-3. Toggle to queue view → choice persists when switching tabs and back.
-4. Select all on page → bulk bar shows "X selected"; "Enable Automation" / "Move to Nurture" still go through existing dialogs with consent (no silent enables — Automation Consent rule preserved).
-5. "Show all" → renders full filtered set, hides Next/Prev.
-6. Switch to Action Required tab → filter bar is hidden, original layout intact.
+- Touch the `reply_now` action (incoming reply pending) — that's a "you should reply" surface, not an outbound send.
+- Touch nurture pre-generate or any draft-generation path — drafts are fine, sending is the issue.
+- Disable Cliff's account or pause his real automation work; he can still opt-in per lead.

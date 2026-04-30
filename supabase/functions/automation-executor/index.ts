@@ -154,6 +154,7 @@ serve(async (req) => {
       .lte("eligible_at", now)        // eligible_at has arrived
       .eq("needs_action", false)      // not yet surfaced
       .eq("unsubscribed", false)
+      .not("automation_mode", "is", null) // ← consent gate: never auto-promote a non-consented lead
       .in("status", ["active", "new"])
       .limit(20);
 

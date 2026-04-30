@@ -577,7 +577,12 @@ export function buildLeadUpdate(
     motion: string;
     nurture_status: string;
     ooo_until: string | null;
-  } | null
+  } | null,
+  // CONSENT GATE: when null, lead has not opted into automation. We will still
+  // surface "reply_now" (a manual prompt to the rep) but we will NEVER schedule
+  // an outbound send (eligible_at) for this lead. Without this guard, mail sync
+  // re-arms the queue every cycle and the executor fires unauthorized sends.
+  automationMode: string | null = null,
 ): LeadUpdate {
   const dismissedAt = actionDismissedAt ? new Date(actionDismissedAt).getTime() : 0;
   const lastInteractionTime = Math.max(
@@ -592,6 +597,31 @@ export function buildLeadUpdate(
     finalAction = { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null, auto_nurture_eligible: actionResult.auto_nurture_eligible };
   } else if (dismissedAt > 0 && lastInteractionTime > dismissedAt) {
     shouldClearDismissal = true;
+  }
+
+  // CONSENT GATE — strip any scheduled outbound send if the user never opted in.
+  // "reply_now" is a UI prompt for the human to reply, not an automated send,
+  // so we leave it intact.
+  const OUTBOUND_SEND_KEYS = new Set([
+    "send_pre_1", "send_pre_2", "send_pre_3", "send_pre_4",
+    "send_nurture_1", "send_nurture_2", "send_nurture_3", "send_nurture_4",
+    "send_nurture_5", "send_nurture_6", "send_nurture_7", "send_nurture_8",
+    "reengage", "closing_followup", "post_meeting_followup",
+    "switch_to_nurture", "generate_post_meeting_recap",
+  ]);
+  if (
+    automationMode == null &&
+    finalAction.next_action_key &&
+    OUTBOUND_SEND_KEYS.has(finalAction.next_action_key)
+  ) {
+    finalAction = {
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      eligible_at: null,
+      action_reason_code: null,
+      auto_nurture_eligible: actionResult.auto_nurture_eligible,
+    };
   }
 
   const hasActiveSequence = currentLeadState?.needs_action === true
