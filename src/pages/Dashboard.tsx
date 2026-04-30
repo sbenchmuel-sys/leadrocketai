@@ -119,10 +119,17 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  const filteredLeads = useMemo(() => {
+  const baseFilteredLeads = useMemo(() => {
     if (revenueStateFilter === "active") return leads;
     return leads.filter((l) => l.revenueState === revenueStateFilter);
   }, [leads, revenueStateFilter]);
+
+  const filterableTab = isFilterableTab(revenueStateFilter);
+
+  const filteredLeads = useMemo(() => {
+    if (!filterableTab) return baseFilteredLeads;
+    return applyLeadFilters(baseFilteredLeads, tabFilters);
+  }, [baseFilteredLeads, tabFilters, filterableTab]);
 
   const queueLeads = useMemo(() => sortForQueue(filteredLeads).slice(0, QUEUE_LIMIT), [filteredLeads]);
 
@@ -151,7 +158,7 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {flags.ui_v2 && (
+          {(flags.ui_v2 || filterableTab) && (
             <div className="flex items-center border border-border rounded-md overflow-hidden">
               <Button
                 variant={viewMode === "queue" ? "secondary" : "ghost"}
