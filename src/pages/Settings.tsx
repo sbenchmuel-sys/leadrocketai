@@ -9,6 +9,7 @@ import { WritingStyleCard } from "@/components/settings/WritingStyleCard";
 import { CadenceSettingsCard } from "@/components/settings/CadenceSettingsCard";
 import { OutlookConnectionCard } from "@/components/settings/OutlookConnectionCard";
 import { WorkspaceMembersCard } from "@/components/settings/WorkspaceMembersCard";
+import { WorkspaceTimezoneCard } from "@/components/settings/WorkspaceTimezoneCard";
 import { SmsSettingsCard } from "@/components/settings/SmsSettingsCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
@@ -44,7 +45,8 @@ export default function Settings() {
               </div>
             </div>
           </AccordionTrigger>
-          <AccordionContent>
+          <AccordionContent className="space-y-6">
+            <WorkspaceTimezoneCard />
             <WorkspaceMembersCard />
           </AccordionContent>
         </AccordionItem>
