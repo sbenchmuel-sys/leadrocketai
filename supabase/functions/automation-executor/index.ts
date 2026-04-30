@@ -241,7 +241,7 @@ serve(async (req) => {
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
+      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
@@ -919,7 +919,8 @@ serve(async (req) => {
                 motion: isInboundLead ? "inbound_response" : lead.motion,
                 source_type: lead.source_type || "manual_entry",
                 outbound_tone: (lead as any).outbound_tone || "direct",
-                lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${isInboundLead ? "inbound_response" : lead.motion}\nSource: ${lead.source_type || "manual_entry"}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
+                lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${isInboundLead ? "inbound_response" : lead.motion}\nSource: ${lead.source_type || "manual_entry"}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${(lead as any).initial_message ? `\nInitial Message: ${(lead as any).initial_message}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
+                lead_card_message: (lead as any).initial_message || "",
                 rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
                 meeting_link: repProfile?.calendar_link || "",
                 custom_instructions: resolvedInstructions,
