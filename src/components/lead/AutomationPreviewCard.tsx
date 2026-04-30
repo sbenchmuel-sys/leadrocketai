@@ -23,18 +23,20 @@ interface AutomationPreviewCardProps {
   onUpdate: () => void;
 }
 
-// Step labels for outbound prospecting sequence
+// Step labels — generic per the product decision (independent of inbound/outbound branch).
+// The cadence type (warm vs cold) is reflected by the underlying ai_task,
+// not by a different display name in the UI.
 const OUTBOUND_STEP_LABELS: Record<string, string> = {
-  send_pre_1: "Intro Email",
-  send_pre_2: "Follow-up 1",
-  send_pre_3: "Follow-up 2",
-  send_pre_4: "Breakup Email",
+  send_pre_1: "Step 1 of 4",
+  send_pre_2: "Step 2 of 4",
+  send_pre_3: "Step 3 of 4",
+  send_pre_4: "Step 4 of 4",
 };
 
 const INBOUND_STEP_LABELS: Record<string, string> = {
-  send_pre_1: "Intro Reply",
-  send_pre_2: "Follow-up 1",
-  send_pre_3: "Follow-up 2",
+  send_pre_1: "Step 1 of 3",
+  send_pre_2: "Step 2 of 3",
+  send_pre_3: "Step 3 of 3",
 };
 
 const NURTURE_STEP_LABELS: Record<string, string> = {
