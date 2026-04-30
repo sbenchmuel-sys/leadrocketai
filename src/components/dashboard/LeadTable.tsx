@@ -815,10 +815,10 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 )}
                 <TableHead className="w-10 py-1.5">
                   <Checkbox
-                    checked={allSelected}
+                    checked={allOnPageSelected}
                     onCheckedChange={handleSelectAll}
-                    aria-label="Select all"
-                    className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
+                    aria-label="Select all on page"
+                    className={cn(someOnPageSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
                 <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[320px] max-w-[320px]" : "py-2")}>Lead</TableHead>
