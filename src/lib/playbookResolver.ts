@@ -76,6 +76,13 @@ export function playbookResolver(ctx: ResolvedContext, channel: "email" | "linke
   if (actionKey) {
     const isStaleRecapKey = (actionKey === "generate_post_meeting_recap" || actionKey === "post_meeting_followup") && !ctx.has_unsent_recap;
     if (!isStaleRecapKey) {
+      if (actionKey.startsWith("send_pre_1") && isInboundLeadContext(ctx)) {
+        return {
+          recommended_intent: "inbound_intro",
+          recommended_playbook: "Inbound Intro",
+          next_sequence_step: "Introduction",
+        };
+      }
       const mapped = mapActionKeyToIntent(actionKey, ctx.thread_emails.length > 0);
       if (mapped) return mapped;
     }
@@ -164,7 +171,7 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
   const hasThread = ctx.thread_emails.length > 0;
 
   // Inbound sources default to reply or intro
-  if (ctx.source_type === "contact_form" || ctx.source_type === "gmail_inbound" || ctx.source_type === "referral") {
+  if (isInboundLeadContext(ctx)) {
     if (!hasThread) {
       return {
         recommended_intent: "inbound_intro",
@@ -205,6 +212,10 @@ function deriveDefault(ctx: ResolvedContext): PlaybookRecommendation {
     recommended_playbook: "Outbound Prospecting",
     next_sequence_step: "Follow-up",
   };
+}
+
+function isInboundLeadContext(ctx: ResolvedContext): boolean {
+  return ctx.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(ctx.source_type || "");
 }
 
 // ============================================
