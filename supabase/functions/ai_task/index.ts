@@ -2032,15 +2032,15 @@ ${customInstructionsText}
       }
     }
 
-    if (task === "inbound_intro" || motion === "inbound_response") {
+    if (INBOUND_WARM_TASKS.has(task) || motion === "inbound_response") {
       const violation = getInboundWarmIntroViolation(content, enhancedPayload as Record<string, unknown>);
       if (violation) {
-        console.warn(`[ai_task] [inbound_intro] ${violation}. Retrying with strict warm-meeting CTA prompt...`);
+        console.warn(`[ai_task] [${task}] inbound violation: ${violation}. Retrying with strict warm-meeting CTA prompt...`);
         const retryPrompt = `${promptParts.join("\n\n")}
 
 STRICT REWRITE REQUIRED:
 - This is a WARM INBOUND lead. They already asked to connect.
-- Thank them for reaching out and acknowledge their specific interest.
+- Acknowledge their inquiry briefly (or thank them for reaching out if no specific message).
 - Include one short relevant value point from approved context.
 - End with a meeting CTA. If a meeting link exists, include it exactly.
 - Do NOT ask a cold discovery question such as their biggest challenge.
