@@ -34,9 +34,13 @@ export default function AutomationDraftPreviewDialog({
     setBody("");
     setSubject("");
     try {
-      // Map step key to AI task
+      // Map step key to AI task — inbound leads use inbound_intro for the first
+      // touch (acknowledges they reached out, suggests a meeting). Cold outbound
+      // leads use the cold prospecting framework.
+      const motion = (lead as any).motion || "outbound_prospecting";
+      const isInbound = motion === "inbound_response";
       let overrideIntent: string;
-      if (stepKey === "send_pre_1") overrideIntent = "pre_email_1_intro";
+      if (stepKey === "send_pre_1") overrideIntent = isInbound ? "inbound_intro" : "pre_email_1_intro";
       else if (stepKey === "send_pre_2") overrideIntent = "pre_email_2_followup";
       else if (stepKey === "send_pre_3") overrideIntent = "pre_email_3_followup";
       else if (stepKey === "send_pre_4") overrideIntent = "pre_email_4_breakup";
