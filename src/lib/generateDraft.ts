@@ -374,6 +374,16 @@ function sanitizeDraftContent(text: string, channel?: string): string {
   // Strip label-only prefixes like "Email body:" or "Body:" or "SMS:" or "Message:"
   cleaned = cleaned.replace(/^(?:email\s*body|body|sms|message|text\s*message)\s*:\s*/i, "").trim();
 
+  const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b)/i;
+  const markerIdx = cleaned.split("\n").findIndex((line) => selfCheckLineRe.test(line.trim()));
+  if (markerIdx >= 0) {
+    const lines = cleaned.split("\n");
+    const lastGreetingAfterMarker = lines.findLastIndex((line, index) =>
+      index > markerIdx && /^(?:Hi|Hey|Hello|Dear|Thank you)\s+\w/i.test(line.trim())
+    );
+    cleaned = (lastGreetingAfterMarker > markerIdx ? lines.slice(lastGreetingAfterMarker) : lines.slice(0, markerIdx)).join("\n").trim();
+  }
+
   // Guard against leaked reasoning blocks if model slips through
   if (/(?:INTERNAL\s+(?:REASONING|REFLECTION|ANALYSIS)|^Reasoning\s*:|^THOUGHT\s*:|^CHAIN\s*OF\s*THOUGHT)/im.test(cleaned)) {
     const lines = cleaned.split("\n");
