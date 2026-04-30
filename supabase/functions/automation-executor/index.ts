@@ -710,12 +710,14 @@ serve(async (req) => {
         if (lead.motion === "re_engagement") {
           aiTask = "re_engagement_intro";
         } else if (actionKey) {
+          // Inbound leads stay on the warm cadence for the entire sequence (decision: switch to warm).
+          // Step 4 still uses the cold breakup task — there's no inbound-specific breakup variant.
           if (actionKey.startsWith("send_pre_1")) aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro";
-          else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
-          else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
+          else if (actionKey.startsWith("send_pre_2")) aiTask = isInboundLead ? "inbound_followup_1" : "pre_email_2_followup";
+          else if (actionKey.startsWith("send_pre_3")) aiTask = isInboundLead ? "inbound_followup_2" : "pre_email_3_followup";
           else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
           else if (actionKey.startsWith("send_nurture") || actionKey.startsWith("nurture_")) aiTask = "nurture_email_single";
-          else aiTask = "pre_email_2_followup"; // truly unknown key — prospecting fallback (non-nurture only)
+          else aiTask = isInboundLead ? "inbound_followup_1" : "pre_email_2_followup"; // unknown key fallback
         } else {
           aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro"; // first touch if no key (non-nurture leads only at this point)
         }
