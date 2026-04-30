@@ -10,8 +10,15 @@ import {
   setDashboardFilter,
   setDashboardScroll,
   setDashboardViewMode,
+  getViewModeForTab,
+  isFilterableTab,
+  getTabFilters,
+  setTabFilters,
   type ViewMode,
+  type TabFilters,
 } from "@/lib/dashboardStateCache";
+import { applyLeadFilters } from "@/lib/leadFilters";
+import { FilterBar } from "@/components/dashboard/FilterBar";
 import type { RevenueState, EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
@@ -50,17 +57,25 @@ export default function Dashboard() {
   if (!isDemoMode()) useAutomationPoller();
 
   const [revenueStateFilter, setRevenueStateFilterLocal] = useState<RevenueState>(getDashboardState().revenueStateFilter);
-  const [viewMode, setViewModeLocal] = useState<ViewMode>(getDashboardState().viewMode);
+  const [viewMode, setViewModeLocal] = useState<ViewMode>(getViewModeForTab(getDashboardState().revenueStateFilter));
+  const [tabFilters, setTabFiltersLocal] = useState<TabFilters>(getTabFilters(getDashboardState().revenueStateFilter));
 
   const handleFilterChange = useCallback((filter: RevenueState) => {
     setRevenueStateFilterLocal(filter);
     setDashboardFilter(filter);
+    setViewModeLocal(getViewModeForTab(filter));
+    setTabFiltersLocal(getTabFilters(filter));
   }, []);
 
   const handleViewMode = useCallback((mode: ViewMode) => {
     setViewModeLocal(mode);
-    setDashboardViewMode(mode);
-  }, []);
+    setDashboardViewMode(revenueStateFilter, mode);
+  }, [revenueStateFilter]);
+
+  const handleFiltersChange = useCallback((next: TabFilters) => {
+    setTabFiltersLocal(next);
+    setTabFilters(revenueStateFilter, next);
+  }, [revenueStateFilter]);
 
   const loadData = useCallback(async () => {
     try {
