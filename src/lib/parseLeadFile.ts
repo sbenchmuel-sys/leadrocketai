@@ -191,10 +191,19 @@ const KEY_ALIASES: Record<string, string> = {
 function normalizeRow(row: Record<string, string>): Record<string, string> {
   const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(row)) {
-    const lowerKey = key.trim().toLowerCase().replace(/[:;]+$/, "").replace(/[\s_-]+/g, " ");
-    const canonical = KEY_ALIASES[lowerKey] || KEY_ALIASES[lowerKey.replace(/ /g, "_")] || lowerKey;
-    // Only set if not already set (first match wins)
-    if (!normalized[canonical]) {
+    // Strip form-builder suffixes like "First Name|name-1", "Email Address|email-1", "Phone|phone-1", "Submission Date|hidden-1"
+    // Also strip parenthetical hints like "Country (optional)" and trailing colons/semicolons
+    const cleaned = key
+      .split("|")[0]
+      .replace(/\([^)]*\)/g, "")
+      .trim()
+      .toLowerCase()
+      .replace(/[:;]+$/, "")
+      .replace(/[\s_-]+/g, " ")
+      .trim();
+    const canonical = KEY_ALIASES[cleaned] || KEY_ALIASES[cleaned.replace(/ /g, "_")] || cleaned;
+    // Only set if not already set (first match wins) and value is non-empty
+    if (!normalized[canonical] && value != null && String(value).trim() !== "") {
       normalized[canonical] = value;
     }
   }
