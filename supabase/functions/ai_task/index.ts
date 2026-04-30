@@ -2087,6 +2087,84 @@ STRICT REWRITE REQUIRED:
       });
     }
 
+    // ── HARD VALIDATION GATE ───────────────────────────────────
+    // Catches reasoning leaks, blanks, missing greeting/sign-off,
+    // unresolved placeholders, inbound cold-framing, missing CTAs.
+    // If validation fails, attempt one strict-repair regeneration.
+    if (EMAIL_BODY_TASKS.has(task)) {
+      const leadFirstFromCtx = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m)?.[1] ?? null;
+      const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+
+      let validation = validateDraft(content, validationCtx);
+      if (!validation.ok) {
+        console.warn(`[ai_task] [${task}] Validation failed: ${validation.codes.join(",")} — ${validation.errors.join(" | ")}`);
+        const repairPrompt = `${promptParts.join("\n\n")}
+
+STRICT REPAIR REQUIRED. The previous draft failed validation:
+${validation.errors.map((e) => `- ${e}`).join("\n")}
+
+Output a complete email body that:
+- Starts with "Hi {FirstName}," using the prospect's first name from Lead Context
+- Has at least one real body sentence with substance
+- Ends with a sign-off line ("Best,") then the rep's first name on the next line
+- Contains NO placeholders like [Name], [Meeting Link], {First Name}
+- Contains NO reasoning, planning, word-count notes, or compliance check text
+${validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup"
+  ? "- Acknowledges they reached out (warm) and includes a meeting CTA. NEVER use cold discovery questions like 'biggest challenge'."
+  : ""}
+${meetingLinkForCheck && (validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup")
+  ? `- MUST include this exact meeting link verbatim: ${meetingLinkForCheck}`
+  : ""}
+
+Output ONLY the final email body.`;
+        try {
+          const repairResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [
+                { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+                { role: "user", content: repairPrompt },
+              ],
+              max_tokens: 2048,
+            }),
+          });
+          if (repairResp.ok) {
+            const repairJson = await repairResp.json();
+            let repaired = stripLeakedReasoning(repairJson.choices?.[0]?.message?.content || "");
+            // Re-apply greeting safety net to repaired
+            if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
+              repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
+            }
+            const reValidation = validateDraft(repaired, validationCtx);
+            if (reValidation.ok) {
+              content = repaired;
+              validation = reValidation;
+              console.log(`[ai_task] [${task}] Repair regeneration accepted`);
+            } else {
+              console.error(`[ai_task] [${task}] Repair STILL failed: ${reValidation.codes.join(",")}`);
+            }
+          }
+        } catch (repairErr) {
+          console.error(`[ai_task] [${task}] Repair fetch failed:`, repairErr);
+        }
+      }
+
+      // If still invalid after repair, refuse to return content.
+      if (!validation.ok) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Generated draft failed safety validation",
+          validation_codes: validation.codes,
+          validation_errors: validation.errors,
+        }), {
+          status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Reply quality evaluation for last-mile tasks (OFFER_ROUTED_TASKS with orchestration context)
     let regenerated = false;
     let replyEvaluation: ReplyEvaluation | undefined;
