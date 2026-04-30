@@ -1130,6 +1130,64 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               })}
             </TableBody>
           </Table>
+
+          {/* Pagination footer */}
+          {totalCount > 0 && (
+            <div className="flex items-center justify-between gap-4 px-4 py-2 border-t border-border/60 text-xs text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <span>
+                  {showAll
+                    ? `Showing all ${totalCount}`
+                    : `${safePageIndex * PAGE_SIZE + 1}–${Math.min((safePageIndex + 1) * PAGE_SIZE, totalCount)} of ${totalCount}`}
+                </span>
+                {selectedOnPage > 0 && selectedLeads.size < totalCount && (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-6 px-0 text-xs"
+                    onClick={handleSelectAllFiltered}
+                  >
+                    Select all {totalCount} filtered
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {!showAll && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={safePageIndex === 0}
+                      onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                    >
+                      Prev
+                    </Button>
+                    <span className="px-1 tabular-nums">
+                      {safePageIndex + 1} / {totalPages}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={safePageIndex >= totalPages - 1}
+                      onClick={() => setPageIndex((i) => Math.min(totalPages - 1, i + 1))}
+                    >
+                      Next
+                    </Button>
+                  </>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => { setShowAll((s) => !s); setPageIndex(0); }}
+                >
+                  {showAll ? "Paginate" : "Show all"}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
