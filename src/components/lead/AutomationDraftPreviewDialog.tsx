@@ -36,19 +36,19 @@ export default function AutomationDraftPreviewDialog({
     setBody("");
     setSubject("");
     try {
-      // Map step key to AI task — inbound leads use inbound_intro for the first
-      // touch (acknowledges they reached out, suggests a meeting). Cold outbound
-      // leads use the cold prospecting framework.
+      // Map step key → AI task. Inbound leads stay on the warm cadence for the
+      // entire 3-step sequence (inbound_intro → inbound_followup_1 → inbound_followup_2).
+      // Cold outbound uses the 4-step cold framework. Must mirror automation-executor.
       const motion = (lead as any).motion || "outbound_prospecting";
       const sourceType = (lead as any).source_type || "manual_entry";
       const isInbound = motion === "inbound_response" || INBOUND_SOURCE_TYPES.has(sourceType);
       let overrideIntent: string;
       if (stepKey.startsWith("send_pre_1")) overrideIntent = isInbound ? "inbound_intro" : "pre_email_1_intro";
-      else if (stepKey.startsWith("send_pre_2")) overrideIntent = "pre_email_2_followup";
-      else if (stepKey.startsWith("send_pre_3")) overrideIntent = "pre_email_3_followup";
+      else if (stepKey.startsWith("send_pre_2")) overrideIntent = isInbound ? "inbound_followup_1" : "pre_email_2_followup";
+      else if (stepKey.startsWith("send_pre_3")) overrideIntent = isInbound ? "inbound_followup_2" : "pre_email_3_followup";
       else if (stepKey.startsWith("send_pre_4")) overrideIntent = "pre_email_4_breakup";
       else if (stepKey.startsWith("nurture_")) overrideIntent = "nurture_email_single";
-      else overrideIntent = "pre_email_2_followup";
+      else overrideIntent = isInbound ? "inbound_followup_1" : "pre_email_2_followup";
 
       const result = await generateDraftPipeline({
         lead_id: lead.id,

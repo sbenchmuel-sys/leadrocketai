@@ -710,12 +710,14 @@ serve(async (req) => {
         if (lead.motion === "re_engagement") {
           aiTask = "re_engagement_intro";
         } else if (actionKey) {
+          // Inbound leads stay on the warm cadence for the entire sequence (decision: switch to warm).
+          // Step 4 still uses the cold breakup task — there's no inbound-specific breakup variant.
           if (actionKey.startsWith("send_pre_1")) aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro";
-          else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
-          else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
+          else if (actionKey.startsWith("send_pre_2")) aiTask = isInboundLead ? "inbound_followup_1" : "pre_email_2_followup";
+          else if (actionKey.startsWith("send_pre_3")) aiTask = isInboundLead ? "inbound_followup_2" : "pre_email_3_followup";
           else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
           else if (actionKey.startsWith("send_nurture") || actionKey.startsWith("nurture_")) aiTask = "nurture_email_single";
-          else aiTask = "pre_email_2_followup"; // truly unknown key — prospecting fallback (non-nurture only)
+          else aiTask = isInboundLead ? "inbound_followup_1" : "pre_email_2_followup"; // unknown key fallback
         } else {
           aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro"; // first touch if no key (non-nurture leads only at this point)
         }
@@ -1245,12 +1247,19 @@ serve(async (req) => {
             eligible_at: nextEligible.toISOString(),
             action_reason_code: "NURTURE_DUE",
           });
-        } else if (["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup"].includes(aiTask)) {
-          // Outbound sequence: schedule next step using structured campaign or legacy intervals
+        } else if ([
+          "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup",
+          "inbound_intro", "inbound_followup_1",
+        ].includes(aiTask)) {
+          // Outbound + inbound sequence: schedule next step using structured campaign
+          // or legacy intervals. Inbound branch: inbound_intro → inbound_followup_1
+          // → inbound_followup_2 → stop. Cold branch: intro → followup → followup → breakup.
           const NEXT_STEP: Record<string, { key: string; label: string; stepNum: number }> = {
-            pre_email_1_intro: { key: "send_pre_2", label: "Follow-up 1", stepNum: 2 },
-            pre_email_2_followup: { key: "send_pre_3", label: "Follow-up 2", stepNum: 3 },
-            pre_email_3_followup: { key: "send_pre_4", label: "Breakup Email", stepNum: 4 },
+            pre_email_1_intro: { key: "send_pre_2", label: "Step 2 of 4", stepNum: 2 },
+            pre_email_2_followup: { key: "send_pre_3", label: "Step 3 of 4", stepNum: 3 },
+            pre_email_3_followup: { key: "send_pre_4", label: "Step 4 of 4", stepNum: 4 },
+            inbound_intro: { key: "send_pre_2", label: "Step 2 of 3", stepNum: 2 },
+            inbound_followup_1: { key: "send_pre_3", label: "Step 3 of 3", stepNum: 3 },
           };
           const nextStep = NEXT_STEP[aiTask];
           if (nextStep) {
@@ -1271,8 +1280,8 @@ serve(async (req) => {
               action_reason_code: "FOLLOWUP_DUE",
             });
           }
-        } else if (aiTask === "pre_email_4_breakup") {
-          // Breakup: explicitly clear sequence fields — no next step
+        } else if (aiTask === "pre_email_4_breakup" || aiTask === "inbound_followup_2") {
+          // Breakup or end of inbound 3-step sequence: explicitly clear sequence fields — no next step
           Object.assign(postUpdate, {
             next_action_key: null,
             next_action_label: null,

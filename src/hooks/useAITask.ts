@@ -16,6 +16,8 @@ export type AITaskType =
   | "linkedin_connect"
   | "linkedin_followup"
   | "inbound_intro"
+  | "inbound_followup_1"
+  | "inbound_followup_2"
   | "pre_email_1_intro"
   | "pre_email_2_followup"
   | "pre_email_3_followup"

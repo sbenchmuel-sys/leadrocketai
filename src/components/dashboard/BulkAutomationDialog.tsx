@@ -100,12 +100,12 @@ function computeAutomationFields(lead: EnrichedLead) {
   const intervals = getMotionIntervals(motion);
 
   const STEP_LABELS: Record<string, string> = motion === "inbound_response"
-    ? { send_pre_1: "Intro Reply", send_pre_2: "Follow-up 1", send_pre_3: "Follow-up 2" }
-    : { send_pre_1: "Intro Email", send_pre_2: "Follow-up 1", send_pre_3: "Follow-up 2", send_pre_4: "Breakup Email" };
+    ? { send_pre_1: "Step 1 of 3", send_pre_2: "Step 2 of 3", send_pre_3: "Step 3 of 3" }
+    : { send_pre_1: "Step 1 of 4", send_pre_2: "Step 2 of 4", send_pre_3: "Step 3 of 4", send_pre_4: "Step 4 of 4" };
 
   const hasOutbound = !!lead.last_outbound_at;
   const nextKey = hasOutbound ? "send_pre_2" : "send_pre_1";
-  const nextLabel = STEP_LABELS[nextKey] || "Intro Email";
+  const nextLabel = STEP_LABELS[nextKey] || "Step 1 of 4";
 
   const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
   const gapDays = stepIdx > 0 && stepIdx < intervals.length
