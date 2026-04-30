@@ -169,9 +169,11 @@ function getInboundHardRules(channel: CanonicalChannel): string[] {
   if (channel !== "email") return [];
   return [
     "Warm inbound response — they contacted us first",
-    "Thank them for reaching out through the website/form if source indicates contact_form",
+    "Thank them for reaching out through the website/form and acknowledge their specific interest",
     "Briefly explain relevant company value from approved context",
-    "Ask for a meeting or availability; do not use cold-observation framing",
+    "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+    "Do not ask cold discovery questions such as their biggest challenge",
+    "Do not use cold-observation framing",
   ];
 }
 
@@ -230,7 +232,9 @@ export function resolveStepPreview(input: ClientCampaignResolverInput): Resolved
     framework: resolveFramework(channel, step, input.motion, isNurture),
     objective: deriveObjective(channel, step, input.motion),
     max_word_count: resolveWordCount(channel, step, hasCustom),
-    cta_type: CTA_DEFAULTS[channel]?.[step] || "question",
+    cta_type: input.motion === "inbound_response" && channel === "email"
+      ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
+      : CTA_DEFAULTS[channel]?.[step] || "question",
     hard_rules: input.motion === "inbound_response" ? getInboundHardRules(channel) : getHardRules(channel, step),
     generation_hints: buildHints(channel, step, input.outbound_tone),
     step_type: resolveStepType(input.motion, step),
