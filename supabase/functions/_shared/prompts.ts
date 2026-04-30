@@ -462,6 +462,90 @@ CONSTRAINTS
 OUTPUT
 Return EMAIL BODY ONLY. The email must be complete and ready to send with real names.`,
 
+  inbound_followup_1: `ROLE
+You are writing Follow-up 1 to a WARM inbound lead. They contacted us first (website form, referral, inbound inquiry) and we already replied once. They have not booked a meeting yet.
+
+GOAL
+Stay warm. Reference your prior reply briefly, gently re-offer the meeting. NOT a cold discovery question. NOT a new pitch. NOT pressure.
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
+Lead's Initial Message:
+{{LEAD_CARD_MESSAGE}}
+
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Knowledge Context (approved snippets):
+{{KNOWLEDGE_CONTEXT}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+CONSTRAINTS
+- 60–100 words
+- Warm tone — they reached out to YOU
+- Open by referencing the inbound topic or your prior reply (one short sentence)
+- ONE light value point or clarifying offer
+- End with a meeting CTA. If Meeting Link is provided, include the EXACT URL. If empty, ask for availability.
+- NEVER ask cold discovery questions like "what is your biggest challenge?" or "how are you handling X?"
+- NEVER pitch features. NEVER restate your product overview.
+- Do NOT use em dashes
+- GREETING: "Hi" + first name
+- SIGN-OFF: "Best," then rep first name on next line
+- Use ACTUAL names. NEVER bracketed placeholders.
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
+  inbound_followup_2: `ROLE
+You are writing Follow-up 2 (final warm nudge) to a WARM inbound lead who hasn't replied to your first reply or first follow-up.
+
+GOAL
+Close the loop politely while keeping the door open. Make it easy for them to say yes or simply confirm timing has shifted.
+
+INPUTS
+Lead Context:
+{{LEAD_CONTEXT}}
+
+Rep Context:
+{{REP_CONTEXT}}
+
+Lead's Initial Message:
+{{LEAD_CARD_MESSAGE}}
+
+Your last email said:
+{{LAST_OUTBOUND_BODY}}
+
+Meeting Link:
+{{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+CONSTRAINTS
+- 50–80 words
+- Warm and respectful — they DID reach out, this is not a breakup
+- Acknowledge timing may have shifted on their side
+- Offer the meeting one last time. If Meeting Link is provided, include the EXACT URL. If empty, ask for availability.
+- NEVER use guilt, urgency, or "I haven't heard back" framing
+- NEVER ask cold discovery questions
+- Do NOT use em dashes
+- GREETING: "Hi" + first name
+- SIGN-OFF: "Best," then rep first name on next line
+- Use ACTUAL names. NEVER bracketed placeholders.
+
+OUTPUT
+Return EMAIL BODY ONLY.`,
+
   pre_email_1_intro: `ROLE
 You are writing Email 1 in a cold outbound sequence.
 

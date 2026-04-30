@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 // Import from shared modules
 import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT, EXTRACT_STYLE_FEATURES_PROMPT } from "../_shared/prompts.ts";
+import { validateDraft, kindFromTask } from "../_shared/draftValidator.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
@@ -182,7 +183,8 @@ const CTA_TYPES = ["quick_question", "soft_offer", "meeting_request", "permissio
 
 const OUTREACH_TASKS = new Set([
   "email_intro_fast", "email_intro_nurture", "pre_email_1_intro", "pre_email_2_followup",
-  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro", "re_engagement_intro",
+  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro",
+  "inbound_followup_1", "inbound_followup_2", "re_engagement_intro",
   "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
   "whatsapp_message", "linkedin_connect", "linkedin_followup",
 ]);
@@ -193,8 +195,12 @@ const EMAIL_BODY_TASKS = new Set([
   "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup",
   "pre_email_4_breakup", "nurture_email_single", "re_engagement_intro",
   "email_intro_fast", "email_intro_nurture", "inbound_intro",
+  "inbound_followup_1", "inbound_followup_2",
   "post_meeting_followup_email", "reply_to_thread",
 ]);
+
+// Tasks that count as warm inbound and must follow the warm-meeting-CTA contract.
+const INBOUND_WARM_TASKS = new Set(["inbound_intro", "inbound_followup_1", "inbound_followup_2"]);
 
 interface DiversityConstraints {
   avoid_opening_types: string[];
@@ -448,6 +454,8 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   email_intro_nurture: ["messaging", "knowledge", "industry"],
   pre_email_1_intro: ["messaging", "knowledge", "industry"],
   inbound_intro: ["messaging", "knowledge", "industry", "case_study"],
+  inbound_followup_1: ["messaging", "knowledge", "industry", "case_study"],
+  inbound_followup_2: ["messaging", "knowledge"],
   re_engagement_intro: ["messaging", "knowledge", "industry", "case_study"],
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
@@ -2025,15 +2033,15 @@ ${customInstructionsText}
       }
     }
 
-    if (task === "inbound_intro" || motion === "inbound_response") {
+    if (INBOUND_WARM_TASKS.has(task) || motion === "inbound_response") {
       const violation = getInboundWarmIntroViolation(content, enhancedPayload as Record<string, unknown>);
       if (violation) {
-        console.warn(`[ai_task] [inbound_intro] ${violation}. Retrying with strict warm-meeting CTA prompt...`);
+        console.warn(`[ai_task] [${task}] inbound violation: ${violation}. Retrying with strict warm-meeting CTA prompt...`);
         const retryPrompt = `${promptParts.join("\n\n")}
 
 STRICT REWRITE REQUIRED:
 - This is a WARM INBOUND lead. They already asked to connect.
-- Thank them for reaching out and acknowledge their specific interest.
+- Acknowledge their inquiry briefly (or thank them for reaching out if no specific message).
 - Include one short relevant value point from approved context.
 - End with a meeting CTA. If a meeting link exists, include it exactly.
 - Do NOT ask a cold discovery question such as their biggest challenge.
@@ -2077,6 +2085,84 @@ STRICT REWRITE REQUIRED:
       return new Response(JSON.stringify({ ok: false, error: "AI returned empty response" }), {
         status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ── HARD VALIDATION GATE ───────────────────────────────────
+    // Catches reasoning leaks, blanks, missing greeting/sign-off,
+    // unresolved placeholders, inbound cold-framing, missing CTAs.
+    // If validation fails, attempt one strict-repair regeneration.
+    if (EMAIL_BODY_TASKS.has(task)) {
+      const leadFirstFromCtx = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m)?.[1] ?? null;
+      const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+
+      let validation = validateDraft(content, validationCtx);
+      if (!validation.ok) {
+        console.warn(`[ai_task] [${task}] Validation failed: ${validation.codes.join(",")} — ${validation.errors.join(" | ")}`);
+        const repairPrompt = `${promptParts.join("\n\n")}
+
+STRICT REPAIR REQUIRED. The previous draft failed validation:
+${validation.errors.map((e) => `- ${e}`).join("\n")}
+
+Output a complete email body that:
+- Starts with "Hi {FirstName}," using the prospect's first name from Lead Context
+- Has at least one real body sentence with substance
+- Ends with a sign-off line ("Best,") then the rep's first name on the next line
+- Contains NO placeholders like [Name], [Meeting Link], {First Name}
+- Contains NO reasoning, planning, word-count notes, or compliance check text
+${validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup"
+  ? "- Acknowledges they reached out (warm) and includes a meeting CTA. NEVER use cold discovery questions like 'biggest challenge'."
+  : ""}
+${meetingLinkForCheck && (validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup")
+  ? `- MUST include this exact meeting link verbatim: ${meetingLinkForCheck}`
+  : ""}
+
+Output ONLY the final email body.`;
+        try {
+          const repairResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [
+                { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+                { role: "user", content: repairPrompt },
+              ],
+              max_tokens: 2048,
+            }),
+          });
+          if (repairResp.ok) {
+            const repairJson = await repairResp.json();
+            let repaired = stripLeakedReasoning(repairJson.choices?.[0]?.message?.content || "");
+            // Re-apply greeting safety net to repaired
+            if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
+              repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
+            }
+            const reValidation = validateDraft(repaired, validationCtx);
+            if (reValidation.ok) {
+              content = repaired;
+              validation = reValidation;
+              console.log(`[ai_task] [${task}] Repair regeneration accepted`);
+            } else {
+              console.error(`[ai_task] [${task}] Repair STILL failed: ${reValidation.codes.join(",")}`);
+            }
+          }
+        } catch (repairErr) {
+          console.error(`[ai_task] [${task}] Repair fetch failed:`, repairErr);
+        }
+      }
+
+      // If still invalid after repair, refuse to return content.
+      if (!validation.ok) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Generated draft failed safety validation",
+          validation_codes: validation.codes,
+          validation_errors: validation.errors,
+        }), {
+          status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Reply quality evaluation for last-mile tasks (OFFER_ROUTED_TASKS with orchestration context)
