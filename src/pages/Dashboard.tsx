@@ -18,7 +18,6 @@ import {
   type TabFilters,
 } from "@/lib/dashboardStateCache";
 import { applyLeadFilters } from "@/lib/leadFilters";
-import { FilterBar } from "@/components/dashboard/FilterBar";
 import type { RevenueState, EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
