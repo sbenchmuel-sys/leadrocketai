@@ -197,13 +197,6 @@ export default function Dashboard() {
         onFilterChange={handleFilterChange}
       />
 
-      {/* Filter Bar (filterable tabs only) */}
-      {filterableTab && (
-        <div className="pt-1">
-          <FilterBar filters={tabFilters} onChange={handleFiltersChange} />
-        </div>
-      )}
-
       {/* Action Required + Top Movers */}
       {revenueStateFilter === "heating_up" ? (
         <>
@@ -213,7 +206,7 @@ export default function Dashboard() {
             {viewMode === "queue" ? (
               <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
             ) : (
-              <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+              <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} filters={tabFilters} onFiltersChange={handleFiltersChange} showColumnFilters={filterableTab} />
             )}
           </div>
         </>
@@ -231,7 +224,7 @@ export default function Dashboard() {
           {viewMode === "queue" ? (
             <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
           ) : (
-            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} />
+            <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} filters={tabFilters} onFiltersChange={handleFiltersChange} showColumnFilters={filterableTab} />
           )}
         </>
       )}
