@@ -916,12 +916,72 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter,
                   </TableHead>
                 )}
                 {revenueStateFilter !== "heating_up" && (
-                  <TableHead className="py-2">Phase</TableHead>
+                  <TableHead className="py-2">
+                    {filtersEnabled ? (
+                      <ColumnFilterHead label={fEffective.phases.length ? `Phase · ${fEffective.phases.length}` : "Phase"} active={fEffective.phases.length > 0}>
+                        <DropdownMenuLabel className="text-xs">Filter by phase</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {DISPLAY_PHASE_ORDER.map((p) => (
+                          <DropdownMenuCheckboxItem key={p} checked={fEffective.phases.includes(p)} onCheckedChange={() => togglePhase(p)} onSelect={(e) => e.preventDefault()}>
+                            {p}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                        {fEffective.phases.length > 0 && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <button onClick={() => setF({ ...fEffective, phases: [] })} className="w-full text-left px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent rounded-sm">Clear</button>
+                          </>
+                        )}
+                      </ColumnFilterHead>
+                    ) : "Phase"}
+                  </TableHead>
                 )}
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px] pl-6" : "py-2", "hidden md:table-cell")}>Last Activity</TableHead>
-                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>Next Action</TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[140px] min-w-[140px] pl-6" : "py-2", "hidden md:table-cell")}>
+                  {filtersEnabled ? (
+                    <ColumnFilterHead label={fEffective.activity === "all" ? "Last Activity" : ACTIVITY_LABELS[fEffective.activity]} active={fEffective.activity !== "all"}>
+                      <DropdownMenuLabel className="text-xs">Last activity</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup value={fEffective.activity} onValueChange={(v) => setF({ ...fEffective, activity: v as ActivityFilter })}>
+                        {(Object.keys(ACTIVITY_LABELS) as ActivityFilter[]).map((k) => (
+                          <DropdownMenuRadioItem key={k} value={k}>{ACTIVITY_LABELS[k]}</DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </ColumnFilterHead>
+                  ) : "Last Activity"}
+                </TableHead>
+                <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[160px] min-w-[160px]" : "py-2", "hidden lg:table-cell")}>
+                  {filtersEnabled ? (
+                    <ColumnFilterHead label={fEffective.nextActions.length ? `Next Action · ${fEffective.nextActions.length}` : "Next Action"} active={fEffective.nextActions.length > 0}>
+                      <DropdownMenuLabel className="text-xs">Next action type</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {ACTION_GROUPS.map((a) => (
+                        <DropdownMenuCheckboxItem key={a} checked={fEffective.nextActions.includes(a)} onCheckedChange={() => toggleAction(a)} onSelect={(e) => e.preventDefault()}>
+                          {ACTION_GROUP_LABELS[a]}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                      {fEffective.nextActions.length > 0 && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <button onClick={() => setF({ ...fEffective, nextActions: [] })} className="w-full text-left px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent rounded-sm">Clear</button>
+                        </>
+                      )}
+                    </ColumnFilterHead>
+                  ) : "Next Action"}
+                </TableHead>
                 {revenueStateFilter !== "heating_up" && (
-                  <TableHead className="py-2 hidden lg:table-cell">Automation</TableHead>
+                  <TableHead className="py-2 hidden lg:table-cell">
+                    {filtersEnabled ? (
+                      <ColumnFilterHead label={fEffective.automation === "all" ? "Automation" : `Automation · ${AUTOMATION_LABELS[fEffective.automation]}`} active={fEffective.automation !== "all"}>
+                        <DropdownMenuLabel className="text-xs">Automation</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuRadioGroup value={fEffective.automation} onValueChange={(v) => setF({ ...fEffective, automation: v as AutomationFilter })}>
+                          {(Object.keys(AUTOMATION_LABELS) as AutomationFilter[]).map((k) => (
+                            <DropdownMenuRadioItem key={k} value={k}>{AUTOMATION_LABELS[k]}</DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </ColumnFilterHead>
+                    ) : "Automation"}
+                  </TableHead>
                 )}
                 {revenueStateFilter === "action_required" && (
                   <TableHead className="py-2 text-right">Action</TableHead>
