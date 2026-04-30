@@ -214,12 +214,23 @@ function mapRowToLead(row: Record<string, string>): ParsedLead {
   const r = normalizeRow(row);
   const firstName = (r["first_name"] || "").trim();
   const lastName = (r["last_name"] || "").trim();
-  const name = firstName && lastName
-    ? `${firstName} ${lastName}`
-    : (r["name"] || firstName || "Unknown").trim();
+  const email = (r["email"] || "").trim().toLowerCase();
+  let name: string;
+  if (firstName && lastName) name = `${firstName} ${lastName}`;
+  else if (r["name"]) name = r["name"].trim();
+  else if (firstName) name = firstName;
+  else if (lastName) name = lastName;
+  else if (email) {
+    // Derive a friendly name from the email local-part as a last resort
+    const local = email.split("@")[0].replace(/[._-]+/g, " ").trim();
+    name = local
+      ? local.split(" ").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ")
+      : "Unknown";
+  } else {
+    name = "Unknown";
+  }
 
   const company = (r["company"] || "").trim();
-  const email = (r["email"] || "").trim().toLowerCase();
 
   // Preserve ALL original columns verbatim (before normalization)
   const rawImportJson: Record<string, string> = {};
