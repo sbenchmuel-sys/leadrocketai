@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Table,
@@ -214,8 +214,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const [bulkSourceUpdating, setBulkSourceUpdating] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [showAll, setShowAll] = useState(false);
+  const PAGE_SIZE = 25;
   const navigate = useNavigate();
   const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  // Reset pagination when underlying data or search changes
+  useEffect(() => { setPageIndex(0); }, [leads.length, searchQuery, revenueStateFilter]);
 
   // Pre-generate button handler
   const handlePreGenerate = useCallback((lead: EnrichedLead, e: React.MouseEvent) => {
