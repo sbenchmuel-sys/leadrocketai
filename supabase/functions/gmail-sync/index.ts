@@ -716,7 +716,7 @@ serve(async (req) => {
     // Use shared lead update builder (handles dismissal, active automation, OOO)
     const { data: currentLeadState } = await serviceSupabase
       .from("leads")
-      .select("eligible_at, needs_action, motion, nurture_status, ooo_until")
+      .select("eligible_at, needs_action, motion, nurture_status, ooo_until, automation_mode")
       .eq("id", leadId)
       .single();
 
@@ -728,7 +728,8 @@ serve(async (req) => {
         motion: currentLeadState.motion,
         nurture_status: currentLeadState.nurture_status,
         ooo_until: currentLeadState.ooo_until,
-      } : null
+      } : null,
+      currentLeadState?.automation_mode ?? null,
     );
 
     await serviceSupabase
