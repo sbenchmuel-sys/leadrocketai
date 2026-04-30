@@ -236,6 +236,9 @@ interface LeadTableProps {
   isLoading: boolean;
   onLeadUpdated?: () => void;
   revenueStateFilter?: string;
+  filters?: TabFilters;
+  onFiltersChange?: (next: TabFilters) => void;
+  showColumnFilters?: boolean;
 }
 
 const stageBadgeVariants: Record<DealStage, string> = {
