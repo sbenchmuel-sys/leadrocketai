@@ -241,7 +241,7 @@ serve(async (req) => {
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
+      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .lte("eligible_at", now)
@@ -705,17 +705,19 @@ serve(async (req) => {
 
         let aiTask: string;
         // Re-engagement leads always use re_engagement_intro task
+        const isInboundLead = lead.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(lead.source_type || "");
+
         if (lead.motion === "re_engagement") {
           aiTask = "re_engagement_intro";
         } else if (actionKey) {
-          if (actionKey.startsWith("send_pre_1")) aiTask = "pre_email_1_intro";
+          if (actionKey.startsWith("send_pre_1")) aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro";
           else if (actionKey.startsWith("send_pre_2")) aiTask = "pre_email_2_followup";
           else if (actionKey.startsWith("send_pre_3")) aiTask = "pre_email_3_followup";
           else if (actionKey.startsWith("send_pre_4")) aiTask = "pre_email_4_breakup";
           else if (actionKey.startsWith("send_nurture") || actionKey.startsWith("nurture_")) aiTask = "nurture_email_single";
           else aiTask = "pre_email_2_followup"; // truly unknown key — prospecting fallback (non-nurture only)
         } else {
-          aiTask = "pre_email_1_intro"; // first outbound if no key (non-nurture leads only at this point)
+          aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro"; // first touch if no key (non-nurture leads only at this point)
         }
 
         logEntry.ai_task = aiTask;
