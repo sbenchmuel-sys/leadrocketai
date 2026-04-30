@@ -599,6 +599,31 @@ export function buildLeadUpdate(
     shouldClearDismissal = true;
   }
 
+  // CONSENT GATE — strip any scheduled outbound send if the user never opted in.
+  // "reply_now" is a UI prompt for the human to reply, not an automated send,
+  // so we leave it intact.
+  const OUTBOUND_SEND_KEYS = new Set([
+    "send_pre_1", "send_pre_2", "send_pre_3", "send_pre_4",
+    "send_nurture_1", "send_nurture_2", "send_nurture_3", "send_nurture_4",
+    "send_nurture_5", "send_nurture_6", "send_nurture_7", "send_nurture_8",
+    "reengage", "closing_followup", "post_meeting_followup",
+    "switch_to_nurture", "generate_post_meeting_recap",
+  ]);
+  if (
+    automationMode == null &&
+    finalAction.next_action_key &&
+    OUTBOUND_SEND_KEYS.has(finalAction.next_action_key)
+  ) {
+    finalAction = {
+      needs_action: false,
+      next_action_key: null,
+      next_action_label: null,
+      eligible_at: null,
+      action_reason_code: null,
+      auto_nurture_eligible: actionResult.auto_nurture_eligible,
+    };
+  }
+
   const hasActiveSequence = currentLeadState?.needs_action === true
     && currentLeadState?.eligible_at
     && new Date(currentLeadState.eligible_at).getTime() > Date.now();
