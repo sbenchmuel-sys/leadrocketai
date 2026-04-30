@@ -159,6 +159,10 @@ export const CHANNEL_FRAMEWORK_EXEMPT_TASKS = new Set([
   "recommend_next_steps", "lead_deep_analysis", "analyze_outgoing_email",
   "match_email_to_milestones", "dedupe_milestones", "whatsapp_classify_intent",
   "followup_sequence_4", "post_meeting_recap", "nurture_sequence",
+  // inbound_intro has its own warm-response contract. The generic email
+  // sequence framework is cold-outbound and tells the model to ask a problem
+  // question / avoid calendar links, which conflicts with inbound meeting CTAs.
+  "inbound_intro",
 ]);
 
 export function resolveChannel(task: string, payloadChannel?: string): string {
@@ -419,11 +423,13 @@ Objective: Convert interest into a scheduled conversation.
 
 Rules:
 - Mirror their energy and brevity
-- Acknowledge their interest in ONE sentence
-- Give them a next step immediately
+- Acknowledge their specific inbound interest in ONE sentence
+- Give them a meeting next step immediately
+- If a meeting/calendar link is available, include it verbatim
+- Do NOT ask a cold discovery question like "what is your biggest challenge?"
 - Do NOT re-pitch or explain the product
 
-Length: Under 80 words.`;
+Length: 80–130 words.`;
   }
 
   if (motion === "nurture") {
