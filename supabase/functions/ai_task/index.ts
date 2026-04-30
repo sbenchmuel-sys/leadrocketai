@@ -55,26 +55,39 @@ function stripLeakedReasoning(text: string): string {
   // parenthetical e.g. "INTERNAL REASONING (DO NOT SHOW THIS TO USER)".
   const reasoningHeaderRe = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT)\b[^\n]*\n/i;
 
+  // Common sign-off words that look like a greeting ("Best,", "Thanks,",
+  // "Cheers,", "Regards,") — must NOT be treated as the start of an email body.
+  const SIGNOFF_WORDS = new Set([
+    "best", "thanks", "cheers", "regards", "sincerely", "warmly",
+    "kindly", "respectfully", "yours", "truly",
+  ]);
+
   // Pattern that identifies a real email greeting line on its own.
-  const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thanks[, ]|Thank you[, ]|[A-Z][a-z]{1,20},)\s*$/i;
+  // Excludes sign-off words via the second check below.
+  const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thank you\s+\w|[A-Z][a-z]{1,20},)\s*$/i;
+
+  const isRealGreeting = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!greetingLineRe.test(trimmed)) return false;
+    // Reject if this is a sign-off word followed by a comma
+    const m = trimmed.match(/^([A-Za-z]+),\s*$/);
+    if (m && SIGNOFF_WORDS.has(m[1].toLowerCase())) return false;
+    return true;
+  };
 
   if (reasoningHeaderRe.test(text)) {
-    // Find the position of the FIRST reasoning header.
     const headerMatch = text.match(reasoningHeaderRe);
     if (headerMatch && headerMatch.index !== undefined) {
       const headerStart = headerMatch.index;
       const afterHeader = text.substring(headerStart);
 
-      // Look for the LAST greeting line in the entire text — this is most
-      // likely the start of the actual final email (the model often re-prints
-      // the greeting after its reasoning block).
+      // Look for the LAST real greeting line AFTER the reasoning header.
       const lines = text.split("\n");
       let lastGreetingLineIdx = -1;
       for (let i = lines.length - 1; i >= 0; i--) {
         const trimmed = lines[i].trim();
         if (!trimmed) continue;
-        if (greetingLineRe.test(trimmed)) {
-          // Make sure this greeting is AFTER the reasoning header
+        if (isRealGreeting(trimmed)) {
           const charsBefore = lines.slice(0, i).join("\n").length;
           if (charsBefore >= headerStart) {
             lastGreetingLineIdx = i;
@@ -85,24 +98,27 @@ function stripLeakedReasoning(text: string): string {
 
       if (lastGreetingLineIdx >= 0) {
         const result = lines.slice(lastGreetingLineIdx).join("\n").trim();
-        if (result.length > 20) return result;
+        // Sanity-check: real email has greeting + body + sign-off, ≥40 chars
+        // and contains either a sentence-ending punctuation or a sign-off line.
+        if (result.length >= 40 && /[.!?]/.test(result)) {
+          return result;
+        }
       }
 
-      // Fallback: scan forward from the header for any greeting
-      const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thanks|Thank you)\s+[^\n]*)/i;
+      // Fallback: scan forward from the header for any greeting (not sign-off)
+      const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thank you)\s+[^\n]*)/i;
       const fwd = afterHeader.match(fwdGreetingRe);
       if (fwd && fwd.index !== undefined) {
         const result = afterHeader.substring(fwd.index).trim();
-        if (result.length > 20) return result;
+        if (result.length >= 40 && /[.!?]/.test(result)) return result;
       }
 
-      // Last resort: drop everything from header to end if we can't find a body
-      // (better empty than leak). Return the text BEFORE the header if it looks
-      // like a complete email (has a greeting + sign-off), otherwise empty string.
+      // Last resort: keep text BEFORE the reasoning header if it looks complete.
       const before = text.substring(0, headerStart).trim();
-      if (before.length > 30 && /^(?:Hi|Hey|Hello|Dear|Subject:)/i.test(before)) {
+      if (before.length >= 40 && /^(?:Hi|Hey|Hello|Dear|Subject:)/i.test(before) && /[.!?]/.test(before)) {
         return before;
       }
+      // Nothing salvageable — return empty so caller can regenerate.
       return "";
     }
   }
