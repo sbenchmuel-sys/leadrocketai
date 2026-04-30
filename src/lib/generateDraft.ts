@@ -378,9 +378,13 @@ function sanitizeDraftContent(text: string, channel?: string): string {
   const markerIdx = cleaned.split("\n").findIndex((line) => selfCheckLineRe.test(line.trim()));
   if (markerIdx >= 0) {
     const lines = cleaned.split("\n");
-    const lastGreetingAfterMarker = lines.findLastIndex((line, index) =>
-      index > markerIdx && /^(?:Hi|Hey|Hello|Dear|Thank you)\s+\w/i.test(line.trim())
-    );
+    let lastGreetingAfterMarker = -1;
+    for (let index = lines.length - 1; index > markerIdx; index--) {
+      if (/^(?:Hi|Hey|Hello|Dear|Thank you)\s+\w/i.test(lines[index].trim())) {
+        lastGreetingAfterMarker = index;
+        break;
+      }
+    }
     cleaned = (lastGreetingAfterMarker > markerIdx ? lines.slice(lastGreetingAfterMarker) : lines.slice(0, markerIdx)).join("\n").trim();
   }
 
