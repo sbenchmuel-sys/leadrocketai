@@ -281,7 +281,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                     } else {
                       const hasOutbound = !!(lead as any).last_outbound_at;
                       const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                      const nextLabel = stepLabels[nextKey] || "Intro Email";
+                      const nextLabel = stepLabels[nextKey] || "Step 1 of 4";
                       const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
                       const gapDays = stepIdx > 0 && stepIdx < intervals.length
                         ? intervals[stepIdx] - intervals[stepIdx - 1]
