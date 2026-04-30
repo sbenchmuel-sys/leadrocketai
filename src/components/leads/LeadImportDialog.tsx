@@ -213,7 +213,7 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
       if (leadsToInsert.length > 0) {
         try {
           const allContextItems = leadsToInsert.flatMap((insertedLead, idx) => {
-            const parsedLead = parsedLeads[idx];
+            const parsedLead = finalParsedLeads[idx];
             if (!parsedLead) return [];
             return extractLeadContextItems(parsedLead, insertedLead.id, workspaceId);
           });
