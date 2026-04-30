@@ -2025,6 +2025,41 @@ ${customInstructionsText}
       }
     }
 
+    if (task === "inbound_intro" || motion === "inbound_response") {
+      const violation = getInboundWarmIntroViolation(content, enhancedPayload as Record<string, unknown>);
+      if (violation) {
+        console.warn(`[ai_task] [inbound_intro] ${violation}. Retrying with strict warm-meeting CTA prompt...`);
+        const retryPrompt = `${promptParts.join("\n\n")}
+
+STRICT REWRITE REQUIRED:
+- This is a WARM INBOUND lead. They already asked to connect.
+- Thank them for reaching out and acknowledge their specific interest.
+- Include one short relevant value point from approved context.
+- End with a meeting CTA. If a meeting link exists, include it exactly.
+- Do NOT ask a cold discovery question such as their biggest challenge.
+- Output only the final email body.`;
+        const retryResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+              { role: "user", content: retryPrompt },
+            ],
+            max_tokens: 2048,
+          }),
+        });
+        if (retryResp.ok) {
+          const retryJson = await retryResp.json();
+          const retryContent = stripLeakedReasoning(retryJson.choices?.[0]?.message?.content || "");
+          if (retryContent && !getInboundWarmIntroViolation(retryContent, enhancedPayload as Record<string, unknown>)) {
+            content = retryContent;
+          }
+        }
+      }
+    }
+
     // Safety net: if an outbound email task is missing its greeting, prepend it.
     // This catches cases where reasoning stripping consumed the first line, or the
     // model simply omitted the greeting despite the prompt instruction.
