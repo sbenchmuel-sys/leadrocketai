@@ -80,6 +80,7 @@ function buildLeadContext(ctx: ResolvedContext): string {
     `Company: ${lead.company}`,
     `Email: ${lead.email}`,
     `Motion: ${(lead as any).motion || "outbound_prospecting"}`,
+    `Source: ${(lead as any).source_type || "manual_entry"}`,
     `Stage: ${lead.stage}`,
     lead.job_title ? `Title: ${lead.job_title}` : "",
     lead.industry ? `Industry: ${lead.industry}` : "",
@@ -203,6 +204,7 @@ function buildAIPayload(
   const payload: Record<string, unknown> = {
     lead_id: lead.id,
     lead_context: buildLeadContext(ctx),
+    lead_card_message: lead.initial_message || "",
     rep_context: buildRepContext(ctx),
     workspace_context: formatWorkspaceContext(ctx.workspace_profile),
     meeting_link: lead.meeting_link || ctx.rep_profile?.calendar_link || "",
