@@ -43,28 +43,53 @@ import {
 // STRIP LEAKED REASONING FROM LLM OUTPUT
 // ============================================
 
+const SIGNOFF_WORDS = new Set([
+  "best", "thanks", "cheers", "regards", "sincerely", "warmly",
+  "kindly", "respectfully", "yours", "truly",
+]);
+
+const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thank you\s+\w|[A-Z][a-z]{1,20},)\s*$/i;
+const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
+
+const isRealGreetingLine = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (!greetingLineRe.test(trimmed)) return false;
+  const m = trimmed.match(/^([A-Za-z]+),\s*$/);
+  if (m && SIGNOFF_WORDS.has(m[1].toLowerCase())) return false;
+  return true;
+};
+
+const looksLikeCompleteEmail = (text: string): boolean =>
+  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[A-Z][a-z]{1,20},)/i.test(text.trim()) && /[.!?]/.test(text);
+
+function stripSelfChecksAndDuplicateBodies(text: string): string {
+  const lines = text.split("\n");
+  const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
+  if (markerIdx >= 0) {
+    for (let i = lines.length - 1; i > markerIdx; i--) {
+      if (isRealGreetingLine(lines[i])) {
+        const after = lines.slice(i).join("\n").trim();
+        if (looksLikeCompleteEmail(after)) return after;
+      }
+    }
+    const before = lines.slice(0, markerIdx).join("\n").trim();
+    if (looksLikeCompleteEmail(before)) return before;
+    return before;
+  }
+  return text.trim();
+}
+
 /**
- * Robustly removes any internal reasoning/reflection/analysis blocks
- * that the LLM may have leaked before the actual email content.
- * Handles cases where the greeting is a name (e.g. "Eldad,") not just "Hi/Hey/Dear".
+ * Robustly removes any internal reasoning/reflection/analysis/self-check blocks
+ * that the LLM may have leaked before, after, or between email bodies.
  */
 function stripLeakedReasoning(text: string): string {
   if (!text) return text;
+  text = stripSelfChecksAndDuplicateBodies(text);
 
   // Reasoning header markers (case-insensitive). May appear with optional
   // parenthetical e.g. "INTERNAL REASONING (DO NOT SHOW THIS TO USER)".
   const reasoningHeaderRe = /(?:^|\n)\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT)\b[^\n]*\n/i;
-
-  // Common sign-off words that look like a greeting ("Best,", "Thanks,",
-  // "Cheers,", "Regards,") — must NOT be treated as the start of an email body.
-  const SIGNOFF_WORDS = new Set([
-    "best", "thanks", "cheers", "regards", "sincerely", "warmly",
-    "kindly", "respectfully", "yours", "truly",
-  ]);
-
-  // Pattern that identifies a real email greeting line on its own.
-  // Excludes sign-off words via the second check below.
-  const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thank you\s+\w|[A-Z][a-z]{1,20},)\s*$/i;
 
   const isRealGreeting = (line: string): boolean => {
     const trimmed = line.trim();
