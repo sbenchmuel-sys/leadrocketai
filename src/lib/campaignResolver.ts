@@ -160,6 +160,11 @@ function resolveWordCount(channel: CanonicalChannel, step: number, hasCustom: bo
   return hasCustom ? sc.max_words_with_instructions : sc.max_words;
 }
 
+function resolveEffectiveWordCount(channel: CanonicalChannel, step: number, motion: string, hasCustom: boolean): number {
+  if (motion === "inbound_response" && channel === "email") return 150;
+  return resolveWordCount(channel, step, hasCustom);
+}
+
 function getHardRules(channel: CanonicalChannel, step: number): string[] {
   const constraints = CHANNEL_CONSTRAINTS[channel];
   return constraints?.[step]?.hard_rules || [];
@@ -169,9 +174,11 @@ function getInboundHardRules(channel: CanonicalChannel): string[] {
   if (channel !== "email") return [];
   return [
     "Warm inbound response — they contacted us first",
-    "Thank them for reaching out through the website/form if source indicates contact_form",
+    "Thank them for reaching out through the website/form and acknowledge their specific interest",
     "Briefly explain relevant company value from approved context",
-    "Ask for a meeting or availability; do not use cold-observation framing",
+    "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+    "Do not ask cold discovery questions such as their biggest challenge",
+    "Do not use cold-observation framing",
   ];
 }
 
@@ -186,6 +193,13 @@ function buildHints(channel: CanonicalChannel, step: number, tone?: string): str
   if (tone === "assertive") hints.push("Confident, include specific offers");
   if (tone === "consultative") hints.push("Trusted advisor positioning, diagnostic questions");
   return hints;
+}
+
+function buildEffectiveHints(channel: CanonicalChannel, step: number, motion: string, tone?: string): string[] {
+  if (motion === "inbound_response" && channel === "email") {
+    return ["Open by acknowledging their inbound interest, then move toward a meeting"];
+  }
+  return buildHints(channel, step, tone);
 }
 
 function resolveStepType(motion: string, step: number): StepType {
@@ -229,10 +243,12 @@ export function resolveStepPreview(input: ClientCampaignResolverInput): Resolved
     channel,
     framework: resolveFramework(channel, step, input.motion, isNurture),
     objective: deriveObjective(channel, step, input.motion),
-    max_word_count: resolveWordCount(channel, step, hasCustom),
-    cta_type: CTA_DEFAULTS[channel]?.[step] || "question",
+    max_word_count: resolveEffectiveWordCount(channel, step, input.motion, hasCustom),
+    cta_type: input.motion === "inbound_response" && channel === "email"
+      ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
+      : CTA_DEFAULTS[channel]?.[step] || "question",
     hard_rules: input.motion === "inbound_response" ? getInboundHardRules(channel) : getHardRules(channel, step),
-    generation_hints: buildHints(channel, step, input.outbound_tone),
+    generation_hints: buildEffectiveHints(channel, step, input.motion, input.outbound_tone),
     step_type: resolveStepType(input.motion, step),
   };
 }

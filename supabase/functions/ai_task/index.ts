@@ -62,6 +62,18 @@ const isRealGreetingLine = (line: string): boolean => {
 const looksLikeCompleteEmail = (text: string): boolean =>
   text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[A-Z][a-z]{1,20},)/i.test(text.trim()) && /[.!?]/.test(text);
 
+function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
+  const text = (content || "").trim();
+  if (!text) return "empty inbound response";
+  const meetingLink = String(payload.meeting_link || "").trim();
+  if (meetingLink && !text.includes(meetingLink)) return "missing meeting link";
+  if (/biggest\s+challenge|how\s+are\s+you\s+(?:handling|approaching)|what\s+challenge|what\s+are\s+you\s+using/i.test(text)) {
+    return "cold discovery question in inbound response";
+  }
+  if (!/(book|schedule|chat|call|meet|availability|available)/i.test(text)) return "missing meeting CTA";
+  return null;
+}
+
 function stripSelfChecksAndDuplicateBodies(text: string): string {
   const lines = text.split("\n");
   const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
@@ -2009,6 +2021,41 @@ ${customInstructionsText}
         const cleaned = stripLeakedReasoning(retryContent);
         if (cleaned && cleaned.length >= 40) {
           content = cleaned;
+        }
+      }
+    }
+
+    if (task === "inbound_intro" || motion === "inbound_response") {
+      const violation = getInboundWarmIntroViolation(content, enhancedPayload as Record<string, unknown>);
+      if (violation) {
+        console.warn(`[ai_task] [inbound_intro] ${violation}. Retrying with strict warm-meeting CTA prompt...`);
+        const retryPrompt = `${promptParts.join("\n\n")}
+
+STRICT REWRITE REQUIRED:
+- This is a WARM INBOUND lead. They already asked to connect.
+- Thank them for reaching out and acknowledge their specific interest.
+- Include one short relevant value point from approved context.
+- End with a meeting CTA. If a meeting link exists, include it exactly.
+- Do NOT ask a cold discovery question such as their biggest challenge.
+- Output only the final email body.`;
+        const retryResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+              { role: "user", content: retryPrompt },
+            ],
+            max_tokens: 2048,
+          }),
+        });
+        if (retryResp.ok) {
+          const retryJson = await retryResp.json();
+          const retryContent = stripLeakedReasoning(retryJson.choices?.[0]?.message?.content || "");
+          if (retryContent && !getInboundWarmIntroViolation(retryContent, enhancedPayload as Record<string, unknown>)) {
+            content = retryContent;
+          }
         }
       }
     }

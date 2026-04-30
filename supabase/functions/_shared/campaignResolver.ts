@@ -160,10 +160,14 @@ function parseLegacyInstructions(raw: string | null | undefined): ParsedLegacyIn
 function resolveCTA(
   channel: CanonicalChannel,
   step: number,
+  motion: string,
   includeCalendar: boolean,
   calendarLink: string | null | undefined,
   customInstructions: string | null,
 ): string {
+  if (channel === "email" && motion === "inbound_response") {
+    return calendarLink ? `meeting_booking:${calendarLink}` : "meeting_request";
+  }
   // Custom instructions may specify CTA type
   if (customInstructions) {
     const lower = customInstructions.toLowerCase();
@@ -253,6 +257,7 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
     // Structured path: all step data comes from DB, no text parsing
     const stepChannel = structuredStep.channel || channel;
     const sequenceContext = buildSequenceContext(input, stepNumber);
+    const isInboundEmail = input.motion === "inbound_response" && stepChannel === "email";
     const customInstr = input.structured_campaign?.steps
       ?.find(s => s.step_number === stepNumber)?.custom_instructions || null;
     const globalInstr = input.structured_campaign?.global_instructions || null;
@@ -267,10 +272,17 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
 
     return {
       channel: stepChannel,
-      framework: structuredStep.framework,
-      objective: structuredStep.objective,
-      hard_rules: structuredStep.hard_rules,
-      generation_hints: hints,
+      framework: isInboundEmail ? "inbound_response" : structuredStep.framework,
+      objective: isInboundEmail ? "Convert interest into a scheduled conversation" : structuredStep.objective,
+      hard_rules: isInboundEmail ? [
+        "Warm inbound response — they contacted us first",
+        "Thank them for reaching out through the website/form and acknowledge their specific interest",
+        "Briefly explain relevant company value from approved context",
+        "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+        "Do not ask cold discovery questions such as their biggest challenge",
+        "Do not use cold-observation framing",
+      ] : structuredStep.hard_rules,
+      generation_hints: isInboundEmail ? ["Open by acknowledging their inbound interest, then move toward a meeting", ...hints] : hints,
       sequence_context: sequenceContext,
       personalization_context: {
         tone: input.outbound_tone || "direct",
@@ -278,8 +290,10 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
         include_meeting_cta: input.structured_campaign?.include_meeting_cta ?? input.include_meeting_cta ?? false,
         calendar_link: input.calendar_link || null,
       },
-      max_word_count: structuredStep.max_words,
-      cta_type: structuredStep.cta_type,
+      max_word_count: isInboundEmail ? 150 : structuredStep.max_words,
+      cta_type: isInboundEmail
+        ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
+        : structuredStep.cta_type,
       raw_custom_instructions: rawCustom,
     };
   }
@@ -291,17 +305,21 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
   const framework = resolveFramework(channel, stepNumber, input.motion, hasSignals);
   const objective = deriveObjective(channel, stepNumber, input.motion);
   const sequenceContext = buildSequenceContext(input, stepNumber);
-  const maxWordCount = resolveWordCount(channel, stepNumber, hasCustomInstructions);
+  const maxWordCount = input.motion === "inbound_response" && channel === "email"
+    ? 150
+    : resolveWordCount(channel, stepNumber, hasCustomInstructions);
   const hardRules = input.motion === "inbound_response" && channel === "email"
     ? [
       "Warm inbound response — they contacted us first",
-      "Thank them for reaching out through the website/form if source indicates contact_form",
+      "Thank them for reaching out through the website/form and acknowledge their specific interest",
       "Briefly explain relevant company value from approved context",
-      "Ask for a meeting or availability; do not use cold-observation framing",
+      "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+      "Do not ask cold discovery questions such as their biggest challenge",
+      "Do not use cold-observation framing",
     ]
     : buildHardRules(channel, stepNumber, legacy, input.outbound_tone || "direct");
   const ctaType = resolveCTA(
-    channel, stepNumber,
+    channel, stepNumber, input.motion,
     input.include_meeting_cta ?? false,
     input.calendar_link,
     hasCustomInstructions ? [...legacy.global_rules, ...Object.values(legacy.step_instructions)].join(" ") : null,

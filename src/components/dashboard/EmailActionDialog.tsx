@@ -141,7 +141,7 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean, motion
   
   switch (actionType) {
     case "reply":
-      if (isInboundFirstTouch) return "pre_email_1_intro";
+      if (isInboundFirstTouch) return "inbound_intro";
       return hasThread ? "reply_to_thread" : "pre_email_1_intro";
     case "recap":
       return "post_meeting_followup_email";
@@ -153,7 +153,7 @@ function getAITaskForAction(actionKey: string | null, hasThread: boolean, motion
     case "nurture":
       return "nurture_email_single";
     default:
-      if (isInboundFirstTouch) return "pre_email_1_intro";
+      if (isInboundFirstTouch) return "inbound_intro";
       return hasThread ? "reply_to_thread" : "pre_email_1_intro";
   }
 }

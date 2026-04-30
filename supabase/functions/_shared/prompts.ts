@@ -421,7 +421,7 @@ Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`,
 You are writing the first response email to an inbound lead who has expressed interest via a website form, referral, or inbound inquiry.
 
 GOAL
-Acknowledge their message, provide one relevant value point, and propose a clear next step. Convert interest into a conversation — NOT a cold pitch.
+Acknowledge their message, provide one relevant value point, and propose a clear meeting next step. Convert interest into a conversation — NOT a cold pitch and NOT cold discovery.
 
 INPUTS
 Lead Context:
@@ -448,7 +448,8 @@ CONSTRAINTS
 - If Source is contact_form or the initial message is missing, open by thanking them for contacting/reaching out through the website
 - If a specific initial message or interest area exists, acknowledge it directly in the opening
 - Provide ONE relevant value point from Knowledge Context (if available)
-- End with a clear next step: propose a meeting (use Meeting Link if available) OR ask a qualifying question
+- End with a clear meeting CTA. If Meeting Link is provided, include the exact URL and ask them to book a quick chat. If Meeting Link is empty, ask them to reply with availability.
+- NEVER end with a cold discovery question like "what is your biggest challenge?" or "how are you handling X?" They already asked to connect.
 - Do NOT pitch cold — they already showed interest
 - Do NOT list features or write a product overview
 - Do NOT use generic openers like "Thanks for reaching out" without referencing their specific interest
