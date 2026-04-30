@@ -239,11 +239,17 @@ serve(async (req) => {
     // CRITICAL: Exclude nurture leads — they are handled separately by the nurture pre-generate pipeline.
     // Nurture leads in "review" mode need manual approval; "automatic" mode is handled by its own flow.
     // Allowing nurture leads here causes prospecting emails to be sent erroneously.
+    // CONSENT GATE: only send for leads where the user has explicitly enabled
+    // automation (automation_mode IS NOT NULL). syncEngine/automation-check may
+    // populate eligible_at/needs_action for any inbound lead, but those are
+    // suggestions only — sending requires explicit user opt-in via the
+    // BulkAutomationDialog / AutomationPreviewCard which sets automation_mode.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode")
+      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
+      .not("automation_mode", "is", null) // ← explicit consent required
       .lte("eligible_at", now)
       .in("status", ["active", "new"])
       .eq("unsubscribed", false)
