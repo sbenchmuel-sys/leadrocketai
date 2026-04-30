@@ -182,7 +182,8 @@ const CTA_TYPES = ["quick_question", "soft_offer", "meeting_request", "permissio
 
 const OUTREACH_TASKS = new Set([
   "email_intro_fast", "email_intro_nurture", "pre_email_1_intro", "pre_email_2_followup",
-  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro", "re_engagement_intro",
+  "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro",
+  "inbound_followup_1", "inbound_followup_2", "re_engagement_intro",
   "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
   "whatsapp_message", "linkedin_connect", "linkedin_followup",
 ]);
@@ -193,8 +194,12 @@ const EMAIL_BODY_TASKS = new Set([
   "pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup",
   "pre_email_4_breakup", "nurture_email_single", "re_engagement_intro",
   "email_intro_fast", "email_intro_nurture", "inbound_intro",
+  "inbound_followup_1", "inbound_followup_2",
   "post_meeting_followup_email", "reply_to_thread",
 ]);
+
+// Tasks that count as warm inbound and must follow the warm-meeting-CTA contract.
+const INBOUND_WARM_TASKS = new Set(["inbound_intro", "inbound_followup_1", "inbound_followup_2"]);
 
 interface DiversityConstraints {
   avoid_opening_types: string[];
