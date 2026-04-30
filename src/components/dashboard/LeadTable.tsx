@@ -48,6 +48,77 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { DISPLAY_PHASE_ORDER, type DisplayPhase } from "@/lib/dashboardUtils";
+import {
+  type TabFilters,
+  type ActivityFilter,
+  type AutomationFilter,
+  type NextActionGroup,
+  EMPTY_FILTERS,
+  hasActiveFilters,
+} from "@/lib/dashboardStateCache";
+
+const ACTIVITY_LABELS: Record<ActivityFilter, string> = {
+  all: "Any time",
+  recent_inbound: "Recent inbound (≤7d)",
+  recent_outbound: "Recent outbound (≤7d)",
+  stale: "Stale (>14d)",
+  never: "Never contacted",
+};
+const ACTION_GROUP_LABELS: Record<NextActionGroup, string> = {
+  reply: "Reply",
+  follow_up: "Follow-up",
+  recap: "Recap",
+  nurture: "Nurture",
+  closing: "Closing",
+  none: "No action needed",
+};
+const ACTION_GROUPS: NextActionGroup[] = ["reply", "follow_up", "recap", "nurture", "closing", "none"];
+const AUTOMATION_LABELS: Record<AutomationFilter, string> = {
+  all: "All",
+  on: "On",
+  off: "Off",
+};
+
+function ColumnFilterHead({
+  label,
+  active,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex items-center gap-1 text-xs font-medium hover:text-foreground transition-colors",
+            active ? "text-primary" : "text-muted-foreground"
+          )}
+        >
+          {label}
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 // Format last email date with color coding
 function formatLastEmail(dateStr: string | null): { text: string; className: string } {
