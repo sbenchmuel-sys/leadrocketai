@@ -62,6 +62,18 @@ const isRealGreetingLine = (line: string): boolean => {
 const looksLikeCompleteEmail = (text: string): boolean =>
   text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[A-Z][a-z]{1,20},)/i.test(text.trim()) && /[.!?]/.test(text);
 
+function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
+  const text = (content || "").trim();
+  if (!text) return "empty inbound response";
+  const meetingLink = String(payload.meeting_link || "").trim();
+  if (meetingLink && !text.includes(meetingLink)) return "missing meeting link";
+  if (/biggest\s+challenge|how\s+are\s+you\s+(?:handling|approaching)|what\s+challenge|what\s+are\s+you\s+using/i.test(text)) {
+    return "cold discovery question in inbound response";
+  }
+  if (!/(book|schedule|chat|call|meet|availability|available)/i.test(text)) return "missing meeting CTA";
+  return null;
+}
+
 function stripSelfChecksAndDuplicateBodies(text: string): string {
   const lines = text.split("\n");
   const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
