@@ -3498,6 +3498,7 @@ export type Database = {
           name: string
           plan: string
           sms_enabled: boolean
+          timezone: string | null
           updated_at: string
         }
         Insert: {
@@ -3509,6 +3510,7 @@ export type Database = {
           name: string
           plan?: string
           sms_enabled?: boolean
+          timezone?: string | null
           updated_at?: string
         }
         Update: {
@@ -3520,6 +3522,7 @@ export type Database = {
           name?: string
           plan?: string
           sms_enabled?: boolean
+          timezone?: string | null
           updated_at?: string
         }
         Relationships: []
