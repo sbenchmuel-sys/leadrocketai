@@ -298,7 +298,7 @@ export async function getLeadInteractions(leadId: string, includeHidden = false)
 
   let query = supabase
     .from('interactions')
-    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, hidden')
+    .select('id, lead_id, type, source, occurred_at, subject, from_email, to_email, to_emails, cc_emails, body_text, ai_summary, ai_intent, ai_reply_worthy, gmail_message_id, gmail_thread_id, hidden')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false })
     .limit(100);
