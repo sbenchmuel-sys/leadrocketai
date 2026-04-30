@@ -847,13 +847,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.filter((l) => {
-                if (!searchQuery) return true;
-                const q = searchQuery.toLowerCase();
-                return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
-              })
-              .sort((a, b) => revenueStateFilter === "heating_up" ? (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0) : 0)
-              .map((lead, index) => {
+              {pageLeads.map((lead, index) => {
                 const isHeatingUp = revenueStateFilter === "heating_up";
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
