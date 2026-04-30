@@ -333,6 +333,7 @@ function deriveSubject(ctx: ResolvedContext, taskType: AITaskType): string {
   if (taskType === "post_meeting_followup_email") {
     return `Following up on our conversation${company ? ` - ${company}` : ""}`;
   }
+  if (taskType === "inbound_intro") return company ? `Thanks for reaching out - ${company}` : `Thanks for reaching out, ${leadFirstName}`;
   if (taskType === "re_engagement_intro") return `Reconnecting - ${leadFirstName}`;
   if (taskType === "pre_email_2_followup") return `Following up - ${leadFirstName}`;
   if (taskType === "pre_email_3_followup") return `Checking in - ${leadFirstName}`;
