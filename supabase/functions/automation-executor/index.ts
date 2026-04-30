@@ -1004,7 +1004,9 @@ serve(async (req) => {
           const leadFirstName = lead.name.split(" ")[0];
           const companyName = lead.company !== "Unknown Company" ? lead.company : null;
           if (resolvedChannel === "email") {
-            if (aiTask === "pre_email_1_intro") {
+            if (aiTask === "inbound_intro") {
+              subject = companyName ? `Thanks for reaching out - ${companyName}` : `Thanks for reaching out, ${leadFirstName}`;
+            } else if (aiTask === "pre_email_1_intro") {
               subject = companyName ? `Introduction - ${companyName}` : `Connecting with you, ${leadFirstName}`;
             } else if (aiTask === "pre_email_2_followup") {
               subject = `Following up - ${leadFirstName}`;
