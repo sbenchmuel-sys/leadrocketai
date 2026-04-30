@@ -453,6 +453,8 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   email_intro_nurture: ["messaging", "knowledge", "industry"],
   pre_email_1_intro: ["messaging", "knowledge", "industry"],
   inbound_intro: ["messaging", "knowledge", "industry", "case_study"],
+  inbound_followup_1: ["messaging", "knowledge", "industry", "case_study"],
+  inbound_followup_2: ["messaging", "knowledge"],
   re_engagement_intro: ["messaging", "knowledge", "industry", "case_study"],
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
