@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Table,
@@ -214,8 +214,14 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const [bulkSourceUpdating, setBulkSourceUpdating] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkAutomationOpen, setBulkAutomationOpen] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [showAll, setShowAll] = useState(false);
+  const PAGE_SIZE = 25;
   const navigate = useNavigate();
   const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  // Reset pagination when underlying data or search changes
+  useEffect(() => { setPageIndex(0); }, [leads.length, searchQuery, revenueStateFilter]);
 
   // Pre-generate button handler
   const handlePreGenerate = useCallback((lead: EnrichedLead, e: React.MouseEvent) => {
@@ -243,12 +249,45 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
   const allSelected = leads.length > 0 && selectedLeads.size === leads.length;
   const someSelected = selectedLeads.size > 0 && selectedLeads.size < leads.length;
 
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedLeads(new Set(leads.map(l => l.id)));
-    } else {
-      setSelectedLeads(new Set());
+  // Filtered + sorted leads (search + heating_up sort)
+  const visibleLeads = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    let arr = leads;
+    if (q) {
+      arr = arr.filter((l) => l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q));
     }
+    if (revenueStateFilter === "heating_up") {
+      arr = [...arr].sort((a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0));
+    }
+    return arr;
+  }, [leads, searchQuery, revenueStateFilter, scoreMap]);
+
+  const totalCount = visibleLeads.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const safePageIndex = Math.min(pageIndex, totalPages - 1);
+  const pageLeads = useMemo(() => {
+    if (showAll) return visibleLeads;
+    const start = safePageIndex * PAGE_SIZE;
+    return visibleLeads.slice(start, start + PAGE_SIZE);
+  }, [visibleLeads, safePageIndex, showAll]);
+
+  const pageIds = useMemo(() => new Set(pageLeads.map((l) => l.id)), [pageLeads]);
+  const selectedOnPage = useMemo(() => pageLeads.filter((l) => selectedLeads.has(l.id)).length, [pageLeads, selectedLeads]);
+  const allOnPageSelected = pageLeads.length > 0 && selectedOnPage === pageLeads.length;
+  const someOnPageSelected = selectedOnPage > 0 && selectedOnPage < pageLeads.length;
+
+  const handleSelectAll = (checked: boolean) => {
+    const next = new Set(selectedLeads);
+    if (checked) {
+      pageIds.forEach((id) => next.add(id));
+    } else {
+      pageIds.forEach((id) => next.delete(id));
+    }
+    setSelectedLeads(next);
+  };
+
+  const handleSelectAllFiltered = () => {
+    setSelectedLeads(new Set(visibleLeads.map((l) => l.id)));
   };
 
   const handleSelectLead = (leadId: string, checked: boolean) => {
@@ -776,10 +815,10 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
                 )}
                 <TableHead className="w-10 py-1.5">
                   <Checkbox
-                    checked={allSelected}
+                    checked={allOnPageSelected}
                     onCheckedChange={handleSelectAll}
-                    aria-label="Select all"
-                    className={cn(someSelected && "data-[state=checked]:bg-primary/50")}
+                    aria-label="Select all on page"
+                    className={cn(someOnPageSelected && "data-[state=checked]:bg-primary/50")}
                   />
                 </TableHead>
                 <TableHead className={cn(revenueStateFilter === "heating_up" ? "py-1.5 w-[320px] max-w-[320px]" : "py-2")}>Lead</TableHead>
@@ -808,13 +847,7 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.filter((l) => {
-                if (!searchQuery) return true;
-                const q = searchQuery.toLowerCase();
-                return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q);
-              })
-              .sort((a, b) => revenueStateFilter === "heating_up" ? (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0) : 0)
-              .map((lead, index) => {
+              {pageLeads.map((lead, index) => {
                 const isHeatingUp = revenueStateFilter === "heating_up";
                 const lastEmail = formatLastEmail(lead.last_activity_at);
                 const isSelected = selectedLeads.has(lead.id);
@@ -1097,6 +1130,64 @@ export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter 
               })}
             </TableBody>
           </Table>
+
+          {/* Pagination footer */}
+          {totalCount > 0 && (
+            <div className="flex items-center justify-between gap-4 px-4 py-2 border-t border-border/60 text-xs text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <span>
+                  {showAll
+                    ? `Showing all ${totalCount}`
+                    : `${safePageIndex * PAGE_SIZE + 1}–${Math.min((safePageIndex + 1) * PAGE_SIZE, totalCount)} of ${totalCount}`}
+                </span>
+                {selectedOnPage > 0 && selectedLeads.size < totalCount && (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-6 px-0 text-xs"
+                    onClick={handleSelectAllFiltered}
+                  >
+                    Select all {totalCount} filtered
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {!showAll && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={safePageIndex === 0}
+                      onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                    >
+                      Prev
+                    </Button>
+                    <span className="px-1 tabular-nums">
+                      {safePageIndex + 1} / {totalPages}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={safePageIndex >= totalPages - 1}
+                      onClick={() => setPageIndex((i) => Math.min(totalPages - 1, i + 1))}
+                    >
+                      Next
+                    </Button>
+                  </>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => { setShowAll((s) => !s); setPageIndex(0); }}
+                >
+                  {showAll ? "Paginate" : "Show all"}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

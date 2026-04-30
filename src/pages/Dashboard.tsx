@@ -10,8 +10,15 @@ import {
   setDashboardFilter,
   setDashboardScroll,
   setDashboardViewMode,
+  getViewModeForTab,
+  isFilterableTab,
+  getTabFilters,
+  setTabFilters,
   type ViewMode,
+  type TabFilters,
 } from "@/lib/dashboardStateCache";
+import { applyLeadFilters } from "@/lib/leadFilters";
+import { FilterBar } from "@/components/dashboard/FilterBar";
 import type { RevenueState, EnrichedLead } from "@/lib/dashboardUtils";
 import {
   getDashboardMetrics,
@@ -50,17 +57,25 @@ export default function Dashboard() {
   if (!isDemoMode()) useAutomationPoller();
 
   const [revenueStateFilter, setRevenueStateFilterLocal] = useState<RevenueState>(getDashboardState().revenueStateFilter);
-  const [viewMode, setViewModeLocal] = useState<ViewMode>(getDashboardState().viewMode);
+  const [viewMode, setViewModeLocal] = useState<ViewMode>(getViewModeForTab(getDashboardState().revenueStateFilter));
+  const [tabFilters, setTabFiltersLocal] = useState<TabFilters>(getTabFilters(getDashboardState().revenueStateFilter));
 
   const handleFilterChange = useCallback((filter: RevenueState) => {
     setRevenueStateFilterLocal(filter);
     setDashboardFilter(filter);
+    setViewModeLocal(getViewModeForTab(filter));
+    setTabFiltersLocal(getTabFilters(filter));
   }, []);
 
   const handleViewMode = useCallback((mode: ViewMode) => {
     setViewModeLocal(mode);
-    setDashboardViewMode(mode);
-  }, []);
+    setDashboardViewMode(revenueStateFilter, mode);
+  }, [revenueStateFilter]);
+
+  const handleFiltersChange = useCallback((next: TabFilters) => {
+    setTabFiltersLocal(next);
+    setTabFilters(revenueStateFilter, next);
+  }, [revenueStateFilter]);
 
   const loadData = useCallback(async () => {
     try {
@@ -104,10 +119,17 @@ export default function Dashboard() {
 
   const leads = metrics?.leads ?? [];
 
-  const filteredLeads = useMemo(() => {
+  const baseFilteredLeads = useMemo(() => {
     if (revenueStateFilter === "active") return leads;
     return leads.filter((l) => l.revenueState === revenueStateFilter);
   }, [leads, revenueStateFilter]);
+
+  const filterableTab = isFilterableTab(revenueStateFilter);
+
+  const filteredLeads = useMemo(() => {
+    if (!filterableTab) return baseFilteredLeads;
+    return applyLeadFilters(baseFilteredLeads, tabFilters);
+  }, [baseFilteredLeads, tabFilters, filterableTab]);
 
   const queueLeads = useMemo(() => sortForQueue(filteredLeads).slice(0, QUEUE_LIMIT), [filteredLeads]);
 
@@ -136,7 +158,7 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {flags.ui_v2 && (
+          {(flags.ui_v2 || filterableTab) && (
             <div className="flex items-center border border-border rounded-md overflow-hidden">
               <Button
                 variant={viewMode === "queue" ? "secondary" : "ghost"}
@@ -175,6 +197,13 @@ export default function Dashboard() {
         activeFilter={revenueStateFilter}
         onFilterChange={handleFilterChange}
       />
+
+      {/* Filter Bar (filterable tabs only) */}
+      {filterableTab && (
+        <div className="pt-1">
+          <FilterBar filters={tabFilters} onChange={handleFiltersChange} />
+        </div>
+      )}
 
       {/* Action Required + Top Movers */}
       {revenueStateFilter === "heating_up" ? (
