@@ -286,7 +286,7 @@ export async function deleteLead(leadId: string): Promise<void> {
 
 export type InteractionItem = Pick<Interaction,
   'id' | 'lead_id' | 'type' | 'source' | 'occurred_at' | 'subject' |
-  'from_email' | 'to_email' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id' | 'hidden'
+  'from_email' | 'to_email' | 'to_emails' | 'cc_emails' | 'body_text' | 'ai_summary' | 'ai_intent' | 'ai_reply_worthy' | 'gmail_message_id' | 'gmail_thread_id' | 'hidden'
 >;
 
 export async function getLeadInteractions(leadId: string, includeHidden = false): Promise<InteractionItem[]> {
