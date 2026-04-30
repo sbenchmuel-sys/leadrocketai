@@ -253,7 +253,18 @@ const stageBadgeVariants: Record<DealStage, string> = {
 
 const ALL_STAGES: DealStage[] = [...STAGE_ORDER, "closed_won", "closed_lost"];
 
-export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter }: LeadTableProps) {
+export function LeadTable({ leads, isLoading, onLeadUpdated, revenueStateFilter, filters, onFiltersChange, showColumnFilters }: LeadTableProps) {
+  const fEffective: TabFilters = filters ?? EMPTY_FILTERS;
+  const setF = (next: TabFilters) => onFiltersChange?.(next);
+  const filtersEnabled = !!showColumnFilters && !!onFiltersChange;
+  const togglePhase = (p: DisplayPhase) => {
+    const has = fEffective.phases.includes(p);
+    setF({ ...fEffective, phases: has ? fEffective.phases.filter((x) => x !== p) : [...fEffective.phases, p] });
+  };
+  const toggleAction = (a: NextActionGroup) => {
+    const has = fEffective.nextActions.includes(a);
+    setF({ ...fEffective, nextActions: has ? fEffective.nextActions.filter((x) => x !== a) : [...fEffective.nextActions, a] });
+  };
   // Memoize closing scores + breakdowns for heating_up
   const scoreMap = useMemo(() => {
     if (revenueStateFilter !== "heating_up") return new Map<string, number>();
