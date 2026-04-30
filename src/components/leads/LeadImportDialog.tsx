@@ -233,12 +233,17 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
         }
       }
 
+      const skipped = inFileDupes + workspaceDupes;
+      const skipNote = skipped > 0
+        ? ` (skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}${workspaceDupes > 0 ? ` — ${workspaceDupes} already in workspace` : ""})`
+        : "";
+
       if (autoSendIntro && isOutbound) {
-        toast.success(`Imported ${count} leads — intro emails will be queued`, {
+        toast.success(`Imported ${count} leads${skipNote} — intro emails will be queued`, {
           description: "Drafts will be generated for each lead automatically.",
         });
       } else {
-        toast.success(`Successfully imported ${count} leads!`);
+        toast.success(`Successfully imported ${count} leads${skipNote}`);
       }
 
       handleClose(false);
