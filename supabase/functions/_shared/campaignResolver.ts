@@ -160,10 +160,14 @@ function parseLegacyInstructions(raw: string | null | undefined): ParsedLegacyIn
 function resolveCTA(
   channel: CanonicalChannel,
   step: number,
+  motion: string,
   includeCalendar: boolean,
   calendarLink: string | null | undefined,
   customInstructions: string | null,
 ): string {
+  if (channel === "email" && motion === "inbound_response") {
+    return calendarLink ? `meeting_booking:${calendarLink}` : "meeting_request";
+  }
   // Custom instructions may specify CTA type
   if (customInstructions) {
     const lower = customInstructions.toLowerCase();
@@ -295,13 +299,15 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
   const hardRules = input.motion === "inbound_response" && channel === "email"
     ? [
       "Warm inbound response — they contacted us first",
-      "Thank them for reaching out through the website/form if source indicates contact_form",
+      "Thank them for reaching out through the website/form and acknowledge their specific interest",
       "Briefly explain relevant company value from approved context",
-      "Ask for a meeting or availability; do not use cold-observation framing",
+      "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+      "Do not ask cold discovery questions such as their biggest challenge",
+      "Do not use cold-observation framing",
     ]
     : buildHardRules(channel, stepNumber, legacy, input.outbound_tone || "direct");
   const ctaType = resolveCTA(
-    channel, stepNumber,
+    channel, stepNumber, input.motion,
     input.include_meeting_cta ?? false,
     input.calendar_link,
     hasCustomInstructions ? [...legacy.global_rules, ...Object.values(legacy.step_instructions)].join(" ") : null,
