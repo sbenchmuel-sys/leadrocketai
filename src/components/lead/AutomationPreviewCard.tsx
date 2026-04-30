@@ -196,6 +196,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           next_action_label: null,
           eligible_at: null,
           action_reason_code: null,
+          automation_mode: null,
         })
         .eq("id", lead.id);
       toast.success("Sequence stopped permanently");
@@ -275,6 +276,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                         next_action_label: `Nurture Email ${stepNum}`,
                         eligible_at: eligibleAt.toISOString(),
                         action_reason_code: "NURTURE_DUE",
+                        automation_mode: "auto", // explicit consent — required by executor consent gate
                         nurture_status: "active",
                         nurture_mode: (lead as any).nurture_mode || "review",
                       };
@@ -303,6 +305,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                         next_action_label: nextLabel,
                         eligible_at: eligibleAt.toISOString(),
                         action_reason_code: "FOLLOWUP_DUE",
+                        automation_mode: "auto", // explicit consent — required by executor consent gate
                       };
                     }
 
@@ -614,6 +617,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                   next_action_label: null,
                   eligible_at: null,
                   action_reason_code: null,
+                  automation_mode: null,
                 })
                 .eq("id", lead.id);
               toast.success("Automation disabled");
