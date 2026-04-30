@@ -42,6 +42,13 @@ export interface ExecutionSettings {
   guardrails: Guardrails;
   stop_pause_rules: StopPauseRules;
   whatsapp: WhatsAppExecutionSettings;
+  /**
+   * IANA timezone for this workspace (e.g. "America/New_York"). Loaded from
+   * workspaces.timezone via workspace_members join. NULL means the workspace
+   * has not configured a timezone — checkSendWindow will fail-closed in that
+   * case. Set in loadExecutionSettings, never derived from cadence_settings.
+   */
+  timezone: string | null;
 }
 
 // ── Defaults (match DEFAULT_CADENCE_SETTINGS) ──────────────────────
@@ -85,13 +92,28 @@ export async function loadExecutionSettings(
   const cached = cache.get(ownerUserId);
   if (cached) return cached;
 
-  const { data: wpProfile } = await serviceClient
-    .from("workspace_profiles")
-    .select("cadence_settings")
-    .eq("user_id", ownerUserId)
-    .maybeSingle();
+  // Load cadence settings + workspace timezone in parallel.
+  // Timezone lives on workspaces (NOT workspace_profiles) so we join via
+  // workspace_members. A user may belong to multiple workspaces; we take
+  // the first match — automation runs per-owner, so a single owner's
+  // sends are gated by whichever workspace they happen to belong to.
+  const [profileRes, wsRes] = await Promise.all([
+    serviceClient
+      .from("workspace_profiles")
+      .select("cadence_settings")
+      .eq("user_id", ownerUserId)
+      .maybeSingle(),
+    serviceClient
+      .from("workspace_members")
+      .select("workspace_id, workspaces:workspace_id (timezone)")
+      .eq("user_id", ownerUserId)
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  const raw = (wpProfile?.cadence_settings as Record<string, unknown>) ?? {};
+  const raw = (profileRes.data?.cadence_settings as Record<string, unknown>) ?? {};
+  const timezone =
+    ((wsRes.data as any)?.workspaces?.timezone as string | null | undefined) ?? null;
 
   const settings: ExecutionSettings = {
     time_rules: {
@@ -114,6 +136,7 @@ export async function loadExecutionSettings(
       ...DEFAULT_EXECUTION_SETTINGS.whatsapp,
       ...(raw.whatsapp as Record<string, unknown> || {}),
     },
+    timezone: timezone && timezone.trim() ? timezone.trim() : null,
   };
 
   cache.set(ownerUserId, settings);
@@ -144,21 +167,109 @@ export function getDeterministicJitter(
   return (normalized * 2 - 1) * jitterPercent;
 }
 
-/** Check if date falls on a business day */
-export function isBusinessDay(date: Date, avoidWeekends: boolean): boolean {
-  if (!avoidWeekends) return true;
-  const day = date.getDay();
-  return day !== 0 && day !== 6;
+// ── Timezone-aware time helpers ────────────────────────────────────
+//
+// CRITICAL: Edge Functions run in UTC. Date.prototype.getHours/getDay return
+// runtime-local values, so they are silently UTC. We must explicitly project
+// to the workspace's IANA timezone before comparing wall-clock times.
+//
+// All helpers below treat an invalid/unknown timezone as a fatal misconfig:
+// the caller (checkSendWindow) fail-closes when timezone is null. Helpers
+// receiving a non-null but invalid string will throw RangeError from Intl,
+// which propagates up and is caught by the executor as an error skip.
+
+interface TzWallClock {
+  hour: number;
+  minute: number;
+  weekday: number; // 0 = Sun, 6 = Sat (matches Date.prototype.getDay)
+  year: number;
+  month: number;  // 0-indexed (matches Date.prototype.getMonth)
+  day: number;
 }
 
-/** Check if time is within the send window */
+function getWallClockInTz(date: Date, timeZone: string): TzWallClock {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+
+  // Intl returns "24" for midnight in some locales; normalize to 0.
+  let hour = parseInt(get("hour"), 10);
+  if (hour === 24) hour = 0;
+
+  const weekdayMap: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+  };
+
+  return {
+    hour,
+    minute: parseInt(get("minute"), 10),
+    weekday: weekdayMap[get("weekday")] ?? 0,
+    year: parseInt(get("year"), 10),
+    month: parseInt(get("month"), 10) - 1,
+    day: parseInt(get("day"), 10),
+  };
+}
+
+/**
+ * Construct a UTC Date that represents `hour:minute` wall-clock on the given
+ * Y-M-D in the target timezone. Used by computeNextEligibleAt to snap forward.
+ *
+ * Approach: build a "naive UTC" timestamp treating the wall-clock components
+ * as if UTC, then subtract the timezone's offset at that approximate instant.
+ * Handles DST correctly because the offset is computed at the target moment.
+ */
+function utcInstantForTzWallclock(
+  year: number,
+  monthIdx: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  const naiveUtcMs = Date.UTC(year, monthIdx, day, hour, minute, 0, 0);
+  // Iterate twice to converge on DST boundaries (offset depends on the instant).
+  let offsetMs = tzOffsetMsAt(new Date(naiveUtcMs), timeZone);
+  let candidate = naiveUtcMs - offsetMs;
+  offsetMs = tzOffsetMsAt(new Date(candidate), timeZone);
+  return new Date(naiveUtcMs - offsetMs);
+}
+
+/** Offset (ms) the timezone is ahead of UTC at the given instant. NY in DST → -14400000. */
+function tzOffsetMsAt(date: Date, timeZone: string): number {
+  // Trick: format the date as a fake-UTC ISO string for both target TZ and UTC,
+  // then subtract. Both use the same parser so DST is consistent.
+  const tzWall = getWallClockInTz(date, timeZone);
+  const tzAsIfUtc = Date.UTC(
+    tzWall.year, tzWall.month, tzWall.day,
+    tzWall.hour, tzWall.minute, 0, 0,
+  );
+  return tzAsIfUtc - date.getTime();
+}
+
+/** Check if date falls on a business day, in the given timezone. */
+export function isBusinessDay(date: Date, avoidWeekends: boolean, timeZone: string): boolean {
+  if (!avoidWeekends) return true;
+  const { weekday } = getWallClockInTz(date, timeZone);
+  return weekday !== 0 && weekday !== 6;
+}
+
+/** Check if time is within the send window, in the given timezone. */
 export function isWithinSendWindow(
   date: Date,
   sendWindow: { start: string; end: string },
+  timeZone: string,
 ): boolean {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const timeStr = `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+  const { hour, minute } = getWallClockInTz(date, timeZone);
+  const timeStr = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
   return timeStr >= sendWindow.start && timeStr <= sendWindow.end;
 }
 
@@ -166,8 +277,13 @@ export function isWithinSendWindow(
  * Compute eligible_at for the next step, respecting:
  * - delay_days (from campaign_steps or legacy intervals)
  * - jitter_percent
- * - send_window_local
- * - avoid_weekends / use_business_days
+ * - send_window_local (in workspace timezone)
+ * - avoid_weekends / use_business_days (in workspace timezone)
+ *
+ * If the workspace has no timezone configured, falls back to scheduling at
+ * the raw delayed time. checkSendWindow will then refuse the send when the
+ * cron actually fires, so safety is preserved — the schedule just isn't
+ * snapped to business hours until the workspace is configured.
  */
 export function computeNextEligibleAt(
   delayDays: number,
@@ -175,48 +291,54 @@ export function computeNextEligibleAt(
   actionKey: string,
   settings: ExecutionSettings,
 ): Date {
-  const { time_rules, guardrails } = settings;
+  const { time_rules, guardrails, timezone } = settings;
 
   // Apply jitter to delay
   const jitter = getDeterministicJitter(leadId, actionKey, guardrails.jitter_percent);
   const jitteredDelayMs = delayDays * 86_400_000 * (1 + jitter);
   let eligibleTime = new Date(Date.now() + jitteredDelayMs);
 
-  // Parse send window start
+  // Without a timezone we can't snap to wall-clock business hours — return
+  // the delayed time as-is. checkSendWindow will fail-closed at send time.
+  if (!timezone) return eligibleTime;
+
   const [startHour, startMin] = time_rules.send_window_local.start.split(":").map(Number);
   const [endHour] = time_rules.send_window_local.end.split(":").map(Number);
 
-  // Snap to send window + business day
   let iterations = 0;
   const maxIterations = 14; // safety: never loop more than 2 weeks
 
-  while (iterations < maxIterations) {
-    // Skip weekends
-    if (time_rules.use_business_days && !isBusinessDay(eligibleTime, time_rules.avoid_weekends)) {
-      eligibleTime = new Date(eligibleTime.getTime() + 86_400_000);
-      eligibleTime.setHours(startHour, startMin, 0, 0);
-      iterations++;
-      continue;
-    }
+  try {
+    while (iterations < maxIterations) {
+      const wall = getWallClockInTz(eligibleTime, timezone);
 
-    // Before send window → snap to start
-    const currentHour = eligibleTime.getHours();
-    const currentMin = eligibleTime.getMinutes();
-    if (currentHour < startHour || (currentHour === startHour && currentMin < startMin)) {
-      eligibleTime.setHours(startHour, startMin, 0, 0);
+      // Weekend → advance to next day at start-of-window in target TZ
+      if (time_rules.use_business_days && time_rules.avoid_weekends && (wall.weekday === 0 || wall.weekday === 6)) {
+        eligibleTime = utcInstantForTzWallclock(wall.year, wall.month, wall.day + 1, startHour, startMin, timezone);
+        iterations++;
+        continue;
+      }
+
+      // Before window → snap to start of same day in target TZ
+      if (wall.hour < startHour || (wall.hour === startHour && wall.minute < startMin)) {
+        eligibleTime = utcInstantForTzWallclock(wall.year, wall.month, wall.day, startHour, startMin, timezone);
+        break;
+      }
+
+      // After window → next day at start in target TZ
+      if (wall.hour >= endHour) {
+        eligibleTime = utcInstantForTzWallclock(wall.year, wall.month, wall.day + 1, startHour, startMin, timezone);
+        iterations++;
+        continue;
+      }
+
+      // Within window → good
       break;
     }
-
-    // After send window → next day at start
-    if (currentHour >= endHour) {
-      eligibleTime = new Date(eligibleTime.getTime() + 86_400_000);
-      eligibleTime.setHours(startHour, startMin, 0, 0);
-      iterations++;
-      continue;
-    }
-
-    // Within window → good
-    break;
+  } catch (err) {
+    // Invalid timezone string somehow leaked through — return raw delayed time.
+    // checkSendWindow will reject it at send time.
+    console.warn(`[executionSettings] computeNextEligibleAt TZ error (${timezone}): ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return eligibleTime;
@@ -295,22 +417,41 @@ export async function checkPerLeadCaps(
 
 /**
  * Check send window: is "now" within the configured send window on a business day?
+ *
+ * FAIL-CLOSED: if the workspace has no configured timezone, refuse the send.
+ * This prevents the previous bug where missing timezone silently defaulted to
+ * UTC, causing 5am ET sends to slip through a "9-5" window.
  */
 export function checkSendWindow(settings: ExecutionSettings): GuardCheckResult {
-  const now = new Date();
-  const { time_rules } = settings;
-
-  if (time_rules.use_business_days && !isBusinessDay(now, time_rules.avoid_weekends)) {
+  if (!settings.timezone) {
     return {
       allowed: false,
-      reason: `Weekend: ${now.toISOString()} — avoid_weekends is on`,
+      reason: "Workspace timezone not configured — set it in Settings before automation can run",
     };
   }
 
-  if (!isWithinSendWindow(now, time_rules.send_window_local)) {
+  const now = new Date();
+  const { time_rules } = settings;
+
+  // Defensive: if Intl rejects the timezone string (typo/deprecated), bail.
+  try {
+    if (time_rules.use_business_days && !isBusinessDay(now, time_rules.avoid_weekends, settings.timezone)) {
+      return {
+        allowed: false,
+        reason: `Weekend in ${settings.timezone}: ${now.toISOString()} — avoid_weekends is on`,
+      };
+    }
+
+    if (!isWithinSendWindow(now, time_rules.send_window_local, settings.timezone)) {
+      return {
+        allowed: false,
+        reason: `Outside send window ${time_rules.send_window_local.start}–${time_rules.send_window_local.end} ${settings.timezone}`,
+      };
+    }
+  } catch (err) {
     return {
       allowed: false,
-      reason: `Outside send window: ${time_rules.send_window_local.start}–${time_rules.send_window_local.end}`,
+      reason: `Invalid timezone "${settings.timezone}": ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 

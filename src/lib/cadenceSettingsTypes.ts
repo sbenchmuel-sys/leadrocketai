@@ -276,24 +276,103 @@ export function getDeterministicJitter(
   return (normalized * 2 - 1) * jitterPercent;
 }
 
+// ── Timezone-aware helpers (mirror of supabase/functions/_shared/executionSettings.ts) ──
+// When `timezone` is non-null we evaluate wall-clock in that IANA TZ via Intl.
+// When null we fall back to runtime-local (browser TZ) — safe on the client
+// because the browser usually matches the user, unlike the server which is UTC.
+
+interface TzWallClock {
+  hour: number;
+  minute: number;
+  weekday: number;
+  year: number;
+  month: number;
+  day: number;
+}
+
+function getWallClockInTz(date: Date, timeZone: string): TzWallClock {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,
+  });
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+  let hour = parseInt(get("hour"), 10);
+  if (hour === 24) hour = 0;
+  const weekdayMap: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+  };
+  return {
+    hour,
+    minute: parseInt(get("minute"), 10),
+    weekday: weekdayMap[get("weekday")] ?? 0,
+    year: parseInt(get("year"), 10),
+    month: parseInt(get("month"), 10) - 1,
+    day: parseInt(get("day"), 10),
+  };
+}
+
+function tzOffsetMsAt(date: Date, timeZone: string): number {
+  const w = getWallClockInTz(date, timeZone);
+  const tzAsIfUtc = Date.UTC(w.year, w.month, w.day, w.hour, w.minute, 0, 0);
+  return tzAsIfUtc - date.getTime();
+}
+
+function utcInstantForTzWallclock(
+  year: number, monthIdx: number, day: number,
+  hour: number, minute: number, timeZone: string,
+): Date {
+  const naiveUtcMs = Date.UTC(year, monthIdx, day, hour, minute, 0, 0);
+  let offsetMs = tzOffsetMsAt(new Date(naiveUtcMs), timeZone);
+  let candidate = naiveUtcMs - offsetMs;
+  offsetMs = tzOffsetMsAt(new Date(candidate), timeZone);
+  return new Date(naiveUtcMs - offsetMs);
+}
+
 // Helper to check if a time is within the send window (business hours)
 export function isWithinSendWindow(
   date: Date,
   timeRules: TimeRules,
   timezone: string | null
 ): boolean {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
+  let hours: number;
+  let minutes: number;
+  if (timezone) {
+    try {
+      const w = getWallClockInTz(date, timezone);
+      hours = w.hour;
+      minutes = w.minute;
+    } catch {
+      hours = date.getHours();
+      minutes = date.getMinutes();
+    }
+  } else {
+    hours = date.getHours();
+    minutes = date.getMinutes();
+  }
   const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-  
-  return timeStr >= timeRules.send_window_local.start && 
+  return timeStr >= timeRules.send_window_local.start &&
          timeStr <= timeRules.send_window_local.end;
 }
 
 // Helper to check if a date is a business day
-export function isBusinessDay(date: Date, avoidWeekends: boolean): boolean {
+export function isBusinessDay(
+  date: Date,
+  avoidWeekends: boolean,
+  timezone: string | null = null,
+): boolean {
   if (!avoidWeekends) return true;
-  const day = date.getDay();
+  let day: number;
+  if (timezone) {
+    try {
+      day = getWallClockInTz(date, timezone).weekday;
+    } catch {
+      day = date.getDay();
+    }
+  } else {
+    day = date.getDay();
+  }
   return day !== 0 && day !== 6;
 }
 
@@ -307,43 +386,69 @@ export function calculateEligibleAt(
   timezone: string | null
 ): Date {
   const { time_rules, guardrails } = cadenceSettings;
-  
+
   const jitterMultiplier = getDeterministicJitter(leadId, actionKey, guardrails.jitter_percent);
   const jitteredIntervalMs = intervalMs * (1 + jitterMultiplier);
-  
+
   let eligibleTime = new Date(baseTime + jitteredIntervalMs);
-  
-  if (time_rules.use_business_days) {
-    let iterations = 0;
-    const maxIterations = 7;
-    
-    while (iterations < maxIterations) {
-      if (!isBusinessDay(eligibleTime, time_rules.avoid_weekends)) {
-        eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
-        const [startHour, startMin] = time_rules.send_window_local.start.split(':').map(Number);
-        eligibleTime.setHours(startHour, startMin, 0, 0);
-        iterations++;
-        continue;
-      }
-      
-      if (!isWithinSendWindow(eligibleTime, time_rules, timezone)) {
-        const [startHour, startMin] = time_rules.send_window_local.start.split(':').map(Number);
-        const [endHour, endMin] = time_rules.send_window_local.end.split(':').map(Number);
-        const currentHour = eligibleTime.getHours();
-        
-        if (currentHour < startHour || (currentHour === startHour && eligibleTime.getMinutes() < startMin)) {
-          eligibleTime.setHours(startHour, startMin, 0, 0);
-        } else if (currentHour >= endHour) {
-          eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
-          eligibleTime.setHours(startHour, startMin, 0, 0);
+
+  if (!time_rules.use_business_days) return eligibleTime;
+
+  const [startHour, startMin] = time_rules.send_window_local.start.split(':').map(Number);
+  const [endHour] = time_rules.send_window_local.end.split(':').map(Number);
+
+  let iterations = 0;
+  const maxIterations = 14;
+
+  // TZ-aware path
+  if (timezone) {
+    try {
+      while (iterations < maxIterations) {
+        const w = getWallClockInTz(eligibleTime, timezone);
+        if (time_rules.avoid_weekends && (w.weekday === 0 || w.weekday === 6)) {
+          eligibleTime = utcInstantForTzWallclock(w.year, w.month, w.day + 1, startHour, startMin, timezone);
+          iterations++;
+          continue;
         }
-        iterations++;
-        continue;
+        if (w.hour < startHour || (w.hour === startHour && w.minute < startMin)) {
+          eligibleTime = utcInstantForTzWallclock(w.year, w.month, w.day, startHour, startMin, timezone);
+          break;
+        }
+        if (w.hour >= endHour) {
+          eligibleTime = utcInstantForTzWallclock(w.year, w.month, w.day + 1, startHour, startMin, timezone);
+          iterations++;
+          continue;
+        }
+        break;
       }
-      
-      break;
+      return eligibleTime;
+    } catch {
+      // Fall through to local-time path on Intl errors
     }
   }
-  
+
+  // Fallback: runtime-local (browser TZ on client; UTC on server — server uses
+  // the TZ-aware version above via supabase/functions/_shared/executionSettings.ts).
+  while (iterations < maxIterations) {
+    if (!isBusinessDay(eligibleTime, time_rules.avoid_weekends)) {
+      eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
+      eligibleTime.setHours(startHour, startMin, 0, 0);
+      iterations++;
+      continue;
+    }
+    const currentHour = eligibleTime.getHours();
+    if (currentHour < startHour || (currentHour === startHour && eligibleTime.getMinutes() < startMin)) {
+      eligibleTime.setHours(startHour, startMin, 0, 0);
+      break;
+    }
+    if (currentHour >= endHour) {
+      eligibleTime = new Date(eligibleTime.getTime() + 24 * 60 * 60 * 1000);
+      eligibleTime.setHours(startHour, startMin, 0, 0);
+      iterations++;
+      continue;
+    }
+    break;
+  }
+
   return eligibleTime;
 }
