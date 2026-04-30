@@ -461,6 +461,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   if (motion_override && motion_override !== resolvedContext.motion) {
     console.log("[streamDraft] Motion override:", resolvedContext.motion, "→", motion_override);
     (resolvedContext as any).motion = motion_override;
+    (resolvedContext.lead as any).motion = motion_override;
   }
 
   // Step 2: Determine playbook (channel-aware)
@@ -480,7 +481,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
     const campaignFields = buildCampaignPayloadFields({
       action_key: inferActionKey(finalIntent, resolvedContext),
-      motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+      motion: resolvedContext.motion || (resolvedContext.lead as any).motion || "outbound_prospecting",
       channel: channel === "linkedin" ? "email" : channel,
       outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
       action_instructions: leadInstructions,
@@ -637,6 +638,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   if (motion_override && motion_override !== resolvedContext.motion) {
     console.log("[generateDraft] Motion override:", resolvedContext.motion, "→", motion_override);
     (resolvedContext as any).motion = motion_override;
+    (resolvedContext.lead as any).motion = motion_override;
   }
 
   // Step 2: Determine playbook (channel-aware)
@@ -663,7 +665,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
   const campaignFields2 = buildCampaignPayloadFields({
     action_key: inferActionKey(finalIntent, resolvedContext),
-    motion: (resolvedContext.lead as any).motion || "outbound_prospecting",
+    motion: resolvedContext.motion || (resolvedContext.lead as any).motion || "outbound_prospecting",
     channel: channel === "linkedin" ? "email" : channel,
     outbound_tone: (resolvedContext.lead as any).outbound_tone || "direct",
     action_instructions: leadInstructions2,
