@@ -290,7 +290,7 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
         include_meeting_cta: input.structured_campaign?.include_meeting_cta ?? input.include_meeting_cta ?? false,
         calendar_link: input.calendar_link || null,
       },
-      max_word_count: structuredStep.max_words,
+      max_word_count: isInboundEmail ? 150 : structuredStep.max_words,
       cta_type: isInboundEmail
         ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
         : structuredStep.cta_type,
@@ -305,7 +305,9 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
   const framework = resolveFramework(channel, stepNumber, input.motion, hasSignals);
   const objective = deriveObjective(channel, stepNumber, input.motion);
   const sequenceContext = buildSequenceContext(input, stepNumber);
-  const maxWordCount = resolveWordCount(channel, stepNumber, hasCustomInstructions);
+  const maxWordCount = input.motion === "inbound_response" && channel === "email"
+    ? 150
+    : resolveWordCount(channel, stepNumber, hasCustomInstructions);
   const hardRules = input.motion === "inbound_response" && channel === "email"
     ? [
       "Warm inbound response — they contacted us first",
