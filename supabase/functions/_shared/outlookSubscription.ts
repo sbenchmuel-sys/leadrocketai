@@ -20,24 +20,51 @@ export async function createOutlookSubscription(
   const clientState = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SUBSCRIPTION_LIFETIME_MS).toISOString();
 
-  const resp = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      changeType: "created",
-      notificationUrl: webhookUrl,
-      resource: "/me/mailFolders('Inbox')/messages",
-      expirationDateTime: expiresAt,
-      clientState,
-    }),
-  });
+  // Warm up the webhook function so Microsoft Graph's validation POST
+  // (which times out at ~10s) doesn't hit an Edge Function cold start.
+  // Graph returns 400 ValidationError "OK" when the validation handshake
+  // times out — warming the isolate first prevents this.
+  for (let i = 0; i < 2; i++) {
+    try {
+      await fetch(`${webhookUrl}?validationToken=warmup`, { method: "GET" });
+    } catch {
+      // best-effort
+    }
+  }
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Graph subscription CREATE failed (${resp.status}): ${body}`);
+  // Retry CREATE up to 3 times — Graph occasionally fails the validation
+  // handshake on the first attempt even after warmup.
+  let resp: Response | null = null;
+  let lastBody = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    resp = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        changeType: "created",
+        notificationUrl: webhookUrl,
+        resource: "/me/mailFolders('Inbox')/messages",
+        expirationDateTime: expiresAt,
+        clientState,
+      }),
+    });
+
+    if (resp.ok) break;
+    lastBody = await resp.text();
+    logger.warn("mail.outlook.subscription_create_retry", {
+      mail_account_id: mailAccountId,
+      attempt,
+      status: resp.status,
+      body: lastBody.slice(0, 300),
+    });
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 1500 * attempt));
+  }
+
+  if (!resp || !resp.ok) {
+    throw new Error(`Graph subscription CREATE failed (${resp?.status ?? "no-resp"}): ${lastBody}`);
   }
 
   const sub = await resp.json();
