@@ -74,6 +74,7 @@ function resolveChannel(actionKey: string | null, explicit?: CanonicalChannel): 
 type EmailFramework = "neutral_observation" | "observation" | "hypothesis" | "ultra_short" | "value_add" | "breakup";
 
 function resolveEmailFramework(step: number, motion: string, hasSignals: boolean): EmailFramework {
+  if (motion === "inbound_response") return "inbound_response" as EmailFramework;
   if (step === 4) return "breakup";
   if (step === 3) return "value_add";
   if (motion === "nurture") return "value_add";
