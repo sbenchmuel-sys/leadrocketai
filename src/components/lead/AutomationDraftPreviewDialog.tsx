@@ -43,10 +43,10 @@ export default function AutomationDraftPreviewDialog({
       const sourceType = (lead as any).source_type || "manual_entry";
       const isInbound = motion === "inbound_response" || INBOUND_SOURCE_TYPES.has(sourceType);
       let overrideIntent: string;
-      if (stepKey === "send_pre_1") overrideIntent = isInbound ? "inbound_intro" : "pre_email_1_intro";
-      else if (stepKey === "send_pre_2") overrideIntent = "pre_email_2_followup";
-      else if (stepKey === "send_pre_3") overrideIntent = "pre_email_3_followup";
-      else if (stepKey === "send_pre_4") overrideIntent = "pre_email_4_breakup";
+      if (stepKey.startsWith("send_pre_1")) overrideIntent = isInbound ? "inbound_intro" : "pre_email_1_intro";
+      else if (stepKey.startsWith("send_pre_2")) overrideIntent = "pre_email_2_followup";
+      else if (stepKey.startsWith("send_pre_3")) overrideIntent = "pre_email_3_followup";
+      else if (stepKey.startsWith("send_pre_4")) overrideIntent = "pre_email_4_breakup";
       else if (stepKey.startsWith("nurture_")) overrideIntent = "nurture_email_single";
       else overrideIntent = "pre_email_2_followup";
 
