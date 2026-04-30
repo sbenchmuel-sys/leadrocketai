@@ -577,7 +577,12 @@ export function buildLeadUpdate(
     motion: string;
     nurture_status: string;
     ooo_until: string | null;
-  } | null
+  } | null,
+  // CONSENT GATE: when null, lead has not opted into automation. We will still
+  // surface "reply_now" (a manual prompt to the rep) but we will NEVER schedule
+  // an outbound send (eligible_at) for this lead. Without this guard, mail sync
+  // re-arms the queue every cycle and the executor fires unauthorized sends.
+  automationMode: string | null = null,
 ): LeadUpdate {
   const dismissedAt = actionDismissedAt ? new Date(actionDismissedAt).getTime() : 0;
   const lastInteractionTime = Math.max(
