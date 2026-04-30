@@ -439,8 +439,11 @@ export async function getLeadTimeline(
         status_json: { ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
         metadata_json: {
           gmail_message_id: i.gmail_message_id,
+          gmail_thread_id: (i as { gmail_thread_id?: string | null }).gmail_thread_id ?? null,
           from_email: i.from_email,
           to_email: i.to_email,
+          to_emails: Array.isArray((i as { to_emails?: string[] }).to_emails) ? (i as { to_emails?: string[] }).to_emails : [],
+          cc_emails: Array.isArray((i as { cc_emails?: string[] }).cc_emails) ? (i as { cc_emails?: string[] }).cc_emails : [],
           ai_summary: i.ai_summary,
         },
         dedupe_key: i.gmail_message_id ?? i.id,
