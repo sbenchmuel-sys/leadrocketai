@@ -196,6 +196,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
           next_action_label: null,
           eligible_at: null,
           action_reason_code: null,
+          automation_mode: null,
         })
         .eq("id", lead.id);
       toast.success("Sequence stopped permanently");
