@@ -203,7 +203,8 @@ export function BulkAutomationDialog({
       const errors = results.filter((r) => r.error);
       if (errors.length > 0) {
         console.error("Some updates failed:", errors);
-        toast.error(`Failed to update ${errors.length} lead(s)`);
+        const firstMsg = errors[0].error?.message || "unknown error";
+        toast.error(`Failed to update ${errors.length} lead(s): ${firstMsg}`);
       } else {
         toast.success(`Automation enabled on ${eligibleChecked.length} lead${eligibleChecked.length > 1 ? "s" : ""}`);
       }
