@@ -38,10 +38,14 @@ function isAccelerationActive(lead: any): boolean {
   return new Date(lead.acceleration_until) > new Date();
 }
 
-function getEffectiveMode(lead: any, workspaceSettings: any): string {
+function getEffectiveMode(lead: any, _workspaceSettings: any): string {
+  // CONSENT GATE: never derive an auto-send mode from workspace defaults.
+  // A lead is only "in automation" if the user explicitly enabled it on that
+  // lead (sets lead.automation_mode). Otherwise we stay in suggest_only so
+  // the rep sees a draft but nothing fires automatically.
   if (isAccelerationActive(lead)) return "acceleration";
   if (lead?.automation_mode) return lead.automation_mode;
-  return workspaceSettings?.default_mode ?? "suggest_only";
+  return "suggest_only";
 }
 
 function isWeekend(date: Date, tz: string): boolean {
