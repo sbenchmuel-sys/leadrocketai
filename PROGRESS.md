@@ -33,3 +33,18 @@ PRs:
 - ✅ PR 2.2 — Stakeholders + Partners panels on lead detail page. New sidebar component `StakeholdersPartnersPanel` with two sections, "+ Add" dialogs (`AddStakeholderDialog`, `AddPartnerDialog`), champion-swap and remove actions. Query helpers in `src/lib/leadGroupQueries.ts`. Wired into `LeadDetail.tsx` sidebar.
 - ⬜ PR 2.4 — Per-email reply targeting. The "respond to Liza when Ed's email is most recent" scenario. Per-row Reply buttons in `TimelineTab` + composer banner showing reply target with switch dropdown + AI prompt builder consumes `reply_to_interaction_id`.
 - ⬜ PR 2.3 — Contact detail page (`/app/contacts/:id`). Cross-deal partner view — click a partner to see all groups they're on. Currently the partner click-through 404s — non-blocking but should follow PR 2.4.
+
+## Email-send safety hardening
+
+After the 5am ET incident on 2026-04-30 (multiple safeguards failed independently), three patches landed and two more are queued.
+
+Shipped:
+- ✅ Consent gate in `syncEngine` + `automation-executor` eligible-leads queries — won't schedule or send for leads without explicit `automation_mode`.
+- ✅ Workspace timezone fix — `workspaces.timezone` column + Intl-based `checkSendWindow` + fail-closed when timezone is null. Cliff backfilled to `America/New_York`. Migration: `20260430200000_workspace_timezone.sql`.
+
+Queued:
+- ⬜ New-lead 24h cooldown — single check at top of `automation-executor`'s per-lead loop: if `now() - lead.created_at < 24h`, skip + push `eligible_at` forward. Catches CSV imports, candidate approvals, and any future ghost-queue regression.
+- ⬜ Volume tripwire — log a `volume_alert` row in `cron_run_log` when a workspace exceeds N sends per 15-min window. Doesn't block sends, just gives a queryable signal.
+
+Lovable handoff still pending:
+- ⬜ Workspace timezone settings dropdown UI. Until shipped, only Cliff's workspace can run automation (any other workspace has `timezone IS NULL` and the gate fail-closes).
