@@ -1123,6 +1123,45 @@ export type Database = {
         }
         Relationships: []
       }
+      group_partners: {
+        Row: {
+          added_at: string
+          added_by_user_id: string | null
+          contact_id: string
+          group_id: string
+          role_note: string | null
+        }
+        Insert: {
+          added_at?: string
+          added_by_user_id?: string | null
+          contact_id: string
+          group_id: string
+          role_note?: string | null
+        }
+        Update: {
+          added_at?: string
+          added_by_user_id?: string | null
+          contact_id?: string
+          group_id?: string
+          role_note?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "group_partners_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "group_partners_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "lead_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integrations: {
         Row: {
           app_secret_encrypted: string | null
@@ -1577,6 +1616,51 @@ export type Database = {
           },
         ]
       }
+      lead_groups: {
+        Row: {
+          champion_lead_id: string | null
+          created_at: string
+          created_by_user_id: string | null
+          group_name: string | null
+          id: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          champion_lead_id?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          group_name?: string | null
+          id?: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          champion_lead_id?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          group_name?: string | null
+          id?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_groups_champion_lead_id_fkey"
+            columns: ["champion_lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_groups_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_intelligence: {
         Row: {
           buying_signals_json: Json
@@ -1834,6 +1918,7 @@ export type Database = {
           email: string
           engagement_score: number
           first_outbound_at: string | null
+          group_id: string | null
           has_future_meeting: boolean
           id: string
           industry: string | null
@@ -1906,6 +1991,7 @@ export type Database = {
           email: string
           engagement_score?: number
           first_outbound_at?: string | null
+          group_id?: string | null
           has_future_meeting?: boolean
           id?: string
           industry?: string | null
@@ -1978,6 +2064,7 @@ export type Database = {
           email?: string
           engagement_score?: number
           first_outbound_at?: string | null
+          group_id?: string | null
           has_future_meeting?: boolean
           id?: string
           industry?: string | null
@@ -2036,6 +2123,13 @@ export type Database = {
             columns: ["campaign_id"]
             isOneToOne: false
             referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "leads_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "lead_groups"
             referencedColumns: ["id"]
           },
           {
@@ -3574,6 +3668,10 @@ export type Database = {
       }
     }
     Functions: {
+      create_lead_group_with_champion: {
+        Args: { p_champion_lead_id: string; p_group_name?: string }
+        Returns: string
+      }
       decrypt_gmail_token: {
         Args: { encrypted_token: string; encryption_key: string }
         Returns: string
@@ -3668,6 +3766,10 @@ export type Database = {
           tags: string[]
           title: string
         }[]
+      }
+      set_lead_group_champion: {
+        Args: { p_group_id: string; p_new_champion_lead_id: string }
+        Returns: undefined
       }
     }
     Enums: {
