@@ -2,13 +2,7 @@
 
 Read before making changes. This file documents project-specific constraints that aren't obvious from the code alone.
 
-## What this project is
-
-**DrivePilot** (codebase name: `leadrocketai-main`) is a B2B sales automation SaaS in pilot stage. AI-generated outreach across email, SMS, WhatsApp, phone; learns per-workspace writing style; tracks deal intelligence. Founder-led B2B teams (2–25 reps) are the ICP.
-
-Stack: React 18 + Vite + Tailwind + shadcn/ui frontend; Supabase (Postgres + RLS + Edge Functions in Deno) backend; Lovable Cloud for build/deploy.
-
-See `README.md` for architecture detail.
+Stack: React 18 + Vite + Tailwind + shadcn/ui frontend; Supabase (Postgres + RLS + Edge Functions in Deno) backend; Lovable Cloud for build/deploy. See `README.md` for architecture detail.
 
 ## Platform constraints — do not change
 
@@ -58,31 +52,13 @@ These are not just marketing claims — they constrain implementation:
 
 When in doubt: grep for the function name in `cron-dispatcher` allowlists, in `cron.job` table, and in other edge functions before assuming it's dead.
 
-## Things that ARE safe to delete (audited 2026-04-27)
-
-- `src/components/AuthDebugPanel.tsx` — exported, never imported.
-- `src/hooks/useGmailAutoSync.ts` — already commented as "removed" upstream; file was forgotten.
-- `admin_tuning` flag in `src/lib/featureFlags.ts` — defined but never checked.
-- The migration `20260106083245_*.sql` references a different Supabase project (`umqhdxjtgarwkdpwsxrm`) and a non-existent `gmail-background-sync` function. Verify no live `cron.job` row matches `gmail-background-sync-job` before deletion.
-
-## Lovable migration workflow (confirmed 2026-04-29)
+## Lovable migration workflow
 
 External PRs (from Claude/VS Code) land migration files as SQL in `supabase/migrations/`. **Lovable does NOT auto-apply these.** After a PR is merged, tell Lovable in its chat: "Apply migration `<filename>`." Lovable runs it against the live Supabase database AND regenerates `src/integrations/supabase/types.ts`. Both steps happen together — do not regenerate types separately.
 
 When Lovable applies a migration, it creates its own copy with a `<timestamp>_<uuid>.sql` filename (same SQL, different name). This is expected.
 
-## Lead Candidates pipeline (started 2026-04-29)
-
-Build sequence tracking (spec: GitHub issue #3):
-- ✅ PR #3/4 — data layer (`lead_candidates` + dismiss-list tables, RLS). Applied via Lovable.
-- ✅ PR #4 — detection hook (`detect-lead-candidates` edge fn, `_shared/leadCandidateDetection.ts`, cron migration).
-- ✅ PR #5 — AI scoring (`score-lead-candidate` edge fn, 10-min cron, Lovable AI gateway w/ Gemini Flash Lite). Advisory only in V1 — never auto-dismisses.
-- ✅ PR #6 — Lookback seed (`lookback-seed-candidates` edge fn, hourly cron). Adds `lookback_seed_completed_at` column to `gmail_connections` + `mail_accounts`; adds `lookback_seed_window_days` (default 30) to `workspaces`. Existing accounts are backfilled as already-seeded so only future connects trigger a scan.
-- ⬜ PR #7–10 — UI + bulk actions + digest + settings (Lovable).
-
-`detect-lead-candidates` was added to `cron-dispatcher`'s `ALLOWED_TARGETS`. Its cron job is in `20260430000000_add_detect_lead_candidates_cron.sql` and must be applied via Lovable migration tool.
-
-## Open hazards (separately tracked)
+## Open hazards
 
 - **Supabase anon key is hardcoded in 12 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 12 crons must be updated together OR they all break silently.
 - **Demo data fall-through in `src/lib/demoData.ts` (736 lines)** — imported by production query paths. If `VITE_DEMO_MODE` is misconfigured in prod, real users could see demo numbers. Gate explicitly.
@@ -100,3 +76,5 @@ Build sequence tracking (spec: GitHub issue #3):
 | TypeScript DB types | `src/integrations/supabase/types.ts` (auto-generated, large) |
 | AI prompt logic | `supabase/functions/_shared/prompts.ts` |
 | Auth flow | `src/contexts/AuthContext.tsx` + `src/contexts/WorkspaceContext.tsx` |
+| Pending one-time cleanups | `CLEANUP.md` |
+| Build progress / WIP features | `PROGRESS.md` |
