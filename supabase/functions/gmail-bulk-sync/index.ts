@@ -480,34 +480,17 @@ async function syncLeadEmails(
       // OOO / Auto-reply detection — must run BEFORE counting as real inbound
       if (direction === "inbound" && !isBounce) {
         const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
-        if (oooResult.isOOO) {
-          const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
-          const returnDateStr = oooResult.returnDate
-            ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
-            : "approximately 7 days";
-
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: OOO detected (${oooResult.confidence}). Pausing until ${eligibleAt}`);
-
-          await serviceSupabase.from("leads").update({
-            ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
-            eligible_at: eligibleAt,
-            needs_action: false,
-            next_action_key: null,
-            next_action_label: null,
-            action_reason_code: null,
-          }).eq("id", leadId);
-
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId,
-            type: "system_note",
-            source: "automation",
-            body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). Out of office — returning ${returnDateStr}. Automation paused until then.`,
-            occurred_at: occurredAt,
-            gmail_message_id: gmailMessageId,
-            gmail_thread_id: threadId,
-            provider: "automation",
-          });
-
+        const applied = await applyOOOPause({
+          supabase: serviceSupabase,
+          leadId,
+          workspaceId: null,
+          oooResult,
+          occurredAt,
+          gmailMessageId,
+          gmailThreadId: threadId,
+          logPrefix: "[gmail-bulk-sync]",
+        });
+        if (applied) {
           existingMessageIds.add(gmailMessageId);
           synced++;
           continue;
@@ -516,36 +499,14 @@ async function syncLeadEmails(
 
       // ── Defer / "reconnect later" detection ──
       if (direction === "inbound" && !isBounce) {
-        const emailDateObj = new Date(occurredAt);
-        const deferResult = detectDeferSignal(bodyText, emailDateObj);
-        if (deferResult.isDefer && deferResult.reconnectDate) {
-          const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-          const eligibleAt = deferResult.reconnectDate.toISOString();
-          const reasonSnippet = (deferResult.reason || "Lead requested to reconnect later.").slice(0, 200);
-
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: Defer signal detected. Reconnect: ${reconnectDateStr}`);
-
-          await serviceSupabase.from("leads").update({
-            ooo_until: eligibleAt, eligible_at: eligibleAt, needs_action: false,
-            next_action_key: null, next_action_label: null, action_reason_code: null,
-            next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
-            next_step_reason: reasonSnippet, nurture_status: "paused", motion: "nurture",
-          }).eq("id", leadId);
-
-          const { data: currentLead } = await serviceSupabase.from("leads").select("personal_notes").eq("id", leadId).single();
-          await serviceSupabase.from("leads").update({
-            personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
-          }).eq("id", leadId);
-
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId,
-            type: "system_note",
-            source: "automation",
-            body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
-            occurred_at: new Date().toISOString(),
-            provider: "automation",
-          });
-        }
+        const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
+        await applyDeferPause({
+          supabase: serviceSupabase,
+          leadId,
+          workspaceId: null,
+          deferResult,
+          logPrefix: "[gmail-bulk-sync]",
+        });
       }
 
       // ── Meeting confirmation detection ──
