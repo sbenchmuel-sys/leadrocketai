@@ -13,6 +13,7 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
+import StakeholdersPartnersPanel from "@/components/lead/StakeholdersPartnersPanel";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -146,6 +147,15 @@ export default function LeadDetail() {
             onNavigateToMeetings={() => setActiveTab("meetings")}
             onUpdate={handleUpdate}
           />
+          {workspaceId && (
+            <StakeholdersPartnersPanel
+              leadId={lead.id}
+              leadName={lead.name}
+              leadCompany={lead.company ?? null}
+              workspaceId={workspaceId}
+              onChanged={handleUpdate}
+            />
+          )}
           {workspaceId && (
             <LeadContextPanel
               leadId={lead.id}
