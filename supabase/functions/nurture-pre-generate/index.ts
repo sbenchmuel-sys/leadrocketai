@@ -41,6 +41,7 @@ serve(async (req) => {
       .eq("nurture_mode", "review")
       .eq("nurture_status", "active")
       .eq("needs_action", true)
+      .not("automation_mode", "is", null) // ← consent gate: only pre-generate for leads explicitly enrolled in automation
       .not("eligible_at", "is", null)
       .gte("eligible_at", windowStart.toISOString())
       .lte("eligible_at", windowEnd.toISOString())
