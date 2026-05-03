@@ -845,6 +845,29 @@ async function syncLeadEmails(
     updatePayload.next_action_label = actionResult.next_action_label;
   }
 
+  // CONSENT GATE (defensive): gmail-bulk-sync intentionally does NOT route through
+  // syncEngine.buildLeadUpdate, so the per-lead automation_mode gate is not applied
+  // here. To keep the consent contract intact even if this code is later modified,
+  // we explicitly forbid this code path from ever scheduling outbound sends. The
+  // updatePayload below must NEVER set `eligible_at` to a future timestamp paired
+  // with `needs_action: true` and an outbound `next_action_key` — only the
+  // automation-executor (which checks automation_mode IS NOT NULL) is allowed to
+  // do that. OOO/defer pauses set ooo_until + needs_action:false, which is fine.
+  if (
+    "eligible_at" in updatePayload &&
+    updatePayload.needs_action === true &&
+    typeof updatePayload.next_action_key === "string"
+  ) {
+    console.error(
+      `[gmail-bulk-sync] CONSENT VIOLATION: refused to schedule outbound send for lead ${leadId} ` +
+        `(next_action_key=${updatePayload.next_action_key}). Stripping eligible_at/needs_action/next_action_key.`,
+    );
+    delete updatePayload.eligible_at;
+    delete updatePayload.needs_action;
+    delete updatePayload.next_action_key;
+    delete updatePayload.next_action_label;
+  }
+
   // Update lead
   await serviceSupabase
     .from("leads")
