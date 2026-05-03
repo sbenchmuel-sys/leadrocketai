@@ -91,7 +91,7 @@ function computeAutomationFields(lead: EnrichedLead) {
       next_action_label: `Nurture Email ${stepNum}`,
       eligible_at: eligibleAt.toISOString(),
       action_reason_code: "NURTURE_DUE",
-      automation_mode: "auto", // explicit user consent — required by executor consent gate
+      automation_mode: "full_auto", // explicit user consent — required by executor consent gate
       nurture_status: "active",
       nurture_mode: (lead as any).nurture_mode || "review",
     };
@@ -129,7 +129,7 @@ function computeAutomationFields(lead: EnrichedLead) {
     next_action_label: nextLabel,
     eligible_at: eligibleAt.toISOString(),
     action_reason_code: "FOLLOWUP_DUE",
-    automation_mode: "auto", // explicit user consent — required by executor consent gate
+    automation_mode: "full_auto", // explicit user consent — required by executor consent gate
   };
 }
 
@@ -203,7 +203,8 @@ export function BulkAutomationDialog({
       const errors = results.filter((r) => r.error);
       if (errors.length > 0) {
         console.error("Some updates failed:", errors);
-        toast.error(`Failed to update ${errors.length} lead(s)`);
+        const firstMsg = errors[0].error?.message || "unknown error";
+        toast.error(`Failed to update ${errors.length} lead(s): ${firstMsg}`);
       } else {
         toast.success(`Automation enabled on ${eligibleChecked.length} lead${eligibleChecked.length > 1 ? "s" : ""}`);
       }
