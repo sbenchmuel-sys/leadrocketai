@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
-import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
@@ -422,38 +423,18 @@ serve(async (req) => {
         // OOO replies should NOT count as real inbound activity
         if (direction === "inbound" && !isBounce) {
           const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
-          if (oooResult.isOOO) {
-            const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
-            const returnDateStr = oooResult.returnDate
-              ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
-              : "approximately 7 days";
-            const leadName = leadEmailNorm; // we don't have name here, use email as fallback
-
-            console.log(`[gmail-sync] Lead ${leadId}: OOO auto-reply detected (confidence: ${oooResult.confidence}). Return date: ${returnDateStr}. Pausing until ${eligibleAt}`);
-
-            // Update lead: pause automation, set ooo_until, do NOT touch last_inbound_at
-            await serviceSupabase.from("leads").update({
-              ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
-              eligible_at: eligibleAt,
-              needs_action: false,
-              next_action_key: null,
-              next_action_label: null,
-              action_reason_code: null,
-            }).eq("id", leadId);
-
-            // Log as system_note so it appears in timeline but doesn't affect metrics
-            await createCanonicalInteraction(serviceSupabase, {
-              lead_id: leadId,
-              type: "system_note",
-              source: "automation",
-              body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${leadName} is out of office — returning ${returnDateStr}. Automation paused until then.`,
-              occurred_at: occurredAt,
-              gmail_message_id: gmailMessageId,
-              gmail_thread_id: threadId,
-              workspace_id: leadData?.workspace_id ?? null,
-              provider: "automation",
-            });
-
+          const applied = await applyOOOPause({
+            supabase: serviceSupabase,
+            leadId,
+            workspaceId: leadData?.workspace_id ?? null,
+            leadName: leadEmailNorm,
+            oooResult,
+            occurredAt,
+            gmailMessageId,
+            gmailThreadId: threadId,
+            logPrefix: "[gmail-sync]",
+          });
+          if (applied) {
             // Skip normal interaction insert — this is not a real inbound
             existingMessageIds.add(gmailMessageId);
             synced++;
@@ -462,67 +443,16 @@ serve(async (req) => {
         }
 
         // ── Defer / "reconnect later" detection ──
-        // Detect human emails saying "let's reconnect after March", "defer to next FY", etc.
         if (direction === "inbound" && !isBounce) {
-          const emailDateObj = new Date(occurredAt);
-          const deferResult = detectDeferSignal(bodyText, emailDateObj);
-          if (deferResult.isDefer && deferResult.reconnectDate) {
-            const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", {
-              month: "long", day: "numeric", year: "numeric",
-            });
-            const eligibleAt = deferResult.reconnectDate.toISOString();
-
-            console.log(`[gmail-sync] Lead ${leadId}: Defer signal detected. Reconnect date: ${reconnectDateStr}. Raw: "${deferResult.rawMatch}"`);
-
-            // Build context note for personalized follow-up later
-            const reasonSnippet = deferResult.reason
-              ? deferResult.reason.slice(0, 200)
-              : "Lead requested to reconnect later.";
-
-            await serviceSupabase.from("leads").update({
-              ooo_until: eligibleAt,
-              eligible_at: eligibleAt,
-              needs_action: false,
-              next_action_key: null,
-              next_action_label: null,
-              action_reason_code: null,
-              next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
-              next_step_reason: reasonSnippet,
-              nurture_status: "paused",
-              motion: "nurture",
-              personal_notes: (() => {
-                // We can't read current notes in this loop easily, so we append via SQL later
-                return undefined;
-              })(),
-            }).eq("id", leadId);
-
-            // Append to personal_notes via raw update (preserving existing notes)
-            const { data: currentLead } = await serviceSupabase
-              .from("leads")
-              .select("personal_notes")
-              .eq("id", leadId)
-              .single();
-
-            const existingNotes = currentLead?.personal_notes || "";
-            const newNote = `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates and reference their stated timeline.`;
-            
-            await serviceSupabase.from("leads").update({
-              personal_notes: existingNotes + newNote,
-            }).eq("id", leadId);
-
-            // Log as system_note in timeline
-            await createCanonicalInteraction(serviceSupabase, {
-              lead_id: leadId,
-              type: "system_note",
-              source: "automation",
-              body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
-              occurred_at: new Date().toISOString(),
-              workspace_id: leadData?.workspace_id ?? null,
-              provider: "automation",
-            });
-
-            // Still insert the actual email as an interaction (don't skip it)
-          }
+          const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
+          await applyDeferPause({
+            supabase: serviceSupabase,
+            leadId,
+            workspaceId: leadData?.workspace_id ?? null,
+            deferResult,
+            logPrefix: "[gmail-sync]",
+          });
+          // Still insert the actual email as an interaction (don't skip it)
         }
 
         // ── Meeting confirmation detection ──

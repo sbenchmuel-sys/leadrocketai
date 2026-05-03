@@ -18,7 +18,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
-import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
@@ -309,76 +310,34 @@ async function processNotification(
   }
 
   // --- 9. OOO detection ---
-  const oooResult = isOutOfOfficeReply(internetMessageHeaders, messageSubject || "", bodyText);
-  if (oooResult.isOOO) {
-    const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
-    const returnDateStr = oooResult.returnDate
-      ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
-      : "approximately 7 days";
-
-    logger.info("mail.outlook.ooo_detected", {
-      lead_id: lead.id,
-      confidence: oooResult.confidence,
-      return_date: returnDateStr,
+  {
+    const oooResult = isOutOfOfficeReply(internetMessageHeaders, messageSubject || "", bodyText);
+    const applied = await applyOOOPause({
+      supabase: serviceClient,
+      leadId: lead.id,
+      workspaceId: lead.workspace_id ?? null,
+      leadName: lead.name,
+      oooResult,
+      occurredAt: new Date().toISOString(),
+      logPrefix: "[outlook-webhook]",
     });
-
-    await serviceClient.from("leads").update({
-      ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
-      eligible_at: eligibleAt,
-      needs_action: false,
-      next_action_key: null,
-      next_action_label: null,
-      action_reason_code: null,
-    }).eq("id", lead.id);
-
-    await createCanonicalInteraction(serviceClient, {
-      lead_id: lead.id,
-      type: "system_note",
-      source: "automation",
-      body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${lead.name} is out of office — returning ${returnDateStr}. Automation paused until then.`,
-      occurred_at: new Date().toISOString(),
-      workspace_id: lead.workspace_id ?? null,
-      provider: "automation",
-    });
-
-    // Pause any active automation
-    await pauseActiveAutomation(serviceClient, lead.id, mailAccountId, "ooo_reply");
-    return; // OOO replies are not real inbound
+    if (applied) {
+      // Pause any active automation
+      await pauseActiveAutomation(serviceClient, lead.id, mailAccountId, "ooo_reply");
+      return; // OOO replies are not real inbound
+    }
   }
 
   // ── Defer / "reconnect later" detection ──
   {
-    const emailDateObj = new Date();
-    const deferResult = detectDeferSignal(bodyText, emailDateObj);
-    if (deferResult.isDefer && deferResult.reconnectDate) {
-      const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-      const eligibleAt = deferResult.reconnectDate.toISOString();
-      const reasonSnippet = (deferResult.reason || "Lead requested to reconnect later.").slice(0, 200);
-
-      logger.info("mail.outlook.defer_detected", { lead_id: lead.id, reconnect_date: reconnectDateStr });
-
-      await serviceClient.from("leads").update({
-        ooo_until: eligibleAt, eligible_at: eligibleAt, needs_action: false,
-        next_action_key: null, next_action_label: null, action_reason_code: null,
-        next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
-        next_step_reason: reasonSnippet, nurture_status: "paused", motion: "nurture",
-      }).eq("id", lead.id);
-
-      const { data: currentLead } = await serviceClient.from("leads").select("personal_notes").eq("id", lead.id).single();
-      await serviceClient.from("leads").update({
-        personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
-      }).eq("id", lead.id);
-
-      await createCanonicalInteraction(serviceClient, {
-        lead_id: lead.id,
-        type: "system_note",
-        source: "automation",
-        body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
-        occurred_at: new Date().toISOString(),
-        workspace_id: lead.workspace_id ?? null,
-        provider: "automation",
-      });
-    }
+    const deferResult = detectDeferSignal(bodyText, new Date());
+    await applyDeferPause({
+      supabase: serviceClient,
+      leadId: lead.id,
+      workspaceId: lead.workspace_id ?? null,
+      deferResult,
+      logPrefix: "[outlook-webhook]",
+    });
   }
 
   // --- 9b. Meeting confirmation detection ---

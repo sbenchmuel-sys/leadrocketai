@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
-import { isOutOfOfficeReply, getOOOEligibleAt, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
+import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
@@ -479,34 +480,17 @@ async function syncLeadEmails(
       // OOO / Auto-reply detection — must run BEFORE counting as real inbound
       if (direction === "inbound" && !isBounce) {
         const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
-        if (oooResult.isOOO) {
-          const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
-          const returnDateStr = oooResult.returnDate
-            ? oooResult.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
-            : "approximately 7 days";
-
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: OOO detected (${oooResult.confidence}). Pausing until ${eligibleAt}`);
-
-          await serviceSupabase.from("leads").update({
-            ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
-            eligible_at: eligibleAt,
-            needs_action: false,
-            next_action_key: null,
-            next_action_label: null,
-            action_reason_code: null,
-          }).eq("id", leadId);
-
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId,
-            type: "system_note",
-            source: "automation",
-            body_text: `📵 OOO auto-reply detected (${oooResult.confidence} signal). Out of office — returning ${returnDateStr}. Automation paused until then.`,
-            occurred_at: occurredAt,
-            gmail_message_id: gmailMessageId,
-            gmail_thread_id: threadId,
-            provider: "automation",
-          });
-
+        const applied = await applyOOOPause({
+          supabase: serviceSupabase,
+          leadId,
+          workspaceId: null,
+          oooResult,
+          occurredAt,
+          gmailMessageId,
+          gmailThreadId: threadId,
+          logPrefix: "[gmail-bulk-sync]",
+        });
+        if (applied) {
           existingMessageIds.add(gmailMessageId);
           synced++;
           continue;
@@ -515,36 +499,14 @@ async function syncLeadEmails(
 
       // ── Defer / "reconnect later" detection ──
       if (direction === "inbound" && !isBounce) {
-        const emailDateObj = new Date(occurredAt);
-        const deferResult = detectDeferSignal(bodyText, emailDateObj);
-        if (deferResult.isDefer && deferResult.reconnectDate) {
-          const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-          const eligibleAt = deferResult.reconnectDate.toISOString();
-          const reasonSnippet = (deferResult.reason || "Lead requested to reconnect later.").slice(0, 200);
-
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: Defer signal detected. Reconnect: ${reconnectDateStr}`);
-
-          await serviceSupabase.from("leads").update({
-            ooo_until: eligibleAt, eligible_at: eligibleAt, needs_action: false,
-            next_action_key: null, next_action_label: null, action_reason_code: null,
-            next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
-            next_step_reason: reasonSnippet, nurture_status: "paused", motion: "nurture",
-          }).eq("id", leadId);
-
-          const { data: currentLead } = await serviceSupabase.from("leads").select("personal_notes").eq("id", leadId).single();
-          await serviceSupabase.from("leads").update({
-            personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
-          }).eq("id", leadId);
-
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId,
-            type: "system_note",
-            source: "automation",
-            body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
-            occurred_at: new Date().toISOString(),
-            provider: "automation",
-          });
-        }
+        const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
+        await applyDeferPause({
+          supabase: serviceSupabase,
+          leadId,
+          workspaceId: null,
+          deferResult,
+          logPrefix: "[gmail-bulk-sync]",
+        });
       }
 
       // ── Meeting confirmation detection ──
@@ -678,29 +640,17 @@ async function syncLeadEmails(
         // OOO detection in thread messages
         if (direction === "inbound" && !isBounceT) {
           const oooResultT = isOutOfOfficeReply(headers, subject, bodyText);
-          if (oooResultT.isOOO) {
-            const eligibleAt = getOOOEligibleAt(oooResultT.returnDate);
-            const returnDateStr = oooResultT.returnDate
-              ? oooResultT.returnDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
-              : "approximately 7 days";
-
-            console.log(`[gmail-bulk-sync] Lead ${leadId}: OOO in thread (${oooResultT.confidence}). Pausing until ${eligibleAt}`);
-
-            await serviceSupabase.from("leads").update({
-              ooo_until: oooResultT.returnDate ? oooResultT.returnDate.toISOString() : eligibleAt,
-              eligible_at: eligibleAt,
-              needs_action: false,
-              next_action_key: null,
-              next_action_label: null,
-              action_reason_code: null,
-            }).eq("id", leadId);
-
-            await createCanonicalInteraction(serviceSupabase, {
-              lead_id: leadId, type: "system_note", source: "automation",
-              body_text: `📵 OOO auto-reply detected (${oooResultT.confidence} signal). Out of office — returning ${returnDateStr}. Automation paused until then.`,
-              occurred_at: occurredAt, gmail_message_id: gmailMessageId, gmail_thread_id: threadId, provider: "automation",
-            });
-
+          const applied = await applyOOOPause({
+            supabase: serviceSupabase,
+            leadId,
+            workspaceId: null,
+            oooResult: oooResultT,
+            occurredAt,
+            gmailMessageId,
+            gmailThreadId: threadId,
+            logPrefix: "[gmail-bulk-sync:thread]",
+          });
+          if (applied) {
             existingMessageIds.add(gmailMessageId);
             synced++;
             continue;
@@ -709,33 +659,14 @@ async function syncLeadEmails(
 
         // ── Defer detection in thread messages ──
         if (direction === "inbound" && !isBounceT) {
-          const emailDateObj = new Date(occurredAt);
-          const deferResult = detectDeferSignal(bodyText, emailDateObj);
-          if (deferResult.isDefer && deferResult.reconnectDate) {
-            const reconnectDateStr = deferResult.reconnectDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-            const eligibleAt = deferResult.reconnectDate.toISOString();
-            const reasonSnippet = (deferResult.reason || "Lead requested to reconnect later.").slice(0, 200);
-
-            console.log(`[gmail-bulk-sync] Lead ${leadId}: Defer in thread. Reconnect: ${reconnectDateStr}`);
-
-            await serviceSupabase.from("leads").update({
-              ooo_until: eligibleAt, eligible_at: eligibleAt, needs_action: false,
-              next_action_key: null, next_action_label: null, action_reason_code: null,
-              next_step: `Reconnect on ${reconnectDateStr} — ${deferResult.rawMatch}`,
-              next_step_reason: reasonSnippet, nurture_status: "paused", motion: "nurture",
-            }).eq("id", leadId);
-
-            const { data: currentLead } = await serviceSupabase.from("leads").select("personal_notes").eq("id", leadId).single();
-            await serviceSupabase.from("leads").update({
-              personal_notes: (currentLead?.personal_notes || "") + `\n\n[Auto-detected ${new Date().toLocaleDateString()}] Lead asked to reconnect after ${reconnectDateStr}. Context: "${reasonSnippet}". Follow up with relevant updates.`,
-            }).eq("id", leadId);
-
-            await createCanonicalInteraction(serviceSupabase, {
-              lead_id: leadId, type: "system_note", source: "automation",
-              body_text: `📅 Reconnect reminder set for ${reconnectDateStr}. Lead indicated: "${deferResult.rawMatch}". Automation paused until then.`,
-              occurred_at: new Date().toISOString(), provider: "automation",
-            });
-          }
+          const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
+          await applyDeferPause({
+            supabase: serviceSupabase,
+            leadId,
+            workspaceId: null,
+            deferResult,
+            logPrefix: "[gmail-bulk-sync:thread]",
+          });
         }
 
         // ── Meeting confirmation detection (thread messages) ──
@@ -912,6 +843,29 @@ async function syncLeadEmails(
     updatePayload.needs_action = actionResult.needs_action;
     updatePayload.next_action_key = actionResult.next_action_key;
     updatePayload.next_action_label = actionResult.next_action_label;
+  }
+
+  // CONSENT GATE (defensive): gmail-bulk-sync intentionally does NOT route through
+  // syncEngine.buildLeadUpdate, so the per-lead automation_mode gate is not applied
+  // here. To keep the consent contract intact even if this code is later modified,
+  // we explicitly forbid this code path from ever scheduling outbound sends. The
+  // updatePayload below must NEVER set `eligible_at` to a future timestamp paired
+  // with `needs_action: true` and an outbound `next_action_key` — only the
+  // automation-executor (which checks automation_mode IS NOT NULL) is allowed to
+  // do that. OOO/defer pauses set ooo_until + needs_action:false, which is fine.
+  if (
+    "eligible_at" in updatePayload &&
+    updatePayload.needs_action === true &&
+    typeof updatePayload.next_action_key === "string"
+  ) {
+    console.error(
+      `[gmail-bulk-sync] CONSENT VIOLATION: refused to schedule outbound send for lead ${leadId} ` +
+        `(next_action_key=${updatePayload.next_action_key}). Stripping eligible_at/needs_action/next_action_key.`,
+    );
+    delete updatePayload.eligible_at;
+    delete updatePayload.needs_action;
+    delete updatePayload.next_action_key;
+    delete updatePayload.next_action_label;
   }
 
   // Update lead
