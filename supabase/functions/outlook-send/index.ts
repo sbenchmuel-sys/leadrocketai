@@ -48,6 +48,91 @@ function htmlToPlainText(html: string): string {
   return text.trim();
 }
 
+// PR 2.4 follow-up — Microsoft Graph's /sendMail and /messages/{id}/reply
+// both return 202 Accepted with NO body, so we can't capture the new
+// message's id from the send call itself. We look it up post-202 via Sent
+// Items, filtered by recipient + a tight time window.
+//
+// Failure is non-fatal — any HTTP error / empty result / no-recipient-match
+// returns { null, null } and the caller proceeds with null ids (graceful
+// degradation: the outbound row still gets written, just without the
+// Graph message id, and the Follow-up button on it falls back to the
+// existing "Couldn't thread reply — sending as new email" path).
+async function lookupSentMessageId(
+  accessToken: string,
+  primaryTo: string,
+  sendStartedAt: string,
+): Promise<{ providerMessageId: string | null; conversationId: string | null }> {
+  const sendStartedAtMs = new Date(sendStartedAt).getTime();
+  const targetLower = (primaryTo || "").toLowerCase();
+  // Filter floor: send-time minus 60s to absorb clock skew between our
+  // edge function and Graph's sentDateTime. The defensive guard below
+  // re-tightens to messages at-or-after the actual send.
+  const filterFloor = new Date(sendStartedAtMs - 60_000).toISOString();
+  const url =
+    "https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages" +
+    "?$top=5" +
+    "&$orderby=sentDateTime desc" +
+    "&$select=id,internetMessageId,subject,toRecipients,sentDateTime,conversationId" +
+    `&$filter=sentDateTime ge ${filterFloor}`;
+
+  // Returns:
+  //   - { id, conversationId } when a match is found
+  //   - { null, null } when HTTP failed, throttled, or no recipient match in top-5
+  //   - null to signal "value[] empty, retry once"
+  const tryOnce = async (): Promise<
+    { providerMessageId: string | null; conversationId: string | null } | null
+  > => {
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (!resp.ok) {
+        // 401/403/429/etc — non-fatal, no retry (would just compound throttling).
+        logger.warn("mail.outlook.sent_items_lookup_http", { status: resp.status });
+        return { providerMessageId: null, conversationId: null };
+      }
+      const data = await resp.json();
+      const items: Array<{
+        id: string;
+        conversationId: string;
+        toRecipients?: Array<{ emailAddress?: { address?: string } }>;
+        sentDateTime: string;
+      }> = Array.isArray(data?.value) ? data.value : [];
+      if (items.length === 0) return null; // not yet materialized — signal retry
+
+      // Recipient match FIRST, then defensive guard on sentDateTime.
+      // Order matters: we never accept a stale matching message just because
+      // it happens to match by recipient.
+      for (const m of items) {
+        const matched = (m.toRecipients ?? []).some(
+          (r) => (r?.emailAddress?.address ?? "").toLowerCase() === targetLower,
+        );
+        if (!matched) continue;
+        if (new Date(m.sentDateTime).getTime() < sendStartedAtMs) continue;
+        return { providerMessageId: m.id, conversationId: m.conversationId ?? null };
+      }
+      // Top-5 returned but none matched recipient + guard. Don't retry — the
+      // result set is unlikely to change shape on a second read.
+      return { providerMessageId: null, conversationId: null };
+    } catch (err) {
+      logger.warn("mail.outlook.sent_items_lookup_failed", { error: String(err) });
+      return { providerMessageId: null, conversationId: null };
+    }
+  };
+
+  const first = await tryOnce();
+  if (first !== null) return first;
+
+  // value[] was empty — single retry after 1.5s for materialization lag.
+  await new Promise((r) => setTimeout(r, 1500));
+  const second = await tryOnce();
+  return second ?? { providerMessageId: null, conversationId: null };
+}
+
 serve(async (req) => {
   const origin = req.headers.get("Origin") ?? "";
   const cors = corsHeaders(origin);
@@ -242,6 +327,11 @@ serve(async (req) => {
       });
     }
 
+    // PR 2.4 follow-up — captured immediately before the Graph send call so
+    // the post-202 Sent Items lookup can use it as the time-window floor and
+    // as the defensive guard for "this message must be at-or-after our send".
+    const sendStartedAt = new Date().toISOString();
+
     let sendResp = await fetch(sendUrl, {
       method: "POST",
       headers: {
@@ -337,7 +427,40 @@ serve(async (req) => {
           const bodyPlainText = htmlToPlainText(bodyHtml);
           const interactionOccurredAt = new Date().toISOString();
 
-          // Create interaction record
+          // PR 2.4 follow-up — capture the Graph message-id of the email we
+          // just sent so per-row Follow-up can anchor on /messages/{id}/reply
+          // for THIS specific outbound. Lookup runs in the background, after
+          // the user-facing 202; failures fall through to null ids and the
+          // outbound row still gets written normally.
+          let providerMessageId: string | null = null;
+          let conversationId: string | null = null;
+          try {
+            const captured = await lookupSentMessageId(accessToken, primaryTo, sendStartedAt);
+            providerMessageId = captured.providerMessageId;
+            conversationId = captured.conversationId;
+            if (providerMessageId) {
+              logger.info("mail.outlook.sent_items_capture", {
+                mail_account_id,
+                lead_id: leadId,
+                has_conversation_id: !!conversationId,
+              });
+            } else {
+              logger.warn("mail.outlook.sent_items_capture_missed", {
+                mail_account_id,
+                lead_id: leadId,
+              });
+            }
+          } catch (lookupErr) {
+            // Defensive — lookupSentMessageId already wraps its own failures
+            // and never throws, but keep this guard so a future regression
+            // can never abort the row insert.
+            logger.warn("mail.outlook.sent_items_lookup_unexpected", { error: String(lookupErr) });
+          }
+
+          // Create interaction record. The legacy `gmail_message_id` /
+          // `gmail_thread_id` columns are the same slots outlook-sync uses
+          // for the Graph message id and conversationId — mirror that
+          // pattern (see outlook-sync/index.ts:419-420).
           const { data: interactionRow } = await serviceClient
             .from("interactions")
             .insert({
@@ -352,6 +475,8 @@ serve(async (req) => {
               cc_emails: ccArr,
               body_text: bodyPlainText.substring(0, 10000),
               direction: "outbound",
+              gmail_message_id: providerMessageId,
+              gmail_thread_id: conversationId,
             })
             .select("id")
             .single();
@@ -370,8 +495,20 @@ serve(async (req) => {
               source_id: interactionRow.id,
               snippet_text: bodyPlainText?.substring(0, 500),
               subject,
-              metadata_json: { from_email: accountEmail, to_email: primaryTo, to_emails: toArr, cc_emails: ccArr },
-              dedupe_key: emailDedupeKey("outlook", null, interactionRow.id),
+              metadata_json: {
+                from_email: accountEmail,
+                to_email: primaryTo,
+                to_emails: toArr,
+                cc_emails: ccArr,
+                provider_message_id: providerMessageId,
+                conversation_id: conversationId,
+              },
+              // PR 2.4 follow-up — when providerMessageId is non-null this
+              // produces "outlook:<gid>" which collides with outlook-sync's
+              // future re-fetch of the same Sent Items message, enabling
+              // idempotent dedupe. When null, falls back to the UUID branch
+              // (today's behaviour, unchanged).
+              dedupe_key: emailDedupeKey("outlook", providerMessageId, interactionRow.id),
             }).catch(e => logger.warn("mail.outlook.timeline_projection_failed", { error: String(e) }));
           }
 
