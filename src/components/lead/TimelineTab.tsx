@@ -43,10 +43,47 @@ const BOUNCE_FROM_REGEX = /^(postmaster|mailer-daemon|mailerdaemon|noreply|no-re
 const OOO_SUBJECT_REGEX = /(out of office|\bOOO\b|auto.?reply|automatic reply|on vacation|currently away|currently unavailable|annual leave|on leave|holiday notification)/i;
 // Visible-by-default cutoff for the Follow-up button.
 const FOLLOWUP_THRESHOLD_DAYS = 5;
+// Pulsing-ring window — emphasises the freshest unreplied inbound for the
+// first N hours after it arrives. Toned-down: static ring, no animation.
+const FRESH_INBOUND_RING_HOURS = 6;
 
-// Thread-scope key — prefer the provider thread/conversation id (so forwards
-// with the same normalized subject don't accidentally group together), fall
-// back to normalized subject for legacy rows missing that metadata.
+/**
+ * Extract the bare email address from an RFC 2822 `from`/`to` header value.
+ * Handles plain ("a@b.com"), display-name+angle ("Name <a@b.com>"), and
+ * quoted display ("\"Name\" <a@b.com>"). Falls back to lowercase-of-input
+ * for malformed/empty input. Always returns lowercase.
+ */
+function extractBareEmail(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  // Display-name with angle brackets: "Name <addr>" or "\"Name\" <addr>".
+  const angle = /<\s*([^>\s]+@[^>\s]+)\s*>/.exec(trimmed);
+  if (angle && angle[1]) return angle[1].toLowerCase();
+  // Plain email anywhere in the string.
+  const plain = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/.exec(trimmed);
+  if (plain && plain[1]) return plain[1].toLowerCase();
+  return trimmed.toLowerCase();
+}
+
+function fromEmailLower(item: TimelineItem): string {
+  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
+  return extractBareEmail(meta.from_email as string | undefined);
+}
+
+function toEmailsLower(item: TimelineItem): string[] {
+  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
+  const arr = Array.isArray(meta.to_emails) ? (meta.to_emails as string[]) : [];
+  // Each entry in to_emails may itself be RFC-2822 formatted depending on
+  // which writer populated it. Normalize via extractBareEmail so the
+  // To-based clearing rule isn't fooled by display-name wrappers.
+  return arr.map(extractBareEmail).filter(Boolean);
+}
+
+// Thread-scope key for Reply visibility — prefer the provider thread/
+// conversation id (so forwards with the same normalized subject don't
+// accidentally group together), fall back to normalized subject for
+// legacy rows missing that metadata.
 function threadKeyOf(item: TimelineItem): string {
   const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
   const gid = meta.gmail_thread_id as string | undefined;
@@ -54,18 +91,10 @@ function threadKeyOf(item: TimelineItem): string {
   return gid || cid || normalizeSubject(item.subject) || item.id;
 }
 
-function fromEmailLower(item: TimelineItem): string {
-  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
-  return ((meta.from_email as string | undefined) || "").toLowerCase();
-}
-
-function toEmailsLower(item: TimelineItem): string[] {
-  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
-  const arr = Array.isArray(meta.to_emails) ? (meta.to_emails as string[]) : [];
-  return arr.map(e => (e || "").toLowerCase());
-}
-
-/** Reply visibility rule (PR 2.4 §1). Pure function over the loaded timeline. */
+/** Reply visibility rule (PR 2.4 §1). Per-thread scoping for inbounds —
+ *  only the most-recent unreplied inbound per (sender, thread) qualifies.
+ *  Now also respects the per-row snooze/dismiss state stored in
+ *  timeline_followup_state. */
 function canShowReply(item: TimelineItem, all: TimelineItem[], leadUnsubscribed: boolean): boolean {
   if (item.event_type !== "email_inbound") return false;
   const sender = fromEmailLower(item);
@@ -73,6 +102,11 @@ function canShowReply(item: TimelineItem, all: TimelineItem[], leadUnsubscribed:
   if (BOUNCE_FROM_REGEX.test(sender)) return false;
   if (item.subject && OOO_SUBJECT_REGEX.test(item.subject)) return false;
   if (leadUnsubscribed) return false;
+
+  // PR 2.4 follow-up — Reply popover allows snooze/dismiss too. Mirrors
+  // followupVisibility's snooze/dismiss checks on the same columns.
+  if (item.followup_snoozed_until && new Date(item.followup_snoozed_until).getTime() > Date.now()) return false;
+  if (item.followup_dismissed_at) return false;
 
   const tk = threadKeyOf(item);
   const inThread = all.filter(o => threadKeyOf(o) === tk);
@@ -94,32 +128,36 @@ function canShowReply(item: TimelineItem, all: TimelineItem[], leadUnsubscribed:
   return !laterOutboundAddressing;
 }
 
-/** Follow-up button visibility (PR 2.4 §2). Returns "always" (visible),
- *  "hover" (revealed on hover), or "never" (no button at all). */
+/** Follow-up button visibility (PR 2.4 §2 + bug-fix v2).
+ *
+ *  Per-lead rule — at most one always-visible Follow-up per lead. Older
+ *  outbounds and parallel threads still surface on hover. We deliberately
+ *  do NOT thread-scope here; "most recent outbound to this lead" is
+ *  computed across every thread the lead is in, so a lead with five
+ *  parallel threads still sees exactly one always-visible Follow-up. */
 function followupVisibility(item: TimelineItem, all: TimelineItem[]): "always" | "hover" | "never" {
   if (item.event_type !== "email_outbound") return "never";
 
-  const tk = threadKeyOf(item);
-  const inThread = all.filter(o => threadKeyOf(o) === tk);
-  const ts = new Date(item.occurred_at).getTime();
-
-  // Snoozed or dismissed → hover (the user can still circle back manually).
+  // Snoozed or dismissed → hover (user can still circle back manually).
   if (item.followup_snoozed_until && new Date(item.followup_snoozed_until).getTime() > Date.now()) return "hover";
   if (item.followup_dismissed_at) return "hover";
 
-  // Not the most recent outbound in the thread → hover.
-  const laterOutbound = inThread.some(o =>
+  const ts = new Date(item.occurred_at).getTime();
+  const leadItems = all.filter(o => o.lead_id === item.lead_id);
+
+  // Not the most recent outbound to this lead (across ALL their threads) → hover.
+  const laterOutboundForLead = leadItems.some(o =>
     o.event_type === "email_outbound" && new Date(o.occurred_at).getTime() > ts,
   );
-  if (laterOutbound) return "hover";
+  if (laterOutboundForLead) return "hover";
 
-  // Has a later inbound in the same thread → hover (got a reply).
-  const laterInbound = inThread.some(i =>
+  // Any later inbound from this lead, anywhere in their timeline → hover.
+  const laterInboundForLead = leadItems.some(i =>
     i.event_type === "email_inbound" && new Date(i.occurred_at).getTime() > ts,
   );
-  if (laterInbound) return "hover";
+  if (laterInboundForLead) return "hover";
 
-  // Less than the threshold age → hover.
+  // <5 days old → hover (too soon to chase).
   const ageDays = (Date.now() - ts) / (1000 * 60 * 60 * 24);
   if (ageDays < FOLLOWUP_THRESHOLD_DAYS) return "hover";
 
@@ -321,25 +359,91 @@ export interface RowActions {
   onReply: (item: TimelineItem) => void;
   /** Open EmailActionDialog as Follow-up targeting this row. */
   onFollowup: (item: TimelineItem) => void;
-  /** Snooze the follow-up reminder on this row. */
-  onSnoozeFollowup: (item: TimelineItem, days: number) => void;
-  /** Dismiss the follow-up reminder permanently (with 5s undo toast). */
-  onDismissFollowup: (item: TimelineItem) => void;
+  /** Snooze the reminder on this row (works for inbound Reply or outbound Follow-up). */
+  onSnoozeRow: (item: TimelineItem, days: number) => void;
+  /** Dismiss the reminder permanently (with 5s undo toast). Same row scope as snooze. */
+  onDismissRow: (item: TimelineItem) => void;
 }
 
-function ReplyButton({ onClick }: { onClick: () => void }) {
+/** Shared Snooze/Dismiss popover used by both Reply and Follow-up buttons.
+ *  Renders the caret split + the Popover content. */
+function SnoozeDismissPopover({
+  item,
+  actions,
+  caretClass,
+  popoverWidthClass = "w-44",
+}: {
+  item: TimelineItem;
+  actions: RowActions;
+  caretClass: string;
+  popoverWidthClass?: string;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className="inline-flex items-center justify-center h-[22px] w-[22px] rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
-      title="Reply"
-      aria-label="Reply"
-    >
-      <Reply className="h-3.5 w-3.5" />
-    </button>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          onClick={(e) => e.stopPropagation()}
+          className={caretClass}
+          title="Snooze or dismiss"
+          aria-label="Snooze or dismiss this reminder"
+        >
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className={cn(popoverWidthClass, "p-1")}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="px-2 py-1 text-[10px] font-medium text-muted-foreground">Snooze for…</p>
+        {[3, 5, 7].map(days => (
+          <button
+            key={days}
+            onClick={() => { setOpen(false); actions.onSnoozeRow(item, days); }}
+            className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent"
+          >
+            {days} days
+          </button>
+        ))}
+        <div className="my-1 border-t border-border" />
+        <button
+          onClick={() => { setOpen(false); actions.onDismissRow(item); }}
+          className="w-full text-left px-2 py-1.5 text-xs rounded text-destructive hover:bg-destructive/10"
+        >
+          Dismiss
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
+/** Reply — filled split button. Always-visible when the visibility rule
+ *  passes (no hover-reveal). The caret opens the Snooze/Dismiss popover
+ *  shared with Follow-up. */
+function ReplyButton({ item, actions }: { item: TimelineItem; actions: RowActions }) {
+  return (
+    <div className="inline-flex items-stretch rounded-md overflow-hidden bg-primary/90 hover:bg-primary text-primary-foreground shadow-sm transition-colors">
+      <button
+        onClick={(e) => { e.stopPropagation(); actions.onReply(item); }}
+        className="inline-flex items-center gap-1 px-2.5 h-[22px] text-[10px] font-medium"
+        title="Reply"
+      >
+        <Reply className="h-3 w-3" />
+        Reply
+      </button>
+      <SnoozeDismissPopover
+        item={item}
+        actions={actions}
+        caretClass="inline-flex items-center justify-center px-1 h-[22px] border-l border-primary-foreground/20 hover:bg-primary"
+      />
+    </div>
+  );
+}
+
+/** Follow-up — ghost split button. No background at rest; subtle border
+ *  + foreground colour-shift on hover. Hidden by default + revealed on
+ *  hover when `visibility === "hover"`. */
 function FollowupButton({
   item,
   visibility,
@@ -349,9 +453,9 @@ function FollowupButton({
   visibility: "always" | "hover";
   actions: RowActions;
 }) {
-  const [popoverOpen, setPopoverOpen] = useState(false);
   const wrapperClass = cn(
-    "inline-flex items-stretch rounded-full overflow-hidden border border-amber-500/30 bg-amber-500/10 transition-opacity",
+    "inline-flex items-stretch rounded-md overflow-hidden text-muted-foreground",
+    "hover:text-foreground hover:border hover:border-border transition-colors",
     visibility === "hover" && "opacity-0 group-hover:opacity-100",
   );
 
@@ -359,47 +463,17 @@ function FollowupButton({
     <div className={wrapperClass}>
       <button
         onClick={(e) => { e.stopPropagation(); actions.onFollowup(item); }}
-        className="inline-flex items-center gap-1 px-2 h-[22px] text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/15"
+        className="inline-flex items-center gap-1 px-2 h-[22px] text-[10px] font-medium hover:bg-accent/40"
         title="Follow up on this email"
       >
         <Clock className="h-3 w-3" />
         Follow up
       </button>
-      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
-        <PopoverTrigger asChild>
-          <button
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center justify-center px-1 h-[22px] text-amber-700 dark:text-amber-400 border-l border-amber-500/30 hover:bg-amber-500/15"
-            title="Snooze or dismiss"
-            aria-label="Snooze or dismiss this follow-up"
-          >
-            <ChevronDown className="h-3 w-3" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="end"
-          className="w-44 p-1"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <p className="px-2 py-1 text-[10px] font-medium text-muted-foreground">Snooze for…</p>
-          {[3, 5, 7].map(days => (
-            <button
-              key={days}
-              onClick={() => { setPopoverOpen(false); actions.onSnoozeFollowup(item, days); }}
-              className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent"
-            >
-              {days} days
-            </button>
-          ))}
-          <div className="my-1 border-t border-border" />
-          <button
-            onClick={() => { setPopoverOpen(false); actions.onDismissFollowup(item); }}
-            className="w-full text-left px-2 py-1.5 text-xs rounded text-destructive hover:bg-destructive/10"
-          >
-            Dismiss
-          </button>
-        </PopoverContent>
-      </Popover>
+      <SnoozeDismissPopover
+        item={item}
+        actions={actions}
+        caretClass="inline-flex items-center justify-center px-1 h-[22px] border-l border-border/60 hover:bg-accent/40"
+      />
     </div>
   );
 }
@@ -423,6 +497,7 @@ function TimelineEntry({
   leadUnsubscribedById,
   groupMode,
   actions,
+  freshestRingId,
 }: {
   item: TimelineItem;
   defaultOpen: boolean;
@@ -432,6 +507,7 @@ function TimelineEntry({
   leadUnsubscribedById: Map<string, boolean>;
   groupMode: boolean;
   actions: RowActions;
+  freshestRingId: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const tags = useMemo(() => getSignalTags(item), [item]);
@@ -447,10 +523,11 @@ function TimelineEntry({
   const leadUnsubscribed = leadUnsubscribedById.get(item.lead_id) === true;
   const showReply = canShowReply(item, allItems, leadUnsubscribed);
   const followupVis = followupVisibility(item, allItems);
+  const showRing = item.id === freshestRingId;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className={cn("group", item.hidden && "opacity-50")}>
+      <div className={cn("group rounded-lg", item.hidden && "opacity-50", showRing && "ring-1 ring-primary/20")}>
         <CollapsibleTrigger asChild>
           <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
             <div className="flex items-start gap-3">
@@ -500,7 +577,7 @@ function TimelineEntry({
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
-                {showReply && <ReplyButton onClick={() => actions.onReply(item)} />}
+                {showReply && <ReplyButton item={item} actions={actions} />}
                 {followupVis !== "never" && (
                   <FollowupButton item={item} visibility={followupVis} actions={actions} />
                 )}
@@ -549,6 +626,7 @@ function ThreadEntry({
   leadUnsubscribedById,
   groupMode,
   actions,
+  freshestRingId,
 }: {
   thread: ThreadGroup;
   defaultOpen: boolean;
@@ -557,6 +635,7 @@ function ThreadEntry({
   leadUnsubscribedById: Map<string, boolean>;
   groupMode: boolean;
   actions: RowActions;
+  freshestRingId: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [threadExpanded, setThreadExpanded] = useState(false);
@@ -573,10 +652,11 @@ function ThreadEntry({
   const latestUnsubscribed = leadUnsubscribedById.get(latest.lead_id) === true;
   const latestShowReply = canShowReply(latest, allItems, latestUnsubscribed);
   const latestFollowupVis = followupVisibility(latest, allItems);
+  const latestShowRing = latest.id === freshestRingId;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className={cn("group", latest.hidden && "opacity-50")}>
+      <div className={cn("group rounded-lg", latest.hidden && "opacity-50", latestShowRing && "ring-1 ring-primary/20")}>
         <CollapsibleTrigger asChild>
           <button className="w-full text-left py-3 hover:bg-accent/30 rounded-lg px-3 -mx-3 transition-colors duration-150">
             <div className="flex items-start gap-3">
@@ -623,7 +703,7 @@ function ThreadEntry({
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
-                {latestShowReply && <ReplyButton onClick={() => actions.onReply(latest)} />}
+                {latestShowReply && <ReplyButton item={latest} actions={actions} />}
                 {latestFollowupVis !== "never" && (
                   <FollowupButton item={latest} visibility={latestFollowupVis} actions={actions} />
                 )}
@@ -672,8 +752,16 @@ function ThreadEntry({
                       const msgUnsub = leadUnsubscribedById.get(msg.lead_id) === true;
                       const msgShowReply = canShowReply(msg, allItems, msgUnsub);
                       const msgFollowupVis = followupVisibility(msg, allItems);
+                      const msgShowRing = msg.id === freshestRingId;
                       return (
-                        <div key={msg.id} className={cn("space-y-0.5 group/msg", msg.hidden && "opacity-50")}>
+                        <div
+                          key={msg.id}
+                          className={cn(
+                            "space-y-0.5 group/msg rounded-md",
+                            msg.hidden && "opacity-50",
+                            msgShowRing && "ring-1 ring-primary/20 p-1",
+                          )}
+                        >
                           <div className="flex items-center gap-2">
                             <ChannelBadge item={msg} />
                             {groupMode && <LeadChip name={msg.lead_name} />}
@@ -681,7 +769,7 @@ function ThreadEntry({
                               {format(new Date(msg.occurred_at), "MMM d · h:mm a")}
                             </span>
                             <div className="flex-1" />
-                            {msgShowReply && <ReplyButton onClick={() => actions.onReply(msg)} />}
+                            {msgShowReply && <ReplyButton item={msg} actions={actions} />}
                             {msgFollowupVis !== "never" && (
                               <FollowupButton item={msg} visibility={msgFollowupVis} actions={actions} />
                             )}
@@ -986,6 +1074,23 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
     return currentLead ?? null;
   }, [groupMembers, currentLead]);
 
+  // PR 2.4 follow-up — id of the freshest unreplied inbound row that's
+  // also <6h old. Renders a static ring (no animation) on that one row to
+  // call attention without screaming. null = no ring anywhere. Recomputes
+  // when the timeline reloads — there's no per-tick render loop.
+  const freshestRingId = useMemo<string | null>(() => {
+    const candidates = timelineItems.filter(i => {
+      if (i.event_type !== "email_inbound") return false;
+      const unsub = leadUnsubscribedById.get(i.lead_id) === true;
+      if (!canShowReply(i, timelineItems, unsub)) return false;
+      const ageHours = (Date.now() - new Date(i.occurred_at).getTime()) / 3_600_000;
+      return ageHours < FRESH_INBOUND_RING_HOURS;
+    });
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+    return candidates[0].id;
+  }, [timelineItems, leadUnsubscribedById]);
+
   // PR 2.4 — open EmailActionDialog targeting a specific row.
   const openDialog = useCallback((item: TimelineItem, ctx: "reply" | "follow_up") => {
     const targetLead = leadForRow(item);
@@ -1043,8 +1148,8 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   const rowActions: RowActions = useMemo(() => ({
     onReply: (item) => openDialog(item, "reply"),
     onFollowup: (item) => openDialog(item, "follow_up"),
-    onSnoozeFollowup: handleSnoozeFollowup,
-    onDismissFollowup: handleDismissFollowup,
+    onSnoozeRow: handleSnoozeFollowup,
+    onDismissRow: handleDismissFollowup,
   }), [openDialog, handleSnoozeFollowup, handleDismissFollowup]);
 
   const handleToggleHide = async (itemId: string, hide: boolean) => {
@@ -1219,6 +1324,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
                   leadUnsubscribedById={leadUnsubscribedById}
                   groupMode={groupMode}
                   actions={rowActions}
+                  freshestRingId={freshestRingId}
                 />
               ) : entry.channel === "meeting" ? (
                 <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
@@ -1236,6 +1342,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
                   leadUnsubscribedById={leadUnsubscribedById}
                   groupMode={groupMode}
                   actions={rowActions}
+                  freshestRingId={freshestRingId}
                 />
               )}
             </div>
