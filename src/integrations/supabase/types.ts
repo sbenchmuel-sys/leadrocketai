@@ -1902,6 +1902,7 @@ export type Database = {
           acceleration_until: string | null
           action_dismissed_at: string | null
           action_instructions: string | null
+          action_permanently_dismissed: boolean
           action_reason_code: string | null
           auto_created: boolean
           auto_nurture_eligible: boolean | null
@@ -1975,6 +1976,7 @@ export type Database = {
           acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
+          action_permanently_dismissed?: boolean
           action_reason_code?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
@@ -2048,6 +2050,7 @@ export type Database = {
           acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
+          action_permanently_dismissed?: boolean
           action_reason_code?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
