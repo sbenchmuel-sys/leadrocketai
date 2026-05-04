@@ -249,6 +249,14 @@ export function useMailSync() {
 
   // ============================================================
   // sendEmail — routes to the correct send edge function
+  //
+  // PR 2.4 — `outlookMessageId`:
+  //   For per-email reply targeting on Outlook accounts, the target's
+  //   Microsoft Graph long message-id (the AAMk... string) is what the
+  //   `/messages/{id}/reply` endpoint expects. When provided, we forward
+  //   it as the Outlook `threadId` so outlook-send takes the /reply path
+  //   anchored on THIS specific message. Gmail accounts ignore it and
+  //   still use `replyToMessageId` (RFC In-Reply-To/References).
   // ============================================================
   const sendEmail = async (
     to: string | string[],
@@ -258,7 +266,8 @@ export function useMailSync() {
     draftId?: string,
     threadId?: string,
     replyToMessageId?: string,
-    cc?: string[]
+    cc?: string[],
+    outlookMessageId?: string
   ): Promise<SendResult> => {
     try {
       setIsSyncing(true);
@@ -285,13 +294,17 @@ export function useMailSync() {
 
       if (provider === "outlook" && activeAccount) {
         sendFunction = "outlook-send";
+        // Prefer the per-email Graph message-id when present so outlook-send
+        // routes to /messages/{id}/reply. Falls back to threadId (which may
+        // be a conversationId — outlook-send already handles that path).
+        const outlookThread = outlookMessageId ?? threadId ?? null;
         sendBody = {
           mail_account_id: activeAccount.id,
           to: toPayload,
           ...(ccPayload ? { cc: ccPayload } : {}),
           subject,
           bodyHtml: body,
-          threadId: threadId ?? null,
+          threadId: outlookThread,
           leadId,
         };
       } else {

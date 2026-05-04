@@ -334,6 +334,17 @@ export interface TimelineItem {
   contact_id: string | null;
   conversation_id: string | null;
   hidden: boolean;
+  // PR 2.4 — only populated by getGroupTimelineItems. Null/undefined for the
+  // single-lead path. lead_ids is the set of leads this row was projected to
+  // (for emails CC'd to multiple stakeholders, the row dedupes on
+  // gmail_message_id but lead_ids carries every lead it touched).
+  lead_ids?: string[];
+  lead_name?: string | null;
+  // PR 2.4 — per-row follow-up state for outbound rows (LEFT JOIN of
+  // timeline_followup_state). Both null when the row has never been
+  // snoozed/dismissed.
+  followup_snoozed_until?: string | null;
+  followup_dismissed_at?: string | null;
 }
 
 export async function getLeadTimeline(
@@ -390,7 +401,7 @@ export async function getLeadTimeline(
   // Mirrors the dedupe + channel-filter strategy in `leadActivity.ts`.
   try {
     const legacy = await getLeadInteractions(leadId, options?.includeHidden ?? false);
-    if (legacy.length === 0) return timeline;
+    if (legacy.length === 0) return hydrateFollowupState(timeline);
 
     const seen = new Set<string>();
     for (const t of timeline) {
@@ -455,16 +466,219 @@ export async function getLeadTimeline(
       for (const k of keys) seen.add(k);
     }
 
-    if (fallbackItems.length === 0) return timeline;
+    if (fallbackItems.length === 0) return hydrateFollowupState(timeline);
 
     const merged = [...timeline, ...fallbackItems].sort(
       (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
     );
-    return merged.slice(0, options?.limit ?? 200);
+    return hydrateFollowupState(merged.slice(0, options?.limit ?? 200));
   } catch (err) {
     console.warn('[getLeadTimeline] legacy interactions fallback failed', err);
-    return timeline;
+    return hydrateFollowupState(timeline);
   }
+}
+
+// ============================================
+// PR 2.4 — Per-row follow-up state helpers
+// ============================================
+
+/** Hydrate timeline rows with follow-up snooze/dismiss state. Outbound email
+ *  rows are the only ones that surface this in the UI today, but we hydrate
+ *  uniformly to avoid branching the reader path. Demo mode skips the fetch. */
+async function hydrateFollowupState(rows: TimelineItem[]): Promise<TimelineItem[]> {
+  if (rows.length === 0 || isDemoMode()) return rows;
+  const ids = rows.map(r => r.id).filter(Boolean);
+  if (ids.length === 0) return rows;
+
+  try {
+    const { data, error } = await supabase
+      .from('timeline_followup_state')
+      .select('timeline_item_id, snoozed_until, dismissed_at')
+      .in('timeline_item_id', ids);
+    if (error) throw error;
+    const byId = new Map<string, { snoozed_until: string | null; dismissed_at: string | null }>();
+    for (const r of (data ?? []) as Array<{ timeline_item_id: string; snoozed_until: string | null; dismissed_at: string | null }>) {
+      byId.set(r.timeline_item_id, { snoozed_until: r.snoozed_until, dismissed_at: r.dismissed_at });
+    }
+    return rows.map(r => {
+      const s = byId.get(r.id);
+      return s
+        ? { ...r, followup_snoozed_until: s.snoozed_until, followup_dismissed_at: s.dismissed_at }
+        : r;
+    });
+  } catch (err) {
+    console.warn('[hydrateFollowupState] Failed to load follow-up state, continuing without:', err);
+    return rows;
+  }
+}
+
+/** Set or clear snooze/dismiss state on a timeline row.
+ *  Pass `clearDismissed: true` to undo a Dismiss; the 5-second toast undo uses this. */
+export async function setTimelineFollowupState(
+  timelineItemId: string,
+  opts: {
+    snoozedUntil?: string | null;
+    dismissedAt?: string | null;
+    clearSnoozed?: boolean;
+    clearDismissed?: boolean;
+  },
+): Promise<void> {
+  const { error } = await supabase.rpc('set_timeline_followup_state', {
+    p_timeline_item_id: timelineItemId,
+    p_snoozed_until: opts.snoozedUntil ?? null,
+    p_dismissed_at: opts.dismissedAt ?? null,
+    p_clear_snoozed: opts.clearSnoozed ?? false,
+    p_clear_dismissed: opts.clearDismissed ?? false,
+  });
+  if (error) throw error;
+}
+
+// ============================================
+// PR 2.4 — Group-aware timeline reader
+// ============================================
+
+/** Fetch the union timeline for every lead in a stakeholder group.
+ *
+ *  Dedupes by `gmail_message_id` / `provider_message_id` / `dedupe_key` so
+ *  a multi-recipient email projected into multiple leads' timelines shows
+ *  once, with `lead_ids` carrying every lead it touched. The primary
+ *  `lead_id` resolves to the row whose lead_name renders in the chip.
+ *
+ *  Legacy `interactions` rows that were never bridged into
+ *  `lead_timeline_items` are merged in per-lead, mirroring the dedupe
+ *  strategy in `getLeadTimeline`.
+ */
+export async function getGroupTimelineItems(
+  groupId: string,
+  options?: { includeHidden?: boolean; channel?: string; limit?: number },
+): Promise<TimelineItem[]> {
+  if (!groupId) throw new Error('Missing groupId');
+  if (isDemoMode()) return [];
+
+  const limit = options?.limit ?? 200;
+  const fetchWindow = Math.max(limit * 2, 60);
+
+  // 1) Resolve member leads (id + name) for chip annotation.
+  const { data: members, error: memErr } = await supabase
+    .from('leads')
+    .select('id, name')
+    .eq('group_id', groupId);
+  if (memErr) throw memErr;
+  const memberIds = (members ?? []).map(m => m.id);
+  if (memberIds.length === 0) return [];
+  const nameById = new Map<string, string | null>();
+  for (const m of members ?? []) nameById.set(m.id, m.name as string | null);
+
+  // 2) Fetch canonical timeline rows across all member leads.
+  let query = supabase
+    .from('lead_timeline_items')
+    .select('id, lead_id, channel, provider, direction, event_type, occurred_at, source_table, source_id, snippet_text, subject, status_json, metadata_json, dedupe_key, contact_id, conversation_id, hidden')
+    .in('lead_id', memberIds)
+    .order('occurred_at', { ascending: false })
+    .limit(fetchWindow);
+  if (!options?.includeHidden) query = query.eq('hidden', false);
+  if (options?.channel) query = query.eq('channel', options.channel);
+
+  const { data: timelineRows, error: tErr } = await query;
+  if (tErr) throw tErr;
+  const rawTimeline = (timelineRows ?? []) as TimelineItem[];
+
+  // 3) Legacy interactions fallback — pull rows the projector never touched.
+  let fallbackEmails: TimelineItem[] = [];
+  try {
+    let lq = supabase
+      .from('interactions')
+      .select('id, lead_id, type, source, from_email, to_email, to_emails, cc_emails, subject, body_text, occurred_at, direction, gmail_thread_id, gmail_message_id, hidden, ai_summary, ai_intent, ai_reply_worthy')
+      .in('lead_id', memberIds)
+      .order('occurred_at', { ascending: false })
+      .limit(fetchWindow);
+    if (!options?.includeHidden) lq = lq.eq('hidden', false);
+    const { data: legacyRows, error: lErr } = await lq;
+    if (lErr) throw lErr;
+
+    // Build dedupe key set from the canonical timeline so we only merge orphans.
+    const seen = new Set<string>();
+    for (const t of rawTimeline) {
+      if (t.source_id) seen.add(`sid:${t.source_id}`);
+      const gid = (t.metadata_json as { gmail_message_id?: string } | null)?.gmail_message_id;
+      if (gid) seen.add(`gmail:${gid}`);
+    }
+
+    for (const i of (legacyRows as any[]) ?? []) {
+      const keys: string[] = [`sid:${i.id}`];
+      if (i.gmail_message_id) keys.push(`gmail:${i.gmail_message_id}`);
+      if (keys.some(k => seen.has(k))) continue;
+      const channel = i.type?.includes('email') ? 'email'
+        : i.type?.includes('whatsapp') ? 'whatsapp'
+        : i.type?.includes('sms') ? 'sms'
+        : i.type?.includes('call') || i.type?.includes('voice') ? 'voice'
+        : 'system';
+      if (options?.channel && channel !== options.channel) continue;
+      const direction = i.type?.includes('inbound') ? 'inbound'
+        : i.type?.includes('outbound') ? 'outbound'
+        : null;
+      fallbackEmails.push({
+        id: i.id,
+        lead_id: i.lead_id,
+        channel,
+        provider: i.source ?? null,
+        direction,
+        event_type: i.type,
+        occurred_at: i.occurred_at,
+        source_table: 'interactions',
+        source_id: i.id,
+        snippet_text: i.body_text ?? null,
+        subject: i.subject ?? null,
+        status_json: { ai_reply_worthy: i.ai_reply_worthy, ai_intent: i.ai_intent },
+        metadata_json: {
+          gmail_message_id: i.gmail_message_id,
+          gmail_thread_id: i.gmail_thread_id,
+          from_email: i.from_email,
+          to_email: i.to_email,
+          to_emails: Array.isArray(i.to_emails) ? i.to_emails : [],
+          cc_emails: Array.isArray(i.cc_emails) ? i.cc_emails : [],
+          ai_summary: i.ai_summary,
+        },
+        dedupe_key: i.gmail_message_id ?? i.id,
+        contact_id: null,
+        conversation_id: null,
+        hidden: i.hidden ?? false,
+      });
+      for (const k of keys) seen.add(k);
+    }
+  } catch (err) {
+    console.warn('[getGroupTimelineItems] legacy interactions fallback failed', err);
+  }
+
+  // 4) Cross-lead dedupe — same email projected into multiple leads' timelines
+  //    (e.g. an inbound from Liza CC'd to Stuart). Collapse on the strongest
+  //    available identity: gmail_message_id > provider_message_id > dedupe_key.
+  const merged = [...rawTimeline, ...fallbackEmails];
+  const dedupeMap = new Map<string, TimelineItem>();
+  for (const row of merged) {
+    const meta = (row.metadata_json as Record<string, unknown> | null) ?? {};
+    const dedupeKey =
+      (meta.gmail_message_id as string | undefined)
+      || (meta.provider_message_id as string | undefined)
+      || row.dedupe_key
+      || row.id;
+    const existing = dedupeMap.get(dedupeKey);
+    if (existing) {
+      const ids = new Set([...(existing.lead_ids ?? [existing.lead_id]), row.lead_id]);
+      existing.lead_ids = Array.from(ids);
+    } else {
+      dedupeMap.set(dedupeKey, { ...row, lead_ids: [row.lead_id] });
+    }
+  }
+
+  // 5) Sort + slice + annotate lead_name (primary lead_id wins).
+  const out = Array.from(dedupeMap.values())
+    .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())
+    .slice(0, limit)
+    .map(r => ({ ...r, lead_name: nameById.get(r.lead_id) ?? null }));
+
+  // 6) Hydrate per-row follow-up state.
+  return hydrateFollowupState(out);
 }
 
 export async function hideTimelineItem(itemId: string): Promise<void> {
@@ -1512,6 +1726,28 @@ export async function dismissLeadAction(leadId: string, snoozeDays: number = 1):
     })
     .eq('id', leadId);
 
+  if (error) throw error;
+}
+
+/** PR 2.4 — true permanent dismiss of an action_required reminder. Cleared
+ *  by syncEngine on a fresh inbound. The 5-second Undo toast calls this
+ *  with `dismissed=false`. */
+export async function setLeadPermanentDismiss(leadId: string, dismissed: boolean): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+  const updates: Record<string, unknown> = {
+    action_permanently_dismissed: dismissed,
+    last_activity_at: new Date().toISOString(),
+  };
+  if (dismissed) {
+    updates.needs_action = false;
+    updates.next_action_key = null;
+    updates.next_action_label = null;
+    updates.action_reason_code = null;
+  }
+  const { error } = await supabase
+    .from('leads')
+    .update(updates as any)
+    .eq('id', leadId);
   if (error) throw error;
 }
 
