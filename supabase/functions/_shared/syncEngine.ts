@@ -659,7 +659,12 @@ export function buildLeadUpdate(
     if (hasActiveOOO) delete u.last_inbound_at;
   }
 
-  if (shouldClearDismissal) leadUpdate.action_dismissed_at = null;
+  if (shouldClearDismissal) {
+    leadUpdate.action_dismissed_at = null;
+    // PR 2.4 — a fresh inbound also re-arms a permanently-dismissed lead.
+    // Same trigger, parallel column.
+    (leadUpdate as Record<string, unknown>).action_permanently_dismissed = false;
+  }
   if (finalAction.auto_nurture_eligible !== undefined) leadUpdate.auto_nurture_eligible = finalAction.auto_nurture_eligible;
 
   return leadUpdate;

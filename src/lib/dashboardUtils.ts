@@ -207,9 +207,13 @@ export function classifyRevenueState(
   const dismissedAt = (lead as any).action_dismissed_at as string | null;
   const isSnoozed = !!dismissedAt && new Date(dismissedAt).getTime() > Date.now();
 
+  // --- PERMANENT DISMISS GATE (PR 2.4): if user clicked Dismiss in the X overflow,
+  //     suppress action_required until syncEngine clears it on a fresh inbound. ---
+  const isPermanentlyDismissed = (lead as any).action_permanently_dismissed === true;
+
   // --- 1. ACTION REQUIRED ---
-  // Skip action_required escalation for OOO or snoozed leads
-  if (!isOOO && !isSnoozed) {
+  // Skip action_required escalation for OOO, snoozed, or permanently-dismissed leads
+  if (!isOOO && !isSnoozed && !isPermanentlyDismissed) {
     if (lead.needs_action) return "action_required";
     // Unreplied inbound (has inbound but last outbound is before last inbound)
     // BUT suppress if a future meeting is already set — the meeting IS the response

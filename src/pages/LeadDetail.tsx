@@ -123,7 +123,21 @@ export default function LeadDetail() {
             </TabsList>
 
             <TabsContent value="timeline" className="mt-6">
-              <TimelineTab leadId={lead.id} onWhatsAppReply={handleUpdate} />
+              <TimelineTab
+                leadId={lead.id}
+                onWhatsAppReply={handleUpdate}
+                groupId={(lead as any).group_id ?? null}
+                currentLead={{
+                  id: lead.id,
+                  name: lead.name,
+                  email: lead.email,
+                  company: lead.company,
+                  stage: lead.stage,
+                  motion: (lead as any).motion ?? undefined,
+                  job_title: lead.job_title ?? null,
+                  unsubscribed: (lead as any).unsubscribed === true,
+                }}
+              />
             </TabsContent>
             <TabsContent value="drafts" className="mt-6">
               <DraftsTab lead={lead} onUpdate={handleUpdate} onActionComplete={handleActionComplete} />

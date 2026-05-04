@@ -1211,6 +1211,10 @@ CONSTRAINTS
 - SIGN-OFF: End with "Best," on its own line, then the Rep's first name (extract from Rep Context) on the next line — NEVER use placeholders like [Your Name]
 - Return COMPLETE EMAIL BODY ONLY (no subject line). Always finish your final sentence — never cut off mid-thought.
 
+REPLY TARGET (when present)
+{{TARGET_INBOUND_MESSAGE}}
+If a "Specific Reply Target" block appears above, the user is replying to a SPECIFIC earlier message in the thread, NOT necessarily the most recent one. Address THAT message's content as the primary subject of your reply. Use {{EMAIL_THREAD}} only for surrounding context. Ignore {{LATEST_INBOUND}} when a specific target is provided.
+
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}

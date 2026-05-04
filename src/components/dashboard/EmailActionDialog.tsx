@@ -51,7 +51,7 @@ import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { supabase } from "@/integrations/supabase/client";
-import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem } from "@/lib/supabaseQueries";
+import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem, type TimelineItem } from "@/lib/supabaseQueries";
 import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile, RepProfile } from "@/lib/repProfileQueries";
 import { getWorkspaceProfile, formatWorkspaceContext, WorkspaceProfile } from "@/lib/workspaceProfileQueries";
 import { toast } from "sonner";
@@ -89,6 +89,56 @@ interface EmailActionDialogProps {
   prefilledSubject?: string;
   prefilledBody?: string;
   actionKey?: string;
+  /** PR 2.4 — per-email reply targeting. When set, the composer anchors
+   *  threading + To/Cc + AI context on this specific timeline row instead
+   *  of "the latest inbound". Frozen for the dialog's lifetime once open. */
+  replyToTimelineItem?: TimelineItem;
+  /** PR 2.4 — banner copy. 'reply' (default) or 'follow_up' (clicked from
+   *  the Follow-up button on an outbound row). */
+  replyContext?: "reply" | "follow_up";
+}
+
+// PR 2.4 — derive recipients + threading metadata from a timeline row.
+function deriveTargetState(target: TimelineItem, repEmail: string | null) {
+  const meta = (target.metadata_json as Record<string, unknown> | null) ?? {};
+  const toEmails: string[] = Array.isArray(meta.to_emails) ? (meta.to_emails as string[]) : [];
+  const ccEmails: string[] = Array.isArray(meta.cc_emails) ? (meta.cc_emails as string[]) : [];
+  const fromEmail = (meta.from_email as string | null) ?? null;
+  const fallbackTo = (meta.to_email as string | null) ?? null;
+  const repLower = (repEmail || "").toLowerCase();
+  const isOutbound = target.direction === "outbound";
+
+  let to: string;
+  let ccList: string[];
+  if (isOutbound) {
+    // Outbound row → "follow up on what I sent". Keep original recipients,
+    // dropping rep's own address.
+    const filteredTo = toEmails.filter(e => e && e.toLowerCase() !== repLower);
+    to = filteredTo[0] ?? toEmails[0] ?? fallbackTo ?? "";
+    ccList = ccEmails.filter(e => e && e.toLowerCase() !== repLower && e.toLowerCase() !== to.toLowerCase());
+  } else {
+    // Inbound row → "reply to this person". Sender → To. Other To+Cc → Cc.
+    to = fromEmail ?? fallbackTo ?? "";
+    const exclude = new Set([repLower, to.toLowerCase()].filter(Boolean));
+    const merged = new Set<string>([
+      ...toEmails.map(e => (e || "").toLowerCase()),
+      ...ccEmails.map(e => (e || "").toLowerCase()),
+    ]);
+    ccList = Array.from(merged).filter(e => e && !exclude.has(e));
+  }
+
+  return {
+    to,
+    cc: ccList.join(", "),
+    replyThreadId: (meta.gmail_thread_id as string | null) ?? null,
+    replyToMessageId: (meta.gmail_message_id as string | null) ?? null,
+    outlookMessageId: (meta.provider_message_id as string | null) ?? null,
+    fromEmail,
+    targetSubject: target.subject,
+    targetDate: target.occurred_at,
+    targetBody: target.snippet_text ?? "",
+    targetDirection: (target.direction as "inbound" | "outbound") ?? "inbound",
+  };
 }
 
 // Motion options for the override dropdown
@@ -214,6 +264,8 @@ export function EmailActionDialog({
   prefilledSubject,
   prefilledBody,
   actionKey,
+  replyToTimelineItem,
+  replyContext = "reply",
 }: EmailActionDialogProps) {
   const [to, setTo] = useState(lead.email);
   const [cc, setCc] = useState("");                  // comma-separated CC addresses
@@ -233,6 +285,11 @@ export function EmailActionDialog({
   // Threading state for in-thread replies
   const [replyThreadId, setReplyThreadId] = useState<string | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
+  // PR 2.4 — Outlook Graph message-id for /messages/{id}/reply routing
+  const [outlookMessageId, setOutlookMessageId] = useState<string | null>(null);
+  // PR 2.4 — true when both gmail_message_id and provider_message_id are
+  // missing on the chosen target → composer can't thread the reply.
+  const [targetThreadingMissing, setTargetThreadingMissing] = useState(false);
   
   // Signature state
   const [signatures, setSignatures] = useState<RepSignature[]>([]);
@@ -298,10 +355,29 @@ export function EmailActionDialog({
   // Generate email when dialog opens — no longer waits for profilesLoaded
   useEffect(() => {
     if (open) {
-      setTo(lead.email);
-      setCc("");
-      setReplyAll(false);
-      setLastInboundCc([]);
+      // PR 2.4 — when a specific reply target is provided, derive To/Cc and
+      // threading metadata from THAT row up front. The fields are frozen for
+      // the dialog's lifetime (no in-composer target switcher per spec).
+      if (replyToTimelineItem) {
+        const t = deriveTargetState(replyToTimelineItem, lead.email);
+        setTo(t.to || lead.email);
+        setCc(t.cc);
+        setReplyAll(false);
+        setLastInboundCc([]);
+        setReplyThreadId(t.replyThreadId);
+        setReplyToMessageId(t.replyToMessageId);
+        setOutlookMessageId(t.outlookMessageId);
+        setTargetThreadingMissing(!t.replyToMessageId && !t.outlookMessageId);
+      } else {
+        setTo(lead.email);
+        setCc("");
+        setReplyAll(false);
+        setLastInboundCc([]);
+        setReplyThreadId(null);
+        setReplyToMessageId(null);
+        setOutlookMessageId(null);
+        setTargetThreadingMissing(false);
+      }
       setInstructions(initialInstructions);
 
       if (prefilledSubject || prefilledBody) {
@@ -423,8 +499,25 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     setSubject("");
     setKnowledgeUsed(false);
     setFeedbackGiven(null);
-    setReplyThreadId(null);
-    setReplyToMessageId(null);
+    // PR 2.4 — only reset threading state when there's no locked target.
+    // With a locked target, the [open] effect already populated these.
+    if (!replyToTimelineItem) {
+      setReplyThreadId(null);
+      setReplyToMessageId(null);
+      setOutlookMessageId(null);
+    }
+
+    // PR 2.4 — when replying to a specific earlier message, hand the AI
+    // the target's content so the draft addresses it directly.
+    const targetForAI = replyToTimelineItem
+      ? {
+          body: replyToTimelineItem.snippet_text ?? "",
+          from: ((replyToTimelineItem.metadata_json as Record<string, unknown> | null)?.from_email as string | null) ?? null,
+          date: replyToTimelineItem.occurred_at,
+          direction: ((replyToTimelineItem.direction as "inbound" | "outbound" | null) ?? "inbound"),
+          subject: replyToTimelineItem.subject ?? null,
+        }
+      : undefined;
 
     try {
       const pipelineResult = await streamDraft({
@@ -434,6 +527,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
         prefetched: profilesLoaded ? { repProfile, workspaceProfile } : undefined,
         instructions: instructions.trim() || null,
         motion_override: selectedMotion !== leadMotion ? selectedMotion : null,
+        target_inbound_message: targetForAI,
         onToken: (token) => {
           setBody(prev => prev + token);
         },
@@ -443,8 +537,15 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
         onPipelineReady: (partial) => {
           const ctx = partial.resolved_context;
 
-          // Set thread state from pipeline context
+          // Set thread state from pipeline context (used to render the
+          // context panel below; safe to set regardless of target lock).
           setThreadEmails(ctx.thread_emails);
+
+          // PR 2.4 — when a specific reply target is locked, the [open]
+          // effect already populated To/Cc + threading from THAT target.
+          // Skip the latest-inbound-derived overrides so we don't overwrite.
+          if (replyToTimelineItem) return;
+
           const latestInbound = ctx.last_inbound_email;
           if (latestInbound) {
             setReplyThreadId(latestInbound.gmail_thread_id);
@@ -633,7 +734,8 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
       undefined,
       replyThreadId || undefined,
       replyToMessageId || undefined,
-      ccArr.length > 0 ? ccArr : undefined
+      ccArr.length > 0 ? ccArr : undefined,
+      outlookMessageId || undefined,
     );
 
     if (!result.ok && activeMailProvider === "outlook" && isOutlookAuthError(result.error)) {
@@ -804,6 +906,27 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
             {lead.next_action_label || "Prepare and send an email"}
           </DialogDescription>
           
+          {/* PR 2.4 — per-email reply target banner */}
+          {replyToTimelineItem && (() => {
+            const dateStr = new Date(replyToTimelineItem.occurred_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            const verb = replyContext === "follow_up" ? "Following up on" : "Replying to";
+            return (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="gap-1.5 bg-primary/5 border-primary/30">
+                  <MessageSquare className="h-3 w-3" />
+                  <span className="text-[11px]">
+                    {verb} <span className="font-medium">{lead.name}</span>, {dateStr}
+                  </span>
+                </Badge>
+                {targetThreadingMissing && (
+                  <span className="text-[11px] text-amber-600">
+                    Couldn't thread reply — sending as new email.
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+
           {/* To, Cc, Subject fields in header */}
           <div className="grid gap-3 pt-3">
             <div className="flex items-center gap-2">

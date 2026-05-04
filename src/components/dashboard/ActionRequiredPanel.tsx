@@ -5,13 +5,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AlertCircle, Mail, FileText, Eye, Send, X, RefreshCw, Plane } from "lucide-react";
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage } from "@/lib/dashboardUtils";
 import { EmailActionDialog } from "./EmailActionDialog";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
-import { dismissLeadAction } from "@/lib/supabaseQueries";
+import { dismissLeadAction, setLeadPermanentDismiss } from "@/lib/supabaseQueries";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +46,36 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
     } catch (err) {
       console.error("Failed to snooze action:", err);
       toast.error("Failed to snooze action");
+    } finally {
+      setDismissingId(null);
+    }
+  };
+
+  // PR 2.4 — permanent dismiss with 5-second undo toast.
+  const handlePermanentDismiss = async (lead: EnrichedLead) => {
+    setDismissingId(lead.id);
+    try {
+      await setLeadPermanentDismiss(lead.id, true);
+      toast.success(`Dismissed ${lead.name}`, {
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await setLeadPermanentDismiss(lead.id, false);
+              toast.success("Undone");
+              onLeadUpdated?.();
+            } catch (err) {
+              console.error("Undo dismiss failed:", err);
+              toast.error("Undo failed");
+            }
+          },
+        },
+      });
+      onLeadUpdated?.();
+    } catch (err) {
+      console.error("Failed to dismiss action:", err);
+      toast.error("Failed to dismiss action");
     } finally {
       setDismissingId(null);
     }
@@ -195,6 +226,13 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
                           {option.label}
                         </DropdownMenuItem>
                       ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => handlePermanentDismiss(lead)}
+                      >
+                        Dismiss
+                      </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>

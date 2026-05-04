@@ -45,6 +45,14 @@ export function clearDraftCache(leadId: string): void {
   }
 }
 
+export interface TargetInboundMessage {
+  body: string;
+  from: string | null;
+  date: string;                       // ISO timestamp
+  direction: "inbound" | "outbound";  // outbound = "follow up on what I sent"
+  subject?: string | null;
+}
+
 export interface GenerateDraftInput {
   lead_id: string;
   channel?: "email" | "linkedin" | "whatsapp" | "sms";
@@ -53,6 +61,10 @@ export interface GenerateDraftInput {
   motion_override?: Motion | null;
   // Optional pre-fetched data to skip duplicate DB round trips
   prefetched?: ContextPrefetched;
+  // Per-email reply targeting (PR 2.4). When set on a reply_to_thread task,
+  // the AI prompt addresses THIS specific earlier message instead of the
+  // thread's latest inbound.
+  target_inbound_message?: TargetInboundMessage;
 }
 
 export interface DraftPipelineResult {
@@ -116,6 +128,34 @@ function getAuthUserName(): string | null {
   } catch {
     return null;
   }
+}
+
+// ============================================
+// REPLY TARGET HELPER (PR 2.4)
+// ============================================
+
+const TARGET_BODY_MAX_CHARS = 2000;
+
+/** Format the per-email reply target into a prompt-ready block. */
+function formatTargetInboundBlock(t: TargetInboundMessage): string {
+  const dirLabel = t.direction === "outbound"
+    ? "Your earlier outbound (the user is following up on this message they sent)"
+    : "Earlier inbound from this thread (the user is replying to THIS specific message)";
+  const fromLine = t.from ? `From: ${t.from}` : "";
+  const subjLine = t.subject ? `Subject: ${t.subject}` : "";
+  const dateLine = `Sent: ${t.date}`;
+  const truncatedBody = (t.body || "").slice(0, TARGET_BODY_MAX_CHARS);
+  const lines = [
+    "=== Specific Reply Target ===",
+    dirLabel,
+    fromLine,
+    subjLine,
+    dateLine,
+    "",
+    truncatedBody,
+    "=== End Specific Reply Target ===",
+  ].filter(Boolean);
+  return lines.join("\n");
 }
 
 // ============================================
@@ -447,12 +487,15 @@ export interface StreamDraftInput extends GenerateDraftInput {
 }
 
 export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelineResult> {
-  const { lead_id, channel = "email", override_intent, instructions, motion_override, prefetched, onToken, onSubject, onPipelineReady } = input;
+  const { lead_id, channel = "email", override_intent, instructions, motion_override, prefetched, target_inbound_message, onToken, onSubject, onPipelineReady } = input;
 
   console.log("[streamDraft] Starting streaming pipeline for lead", lead_id);
 
-  // Check cache first (keyed by lead + intent override + instructions)
-  const cacheKey = `${lead_id}::${channel}::${override_intent || "auto"}::${instructions || ""}::${motion_override || ""}`;
+  // Check cache first (keyed by lead + intent override + instructions + reply target)
+  const targetSig = target_inbound_message
+    ? `tgt:${(target_inbound_message.from ?? "")}::${target_inbound_message.date}`
+    : "";
+  const cacheKey = `${lead_id}::${channel}::${override_intent || "auto"}::${instructions || ""}::${motion_override || ""}::${targetSig}`;
   const cached = getCachedDraft(cacheKey);
   if (cached) {
     console.log("[streamDraft] Cache hit — serving cached draft instantly");
@@ -493,6 +536,17 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
     const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
+    // PR 2.4 — per-email reply targeting. When the user picked a specific
+    // earlier message as the reply target, override `latest_inbound` with
+    // that message's body and inject the formatted target block. Backward
+    // compatible: when target_inbound_message is absent, the {{TARGET_INBOUND_MESSAGE}}
+    // placeholder is stripped by replaceTemplateVars in ai_task.
+    if (target_inbound_message && finalIntent === "reply_to_thread") {
+      aiPayload.target_inbound_message = formatTargetInboundBlock(target_inbound_message);
+      aiPayload.latest_inbound = (target_inbound_message.body || "").slice(0, TARGET_BODY_MAX_CHARS);
+      aiPayload.has_latest_inbound = true;
+    }
+
     // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
     const campaignFields = buildCampaignPayloadFields({
       action_key: inferActionKey(finalIntent, resolvedContext),
@@ -508,7 +562,12 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
     aiPayload.campaign_meta = campaignFields.campaign_meta;
 
   // Derive subject immediately (no AI needed)
-  const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
+  let suggestedSubject = deriveSubject(resolvedContext, finalIntent);
+  // PR 2.4 — when replying to a specific earlier message, anchor the subject
+  // on THAT message, not on the latest in the thread.
+  if (target_inbound_message && finalIntent === "reply_to_thread" && target_inbound_message.subject) {
+    suggestedSubject = `Re: ${target_inbound_message.subject.replace(/^Re:\s*/i, "")}`;
+  }
   onSubject(suggestedSubject);
 
   // Notify caller of pipeline metadata before streaming starts
@@ -642,7 +701,7 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 // ============================================
 
 export async function generateDraft(input: GenerateDraftInput): Promise<DraftPipelineResult> {
-  const { lead_id, channel = "email", override_intent, instructions, motion_override } = input;
+  const { lead_id, channel = "email", override_intent, instructions, motion_override, target_inbound_message } = input;
 
   console.log("[generateDraft] Starting pipeline for lead", lead_id);
 
@@ -676,6 +735,13 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
   const mergedInstructions2 = mergeInstructions(instructions || null, leadInstructions2);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
+
+  // PR 2.4 — per-email reply targeting (mirror of streamDraft path).
+  if (target_inbound_message && finalIntent === "reply_to_thread") {
+    aiPayload.target_inbound_message = formatTargetInboundBlock(target_inbound_message);
+    aiPayload.latest_inbound = (target_inbound_message.body || "").slice(0, TARGET_BODY_MAX_CHARS);
+    aiPayload.has_latest_inbound = true;
+  }
 
   // Step 5b: Inject structured campaign resolver fields (matches automation-executor)
   const campaignFields2 = buildCampaignPayloadFields({
@@ -716,7 +782,10 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   }
 
   // Step 7: Derive subject
-  const suggestedSubject = deriveSubject(resolvedContext, finalIntent);
+  let suggestedSubject = deriveSubject(resolvedContext, finalIntent);
+  if (target_inbound_message && finalIntent === "reply_to_thread" && target_inbound_message.subject) {
+    suggestedSubject = `Re: ${target_inbound_message.subject.replace(/^Re:\s*/i, "")}`;
+  }
 
   const result: DraftPipelineResult = {
     resolved_context: resolvedContext,

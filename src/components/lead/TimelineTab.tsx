@@ -1,19 +1,129 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { getLeadTimeline, hideTimelineItem, unhideTimelineItem, insertInteraction, type TimelineItem } from "@/lib/supabaseQueries";
+import { getLeadTimeline, getGroupTimelineItems, setTimelineFollowupState, hideTimelineItem, unhideTimelineItem, insertInteraction, type TimelineItem } from "@/lib/supabaseQueries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap, Download, FileText } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap, Download, FileText, Reply, Clock } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import CallTimelineCard from "@/components/call/CallTimelineCard";
+import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
+
+// PR 2.4 — minimal lead shape passed to EmailActionDialog when user clicks
+// Reply/Follow-up. Group view fetches all members up front; solo view uses
+// the parent-supplied currentLead.
+export interface TimelineMinimalLead {
+  id: string;
+  name: string;
+  company: string;
+  email: string;
+  stage: string;
+  motion?: string;
+  job_title?: string | null;
+  unsubscribed?: boolean;
+}
 
 interface TimelineTabProps {
   leadId: string;
   onWhatsAppReply?: () => void;
+  // PR 2.4 — when set, TimelineTab loads the union timeline across every lead
+  // in this group (champion + stakeholders) and renders lead-name chips.
+  groupId?: string | null;
+  // PR 2.4 — current lead (for solo path + as fallback in group path).
+  currentLead?: TimelineMinimalLead;
+}
+
+// PR 2.4 — bounce/no-reply sender filter for the Reply visibility rule.
+const BOUNCE_FROM_REGEX = /^(postmaster|mailer-daemon|mailerdaemon|noreply|no-reply|donotreply|do-not-reply|bounce)([._\-+]|@)/i;
+// Lightweight subject-side OOO check (mirror of supabase/functions/_shared/oooDetection.ts subject patterns).
+const OOO_SUBJECT_REGEX = /(out of office|\bOOO\b|auto.?reply|automatic reply|on vacation|currently away|currently unavailable|annual leave|on leave|holiday notification)/i;
+// Visible-by-default cutoff for the Follow-up button.
+const FOLLOWUP_THRESHOLD_DAYS = 5;
+
+// Thread-scope key — prefer the provider thread/conversation id (so forwards
+// with the same normalized subject don't accidentally group together), fall
+// back to normalized subject for legacy rows missing that metadata.
+function threadKeyOf(item: TimelineItem): string {
+  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
+  const gid = meta.gmail_thread_id as string | undefined;
+  const cid = meta.conversation_id as string | undefined;
+  return gid || cid || normalizeSubject(item.subject) || item.id;
+}
+
+function fromEmailLower(item: TimelineItem): string {
+  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
+  return ((meta.from_email as string | undefined) || "").toLowerCase();
+}
+
+function toEmailsLower(item: TimelineItem): string[] {
+  const meta = (item.metadata_json as Record<string, unknown> | null) ?? {};
+  const arr = Array.isArray(meta.to_emails) ? (meta.to_emails as string[]) : [];
+  return arr.map(e => (e || "").toLowerCase());
+}
+
+/** Reply visibility rule (PR 2.4 §1). Pure function over the loaded timeline. */
+function canShowReply(item: TimelineItem, all: TimelineItem[], leadUnsubscribed: boolean): boolean {
+  if (item.event_type !== "email_inbound") return false;
+  const sender = fromEmailLower(item);
+  if (!sender) return false;
+  if (BOUNCE_FROM_REGEX.test(sender)) return false;
+  if (item.subject && OOO_SUBJECT_REGEX.test(item.subject)) return false;
+  if (leadUnsubscribed) return false;
+
+  const tk = threadKeyOf(item);
+  const inThread = all.filter(o => threadKeyOf(o) === tk);
+
+  // Most recent inbound from THIS sender within the thread?
+  const senderInbounds = inThread
+    .filter(i => i.event_type === "email_inbound" && fromEmailLower(i) === sender)
+    .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+  if (senderInbounds.length === 0 || senderInbounds[0].id !== item.id) return false;
+
+  // No later outbound in the same thread that addressed this sender on To.
+  // (Cc explicitly does NOT clear — only To clears.)
+  const ts = new Date(item.occurred_at).getTime();
+  const laterOutboundAddressing = inThread.some(o =>
+    o.event_type === "email_outbound"
+    && new Date(o.occurred_at).getTime() > ts
+    && toEmailsLower(o).some(e => e === sender),
+  );
+  return !laterOutboundAddressing;
+}
+
+/** Follow-up button visibility (PR 2.4 §2). Returns "always" (visible),
+ *  "hover" (revealed on hover), or "never" (no button at all). */
+function followupVisibility(item: TimelineItem, all: TimelineItem[]): "always" | "hover" | "never" {
+  if (item.event_type !== "email_outbound") return "never";
+
+  const tk = threadKeyOf(item);
+  const inThread = all.filter(o => threadKeyOf(o) === tk);
+  const ts = new Date(item.occurred_at).getTime();
+
+  // Snoozed or dismissed → hover (the user can still circle back manually).
+  if (item.followup_snoozed_until && new Date(item.followup_snoozed_until).getTime() > Date.now()) return "hover";
+  if (item.followup_dismissed_at) return "hover";
+
+  // Not the most recent outbound in the thread → hover.
+  const laterOutbound = inThread.some(o =>
+    o.event_type === "email_outbound" && new Date(o.occurred_at).getTime() > ts,
+  );
+  if (laterOutbound) return "hover";
+
+  // Has a later inbound in the same thread → hover (got a reply).
+  const laterInbound = inThread.some(i =>
+    i.event_type === "email_inbound" && new Date(i.occurred_at).getTime() > ts,
+  );
+  if (laterInbound) return "hover";
+
+  // Less than the threshold age → hover.
+  const ageDays = (Date.now() - ts) / (1000 * 60 * 60 * 24);
+  if (ageDays < FOLLOWUP_THRESHOLD_DAYS) return "hover";
+
+  return "always";
 }
 
 /* ── Filter types ── */
@@ -204,8 +314,125 @@ function formatSnippet(item: TimelineItem): string {
   }
 }
 
+/* ── PR 2.4 — Reply / Follow-up sub-components ── */
+
+export interface RowActions {
+  /** Open EmailActionDialog as Reply targeting this row. */
+  onReply: (item: TimelineItem) => void;
+  /** Open EmailActionDialog as Follow-up targeting this row. */
+  onFollowup: (item: TimelineItem) => void;
+  /** Snooze the follow-up reminder on this row. */
+  onSnoozeFollowup: (item: TimelineItem, days: number) => void;
+  /** Dismiss the follow-up reminder permanently (with 5s undo toast). */
+  onDismissFollowup: (item: TimelineItem) => void;
+}
+
+function ReplyButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className="inline-flex items-center justify-center h-[22px] w-[22px] rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+      title="Reply"
+      aria-label="Reply"
+    >
+      <Reply className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function FollowupButton({
+  item,
+  visibility,
+  actions,
+}: {
+  item: TimelineItem;
+  visibility: "always" | "hover";
+  actions: RowActions;
+}) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const wrapperClass = cn(
+    "inline-flex items-stretch rounded-full overflow-hidden border border-amber-500/30 bg-amber-500/10 transition-opacity",
+    visibility === "hover" && "opacity-0 group-hover:opacity-100",
+  );
+
+  return (
+    <div className={wrapperClass}>
+      <button
+        onClick={(e) => { e.stopPropagation(); actions.onFollowup(item); }}
+        className="inline-flex items-center gap-1 px-2 h-[22px] text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/15"
+        title="Follow up on this email"
+      >
+        <Clock className="h-3 w-3" />
+        Follow up
+      </button>
+      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+        <PopoverTrigger asChild>
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center justify-center px-1 h-[22px] text-amber-700 dark:text-amber-400 border-l border-amber-500/30 hover:bg-amber-500/15"
+            title="Snooze or dismiss"
+            aria-label="Snooze or dismiss this follow-up"
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          className="w-44 p-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="px-2 py-1 text-[10px] font-medium text-muted-foreground">Snooze for…</p>
+          {[3, 5, 7].map(days => (
+            <button
+              key={days}
+              onClick={() => { setPopoverOpen(false); actions.onSnoozeFollowup(item, days); }}
+              className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent"
+            >
+              {days} days
+            </button>
+          ))}
+          <div className="my-1 border-t border-border" />
+          <button
+            onClick={() => { setPopoverOpen(false); actions.onDismissFollowup(item); }}
+            className="w-full text-left px-2 py-1.5 text-xs rounded text-destructive hover:bg-destructive/10"
+          >
+            Dismiss
+          </button>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function LeadChip({ name }: { name: string | null | undefined }) {
+  if (!name) return null;
+  return (
+    <span className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-secondary text-secondary-foreground border border-border">
+      {name}
+    </span>
+  );
+}
+
 /* ── Single Entry Row ── */
-function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: TimelineItem; defaultOpen: boolean; onToggleHide: (id: string, hidden: boolean) => void; showHidden: boolean }) {
+function TimelineEntry({
+  item,
+  defaultOpen,
+  onToggleHide,
+  showHidden,
+  allItems,
+  leadUnsubscribedById,
+  groupMode,
+  actions,
+}: {
+  item: TimelineItem;
+  defaultOpen: boolean;
+  onToggleHide: (id: string, hidden: boolean) => void;
+  showHidden: boolean;
+  allItems: TimelineItem[];
+  leadUnsubscribedById: Map<string, boolean>;
+  groupMode: boolean;
+  actions: RowActions;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const tags = useMemo(() => getSignalTags(item), [item]);
   const meta = item.metadata_json as any;
@@ -216,6 +443,11 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
   const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
   const showParticipants = item.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
 
+  // PR 2.4 — visibility for Reply / Follow-up buttons.
+  const leadUnsubscribed = leadUnsubscribedById.get(item.lead_id) === true;
+  const showReply = canShowReply(item, allItems, leadUnsubscribed);
+  const followupVis = followupVisibility(item, allItems);
+
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className={cn("group", item.hidden && "opacity-50")}>
@@ -225,6 +457,7 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <ChannelBadge item={item} />
+                  {groupMode && <LeadChip name={item.lead_name} />}
                   {isAutomation && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                       <Zap className="h-2.5 w-2.5" />
@@ -267,6 +500,10 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
+                {showReply && <ReplyButton onClick={() => actions.onReply(item)} />}
+                {followupVis !== "never" && (
+                  <FollowupButton item={item} visibility={followupVis} actions={actions} />
+                )}
                 <HideButton itemId={item.id} isHidden={item.hidden} onToggle={onToggleHide} />
                 <span className="text-muted-foreground/50">
                   {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -304,7 +541,23 @@ function TimelineEntry({ item, defaultOpen, onToggleHide, showHidden }: { item: 
 }
 
 /* ── Thread Group ── */
-function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGroup; defaultOpen: boolean; onToggleHide: (id: string, hidden: boolean) => void }) {
+function ThreadEntry({
+  thread,
+  defaultOpen,
+  onToggleHide,
+  allItems,
+  leadUnsubscribedById,
+  groupMode,
+  actions,
+}: {
+  thread: ThreadGroup;
+  defaultOpen: boolean;
+  onToggleHide: (id: string, hidden: boolean) => void;
+  allItems: TimelineItem[];
+  leadUnsubscribedById: Map<string, boolean>;
+  groupMode: boolean;
+  actions: RowActions;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const latest = thread.latest;
@@ -316,6 +569,11 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
   const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
   const showParticipants = latest.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
 
+  // PR 2.4 — Reply / Follow-up visibility for the latest item.
+  const latestUnsubscribed = leadUnsubscribedById.get(latest.lead_id) === true;
+  const latestShowReply = canShowReply(latest, allItems, latestUnsubscribed);
+  const latestFollowupVis = followupVisibility(latest, allItems);
+
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className={cn("group", latest.hidden && "opacity-50")}>
@@ -325,6 +583,7 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <ChannelBadge item={latest} />
+                  {groupMode && <LeadChip name={latest.lead_name} />}
                   <span className="text-[11px] text-muted-foreground">
                     {format(new Date(latest.occurred_at), "MMM d · h:mm a")}
                   </span>
@@ -364,6 +623,10 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
+                {latestShowReply && <ReplyButton onClick={() => actions.onReply(latest)} />}
+                {latestFollowupVis !== "never" && (
+                  <FollowupButton item={latest} visibility={latestFollowupVis} actions={actions} />
+                )}
                 <HideButton itemId={latest.id} isHidden={latest.hidden} onToggle={onToggleHide} />
                 <span className="text-muted-foreground/50">
                   {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -404,20 +667,32 @@ function ThreadEntry({ thread, defaultOpen, onToggleHide }: { thread: ThreadGrou
                 </CollapsibleTrigger>
                 <CollapsibleContent className="animate-accordion-down">
                   <div className="mt-2 ml-2 border-l-2 border-border pl-3 space-y-3">
-                    {thread.items.slice(1).map(msg => (
-                      <div key={msg.id} className={cn("space-y-0.5 group/msg", msg.hidden && "opacity-50")}>
-                        <div className="flex items-center gap-2">
-                          <ChannelBadge item={msg} />
-                          <span className="text-[11px] text-muted-foreground">
-                            {format(new Date(msg.occurred_at), "MMM d · h:mm a")}
-                          </span>
-                          <HideButton itemId={msg.id} isHidden={msg.hidden} onToggle={onToggleHide} />
+                    {thread.items.slice(1).map(msg => {
+                      // PR 2.4 — Reply / Follow-up visibility per older message.
+                      const msgUnsub = leadUnsubscribedById.get(msg.lead_id) === true;
+                      const msgShowReply = canShowReply(msg, allItems, msgUnsub);
+                      const msgFollowupVis = followupVisibility(msg, allItems);
+                      return (
+                        <div key={msg.id} className={cn("space-y-0.5 group/msg", msg.hidden && "opacity-50")}>
+                          <div className="flex items-center gap-2">
+                            <ChannelBadge item={msg} />
+                            {groupMode && <LeadChip name={msg.lead_name} />}
+                            <span className="text-[11px] text-muted-foreground">
+                              {format(new Date(msg.occurred_at), "MMM d · h:mm a")}
+                            </span>
+                            <div className="flex-1" />
+                            {msgShowReply && <ReplyButton onClick={() => actions.onReply(msg)} />}
+                            {msgFollowupVis !== "never" && (
+                              <FollowupButton item={msg} visibility={msgFollowupVis} actions={actions} />
+                            )}
+                            <HideButton itemId={msg.id} isHidden={msg.hidden} onToggle={onToggleHide} />
+                          </div>
+                          <p className={cn("text-[13px] text-muted-foreground line-clamp-3 leading-relaxed", msg.hidden && "line-through")}>
+                            {msg.snippet_text}
+                          </p>
                         </div>
-                        <p className={cn("text-[13px] text-muted-foreground line-clamp-3 leading-relaxed", msg.hidden && "line-through")}>
-                          {msg.snippet_text}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CollapsibleContent>
               </Collapsible>
@@ -634,7 +909,7 @@ function CallEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHide: (
 }
 
 /* ── Main Component ── */
-export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProps) {
+export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentLead }: TimelineTabProps) {
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showReplyForm, setShowReplyForm] = useState(false);
@@ -642,10 +917,22 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
   const [isSavingReply, setIsSavingReply] = useState(false);
   const [activeFilter, setActiveFilter] = useState<TimelineFilter>("all");
   const [showHidden, setShowHidden] = useState(false);
+  // PR 2.4 — group members lookup (id → MinimalLead). Empty in solo mode.
+  const [groupMembers, setGroupMembers] = useState<Map<string, TimelineMinimalLead>>(new Map());
+  // PR 2.4 — EmailActionDialog reply target state.
+  const [replyTarget, setReplyTarget] = useState<TimelineItem | null>(null);
+  const [replyContext, setReplyContext] = useState<"reply" | "follow_up">("reply");
+  const [replyTargetLead, setReplyTargetLead] = useState<TimelineMinimalLead | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const groupMode = !!groupId;
 
   const loadTimeline = () => {
     setIsLoading(true);
-    getLeadTimeline(leadId, { includeHidden: showHidden })
+    const reader = groupId
+      ? getGroupTimelineItems(groupId, { includeHidden: showHidden })
+      : getLeadTimeline(leadId, { includeHidden: showHidden });
+    reader
       .then(items => setTimelineItems(items))
       .catch(console.error)
       .finally(() => setIsLoading(false));
@@ -653,7 +940,112 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
 
   useEffect(() => {
     loadTimeline();
-  }, [leadId, showHidden]);
+  }, [leadId, groupId, showHidden]);
+
+  // PR 2.4 — load all group members up front so the Reply/Follow-up dialog
+  // can resolve the right lead per row (and the unsubscribed gate can use
+  // the row's lead, not just the page's currentLead).
+  useEffect(() => {
+    if (!groupId) {
+      setGroupMembers(new Map());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("leads")
+        .select("id, name, email, company, stage, motion, job_title, unsubscribed")
+        .eq("group_id", groupId);
+      if (cancelled || error) return;
+      const map = new Map<string, TimelineMinimalLead>();
+      for (const l of (data ?? []) as any[]) {
+        map.set(l.id, {
+          id: l.id, name: l.name, email: l.email ?? "",
+          company: l.company ?? "", stage: l.stage ?? "new",
+          motion: l.motion ?? undefined, job_title: l.job_title ?? null,
+          unsubscribed: l.unsubscribed === true,
+        });
+      }
+      setGroupMembers(map);
+    })();
+    return () => { cancelled = true; };
+  }, [groupId]);
+
+  // PR 2.4 — unsubscribed gate map (across solo + group views).
+  const leadUnsubscribedById = useMemo(() => {
+    const m = new Map<string, boolean>();
+    if (currentLead) m.set(currentLead.id, currentLead.unsubscribed === true);
+    for (const [id, lead] of groupMembers) m.set(id, lead.unsubscribed === true);
+    return m;
+  }, [currentLead, groupMembers]);
+
+  // PR 2.4 — resolve which lead to attach to a clicked timeline row.
+  const leadForRow = useCallback((row: TimelineItem): TimelineMinimalLead | null => {
+    if (groupMembers.has(row.lead_id)) return groupMembers.get(row.lead_id) ?? null;
+    if (currentLead && row.lead_id === currentLead.id) return currentLead;
+    return currentLead ?? null;
+  }, [groupMembers, currentLead]);
+
+  // PR 2.4 — open EmailActionDialog targeting a specific row.
+  const openDialog = useCallback((item: TimelineItem, ctx: "reply" | "follow_up") => {
+    const targetLead = leadForRow(item);
+    if (!targetLead) {
+      toast.error("Couldn't resolve the lead for that row.");
+      return;
+    }
+    setReplyTarget(item);
+    setReplyTargetLead(targetLead);
+    setReplyContext(ctx);
+    setDialogOpen(true);
+  }, [leadForRow]);
+
+  const handleSnoozeFollowup = useCallback(async (item: TimelineItem, days: number) => {
+    const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      await setTimelineFollowupState(item.id, { snoozedUntil: until });
+      toast.success(`Snoozed for ${days} day${days > 1 ? "s" : ""}`);
+      loadTimeline();
+    } catch (err) {
+      console.error("[TimelineTab] Snooze failed:", err);
+      toast.error("Failed to snooze");
+    }
+  }, []);
+
+  const handleDismissFollowup = useCallback(async (item: TimelineItem) => {
+    const previous = item.followup_dismissed_at;
+    const now = new Date().toISOString();
+    try {
+      await setTimelineFollowupState(item.id, { dismissedAt: now });
+      // Optimistic local update (avoid full reload during the 5-second undo window)
+      setTimelineItems(prev => prev.map(r => r.id === item.id ? { ...r, followup_dismissed_at: now } : r));
+      toast.success("Dismissed", {
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await setTimelineFollowupState(item.id, { clearDismissed: true });
+              setTimelineItems(prev => prev.map(r => r.id === item.id ? { ...r, followup_dismissed_at: previous ?? null } : r));
+              toast.success("Undone");
+            } catch (err) {
+              console.error("[TimelineTab] Undo dismiss failed:", err);
+              toast.error("Undo failed");
+            }
+          },
+        },
+      });
+    } catch (err) {
+      console.error("[TimelineTab] Dismiss failed:", err);
+      toast.error("Failed to dismiss");
+    }
+  }, []);
+
+  const rowActions: RowActions = useMemo(() => ({
+    onReply: (item) => openDialog(item, "reply"),
+    onFollowup: (item) => openDialog(item, "follow_up"),
+    onSnoozeFollowup: handleSnoozeFollowup,
+    onDismissFollowup: handleDismissFollowup,
+  }), [openDialog, handleSnoozeFollowup, handleDismissFollowup]);
 
   const handleToggleHide = async (itemId: string, hide: boolean) => {
     try {
@@ -819,7 +1211,15 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
             <div key={key}>
               {idx > 0 && <div className="border-t border-border/50 mx-0" />}
               {isThread(entry) ? (
-                <ThreadEntry thread={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
+                <ThreadEntry
+                  thread={entry}
+                  defaultOpen={isExpanded}
+                  onToggleHide={handleToggleHide}
+                  allItems={timelineItems}
+                  leadUnsubscribedById={leadUnsubscribedById}
+                  groupMode={groupMode}
+                  actions={rowActions}
+                />
               ) : entry.channel === "meeting" ? (
                 <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
               ) : entry.channel === "whatsapp" ? (
@@ -827,11 +1227,38 @@ export default function TimelineTab({ leadId, onWhatsAppReply }: TimelineTabProp
               ) : entry.channel === "voice" ? (
                 <CallEntry item={entry} onToggleHide={handleToggleHide} />
               ) : (
-                <TimelineEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} showHidden={showHidden} />
+                <TimelineEntry
+                  item={entry}
+                  defaultOpen={isExpanded}
+                  onToggleHide={handleToggleHide}
+                  showHidden={showHidden}
+                  allItems={timelineItems}
+                  leadUnsubscribedById={leadUnsubscribedById}
+                  groupMode={groupMode}
+                  actions={rowActions}
+                />
               )}
             </div>
           );
         })
+      )}
+
+      {/* PR 2.4 — Reply / Follow-up composer */}
+      {replyTargetLead && replyTarget && (
+        <EmailActionDialog
+          lead={replyTargetLead}
+          open={dialogOpen}
+          onOpenChange={(o) => {
+            setDialogOpen(o);
+            if (!o) {
+              setReplyTarget(null);
+              setReplyTargetLead(null);
+              loadTimeline();
+            }
+          }}
+          replyToTimelineItem={replyTarget}
+          replyContext={replyContext}
+        />
       )}
     </div>
   );
