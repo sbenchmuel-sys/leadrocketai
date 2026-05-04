@@ -513,7 +513,12 @@ async function hydrateFollowupState(rows: TimelineItem[]): Promise<TimelineItem[
 }
 
 /** Set or clear snooze/dismiss state on a timeline row.
- *  Pass `clearDismissed: true` to undo a Dismiss; the 5-second toast undo uses this. */
+ *  Pass `clearDismissed: true` to undo a Dismiss; the 5-second toast undo uses this.
+ *
+ *  Bug-fix v2: cold-tab first-clicks were occasionally hitting RLS denial
+ *  ("Not authenticated") because the auth header hadn't fully attached to
+ *  the supabase-js client yet. We now (a) force a session read up front
+ *  to warm the JWT, and (b) retry once on transient errors only. */
 export async function setTimelineFollowupState(
   timelineItemId: string,
   opts: {
@@ -523,14 +528,45 @@ export async function setTimelineFollowupState(
     clearDismissed?: boolean;
   },
 ): Promise<void> {
-  const { error } = await supabase.rpc('set_timeline_followup_state', {
+  // (a) Auth warmup — ensures the JWT is loaded before the RPC fires.
+  await supabase.auth.getSession();
+
+  const args = {
     p_timeline_item_id: timelineItemId,
     p_snoozed_until: opts.snoozedUntil ?? null,
     p_dismissed_at: opts.dismissedAt ?? null,
     p_clear_snoozed: opts.clearSnoozed ?? false,
     p_clear_dismissed: opts.clearDismissed ?? false,
-  });
-  if (error) throw error;
+  };
+
+  // 42501 = insufficient_privilege (RLS denial). "Not authenticated" can
+  // come back as either an error.message or a thrown TypeError on network
+  // failures (fetch/CORS). Anything else is a genuine error and bubbles up.
+  const isTransient = (e: unknown): boolean => {
+    if (!e) return false;
+    const err = e as { code?: string; message?: string; name?: string };
+    if (err.code === '42501') return true;
+    if (typeof err.message === 'string' && /Not authenticated|Failed to fetch|NetworkError|fetch/i.test(err.message)) return true;
+    if (err.name === 'TypeError') return true;
+    return false;
+  };
+
+  let firstResult: { error: unknown } | null = null;
+  try {
+    firstResult = await supabase.rpc('set_timeline_followup_state', args);
+  } catch (thrown) {
+    if (!isTransient(thrown)) throw thrown;
+    console.warn('[setTimelineFollowupState] transient throw — retrying after 400ms', thrown);
+    firstResult = { error: thrown };
+  }
+  if (!firstResult.error) return;
+  if (!isTransient(firstResult.error)) throw firstResult.error;
+  console.warn('[setTimelineFollowupState] transient error — retrying after 400ms', firstResult.error);
+
+  // (b) Retry once. Anything that fails the second time is a real failure.
+  await new Promise(r => setTimeout(r, 400));
+  const { error: retryError } = await supabase.rpc('set_timeline_followup_state', args);
+  if (retryError) throw retryError;
 }
 
 // ============================================
