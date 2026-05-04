@@ -1902,6 +1902,7 @@ export type Database = {
           acceleration_until: string | null
           action_dismissed_at: string | null
           action_instructions: string | null
+          action_permanently_dismissed: boolean
           action_reason_code: string | null
           auto_created: boolean
           auto_nurture_eligible: boolean | null
@@ -1975,6 +1976,7 @@ export type Database = {
           acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
+          action_permanently_dismissed?: boolean
           action_reason_code?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
@@ -2048,6 +2050,7 @@ export type Database = {
           acceleration_until?: string | null
           action_dismissed_at?: string | null
           action_instructions?: string | null
+          action_permanently_dismissed?: boolean
           action_reason_code?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
@@ -3066,6 +3069,48 @@ export type Database = {
           },
         ]
       }
+      timeline_followup_state: {
+        Row: {
+          dismissed_at: string | null
+          snoozed_until: string | null
+          timeline_item_id: string
+          updated_at: string
+          updated_by_user_id: string | null
+          workspace_id: string
+        }
+        Insert: {
+          dismissed_at?: string | null
+          snoozed_until?: string | null
+          timeline_item_id: string
+          updated_at?: string
+          updated_by_user_id?: string | null
+          workspace_id: string
+        }
+        Update: {
+          dismissed_at?: string | null
+          snoozed_until?: string | null
+          timeline_item_id?: string
+          updated_at?: string
+          updated_by_user_id?: string | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "timeline_followup_state_timeline_item_id_fkey"
+            columns: ["timeline_item_id"]
+            isOneToOne: true
+            referencedRelation: "lead_timeline_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "timeline_followup_state_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       unmatched_meeting_summaries: {
         Row: {
           created_at: string
@@ -3769,6 +3814,16 @@ export type Database = {
       }
       set_lead_group_champion: {
         Args: { p_group_id: string; p_new_champion_lead_id: string }
+        Returns: undefined
+      }
+      set_timeline_followup_state: {
+        Args: {
+          p_clear_dismissed?: boolean
+          p_clear_snoozed?: boolean
+          p_dismissed_at?: string
+          p_snoozed_until?: string
+          p_timeline_item_id: string
+        }
         Returns: undefined
       }
     }
