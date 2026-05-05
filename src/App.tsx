@@ -17,6 +17,7 @@ import Dashboard from "./pages/Dashboard";
 import Inbox from "./pages/Inbox";
 import Leads from "./pages/Leads";
 import LeadDetail from "./pages/LeadDetail";
+import ContactDetail from "./pages/ContactDetail";
 import Knowledge from "./pages/Knowledge";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
@@ -68,6 +69,7 @@ const App = () => (
                 <Route path="leads" element={<Leads />} />
                 <Route path="leads/:id" element={<LeadDetail />} />
                 <Route path="lead/:id" element={<LeadDetail />} />
+                <Route path="contacts/:id" element={<ContactDetail />} />
                 <Route path="knowledge" element={<Knowledge />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="analytics" element={<ManagerAnalytics />} />

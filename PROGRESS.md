@@ -32,7 +32,8 @@ PRs:
 - ✅ PR 2.1 — Data layer: `lead_groups`, `leads.group_id`, `group_partners`. RLS, integrity triggers (deferred champion-membership, auto-cleanup empty groups), RPC helpers `create_lead_group_with_champion` and `set_lead_group_champion`. Migration: `20260503140000_lead_groups_and_partners.sql`.
 - ✅ PR 2.2 — Stakeholders + Partners panels on lead detail page. New sidebar component `StakeholdersPartnersPanel` with two sections, "+ Add" dialogs (`AddStakeholderDialog`, `AddPartnerDialog`), champion-swap and remove actions. Query helpers in `src/lib/leadGroupQueries.ts`. Wired into `LeadDetail.tsx` sidebar.
 - ⬜ PR 2.4 — Per-email reply targeting. The "respond to Liza when Ed's email is most recent" scenario. Per-row Reply buttons in `TimelineTab` + composer banner showing reply target with switch dropdown + AI prompt builder consumes `reply_to_interaction_id`.
-- ⬜ PR 2.3 — Contact detail page (`/app/contacts/:id`). Cross-deal partner view — click a partner to see all groups they're on. Currently the partner click-through 404s — non-blocking but should follow PR 2.4.
+- ✅ PR 2.3 — Contact detail page (`/app/contacts/:id`). Cross-deal partner view — main column lists every group/deal the contact is linked to (clickable to the champion's lead detail page); side panel has editable name + company with auto-save on blur, read-only email joined from `contact_identities`. RLS-aware: fields render disabled with tooltip when the user is neither the assigned rep nor a workspace admin. Resolves the `StakeholdersPartnersPanel` 404. New file: `src/pages/ContactDetail.tsx`. Query helpers added to `src/lib/leadGroupQueries.ts`.
+- ⬜ Deferred — make contact email editable on the contact detail page (multi-table write to `contact_identities` with UNIQUE collision handling).
 
 ## Email-send safety hardening
 
