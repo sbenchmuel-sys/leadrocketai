@@ -29,9 +29,11 @@ export function LeadDetectionCard() {
     let active = true;
     const load = async () => {
       setLoading(true);
+
+      // Load lookback days (established column — hard error if missing)
       const { data, error } = await supabase
         .from("workspaces")
-        .select("lookback_seed_window_days, allow_personal_domains" as any)
+        .select("lookback_seed_window_days" as any)
         .eq("id", workspaceId)
         .maybeSingle();
       if (!active) return;
@@ -41,8 +43,18 @@ export function LeadDetectionCard() {
         const v = Number((data as any)?.lookback_seed_window_days ?? DEFAULT_DAYS);
         setDays(v);
         setInitialDays(v);
-        setAllowPersonalDomains((data as any)?.allow_personal_domains ?? false);
       }
+
+      // Load allow_personal_domains separately — silently defaults to false if
+      // the migration hasn't been applied yet (column doesn't exist).
+      const { data: pd } = await supabase
+        .from("workspaces")
+        .select("allow_personal_domains" as any)
+        .eq("id", workspaceId)
+        .maybeSingle();
+      if (!active) return;
+      setAllowPersonalDomains((pd as any)?.allow_personal_domains ?? false);
+
       setLoading(false);
     };
     load();
