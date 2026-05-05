@@ -3629,6 +3629,7 @@ export type Database = {
       }
       workspaces: {
         Row: {
+          allow_personal_domains: boolean
           billing_email: string | null
           created_at: string
           default_sms_number: string | null
@@ -3641,6 +3642,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          allow_personal_domains?: boolean
           billing_email?: string | null
           created_at?: string
           default_sms_number?: string | null
@@ -3653,6 +3655,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          allow_personal_domains?: boolean
           billing_email?: string | null
           created_at?: string
           default_sms_number?: string | null
