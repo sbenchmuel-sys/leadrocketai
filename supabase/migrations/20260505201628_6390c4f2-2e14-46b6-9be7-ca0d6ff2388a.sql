@@ -1,0 +1,1 @@
+ALTER TABLE public.workspaces ADD COLUMN IF NOT EXISTS allow_personal_domains BOOLEAN NOT NULL DEFAULT FALSE;
