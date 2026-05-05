@@ -100,6 +100,9 @@ export interface WorkspaceFilterContext {
   dismissedDomains: Set<string>;
   // leads.email (lowercase normalized) — already-known prospects
   existingLeadEmails: Set<string>;
+  // When true, personal email domains (gmail.com, yahoo.com, etc.) are NOT filtered.
+  // Useful for markets where prospects use personal email for business (SE Asia, India).
+  allowPersonalDomains: boolean;
 }
 
 export function applyOutboundFilter(
@@ -111,7 +114,7 @@ export function applyOutboundFilter(
   if (ctx.internalDomains.has(domain)) return { pass: false, reason: 'internal_domain' };
   if (ctx.dismissedEmails.has(email)) return { pass: false, reason: 'dismissed_email' };
   if (ctx.dismissedDomains.has(domain)) return { pass: false, reason: 'dismissed_domain' };
-  if (isPersonalDomain(domain)) return { pass: false, reason: 'personal_domain' };
+  if (!ctx.allowPersonalDomains && isPersonalDomain(domain)) return { pass: false, reason: 'personal_domain' };
   if (isRoleAddress(email)) return { pass: false, reason: 'role_address' };
   if (ctx.existingLeadEmails.has(email)) return { pass: false, reason: 'existing_lead' };
   return { pass: true, reason: 'pass' };

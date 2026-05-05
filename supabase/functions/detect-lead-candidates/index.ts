@@ -117,6 +117,7 @@ async function loadFilterContext(
     { data: dismissedEmailRows },
     { data: dismissedDomainRows },
     { data: leadRows },
+    { data: workspaceSettings },
   ] = await Promise.all([
     // Collect email addresses of all workspace members via their connected Gmail accounts
     serviceSupabase
@@ -157,6 +158,12 @@ async function loadFilterContext(
       .select("email")
       .eq("workspace_id", workspaceId)
       .not("email", "is", null),
+    // Workspace-level filter settings
+    serviceSupabase
+      .from("workspaces")
+      .select("allow_personal_domains")
+      .eq("id", workspaceId)
+      .maybeSingle(),
   ]);
 
   const memberEmails = new Set<string>();
@@ -177,7 +184,7 @@ async function loadFilterContext(
     if (r.email) existingLeadEmails.add(normalizeEmail(r.email));
   }
 
-  return { workspaceId, memberEmails, internalDomains, dismissedEmails, dismissedDomains, existingLeadEmails };
+  return { workspaceId, memberEmails, internalDomains, dismissedEmails, dismissedDomains, existingLeadEmails, allowPersonalDomains: (workspaceSettings as any)?.allow_personal_domains ?? false };
 }
 
 // ── Candidate upsert ─────────────────────────────────────────

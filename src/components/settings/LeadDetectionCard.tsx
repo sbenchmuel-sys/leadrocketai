@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { ListEditor } from "@/components/leads/DismissedListsDialog";
@@ -17,9 +18,11 @@ const DEFAULT_DAYS = 30;
 export function LeadDetectionCard() {
   const { workspaceId } = useWorkspace();
   const [days, setDays] = useState<number>(DEFAULT_DAYS);
-  const [initial, setInitial] = useState<number>(DEFAULT_DAYS);
+  const [initialDays, setInitialDays] = useState<number>(DEFAULT_DAYS);
+  const [allowPersonalDomains, setAllowPersonalDomains] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingToggle, setSavingToggle] = useState(false);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -28,7 +31,7 @@ export function LeadDetectionCard() {
       setLoading(true);
       const { data, error } = await supabase
         .from("workspaces")
-        .select("lookback_seed_window_days" as any)
+        .select("lookback_seed_window_days, allow_personal_domains" as any)
         .eq("id", workspaceId)
         .maybeSingle();
       if (!active) return;
@@ -37,39 +40,56 @@ export function LeadDetectionCard() {
       } else {
         const v = Number((data as any)?.lookback_seed_window_days ?? DEFAULT_DAYS);
         setDays(v);
-        setInitial(v);
+        setInitialDays(v);
+        setAllowPersonalDomains((data as any)?.allow_personal_domains ?? false);
       }
       setLoading(false);
     };
     load();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [workspaceId]);
 
-  const handleSave = async () => {
+  const handleSaveDays = async () => {
     if (!workspaceId) return;
     if (!Number.isInteger(days) || days < MIN_DAYS || days > MAX_DAYS) {
       toast.error(`Enter a whole number between ${MIN_DAYS} and ${MAX_DAYS}`);
       return;
     }
     setSaving(true);
-    const prev = initial;
-    setInitial(days); // optimistic
+    const prev = initialDays;
+    setInitialDays(days);
     const { error } = await supabase
       .from("workspaces")
       .update({ lookback_seed_window_days: days } as any)
       .eq("id", workspaceId);
     setSaving(false);
     if (error) {
-      setInitial(prev);
+      setInitialDays(prev);
       toast.error(error.message || "Failed to save");
       return;
     }
     toast.success("Saved");
   };
 
-  const dirty = days !== initial;
+  const handleTogglePersonalDomains = async (checked: boolean) => {
+    if (!workspaceId) return;
+    setSavingToggle(true);
+    const prev = allowPersonalDomains;
+    setAllowPersonalDomains(checked); // optimistic
+    const { error } = await supabase
+      .from("workspaces")
+      .update({ allow_personal_domains: checked } as any)
+      .eq("id", workspaceId);
+    setSavingToggle(false);
+    if (error) {
+      setAllowPersonalDomains(prev);
+      toast.error(error.message || "Failed to save");
+      return;
+    }
+    toast.success(checked ? "Personal domains enabled" : "Personal domains disabled");
+  };
+
+  const dirty = days !== initialDays;
 
   return (
     <Card>
@@ -92,13 +112,35 @@ export function LeadDetectionCard() {
               disabled={loading || saving}
               onChange={(e) => setDays(parseInt(e.target.value, 10) || 0)}
             />
-            <Button onClick={handleSave} disabled={!dirty || saving || loading}>
+            <Button onClick={handleSaveDays} disabled={!dirty || saving || loading}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
             When you connect a new mailbox, we'll scan this many days back to seed your Pending Leads.
           </p>
+        </div>
+
+        <Separator />
+
+        <div className="flex items-center justify-between max-w-sm">
+          <div className="space-y-0.5">
+            <Label>Allow personal email domains</Label>
+            <p className="text-sm text-muted-foreground">
+              Surface prospects using Gmail, Yahoo, Outlook, etc. as their work email.
+              Useful for markets where personal email is common for business (SE Asia, India, startups).
+            </p>
+          </div>
+          {savingToggle ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-4" />
+          ) : (
+            <Switch
+              checked={allowPersonalDomains}
+              disabled={loading}
+              onCheckedChange={handleTogglePersonalDomains}
+              className="ml-4"
+            />
+          )}
         </div>
 
         <Separator />

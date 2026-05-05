@@ -124,6 +124,7 @@ async function loadFilterContext(
     { data: dismissedEmailRows },
     { data: dismissedDomainRows },
     { data: leadRows },
+    { data: workspaceSettings },
   ] = await Promise.all([
     serviceSupabase
       .from("workspace_members")
@@ -158,6 +159,11 @@ async function loadFilterContext(
       .select("email")
       .eq("workspace_id", workspaceId)
       .not("email", "is", null),
+    serviceSupabase
+      .from("workspaces")
+      .select("allow_personal_domains")
+      .eq("id", workspaceId)
+      .maybeSingle(),
   ]);
 
   const memberEmails = new Set<string>();
@@ -178,7 +184,7 @@ async function loadFilterContext(
     if (r.email) existingLeadEmails.add(normalizeEmail(r.email));
   }
 
-  return { workspaceId, memberEmails, internalDomains, dismissedEmails, dismissedDomains, existingLeadEmails };
+  return { workspaceId, memberEmails, internalDomains, dismissedEmails, dismissedDomains, existingLeadEmails, allowPersonalDomains: (workspaceSettings as any)?.allow_personal_domains ?? false };
 }
 
 // ── Candidate upsert (lookback always inserts pending; never updates existing rows) ──
