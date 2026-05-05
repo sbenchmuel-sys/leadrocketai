@@ -117,11 +117,59 @@ export default function Dashboard() {
   }, []);
 
   const leads = metrics?.leads ?? [];
+  const championByGroup = metrics?.championByGroup ?? {};
+
+  // Stakeholder = lead in a group whose champion is someone else.
+  const isStakeholder = useCallback(
+    (l: EnrichedLead) => {
+      if (!l.group_id) return false;
+      const championId = championByGroup[l.group_id];
+      return !!championId && championId !== l.id;
+    },
+    [championByGroup],
+  );
+
+  // Unanswered inbound = has an inbound timestamp that is strictly after the
+  // last outbound. Null inbound is treated as "not unanswered" per spec.
+  const hasUnansweredInbound = useCallback((l: EnrichedLead) => {
+    if (!l.last_inbound_at) return false;
+    const inbound = new Date(l.last_inbound_at).getTime();
+    const outbound = l.last_outbound_at
+      ? new Date(l.last_outbound_at).getTime()
+      : 0;
+    return inbound > outbound;
+  }, []);
 
   const baseFilteredLeads = useMemo(() => {
-    if (revenueStateFilter === "active") return leads;
-    return leads.filter((l) => l.revenueState === revenueStateFilter);
-  }, [leads, revenueStateFilter]);
+    if (revenueStateFilter !== "active") {
+      return leads.filter((l) => l.revenueState === revenueStateFilter);
+    }
+    // Active tab: residual bucket only (Change 1) AND hide non-action
+    // stakeholders unless they have unanswered inbound (Change 2).
+    return leads.filter((l) => {
+      if (l.revenueState !== "active") return false;
+      if (isStakeholder(l) && !hasUnansweredInbound(l)) return false;
+      return true;
+    });
+  }, [leads, revenueStateFilter, isStakeholder, hasUnansweredInbound]);
+
+  // Change 3: per-champion summary of stakeholders with unanswered inbound.
+  // Computed from all open leads so a hidden stakeholder still surfaces as a
+  // badge on its champion's card.
+  const stakeholderRepliesByChampion = useMemo(() => {
+    const map = new Map<string, EnrichedLead[]>();
+    if (revenueStateFilter !== "active") return map;
+    for (const l of leads) {
+      if (!l.group_id) continue;
+      const championId = championByGroup[l.group_id];
+      if (!championId || championId === l.id) continue;
+      if (!hasUnansweredInbound(l)) continue;
+      const arr = map.get(championId) ?? [];
+      arr.push(l);
+      map.set(championId, arr);
+    }
+    return map;
+  }, [leads, championByGroup, revenueStateFilter, hasUnansweredInbound]);
 
   const filterableTab = isFilterableTab(revenueStateFilter);
 
@@ -204,7 +252,7 @@ export default function Dashboard() {
           <AIInsightPanel leads={filteredLeads} />
           <div className="min-h-[60vh]">
             {viewMode === "queue" ? (
-              <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
+              <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} stakeholderRepliesByChampion={stakeholderRepliesByChampion} />
             ) : (
               <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} filters={tabFilters} onFiltersChange={handleFiltersChange} showColumnFilters={filterableTab} />
             )}
@@ -222,7 +270,7 @@ export default function Dashboard() {
           </div>
           <AIInsightPanel leads={filteredLeads} />
           {viewMode === "queue" ? (
-            <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} />
+            <QueueView leads={queueLeads} isLoading={isLoading} navigate={navigate} stakeholderRepliesByChampion={stakeholderRepliesByChampion} />
           ) : (
             <LeadTable leads={filteredLeads} isLoading={isLoading} onLeadUpdated={loadData} revenueStateFilter={revenueStateFilter} filters={tabFilters} onFiltersChange={handleFiltersChange} showColumnFilters={filterableTab} />
           )}
@@ -234,14 +282,24 @@ export default function Dashboard() {
 
 // ── Queue sub-component ────────────────────────────────────────────────
 
+function firstNameOrFallback(name: string | null | undefined): string {
+  if (!name) return "Stakeholder";
+  const trimmed = name.trim();
+  if (!trimmed) return "Stakeholder";
+  const space = trimmed.indexOf(" ");
+  return space === -1 ? trimmed : trimmed.slice(0, space);
+}
+
 function QueueView({
   leads,
   isLoading,
   navigate,
+  stakeholderRepliesByChampion,
 }: {
   leads: EnrichedLead[];
   isLoading: boolean;
   navigate: ReturnType<typeof useNavigate>;
+  stakeholderRepliesByChampion: Map<string, EnrichedLead[]>;
 }) {
   if (isLoading) {
     return (
@@ -261,17 +319,28 @@ function QueueView({
 
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      {leads.map((lead) => (
-        <LeadCard
-          key={lead.id}
-          lead={lead}
-          context="dashboard"
-          primaryAction={{
-            label: lead.needs_action ? "Handle now" : "Open",
-            onClick: () => navigate(`/app/lead/${lead.id}`),
-          }}
-        />
-      ))}
+      {leads.map((lead) => {
+        const replies = stakeholderRepliesByChampion.get(lead.id);
+        const stakeholderReplies = replies && replies.length > 0
+          ? {
+              count: replies.length,
+              firstName: firstNameOrFallback(replies[0].name),
+              fallbackName: replies[0].name ?? "Stakeholder",
+            }
+          : undefined;
+        return (
+          <LeadCard
+            key={lead.id}
+            lead={lead}
+            context="dashboard"
+            stakeholderReplies={stakeholderReplies}
+            primaryAction={{
+              label: lead.needs_action ? "Handle now" : "Open",
+              onClick: () => navigate(`/app/lead/${lead.id}`),
+            }}
+          />
+        );
+      })}
     </div>
   );
 }

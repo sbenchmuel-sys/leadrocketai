@@ -50,6 +50,9 @@ export interface DashboardMetrics {
   staleLeads: EnrichedLead[];
   nurtureCandidates: EnrichedLead[];
   warmingUpLeads: EnrichedLead[];
+
+  /** group_id → champion lead id, for stakeholder visibility logic. Empty in demo mode. */
+  championByGroup: Record<string, string>;
 }
 
 // ============================================
@@ -64,7 +67,7 @@ const DASHBOARD_LEAD_COLUMNS = `
   nurture_cadence, auto_nurture_eligible, source_type, motion,
   nurture_mode, nurture_status, eligible_at,
   has_future_meeting, milestones_json, risks_json, ooo_until, action_dismissed_at,
-  action_permanently_dismissed
+  action_permanently_dismissed, group_id
 `;
 
 async function fetchLeads(): Promise<EnrichedLead[]> {
@@ -85,6 +88,28 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   }
 
   return (data || []).map(enrichLead);
+}
+
+async function fetchChampionByGroup(
+  groupIds: string[],
+): Promise<Record<string, string>> {
+  if (groupIds.length === 0) return {};
+
+  const { data, error } = await supabase
+    .from("lead_groups")
+    .select("id, champion_lead_id")
+    .in("id", groupIds);
+
+  if (error) {
+    console.error("[dashboardMetrics] lead_groups fetch error:", error);
+    return {};
+  }
+
+  const map: Record<string, string> = {};
+  for (const row of data || []) {
+    if (row.champion_lead_id) map[row.id] = row.champion_lead_id;
+  }
+  return map;
 }
 
 // ============================================
@@ -253,6 +278,7 @@ function buildDemoMetrics(): DashboardMetrics {
     staleLeads: [],
     nurtureCandidates: [],
     warmingUpLeads: leads.filter(l => l.revenueState === "heating_up"),
+    championByGroup: {},
   };
 }
 
@@ -274,6 +300,15 @@ export async function getDashboardMetrics(
   }
 
   const leads = await fetchLeads();
+
+  const groupIds = Array.from(
+    new Set(
+      leads
+        .map((l) => l.group_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  );
+  const championByGroup = await fetchChampionByGroup(groupIds);
 
   const staleLeads = deriveStaleLeads(leads);
   const nurtureCandidates = deriveNurtureCandidates(leads);
@@ -303,8 +338,10 @@ export async function getDashboardMetrics(
     revenueStateCounts[state]++;
   }
 
-  // "active" count = all open leads (not a specific state)
-  revenueStateCounts.active = openLeads.length;
+  // "active" count = leads in the residual bucket only (matches tab filter).
+  // Stakeholder visibility is a display-layer concern and is intentionally NOT
+  // subtracted here — the pill reflects the data model bucket count.
+  revenueStateCounts.active = openLeads.filter((l) => l.revenueState === "active").length;
 
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,
@@ -319,6 +356,7 @@ export async function getDashboardMetrics(
     staleLeads,
     nurtureCandidates,
     warmingUpLeads,
+    championByGroup,
   };
 }
 

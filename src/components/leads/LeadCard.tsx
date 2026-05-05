@@ -23,6 +23,12 @@ interface LeadCardProps {
   primaryAction?: { label: string; onClick: () => void };
   secondaryActions?: Array<{ label: string; onClick: () => void }>;
   context?: "dashboard" | "list" | "inbox";
+  /** Surfaced on champion cards in the Active tab when grouped stakeholders have unanswered inbound. */
+  stakeholderReplies?: {
+    count: number;
+    firstName: string;
+    fallbackName: string;
+  };
 }
 
 // ── Stage pill colour mapping (semantic tokens) ────────────────────────
@@ -39,12 +45,18 @@ const STAGE_VARIANT: Record<DealStage, string> = {
 
 // ── Component ──────────────────────────────────────────────────────────
 
-export function LeadCard({ lead, primaryAction, secondaryActions, context = "list" }: LeadCardProps) {
+export function LeadCard({ lead, primaryAction, secondaryActions, context = "list", stakeholderReplies }: LeadCardProps) {
   const navigate = useNavigate();
   const stageLabel = STAGE_LABELS[lead.stage] ?? lead.stage;
   const motionLabel = MOTION_LABELS[lead.motion as Motion] ?? lead.motion;
   const routed = routeLeadAction(lead);
   const actionLine = lead.next_action_label || routed.label;
+
+  const stakeholderRepliesLabel = stakeholderReplies
+    ? stakeholderReplies.count === 1
+      ? `${stakeholderReplies.firstName || stakeholderReplies.fallbackName} replied`
+      : `${stakeholderReplies.count} stakeholders replied`
+    : null;
 
   const lastActivity = lead.last_activity_at
     ? formatDistanceToNow(new Date(lead.last_activity_at), { addSuffix: true })
@@ -121,6 +133,15 @@ export function LeadCard({ lead, primaryAction, secondaryActions, context = "lis
           <span className="text-[10px] px-1.5 py-0 h-4 shrink-0 inline-flex items-center rounded-full border border-border">
             {motionLabel}
           </span>
+          {stakeholderRepliesLabel && (
+            <Badge
+              variant="secondary"
+              className="text-[10px] px-1.5 py-0 h-4 shrink-0 font-medium"
+              title={`${stakeholderReplies!.count} stakeholder${stakeholderReplies!.count === 1 ? "" : "s"} in this group ${stakeholderReplies!.count === 1 ? "has" : "have"} unanswered inbound`}
+            >
+              {stakeholderRepliesLabel}
+            </Badge>
+          )}
         </div>
 
         {primaryAction && (
