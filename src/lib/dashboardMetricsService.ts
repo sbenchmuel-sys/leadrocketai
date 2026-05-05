@@ -338,8 +338,10 @@ export async function getDashboardMetrics(
     revenueStateCounts[state]++;
   }
 
-  // "active" count = all open leads (not a specific state)
-  revenueStateCounts.active = openLeads.length;
+  // "active" count = leads in the residual bucket only (matches tab filter).
+  // Stakeholder visibility is a display-layer concern and is intentionally NOT
+  // subtracted here — the pill reflects the data model bucket count.
+  revenueStateCounts.active = openLeads.filter((l) => l.revenueState === "active").length;
 
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,
