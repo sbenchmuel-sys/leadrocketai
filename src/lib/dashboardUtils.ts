@@ -211,22 +211,31 @@ export function classifyRevenueState(
   //     suppress action_required until syncEngine clears it on a fresh inbound. ---
   const isPermanentlyDismissed = (lead as any).action_permanently_dismissed === true;
 
+  // --- RECENT-OUTBOUND GATE: if the user just sent an outbound (within 3 days)
+  //     and no later inbound has arrived, suppress action_required so the dashboard
+  //     self-corrects between backend recompute cycles. ---
+  const lastOutboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+  const lastInboundTs = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const recentOutboundWithoutReply =
+    lastOutboundTs > 0 &&
+    Date.now() - lastOutboundTs < THREE_DAYS_MS &&
+    lastInboundTs <= lastOutboundTs;
+
   // --- 1. ACTION REQUIRED ---
-  // Skip action_required escalation for OOO, snoozed, or permanently-dismissed leads
-  if (!isOOO && !isSnoozed && !isPermanentlyDismissed) {
+  // Skip action_required escalation for OOO, snoozed, permanently-dismissed,
+  // or leads we just contacted (recent outbound, no later inbound).
+  if (!isOOO && !isSnoozed && !isPermanentlyDismissed && !recentOutboundWithoutReply) {
     if (lead.needs_action) return "action_required";
-    // Unreplied inbound (has inbound but last outbound is before last inbound)
-    // BUT suppress if a future meeting is already set — the meeting IS the response
+    // Unreplied inbound: explicit check that inbound is strictly after outbound.
+    // Suppress if a future meeting is already set — the meeting IS the response.
     if (lead.last_inbound_at && !lead.has_future_meeting) {
-      const inboundTs = new Date(lead.last_inbound_at).getTime();
-      const outboundTs = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
-      if (inboundTs > outboundTs) return "action_required";
+      if (lastInboundTs > lastOutboundTs) return "action_required";
     }
-    // Meeting completed with no follow-up sent (post_meeting stage, no outbound after meeting)
+    // Meeting completed with no follow-up sent: explicit inbound-after-outbound,
+    // not a heuristic against last_activity_at (which the user's own send updates).
     if (lead.stage === "post_meeting" && lead.hasMeeting) {
-      const lastActivity = new Date(lead.last_activity_at).getTime();
-      const lastOutbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
-      if (lastOutbound < lastActivity) return "action_required";
+      if (lastInboundTs > lastOutboundTs) return "action_required";
     }
   }
 
