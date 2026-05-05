@@ -199,18 +199,20 @@ async function upsertCandidate(serviceSupabase: any, {
 }): Promise<"inserted" | "updated" | "skipped"> {
   const normalized = normalizeEmail(contactEmail);
 
-  // Check for an existing non-approved candidate for this email in this workspace
+  // Check for any existing candidate for this email in this workspace (all statuses)
   const { data: existing } = await serviceSupabase
     .from("lead_candidates")
     .select("id, status, resolved_at, email_count")
     .eq("workspace_id", workspaceId)
     .eq("contact_email", normalized)
-    .neq("status", "approved")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (existing) {
+    // Already a lead — never re-surface regardless of how old the approval is
+    if (existing.status === "approved") return "skipped";
+
     if (existing.status === "pending" || existing.status === "snoozed") {
       await serviceSupabase
         .from("lead_candidates")

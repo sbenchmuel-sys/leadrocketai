@@ -196,14 +196,14 @@ async function upsertLookbackCandidate(serviceSupabase: any, args: {
 }): Promise<"inserted" | "skipped"> {
   const normalized = normalizeEmail(args.contactEmail);
 
-  // Skip if any non-approved candidate already exists (pending/snoozed/dismissed)
-  // Lookback is one-shot — we never bump email_count or fight detect-lead-candidates.
+  // Skip if any candidate already exists — including approved.
+  // Lookback is one-shot: we never bump email_count, re-surface approved leads,
+  // or compete with detect-lead-candidates on pending/snoozed/dismissed rows.
   const { data: existing } = await serviceSupabase
     .from("lead_candidates")
     .select("id")
     .eq("workspace_id", args.workspaceId)
     .eq("contact_email", normalized)
-    .neq("status", "approved")
     .limit(1)
     .maybeSingle();
 
