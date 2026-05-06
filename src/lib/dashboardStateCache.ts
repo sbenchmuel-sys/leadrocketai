@@ -37,6 +37,7 @@ const DEFAULT_VIEW_MODE: Record<RevenueState, ViewMode> = {
   action_required: "queue",
   heating_up: "queue",
   long_cycle: "table",
+  nurture: "queue",
   automation: "table",
 };
 

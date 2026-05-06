@@ -173,26 +173,29 @@ const STAGE_PROGRESSION_ORDER: DealStage[] = ["new", "contacted", "engaged", "po
 // REVENUE CONTROL STATES
 // ============================================
 
-export type RevenueState = "action_required" | "heating_up" | "long_cycle" | "active" | "automation";
+export type RevenueState = "action_required" | "heating_up" | "long_cycle" | "nurture" | "active" | "automation";
 
 export const REVENUE_STATE_LABELS: Record<RevenueState, string> = {
   action_required: "Action Required",
   heating_up: "Heating Up",
   long_cycle: "Long Cycle",
+  nurture: "Nurture",
   active: "Active",
   automation: "Automation",
 };
 
 /**
  * Classify a lead into exactly ONE Revenue State.
- * Priority order (highest → lowest): Action Required > Heating Up > Long Cycle > Active.
+ * Priority order (highest → lowest):
+ *   Automation > Action Required > Heating Up > Long Cycle > Nurture > Active.
  *
  * Must be called AFTER enrichment so hasMeeting / stage / needs_action are populated.
- * warmingUpIds is a pre-computed set from deriveWarmingUpLeads for consistency.
+ * warmingUpIds and nurtureIds are pre-computed sets from the metrics service.
  */
 export function classifyRevenueState(
   lead: EnrichedLead,
-  warmingUpIds: Set<string>
+  warmingUpIds: Set<string>,
+  nurtureIds: Set<string>
 ): RevenueState {
   // --- OOO GATE: if lead is currently out of office, suppress action_required escalation ---
   const oooUntil = (lead as any).ooo_until as string | null;
@@ -243,23 +246,25 @@ export function classifyRevenueState(
   if (warmingUpIds.has(lead.id)) return "heating_up";
 
   // --- 3. LONG CYCLE ---
-  const now = new Date();
-  const createdDaysAgo = lead.created_at
-    ? differenceInDays(now, parseISO(lead.created_at))
-    : 0;
-  const isLongCycle =
-    createdDaysAgo > 60 &&
-    lead.stage !== "closed_won" &&
-    lead.stage !== "closed_lost";
-  // Long cycle only if genuinely inactive (>14 days silence), regardless of motion
-  if (isLongCycle) {
-    const lastActDays = lead.last_activity_at
-      ? differenceInDays(now, parseISO(lead.last_activity_at))
-      : 999;
-    if (lastActDays > 14) return "long_cycle";
+  // PR 3.2 redefinition: stale based on COALESCE(last_activity_at, created_at).
+  // Falls back to created_at so a brand-new lead with no activity yet stays
+  // in Active rather than getting flagged as long-cycle on day one.
+  const stageOpen =
+    lead.stage !== "closed_won" && lead.stage !== "closed_lost";
+  if (stageOpen) {
+    const reference = lead.last_activity_at ?? lead.created_at;
+    if (reference) {
+      const daysSince = differenceInDays(new Date(), parseISO(reference));
+      if (daysSince > 60) return "long_cycle";
+    }
   }
 
-  // --- 4. ACTIVE (default) ---
+  // --- 4. NURTURE ---
+  // Pre-computed by deriveNurtureCandidates() in dashboardMetricsService —
+  // criteria are owned there, the classifier just consumes the set.
+  if (nurtureIds.has(lead.id)) return "nurture";
+
+  // --- 5. ACTIVE (default) ---
   return "active";
 }
 
