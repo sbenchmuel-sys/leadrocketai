@@ -141,24 +141,22 @@ export default function Dashboard() {
   }, []);
 
   const baseFilteredLeads = useMemo(() => {
-    if (revenueStateFilter !== "active") {
-      return leads.filter((l) => l.revenueState === revenueStateFilter);
-    }
-    // Active tab: residual bucket only (Change 1) AND hide non-action
-    // stakeholders unless they have unanswered inbound (Change 2).
+    // Tab filter + stakeholder hiding (PR 3.2: hiding now applies to every tab,
+    // not just Active). Hide non-champion stakeholders unless they have
+    // unanswered inbound — they remain represented by the badge on the champion
+    // card.
     return leads.filter((l) => {
-      if (l.revenueState !== "active") return false;
+      if (l.revenueState !== revenueStateFilter) return false;
       if (isStakeholder(l) && !hasUnansweredInbound(l)) return false;
       return true;
     });
   }, [leads, revenueStateFilter, isStakeholder, hasUnansweredInbound]);
 
-  // Change 3: per-champion summary of stakeholders with unanswered inbound.
-  // Computed from all open leads so a hidden stakeholder still surfaces as a
-  // badge on its champion's card.
+  // Per-champion summary of stakeholders with unanswered inbound. Computed from
+  // all open leads (PR 3.2: badge surfaces on every tab, so we no longer gate
+  // this on revenueStateFilter).
   const stakeholderRepliesByChampion = useMemo(() => {
     const map = new Map<string, EnrichedLead[]>();
-    if (revenueStateFilter !== "active") return map;
     for (const l of leads) {
       if (!l.group_id) continue;
       const championId = championByGroup[l.group_id];
@@ -169,7 +167,7 @@ export default function Dashboard() {
       map.set(championId, arr);
     }
     return map;
-  }, [leads, championByGroup, revenueStateFilter, hasUnansweredInbound]);
+  }, [leads, championByGroup, hasUnansweredInbound]);
 
   const filterableTab = isFilterableTab(revenueStateFilter);
 
@@ -186,6 +184,7 @@ export default function Dashboard() {
       action_required: 0,
       heating_up: 0,
       long_cycle: 0,
+      nurture: 0,
       automation: 0,
     };
   }, [metrics?.revenueStateCounts]);

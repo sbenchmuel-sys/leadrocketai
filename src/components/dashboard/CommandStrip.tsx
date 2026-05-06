@@ -14,6 +14,7 @@ const segments: { key: DashboardFilter; label: string }[] = [
   { key: "action_required", label: "Action Required" },
   { key: "heating_up", label: "Heating Up" },
   { key: "long_cycle", label: "Long Cycle" },
+  { key: "nurture", label: "Nurture" },
   { key: "automation", label: "Automation" },
 ];
 

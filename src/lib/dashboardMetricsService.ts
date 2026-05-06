@@ -259,7 +259,7 @@ function buildDemoMetrics(): DashboardMetrics {
   const openLeads = leads.filter(l => l.stage !== "closed_won" && l.stage !== "closed_lost");
 
   const revenueStateCounts: Record<RevenueState, number> = {
-    active: 0, action_required: 0, heating_up: 0, long_cycle: 0, automation: 0,
+    active: 0, action_required: 0, heating_up: 0, long_cycle: 0, nurture: 0, automation: 0,
   };
   for (const lead of leads) {
     if (lead.revenueState) revenueStateCounts[lead.revenueState]++;
@@ -314,6 +314,7 @@ export async function getDashboardMetrics(
   const nurtureCandidates = deriveNurtureCandidates(leads);
   const warmingUpLeads = deriveWarmingUpLeads(leads);
   const warmingUpIds = new Set(warmingUpLeads.map((l) => l.id));
+  const nurtureIds = new Set(nurtureCandidates.map((l) => l.id));
 
   // Classify every lead into a Revenue State and stamp it
   const openLeads = leads.filter(
@@ -325,6 +326,7 @@ export async function getDashboardMetrics(
     action_required: 0,
     heating_up: 0,
     long_cycle: 0,
+    nurture: 0,
     automation: 0,
   };
 
@@ -333,7 +335,7 @@ export async function getDashboardMetrics(
       lead.revenueState = undefined;
       continue;
     }
-    const state = classifyRevenueState(lead, warmingUpIds);
+    const state = classifyRevenueState(lead, warmingUpIds, nurtureIds);
     lead.revenueState = state;
     revenueStateCounts[state]++;
   }
@@ -349,7 +351,11 @@ export async function getDashboardMetrics(
     automation_running_count: deriveAutomationRunningCount(leads),
     momentum_score: deriveMomentumScore(leads),
     stale_count: staleLeads.length,
-    nurture_ready_count: nurtureCandidates.length,
+    // Aligned to the new Nurture bucket count so the KPI matches the tab pill.
+    // deriveNurtureCandidates() can return more leads than the bucket (e.g. if a
+    // candidate is also action_required or long_cycle, the higher-priority bucket
+    // wins) — we report what's actually surfaced on the Nurture tab.
+    nurture_ready_count: revenueStateCounts.nurture,
     warming_up_count: warmingUpLeads.length,
     revenueStateCounts,
     leads,
