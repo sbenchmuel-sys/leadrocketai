@@ -38,7 +38,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 2 * HOUR).toISOString(),
       last_inbound_at: new Date(Date.now() - 5 * DAY).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).not.toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 
   it("DOES return action_required when inbound arrives AFTER recent outbound", () => {
@@ -46,7 +46,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 6 * HOUR).toISOString(),
       last_inbound_at: new Date(Date.now() - 1 * HOUR).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).toBe("action_required");
   });
 
   it("DOES return action_required when outbound was >3 days ago and inbound exists", () => {
@@ -54,7 +54,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).toBe("action_required");
   });
 
   it("post_meeting + hasMeeting + recent outbound is NOT action_required (re-engagement scenario)", () => {
@@ -65,7 +65,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_inbound_at: new Date(Date.now() - 30 * DAY).toISOString(),
       last_activity_at: new Date(Date.now() - 4 * HOUR).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).not.toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 
   it("post_meeting becomes action_required only when inbound is after outbound", () => {
@@ -75,7 +75,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 5 * DAY).toISOString(),
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).toBe("action_required");
   });
 
   it("OOO gate suppresses action_required even with inbound", () => {
@@ -84,7 +84,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
     });
     (lead as any).ooo_until = new Date(Date.now() + 3 * DAY).toISOString();
-    expect(classifyRevenueState(lead, new Set())).not.toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 
   it("permanently dismissed suppresses action_required", () => {
@@ -93,7 +93,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
     });
     (lead as any).action_permanently_dismissed = true;
-    expect(classifyRevenueState(lead, new Set())).not.toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 
   it("automation takes priority over action_required", () => {
@@ -103,7 +103,7 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
     });
-    expect(classifyRevenueState(lead, new Set())).toBe("automation");
+    expect(classifyRevenueState(lead, new Set(), new Set())).toBe("automation");
   });
 
   it("future meeting suppresses unreplied-inbound action_required", () => {
@@ -112,6 +112,6 @@ describe("classifyRevenueState — recent outbound suppression", () => {
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
       has_future_meeting: true,
     });
-    expect(classifyRevenueState(lead, new Set())).not.toBe("action_required");
+    expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 });
