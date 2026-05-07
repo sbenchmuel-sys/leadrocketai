@@ -15,6 +15,21 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
+import { plainTextToHtml } from "../_shared/emailUtils.ts";
+
+// Detect whether `body` already contains HTML markup. If not, treat it as
+// plain text and convert via plainTextToHtml so Outlook (Graph contentType:HTML)
+// renders paragraphs and line breaks instead of collapsing whitespace into
+// one wall of text. Frontend `sendEmail` paths forward the composer's plain
+// textarea contents as `bodyHtml`, so this normalization is required.
+function ensureHtmlBody(body: string): string {
+  if (!body) return body;
+  // Heuristic: any well-formed tag means treat as HTML already.
+  if (/<\/?(p|br|div|html|body|span|a|table|ul|ol|li|h[1-6]|strong|em|hr)\b/i.test(body)) {
+    return body;
+  }
+  return plainTextToHtml(body);
+}
 
 function corsHeaders(origin: string): Record<string, string> {
   const allowed =
@@ -158,7 +173,8 @@ serve(async (req) => {
 
     // Parse body first (req.json() can only be called once)
     const body = await req.json();
-    const { mail_account_id, to, cc, subject, bodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+    const { mail_account_id, to, cc, subject, bodyHtml: rawBodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+    const bodyHtml = ensureHtmlBody(rawBodyHtml);
 
     // Normalize recipients: accept either legacy `to: string` or new `to: string[]`,
     // plus optional `cc: string[]`. The first To address remains the canonical
