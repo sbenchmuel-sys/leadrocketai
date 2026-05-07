@@ -173,7 +173,8 @@ serve(async (req) => {
 
     // Parse body first (req.json() can only be called once)
     const body = await req.json();
-    const { mail_account_id, to, cc, subject, bodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+    const { mail_account_id, to, cc, subject, bodyHtml: rawBodyHtml, threadId, leadId, draftId, skipStateUpdate, ownerUserId } = body;
+    const bodyHtml = ensureHtmlBody(rawBodyHtml);
 
     // Normalize recipients: accept either legacy `to: string` or new `to: string[]`,
     // plus optional `cc: string[]`. The first To address remains the canonical
