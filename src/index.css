@@ -4,10 +4,66 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Premium dark design system — all colors HSL */
+/* Premium design system — all colors HSL. Light is the default in :root, dark is opt-in via .dark */
 
 @layer base {
   :root {
+    /* Light theme — warm off-white background, white cards, blue-tinted neutrals */
+    --background: 220 30% 98%;
+    --foreground: 220 30% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 12%;
+
+    --primary: 217 85% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 239 75% 60%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 14% 94%;
+    --accent-foreground: 220 30% 12%;
+
+    --destructive: 0 78% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 217 85% 52%;
+
+    --radius: 0.5rem;
+
+    /* Semantic colors — slightly tuned for light backgrounds */
+    --success: 160 75% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 45%;
+    --warning-foreground: 0 0% 100%;
+    --info: 217 85% 52%;
+    --info-foreground: 0 0% 100%;
+
+    /* Shadows — softer in light mode; cards rely on borders + subtle elevation */
+    --shadow-sm: 0 1px 2px hsl(220 30% 12% / 0.05);
+    --shadow-md: 0 2px 8px hsl(220 30% 12% / 0.08);
+    --shadow-lg: 0 8px 24px hsl(220 30% 12% / 0.10);
+
+    /* Sidebar reads as a slightly darker navigation surface in light mode */
+    --sidebar-background: 220 25% 96%;
+    --sidebar-foreground: 220 15% 35%;
+    --sidebar-primary: 217 85% 52%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 91%;
+    --sidebar-accent-foreground: 220 30% 12%;
+    --sidebar-border: 220 13% 88%;
+    --sidebar-ring: 217 85% 52%;
+  }
+
+  .dark {
     --background: 220 30% 8%;
     --foreground: 210 40% 98%;
 
@@ -36,9 +92,6 @@
     --input: 215 20% 16%;
     --ring: 217 91% 60%;
 
-    --radius: 0.5rem;
-
-    /* Semantic colors */
     --success: 160 84% 39%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
@@ -46,61 +99,9 @@
     --info: 217 91% 60%;
     --info-foreground: 0 0% 100%;
 
-    /* Shadows */
     --shadow-sm: 0 1px 4px hsl(0 0% 0% / 0.2);
     --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.25);
     --shadow-lg: 0 8px 24px hsl(0 0% 0% / 0.3);
-
-    --sidebar-background: 220 30% 7%;
-    --sidebar-foreground: 215 20% 75%;
-    --sidebar-primary: 217 91% 60%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 217 19% 14%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 215 20% 14%;
-    --sidebar-ring: 217 91% 60%;
-  }
-
-  /* Keep dark class pointing to the same tokens for compatibility */
-  .dark {
-    --background: 220 30% 8%;
-    --foreground: 210 40% 98%;
-
-    --card: 220 26% 12%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 220 26% 12%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 239 84% 67%;
-    --secondary-foreground: 0 0% 100%;
-
-    --muted: 217 19% 17%;
-    --muted-foreground: 215 20% 75%;
-
-    --accent: 217 19% 17%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62% 31%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 215 20% 16%;
-    --input: 215 20% 16%;
-    --ring: 217 91% 60%;
-
-    --success: 160 84% 39%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 0%;
-    --info: 217 91% 60%;
-    --info-foreground: 0 0% 100%;
-
-    --shadow-sm: 0 1px 4px hsl(0 0% 0% / 0.3);
-    --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.35);
-    --shadow-lg: 0 8px 24px hsl(0 0% 0% / 0.4);
 
     --sidebar-background: 220 30% 7%;
     --sidebar-foreground: 215 20% 75%;

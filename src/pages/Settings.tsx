@@ -22,7 +22,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
 import { LeadDetectionCard } from "@/components/settings/LeadDetectionCard";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles, Inbox } from "lucide-react";
+import { AppearanceCard } from "@/components/settings/AppearanceCard";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles, Inbox, Palette } from "lucide-react";
 
 export default function Settings() {
   const { workspaceId } = useWorkspace();
@@ -79,6 +80,21 @@ export default function Settings() {
           <AccordionContent className="space-y-6">
             <RepProfileCard />
             <SignaturesCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="appearance" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Palette className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Appearance</div>
+                <div className="text-sm text-muted-foreground font-normal">Light, dark, or match your system</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <AppearanceCard />
           </AccordionContent>
         </AccordionItem>
 

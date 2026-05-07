@@ -11,9 +11,30 @@
     <meta property="og:description" content="AI-powered sales automation platform" />
     <meta property="og:type" content="website" />
     <meta name="facebook-domain-verification" content="gwvflc0oaofu3p6myxm0z2vw2f4ijr" />
+
+    <script>
+      // Apply theme before paint to avoid flash. Mirrors next-themes storageKey="drivepilot-theme".
+      (function () {
+        try {
+          var stored = localStorage.getItem('drivepilot-theme');
+          var resolved;
+          if (!stored) {
+            resolved = 'dark'; // default for users who haven't picked
+          } else if (stored === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          } else {
+            resolved = stored;
+          }
+          document.documentElement.classList.add(resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
   </head>
 
-  <body class="dark">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
