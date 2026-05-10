@@ -330,7 +330,7 @@ export function EmailActionDialog({
   const [activeMailProvider, setActiveMailProvider] = useState<"gmail" | "outlook" | null>(null);
   
   const { runTask } = useAITask();
-  const { sendEmail, isSyncing, provider: activeProvider } = useMailSync();
+  const { sendEmail, isSyncing, provider: activeProvider, activeAccount } = useMailSync();
   const { isConnected, connection } = useGmailConnection();
 
   // Use the unified hook's provider detection, fallback to legacy check
@@ -359,7 +359,8 @@ export function EmailActionDialog({
       // threading metadata from THAT row up front. The fields are frozen for
       // the dialog's lifetime (no in-composer target switcher per spec).
       if (replyToTimelineItem) {
-        const t = deriveTargetState(replyToTimelineItem, lead.email);
+        const repEmail = activeAccount?.email_address ?? connection?.gmail_email ?? null;
+        const t = deriveTargetState(replyToTimelineItem, repEmail);
         setTo(t.to || lead.email);
         setCc(t.cc);
         setReplyAll(false);
