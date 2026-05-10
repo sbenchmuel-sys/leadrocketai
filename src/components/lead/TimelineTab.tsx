@@ -1068,10 +1068,14 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   }, [currentLead, groupMembers]);
 
   // PR 2.4 — resolve which lead to attach to a clicked timeline row.
+  // Strict: an unrecognized row.lead_id must NOT silently fall back to
+  // currentLead — in group mode that would mis-attribute outbound/draft/state
+  // writes to the page's lead instead of the row's owner while groupMembers
+  // is still loading.
   const leadForRow = useCallback((row: TimelineItem): TimelineMinimalLead | null => {
     if (groupMembers.has(row.lead_id)) return groupMembers.get(row.lead_id) ?? null;
     if (currentLead && row.lead_id === currentLead.id) return currentLead;
-    return currentLead ?? null;
+    return null;
   }, [groupMembers, currentLead]);
 
   // PR 2.4 follow-up — id of the freshest unreplied inbound row that's
