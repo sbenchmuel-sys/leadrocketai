@@ -7,7 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Calendar, ExternalLink, Loader2, Mail } from "lucide-react";
+import { Calendar, ExternalLink, Loader2, Mail, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useNeedsCalendarReconsent } from "@/hooks/useNeedsCalendarReconsent";
@@ -22,8 +22,9 @@ export function CalendarReconsentModal() {
   const { google, microsoft, isLoading, refresh } = useNeedsCalendarReconsent();
   const { workspaceId } = useWorkspace();
   const [connecting, setConnecting] = useState<"google" | "microsoft" | null>(null);
+  const [dismissed, setDismissed] = useState(false);
 
-  const open = !isLoading && (google || microsoft);
+  const open = !isLoading && !dismissed && (google || microsoft);
 
   const handleReconnectGoogle = async () => {
     try {
@@ -77,13 +78,19 @@ export function CalendarReconsentModal() {
   }, [refresh]);
 
   return (
-    <Dialog open={open}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) setDismissed(true); }}>
       <DialogContent
         className="sm:max-w-lg"
         hideClose
-        onInteractOutside={(e) => e.preventDefault()}
-        onEscapeKeyDown={(e) => e.preventDefault()}
       >
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </button>
         <DialogHeader>
           <div className="flex items-center gap-2">
             <Calendar className="h-5 w-5 text-primary" />
