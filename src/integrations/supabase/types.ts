@@ -113,6 +113,81 @@ export type Database = {
         }
         Relationships: []
       }
+      calendar_events: {
+        Row: {
+          attendees_emails: string[]
+          created_at: string
+          end_time: string | null
+          external_event_id: string
+          id: string
+          lead_id: string | null
+          meeting_url: string | null
+          organizer_email: string | null
+          platform: string | null
+          provider: string
+          raw_event: Json | null
+          start_time: string
+          status: string
+          title: string | null
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          attendees_emails?: string[]
+          created_at?: string
+          end_time?: string | null
+          external_event_id: string
+          id?: string
+          lead_id?: string | null
+          meeting_url?: string | null
+          organizer_email?: string | null
+          platform?: string | null
+          provider: string
+          raw_event?: Json | null
+          start_time: string
+          status?: string
+          title?: string | null
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          attendees_emails?: string[]
+          created_at?: string
+          end_time?: string | null
+          external_event_id?: string
+          id?: string
+          lead_id?: string | null
+          meeting_url?: string | null
+          organizer_email?: string | null
+          platform?: string | null
+          provider?: string
+          raw_event?: Json | null
+          start_time?: string
+          status?: string
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "calendar_events_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       call_analyses: {
         Row: {
           action_items_json: Json | null
@@ -1089,9 +1164,11 @@ export type Database = {
           access_token_encrypted: string | null
           created_at: string
           gmail_email: string
+          granted_scopes: string[]
           id: string
           last_sync_at: string | null
           lookback_seed_completed_at: string | null
+          needs_reconnect: boolean
           refresh_token_encrypted: string | null
           token_expires_at: string
           updated_at: string
@@ -1101,9 +1178,11 @@ export type Database = {
           access_token_encrypted?: string | null
           created_at?: string
           gmail_email: string
+          granted_scopes?: string[]
           id?: string
           last_sync_at?: string | null
           lookback_seed_completed_at?: string | null
+          needs_reconnect?: boolean
           refresh_token_encrypted?: string | null
           token_expires_at: string
           updated_at?: string
@@ -1113,9 +1192,11 @@ export type Database = {
           access_token_encrypted?: string | null
           created_at?: string
           gmail_email?: string
+          granted_scopes?: string[]
           id?: string
           last_sync_at?: string | null
           lookback_seed_completed_at?: string | null
+          needs_reconnect?: boolean
           refresh_token_encrypted?: string | null
           token_expires_at?: string
           updated_at?: string
@@ -2152,15 +2233,18 @@ export type Database = {
           email_address: string
           error_reason: string | null
           external_user_id: string | null
+          granted_scopes: string[]
           id: string
           is_default: boolean
           last_sync_at: string | null
           lookback_seed_completed_at: string | null
+          needs_reconnect: boolean
           provider: string
           refresh_token: string | null
           status: string
           token_expires_at: string | null
           updated_at: string
+          user_id: string | null
           workspace_id: string
         }
         Insert: {
@@ -2170,15 +2254,18 @@ export type Database = {
           email_address: string
           error_reason?: string | null
           external_user_id?: string | null
+          granted_scopes?: string[]
           id?: string
           is_default?: boolean
           last_sync_at?: string | null
           lookback_seed_completed_at?: string | null
+          needs_reconnect?: boolean
           provider: string
           refresh_token?: string | null
           status?: string
           token_expires_at?: string | null
           updated_at?: string
+          user_id?: string | null
           workspace_id: string
         }
         Update: {
@@ -2188,15 +2275,18 @@ export type Database = {
           email_address?: string
           error_reason?: string | null
           external_user_id?: string | null
+          granted_scopes?: string[]
           id?: string
           is_default?: boolean
           last_sync_at?: string | null
           lookback_seed_completed_at?: string | null
+          needs_reconnect?: boolean
           provider?: string
           refresh_token?: string | null
           status?: string
           token_expires_at?: string | null
           updated_at?: string
+          user_id?: string | null
           workspace_id?: string
         }
         Relationships: [
