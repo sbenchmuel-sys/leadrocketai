@@ -135,7 +135,10 @@ serve(async (req) => {
     }
 
     const tokens = await tokenResponse.json();
-    const { access_token, refresh_token, expires_in } = tokens;
+    const { access_token, refresh_token, expires_in, scope: grantedScopeStr } = tokens;
+    const grantedScopes: string[] = typeof grantedScopeStr === "string" && grantedScopeStr.length > 0
+      ? grantedScopeStr.split(/\s+/).filter(Boolean)
+      : [];
 
     if (!access_token || !refresh_token) {
       const errorId = crypto.randomUUID();
@@ -193,6 +196,8 @@ serve(async (req) => {
         access_token_encrypted: encryptedAccessToken,
         refresh_token_encrypted: encryptedRefreshToken,
         token_expires_at: tokenExpiresAt,
+        granted_scopes: grantedScopes,
+        needs_reconnect: false,
       }, { onConflict: "user_id" });
 
     if (upsertError) {

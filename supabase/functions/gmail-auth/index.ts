@@ -85,10 +85,15 @@ serve(async (req) => {
     }
 
     // Build Google OAuth URL
+    // calendar.readonly + drive.readonly are added now (Phase 1) so users
+    // re-consent once instead of twice; Drive is needed for transcript fetch
+    // in Phase 2.
     const scopes = [
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
     ].join(" ");
 
     // Extract origin from redirectUrl for secure postMessage
