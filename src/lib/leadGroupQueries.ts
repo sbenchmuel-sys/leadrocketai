@@ -310,6 +310,7 @@ export async function getContactDetail(contactId: string): Promise<ContactDetail
   ]);
 
   if (contactRes.error) throw contactRes.error;
+  if (emailRes.error) throw emailRes.error;
   if (!contactRes.data) return null;
 
   const c = contactRes.data as {

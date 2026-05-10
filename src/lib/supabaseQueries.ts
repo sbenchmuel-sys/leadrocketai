@@ -1767,9 +1767,33 @@ export async function dismissLeadAction(leadId: string, snoozeDays: number = 1):
 
 /** PR 2.4 — true permanent dismiss of an action_required reminder. Cleared
  *  by syncEngine on a fresh inbound. The 5-second Undo toast calls this
- *  with `dismissed=false`. */
-export async function setLeadPermanentDismiss(leadId: string, dismissed: boolean): Promise<void> {
+ *  with `dismissed=false` and the snapshot returned by the dismiss call so
+ *  the action fields are restored, not just `action_permanently_dismissed`. */
+export interface LeadActionSnapshot {
+  needs_action: boolean;
+  next_action_key: string | null;
+  next_action_label: string | null;
+  action_reason_code: string | null;
+}
+
+export async function setLeadPermanentDismiss(
+  leadId: string,
+  dismissed: boolean,
+  restore?: LeadActionSnapshot,
+): Promise<LeadActionSnapshot | null> {
   if (!leadId) throw new Error('Missing leadId');
+
+  let captured: LeadActionSnapshot | null = null;
+  if (dismissed) {
+    const { data, error: selErr } = await supabase
+      .from('leads')
+      .select('needs_action, next_action_key, next_action_label, action_reason_code')
+      .eq('id', leadId)
+      .single();
+    if (selErr) throw selErr;
+    captured = data as LeadActionSnapshot;
+  }
+
   const updates: Record<string, unknown> = {
     action_permanently_dismissed: dismissed,
     last_activity_at: new Date().toISOString(),
@@ -1779,12 +1803,19 @@ export async function setLeadPermanentDismiss(leadId: string, dismissed: boolean
     updates.next_action_key = null;
     updates.next_action_label = null;
     updates.action_reason_code = null;
+  } else if (restore) {
+    updates.needs_action = restore.needs_action;
+    updates.next_action_key = restore.next_action_key;
+    updates.next_action_label = restore.next_action_label;
+    updates.action_reason_code = restore.action_reason_code;
   }
+
   const { error } = await supabase
     .from('leads')
     .update(updates as any)
     .eq('id', leadId);
   if (error) throw error;
+  return captured;
 }
 
 // ============================================

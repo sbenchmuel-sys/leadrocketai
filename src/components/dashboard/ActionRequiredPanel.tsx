@@ -55,14 +55,14 @@ export function ActionRequiredPanel({ leads, onLeadUpdated }: ActionRequiredPane
   const handlePermanentDismiss = async (lead: EnrichedLead) => {
     setDismissingId(lead.id);
     try {
-      await setLeadPermanentDismiss(lead.id, true);
+      const snapshot = await setLeadPermanentDismiss(lead.id, true);
       toast.success(`Dismissed ${lead.name}`, {
         duration: 5000,
         action: {
           label: "Undo",
           onClick: async () => {
             try {
-              await setLeadPermanentDismiss(lead.id, false);
+              await setLeadPermanentDismiss(lead.id, false, snapshot ?? undefined);
               toast.success("Undone");
               onLeadUpdated?.();
             } catch (err) {
