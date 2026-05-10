@@ -103,7 +103,7 @@ serve(async (req) => {
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: callbackUrl,
-        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read OnlineMeetings.Read.All",
+        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read",
       }),
     });
 
