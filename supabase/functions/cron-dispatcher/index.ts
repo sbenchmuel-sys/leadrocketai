@@ -34,6 +34,7 @@ const ALLOWED_TARGETS = new Set([
   "detect-lead-candidates",
   "score-lead-candidate",
   "lookback-seed-candidates",
+  "calendar-sync",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)
