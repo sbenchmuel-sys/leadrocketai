@@ -330,6 +330,21 @@ export async function getDashboardMetrics(
     automation: 0,
   };
 
+  // Counts mirror the tab body's stakeholder-visibility filter so the pill
+  // never overstates what the tab can render. Hide non-champion stakeholders
+  // from every bucket unless they have unanswered inbound — same rule used by
+  // baseFilteredLeads in src/pages/Dashboard.tsx.
+  const isVisibleInTab = (l: EnrichedLead): boolean => {
+    if (!l.group_id) return true;
+    const championId = championByGroup[l.group_id];
+    const isStakeholder = !!championId && championId !== l.id;
+    if (!isStakeholder) return true;
+    if (!l.last_inbound_at) return false;
+    const inbound = new Date(l.last_inbound_at).getTime();
+    const outbound = l.last_outbound_at ? new Date(l.last_outbound_at).getTime() : 0;
+    return inbound > outbound;
+  };
+
   for (const lead of leads) {
     if (lead.stage === "closed_won" || lead.stage === "closed_lost") {
       lead.revenueState = undefined;
@@ -337,13 +352,8 @@ export async function getDashboardMetrics(
     }
     const state = classifyRevenueState(lead, warmingUpIds, nurtureIds);
     lead.revenueState = state;
-    revenueStateCounts[state]++;
+    if (isVisibleInTab(lead)) revenueStateCounts[state]++;
   }
-
-  // "active" count = leads in the residual bucket only (matches tab filter).
-  // Stakeholder visibility is a display-layer concern and is intentionally NOT
-  // subtracted here — the pill reflects the data model bucket count.
-  revenueStateCounts.active = openLeads.filter((l) => l.revenueState === "active").length;
 
   return {
     needs_action_count: leads.filter((l) => l.needs_action).length,

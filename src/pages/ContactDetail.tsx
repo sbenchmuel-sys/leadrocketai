@@ -199,7 +199,11 @@ function GroupRow({ group }: { group: ContactGroupRow }) {
     </div>
   );
 
-  if (group.champion_lead_id) {
+  // Only render a clickable link when the joined champion row resolved
+  // (champion_name non-null). A non-null champion_lead_id with a null
+  // champion_name signals the lead was hidden by RLS (shared contact, other
+  // rep's deal), and lead detail rejects non-owner/non-admin loads.
+  if (group.champion_lead_id && group.champion_name) {
     return (
       <Link
         to={`/app/leads/${group.champion_lead_id}`}
@@ -210,7 +214,7 @@ function GroupRow({ group }: { group: ContactGroupRow }) {
       </Link>
     );
   }
-  // Champion was removed and not yet swapped — non-clickable row.
+  // Champion missing or hidden by RLS — non-clickable row.
   return <div className="flex items-center gap-2 px-3 py-3 opacity-70">{inner}</div>;
 }
 
