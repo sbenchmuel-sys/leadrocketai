@@ -103,7 +103,7 @@ serve(async (req) => {
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: callbackUrl,
-        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read",
+        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read OnlineMeetings.Read.All",
       }),
     });
 
@@ -116,7 +116,10 @@ serve(async (req) => {
     }
 
     const tokens = await tokenResp.json();
-    const { access_token, refresh_token, expires_in } = tokens;
+    const { access_token, refresh_token, expires_in, scope: grantedScopeStr } = tokens;
+    const grantedScopes: string[] = typeof grantedScopeStr === "string" && grantedScopeStr.length > 0
+      ? grantedScopeStr.split(/\s+/).filter(Boolean)
+      : [];
 
     if (!access_token || !refresh_token) {
       logger.error("mail.outlook.callback_missing_tokens", { tokens });
@@ -174,11 +177,14 @@ serve(async (req) => {
           email_address: emailAddress,
           display_name: displayName,
           external_user_id: externalUserId,
+          user_id: stateData.user_id,
           status: "connected",
           is_default: isDefault,
           access_token: encAccess,
           refresh_token: encRefresh,
           token_expires_at: tokenExpiresAt,
+          granted_scopes: grantedScopes,
+          needs_reconnect: false,
           error_reason: null,
           updated_at: new Date().toISOString(),
         },

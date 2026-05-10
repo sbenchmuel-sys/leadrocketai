@@ -72,6 +72,7 @@ import {
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
+import { UpcomingMeetingsSection } from "@/components/lead/UpcomingMeetingsSection";
 
 interface MeetingsTabProps {
   leadId: string;
@@ -482,28 +483,37 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
   if (meetingPacks.length === 0 && zoomSummaries.length === 0 && !showAddForm) {
     return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-          <h3 className="font-medium text-lg mb-2">No Meetings Yet</h3>
-          <p className="text-muted-foreground text-sm max-w-md mx-auto mb-4">
-            Add meeting summaries to trigger AI analysis — recap, milestones, and follow-up email generation.
-          </p>
-          <Button onClick={() => setShowAddForm(true)}>
-            <PlusCircle className="h-4 w-4 mr-2" />
-            Add Meeting Summary
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="space-y-6">
+        <UpcomingMeetingsSection leadId={leadId} />
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+            <h3 className="font-medium text-lg mb-2">No Meetings Yet</h3>
+            <p className="text-muted-foreground text-sm max-w-md mx-auto mb-4">
+              Add meeting summaries to trigger AI analysis — recap, milestones, and follow-up email generation.
+            </p>
+            <Button onClick={() => setShowAddForm(true)}>
+              <PlusCircle className="h-4 w-4 mr-2" />
+              Add Meeting Summary
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   if (meetingPacks.length === 0 && zoomSummaries.length === 0 && showAddForm) {
-    return <div className="space-y-6">{addMeetingForm}</div>;
+    return (
+      <div className="space-y-6">
+        <UpcomingMeetingsSection leadId={leadId} />
+        {addMeetingForm}
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
+      <UpcomingMeetingsSection leadId={leadId} />
       {/* Add Meeting Summary button + form */}
       <div className="flex justify-end">
         {!showAddForm && (

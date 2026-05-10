@@ -1,5 +1,5 @@
 -- 20260427230000_codify_cron_jobs.sql
--- Codify the 9 cron-dispatcher jobs that drive scheduled work, into a tracked migration.
+-- Codify the cron-dispatcher jobs that drive scheduled work, into a tracked migration.
 --
 -- Background: prior to this migration, these crons lived only in the live database
 -- (configured via the Supabase Dashboard). They were not in any migration file,
@@ -47,7 +47,8 @@ BEGIN
       'dispatch-promote-winning',
       'dispatch-message-cleanup',
       'dispatch-reply-suggestions',
-      'dispatch-manager-analytics'
+      'dispatch-manager-analytics',
+      'dispatch-calendar-sync'
     ])
   LOOP
     PERFORM cron.unschedule(jid);
@@ -55,7 +56,7 @@ BEGIN
 END
 $cleanup$;
 
--- ── Schedule the 9 dispatcher jobs ───────────────────────────────────────────
+-- ── Schedule the dispatcher jobs ─────────────────────────────────────────────
 
 -- Send queued automation drips. Every 15 minutes; the executor itself filters
 -- by per-workspace local-time send windows.
@@ -172,6 +173,21 @@ SELECT cron.schedule(
     url := 'https://ntzeiflqqluwgdfmatjh.supabase.co/functions/v1/cron-dispatcher',
     headers := '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50emVpZmxxcWx1d2dkZm1hdGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3NDE5ODgsImV4cCI6MjA4NjMxNzk4OH0.3uw7Tx3wv2EX8m82VtnY-M33K2ey4Yzhci6XnwZFPko"}'::jsonb,
     body := '{"target": "compute-manager-analytics"}'::jsonb
+  ) AS request_id;
+  $cron$
+);
+
+-- Pull upcoming Google + Outlook calendar events. Every 15 minutes.
+-- Phase 1 of calendar awareness — populates `calendar_events` for the
+-- per-lead Meetings tab "Upcoming Meetings" section.
+SELECT cron.schedule(
+  'dispatch-calendar-sync',
+  '*/15 * * * *',
+  $cron$
+  SELECT net.http_post(
+    url := 'https://ntzeiflqqluwgdfmatjh.supabase.co/functions/v1/cron-dispatcher',
+    headers := '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50emVpZmxxcWx1d2dkZm1hdGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3NDE5ODgsImV4cCI6MjA4NjMxNzk4OH0.3uw7Tx3wv2EX8m82VtnY-M33K2ey4Yzhci6XnwZFPko"}'::jsonb,
+    body := '{"target": "calendar-sync"}'::jsonb
   ) AS request_id;
   $cron$
 );

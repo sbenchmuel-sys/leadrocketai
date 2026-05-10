@@ -98,7 +98,12 @@ serve(async (req) => {
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("redirect_uri", callbackUrl);
-    authUrl.searchParams.set("scope", "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read");
+    // Calendars.Read + OnlineMeetings.Read.All added in Phase 1 of calendar
+    // awareness so users re-consent once instead of twice.
+    authUrl.searchParams.set(
+      "scope",
+      "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read OnlineMeetings.Read.All"
+    );
     authUrl.searchParams.set("response_mode", "query");
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("prompt", "select_account");
