@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
+import { CalendarReconsentModal } from "@/components/calendar/CalendarReconsentModal";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -192,6 +193,8 @@ export default function DashboardLayout() {
           <Outlet />
         </div>
       </main>
+
+      <CalendarReconsentModal />
     </div>);
 
 }
