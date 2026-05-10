@@ -52,9 +52,12 @@ CREATE TABLE IF NOT EXISTS public.calendar_events (
 CREATE INDEX IF NOT EXISTS idx_calendar_events_lead
   ON public.calendar_events (lead_id, start_time DESC);
 
+-- Note: no partial-index predicate here — Postgres rejects now() in index
+-- WHERE clauses (must be IMMUTABLE). The composite (workspace_id, start_time)
+-- index is still used efficiently for "WHERE workspace_id = X AND start_time > now()"
+-- via a normal range scan.
 CREATE INDEX IF NOT EXISTS idx_calendar_events_workspace_upcoming
-  ON public.calendar_events (workspace_id, start_time)
-  WHERE start_time > now();
+  ON public.calendar_events (workspace_id, start_time);
 
 -- updated_at trigger (uses the existing helper function)
 DROP TRIGGER IF EXISTS calendar_events_updated_at ON public.calendar_events;
