@@ -32,7 +32,7 @@ const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly
 const OUTLOOK_CALENDAR_SCOPE = "Calendars.Read";
 
 const OUTLOOK_OAUTH_FULL_SCOPES =
-  "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read OnlineMeetings.Read.All";
+  "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read";
 
 type CalendarPlatform = "google_meet" | "teams" | "zoom" | "other";
 
