@@ -7,7 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Calendar, ExternalLink, Loader2, Mail } from "lucide-react";
+import { Calendar, ExternalLink, Loader2, Mail, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useNeedsCalendarReconsent } from "@/hooks/useNeedsCalendarReconsent";
