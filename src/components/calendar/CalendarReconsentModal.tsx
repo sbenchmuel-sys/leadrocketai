@@ -22,8 +22,9 @@ export function CalendarReconsentModal() {
   const { google, microsoft, isLoading, refresh } = useNeedsCalendarReconsent();
   const { workspaceId } = useWorkspace();
   const [connecting, setConnecting] = useState<"google" | "microsoft" | null>(null);
+  const [dismissed, setDismissed] = useState(false);
 
-  const open = !isLoading && (google || microsoft);
+  const open = !isLoading && !dismissed && (google || microsoft);
 
   const handleReconnectGoogle = async () => {
     try {
