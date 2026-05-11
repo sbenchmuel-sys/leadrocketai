@@ -2417,6 +2417,76 @@ export type Database = {
           },
         ]
       }
+      meeting_ai_summaries: {
+        Row: {
+          action_items: Json | null
+          ai_model_used: string | null
+          created_at: string
+          generated_at: string | null
+          id: string
+          lead_id: string
+          meeting_transcript_id: string | null
+          milestones: Json | null
+          open_questions: Json | null
+          risks: Json | null
+          summary: string | null
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          action_items?: Json | null
+          ai_model_used?: string | null
+          created_at?: string
+          generated_at?: string | null
+          id?: string
+          lead_id: string
+          meeting_transcript_id?: string | null
+          milestones?: Json | null
+          open_questions?: Json | null
+          risks?: Json | null
+          summary?: string | null
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          action_items?: Json | null
+          ai_model_used?: string | null
+          created_at?: string
+          generated_at?: string | null
+          id?: string
+          lead_id?: string
+          meeting_transcript_id?: string | null
+          milestones?: Json | null
+          open_questions?: Json | null
+          risks?: Json | null
+          summary?: string | null
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_ai_summaries_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_ai_summaries_meeting_transcript_id_fkey"
+            columns: ["meeting_transcript_id"]
+            isOneToOne: true
+            referencedRelation: "meeting_transcripts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_ai_summaries_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_packs: {
         Row: {
           created_at: string
@@ -2538,6 +2608,82 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      meeting_transcripts: {
+        Row: {
+          calendar_event_id: string
+          created_at: string
+          fetch_attempts: number
+          id: string
+          last_attempt_at: string | null
+          lead_id: string
+          provider: string
+          provider_meeting_id: string | null
+          ready_at: string | null
+          status: string
+          status_reason: string | null
+          transcript_format: string | null
+          transcript_text: string | null
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          calendar_event_id: string
+          created_at?: string
+          fetch_attempts?: number
+          id?: string
+          last_attempt_at?: string | null
+          lead_id: string
+          provider: string
+          provider_meeting_id?: string | null
+          ready_at?: string | null
+          status?: string
+          status_reason?: string | null
+          transcript_format?: string | null
+          transcript_text?: string | null
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          calendar_event_id?: string
+          created_at?: string
+          fetch_attempts?: number
+          id?: string
+          last_attempt_at?: string | null
+          lead_id?: string
+          provider?: string
+          provider_meeting_id?: string | null
+          ready_at?: string | null
+          status?: string
+          status_reason?: string | null
+          transcript_format?: string | null
+          transcript_text?: string | null
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_transcripts_calendar_event_id_fkey"
+            columns: ["calendar_event_id"]
+            isOneToOne: true
+            referencedRelation: "calendar_events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_transcripts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_transcripts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]
