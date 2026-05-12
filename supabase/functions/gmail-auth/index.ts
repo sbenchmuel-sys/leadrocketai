@@ -120,7 +120,12 @@ serve(async (req) => {
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("scope", scopes);
     authUrl.searchParams.set("access_type", "offline");
-    authUrl.searchParams.set("prompt", "consent");
+    // `select_account` forces Google's account chooser instead of silently
+    // grabbing the browser's default Google account — prevents intermittent
+    // 403s when the user has multiple Google accounts signed in and the
+    // wrong one isn't on the OAuth consent screen's Test Users list.
+    // Matches Outlook's behavior at outlook-auth/index.ts.
+    authUrl.searchParams.set("prompt", "consent select_account");
     authUrl.searchParams.set("state", state);
 
     console.log(`[gmail-auth] Generated OAuth URL for user ${user.id}`);
