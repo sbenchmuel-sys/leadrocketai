@@ -131,34 +131,76 @@ export function usePendingCandidatesCount() {
   return count;
 }
 
+// Map a candidate's detected source to the proper lead motion / source_type / stage.
+// Inbound-detected candidates (mentioned us / referral) are warm — they must NOT
+// land in the cold outbound prospecting playbook. Lookback-seeded candidates already
+// have prior email exchanges, so we mark them as `engaged` so the resolver doesn't
+// restart at "Step 1 of 4".
+function deriveLeadDefaults(c: Candidate): {
+  motion: "outbound_prospecting" | "inbound_response";
+  source_type: "outbound_prospecting" | "gmail_inbound" | "referral" | "manual_entry";
+  stage: "new" | "engaged";
+} {
+  switch (c.source) {
+    case "inbound_explicit":
+      return { motion: "inbound_response", source_type: "gmail_inbound", stage: "engaged" };
+    case "inbound_referral":
+      return { motion: "inbound_response", source_type: "referral", stage: "engaged" };
+    case "lookback_seed":
+      // Historical outbound thread — already had contact, treat as engaged.
+      return { motion: "outbound_prospecting", source_type: "gmail_inbound", stage: "engaged" };
+    case "outbound":
+    case "outbound_detection":
+    default:
+      return { motion: "outbound_prospecting", source_type: "outbound_prospecting", stage: "new" };
+  }
+}
+
+// Backfill the new lead with prior Gmail history (interactions + lead_timeline_items)
+// and recompute lead intelligence so motion / next_action_key / signals reflect the
+// real conversation. Best-effort — failure here must not block approval.
+async function backfillLeadHistory(leadId: string, leadEmail: string) {
+  try {
+    const { error: syncErr } = await supabase.functions.invoke("gmail-sync", {
+      body: { leadId, leadEmail, maxResults: 50 },
+    });
+    if (syncErr) console.warn("[PendingLeads] gmail-sync backfill failed", syncErr);
+  } catch (e) {
+    console.warn("[PendingLeads] gmail-sync backfill threw", e);
+  }
+  try {
+    await supabase.functions.invoke("recompute-lead-intelligence", {
+      body: { leadId, force: true },
+    });
+  } catch (e) {
+    console.warn("[PendingLeads] recompute-lead-intelligence failed", e);
+  }
+}
+
 async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extraNotes?: string) {
   const ownerUserId = c.owner_user_id || ownerFallback;
   const company = c.company_domain || c.contact_email.split("@")[1] || "Unknown";
-  // Map candidate source -> allowed leads.source_type values
-  // Allowed: outbound_prospecting | contact_form | gmail_inbound | event_lead |
-  //          referral | csv_import | manual_entry | whatsapp_inbound
-  const sourceType =
-    c.source === "lookback_seed" || c.source === "outbound" || c.source === "outbound_detection"
-      ? "outbound_prospecting"
-      : c.source === "inbound_reply" || c.source === "inbound" || c.source === "manual_inbox"
-      ? "gmail_inbound"
-      : "manual_entry";
+  const defaults = deriveLeadDefaults(c);
   const payload: any = {
     name: deriveName(c),
     company,
     email: c.contact_email.toLowerCase(),
     strategy: "fast",
-    motion: "outbound_prospecting",
-    source_type: sourceType,
+    motion: defaults.motion,
+    source_type: defaults.source_type,
     owner_user_id: ownerUserId,
     workspace_id: c.workspace_id,
-    stage: "new",
+    stage: defaults.stage,
     last_activity_at: new Date().toISOString(),
     ...(extraNotes ? { personal_notes: extraNotes } : {}),
   };
   const { data, error } = await supabase.from("leads").insert(payload).select("id").single();
   if (error) throw error;
-  return data.id as string;
+  const leadId = data.id as string;
+  // Fire-and-forget backfill so the UI stays responsive. Awaited callers (single
+  // approve) get a quicker toast; bulk paths don't block on each lead.
+  void backfillLeadHistory(leadId, c.contact_email.toLowerCase());
+  return leadId;
 }
 
 
