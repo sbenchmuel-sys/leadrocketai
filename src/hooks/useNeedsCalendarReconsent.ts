@@ -3,8 +3,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
+// Backend mirrors of these lists live at:
+//   - Google: supabase/functions/gmail-auth/index.ts (scopes array)
+//   - Outlook: supabase/functions/_shared/outlookScopes.ts (OUTLOOK_OAUTH_SCOPES)
+// Different runtimes, can't share code — update both together when adding scopes.
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_TRANSCRIPT_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
 const OUTLOOK_CALENDAR_SCOPE = "Calendars.Read";
+const OUTLOOK_TRANSCRIPT_SCOPE = "OnlineMeetingTranscript.Read.All";
 
 export interface CalendarReconsentState {
   google: boolean;
@@ -46,19 +52,25 @@ export function useNeedsCalendarReconsent(): CalendarReconsentState {
     ]);
 
     const gmail = gmailRes.data;
+    const gmailScopes = gmail?.granted_scopes ?? [];
     const googleNeeds = !!gmail && (
       gmail.needs_reconnect === true ||
-      !(gmail.granted_scopes ?? []).includes(GOOGLE_CALENDAR_SCOPE)
+      !gmailScopes.includes(GOOGLE_CALENDAR_SCOPE) ||
+      !gmailScopes.includes(GOOGLE_TRANSCRIPT_SCOPE)
     );
 
     const outlookRows = (outlookRes.data ?? []) as Array<{
       granted_scopes: string[] | null;
       needs_reconnect: boolean | null;
     }>;
-    const microsoftNeeds = outlookRows.some((row) =>
-      row.needs_reconnect === true ||
-      !(row.granted_scopes ?? []).includes(OUTLOOK_CALENDAR_SCOPE)
-    );
+    const microsoftNeeds = outlookRows.some((row) => {
+      if (row.needs_reconnect === true) return true;
+      const scopes = row.granted_scopes ?? [];
+      if (!scopes.includes(OUTLOOK_CALENDAR_SCOPE)) return true;
+      // Only escalate to transcript-scope check if calendar is already granted —
+      // avoids double-prompting users on a single missing-grant state.
+      return !scopes.includes(OUTLOOK_TRANSCRIPT_SCOPE);
+    });
 
     setGoogle(googleNeeds);
     setMicrosoft(microsoftNeeds);

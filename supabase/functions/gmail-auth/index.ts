@@ -85,14 +85,15 @@ serve(async (req) => {
     }
 
     // Build Google OAuth URL.
-    // Phase 2 will fetch transcripts via the Meet REST API
-    // (meetings.space.readonly), which avoids Google's restricted-scope
-    // verification entirely.
+    // meetings.space.readonly grants access to the Meet REST API for
+    // transcript fetching (Phase 2 recap pipeline). Frontend mirror at
+    // src/hooks/useNeedsCalendarReconsent.ts — keep both lists in sync.
     const scopes = [
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/meetings.space.readonly",
     ].join(" ");
 
     // Extract origin from redirectUrl for secure postMessage

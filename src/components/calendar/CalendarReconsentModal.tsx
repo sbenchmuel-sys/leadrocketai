@@ -97,8 +97,12 @@ export function CalendarReconsentModal() {
             <DialogTitle>DrivePilot now reads your calendar to recap meetings.</DialogTitle>
           </div>
           <DialogDescription className="pt-2">
-            We need permission to see your upcoming events and meeting transcripts.
+            We need permission to read your upcoming events and meeting transcripts.
             This stays inside DrivePilot — we never share it.
+            <br /><br />
+            <strong>Microsoft users:</strong> if your IT admin manages your account,
+            the connect button may ask for admin approval. Forward the approval link
+            to your admin — they only need to approve DrivePilot once for your whole organization.
           </DialogDescription>
         </DialogHeader>
 

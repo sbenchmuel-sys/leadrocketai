@@ -6,6 +6,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
+import { OUTLOOK_FULL_OAUTH_SCOPES_STRING } from "../_shared/outlookScopes.ts";
 
 function corsHeaders(origin: string): Record<string, string> {
   const allowed =
@@ -98,13 +99,7 @@ serve(async (req) => {
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("redirect_uri", callbackUrl);
-    // Calendars.Read added in Phase 1 to power the upcoming-meetings section.
-    // Phase 2 will add online-meetings access via a separate consent step
-    // with the correct delegated scope.
-    authUrl.searchParams.set(
-      "scope",
-      "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read"
-    );
+    authUrl.searchParams.set("scope", OUTLOOK_FULL_OAUTH_SCOPES_STRING);
     authUrl.searchParams.set("response_mode", "query");
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("prompt", "select_account");

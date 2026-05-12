@@ -15,6 +15,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { createOutlookSubscription } from "../_shared/outlookSubscription.ts";
 import { logger } from "../_shared/logger.ts";
+import { OUTLOOK_FULL_OAUTH_SCOPES_STRING } from "../_shared/outlookScopes.ts";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -103,7 +104,7 @@ serve(async (req) => {
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: callbackUrl,
-        scope: "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read",
+        scope: OUTLOOK_FULL_OAUTH_SCOPES_STRING,
       }),
     });
 
