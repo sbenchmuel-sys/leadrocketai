@@ -19,6 +19,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "../_shared/encryption.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import {
+  OUTLOOK_CALENDAR_SCOPE,
+  OUTLOOK_CALENDAR_SCOPES_STRING,
+} from "../_shared/outlookScopes.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,10 +33,6 @@ const WINDOW_DAYS = 14;
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
-const OUTLOOK_CALENDAR_SCOPE = "Calendars.Read";
-
-const OUTLOOK_OAUTH_FULL_SCOPES =
-  "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read Calendars.Read";
 
 type CalendarPlatform = "google_meet" | "teams" | "zoom" | "other";
 
@@ -240,7 +240,7 @@ async function refreshOutlookToken(
       refresh_token: decryptedRefresh,
       client_id: clientId,
       client_secret: clientSecret,
-      scope: OUTLOOK_OAUTH_FULL_SCOPES,
+      scope: OUTLOOK_CALENDAR_SCOPES_STRING,
     }),
   });
 

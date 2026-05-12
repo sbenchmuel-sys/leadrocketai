@@ -11,6 +11,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "./encryption.ts";
 import { logger } from "./logger.ts";
 import { OutlookGraphClient, MicrosoftCredentialsMissingError } from "./outlookGraphClient.ts";
+import { OUTLOOK_MAIL_SCOPES_STRING } from "./outlookScopes.ts";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -61,7 +62,7 @@ export async function getFreshOutlookToken(
     // Throws MicrosoftCredentialsMissingError if env vars absent — bubbles up safely
     const tokens = await OutlookGraphClient.refreshToken(
       refreshTokenValue,
-      "Mail.Read Mail.ReadWrite Mail.Send offline_access User.Read"
+      OUTLOOK_MAIL_SCOPES_STRING
     );
 
     const newAccessToken: string = tokens.access_token;
