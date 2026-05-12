@@ -99,5 +99,5 @@ verify_jwt = false
 [functions.cron-dispatcher]
 verify_jwt = false
 
-[functions._ai_diag]
+[functions.ai-diag]
 verify_jwt = false
