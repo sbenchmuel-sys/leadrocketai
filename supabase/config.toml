@@ -98,3 +98,4 @@ verify_jwt = false
 
 [functions.cron-dispatcher]
 verify_jwt = false
+
