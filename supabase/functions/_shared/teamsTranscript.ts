@@ -15,11 +15,13 @@
 //
 // Recurring-series note: a Teams series shares one joinWebUrl
 // across all occurrences, so the meeting's /transcripts list may
-// contain one entry per occurrence. We pick the transcript whose
-// `createdDateTime` is closest to the calendar event's end time.
-// (Graph's transcript resource does not expose endDateTime — the
-// transcript is created shortly after the meeting ends, so
-// createdDateTime is the documented proxy.)
+// contain one entry per occurrence. We match a transcript to the
+// supplied event end time by preferring `endDateTime` (the
+// documented field on the callTranscript resource) and falling
+// back to `createdDateTime` when `endDateTime` is null — which
+// it can be on freshly-completed transcripts whose background
+// processing has not yet populated the end timestamp. The closest
+// timestamp within a ±60 min tolerance wins.
 // ============================================================
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
@@ -51,6 +53,7 @@ type GraphTranscript = {
   id?: string;
   meetingId?: string;
   createdDateTime?: string;
+  endDateTime?: string;
 };
 
 type ApiStage = "resolve_meeting" | "list_transcripts" | "fetch_content";
@@ -211,8 +214,9 @@ function pickClosestTranscript(
   let bestDriftMs = Number.POSITIVE_INFINITY;
   let best: GraphTranscript | null = null;
   for (const t of transcripts) {
-    if (!t.createdDateTime) continue;
-    const ms = Date.parse(t.createdDateTime);
+    const stamp = t.endDateTime ?? t.createdDateTime;
+    if (!stamp) continue;
+    const ms = Date.parse(stamp);
     if (Number.isNaN(ms)) continue;
     const drift = Math.abs(ms - eventEndMs);
     if (drift < bestDriftMs) {
