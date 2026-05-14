@@ -25,10 +25,21 @@ export interface OutlookTokens {
  * Returns a fresh access token for the given mail_account_id.
  * Refreshes automatically if within 5-minute expiry window.
  * Throws if refresh fails (and marks account as expired).
+ *
+ * `scopes` is the space-delimited scope string sent on refresh.
+ * Defaults to `OUTLOOK_MAIL_SCOPES_STRING` (back-compat with all
+ * pre-existing callers). Override with a wider bundle (e.g.
+ * `OUTLOOK_FULL_OAUTH_SCOPES_STRING`) when the caller needs a
+ * non-mail scope such as `OnlineMeetingTranscript.Read.All`.
+ *
+ * Microsoft's refresh endpoint rejects scopes outside the user's
+ * original grant — so the override must still be a subset of what
+ * the user originally consented to.
  */
 export async function getFreshOutlookToken(
   mailAccountId: string,
-  serviceSupabase: ReturnType<typeof createClient>
+  serviceSupabase: ReturnType<typeof createClient>,
+  scopes: string = OUTLOOK_MAIL_SCOPES_STRING
 ): Promise<string> {
   const { data: account, error } = await serviceSupabase
     .from("mail_accounts")
@@ -62,7 +73,7 @@ export async function getFreshOutlookToken(
     // Throws MicrosoftCredentialsMissingError if env vars absent — bubbles up safely
     const tokens = await OutlookGraphClient.refreshToken(
       refreshTokenValue,
-      OUTLOOK_MAIL_SCOPES_STRING
+      scopes
     );
 
     const newAccessToken: string = tokens.access_token;
