@@ -79,7 +79,9 @@ export class TeamsGraphClient {
 
   /**
    * Resolves a Teams meeting joinWebUrl to the VTT transcript whose
-   * createdDateTime is closest to `eventEndTimeIso`. Returns a
+   * timestamp is closest to `eventEndTimeIso` (preferring the
+   * transcript's `endDateTime`, falling back to `createdDateTime`
+   * when null), within a ±60 min tolerance. Returns a
    * discriminated-union result; throws only on programmer errors
    * or repeated Graph 5xx.
    */
