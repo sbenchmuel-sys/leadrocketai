@@ -27,6 +27,7 @@ const corsHeaders = {
 // that provider. Adding "teams" in step 4 is a one-line change here.
 const PROVIDER_TO_FETCH_FN: Record<string, string> = {
   google_meet: "meet-transcript-fetch",
+  teams: "teams-transcript-fetch",
 };
 
 const DEFAULT_PROVIDERS = ["google_meet"];
