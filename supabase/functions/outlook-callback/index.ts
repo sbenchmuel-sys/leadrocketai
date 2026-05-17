@@ -20,8 +20,60 @@ import { OUTLOOK_FULL_OAUTH_SCOPES_STRING } from "../_shared/outlookScopes.ts";
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-function errorPage(title: string, msg: string): string {
-  return `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5}.box{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}h1{color:#ef4444}p{color:#666}</style></head><body><div class="box"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(msg)}</p><p>This window will close automatically…</p></div><script>setTimeout(()=>window.close(),3000)</script></body></html>`;
+function errorPage(title: string, msg: string, diagnostic?: string): string {
+  const diagBlock = diagnostic
+    ? `<pre style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:#f3f4f6;color:#374151;padding:.75rem;border-radius:6px;text-align:left;white-space:pre-wrap;word-break:break-word;margin-top:1rem;max-width:520px">${escapeHtml(diagnostic)}</pre>`
+    : "";
+  return `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}.box{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1);max-width:560px}h1{color:#ef4444}p{color:#666}</style></head><body><div class="box"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(msg)}</p>${diagBlock}<p style="font-size:12px;color:#9ca3af">This window will close automatically…</p></div><script>setTimeout(()=>window.close(),8000)</script></body></html>`;
+}
+
+function adminConsentPage(consentUrl: string, diagnostic: string): string {
+  return `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}.box{padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1);max-width:620px}h1{color:#0f172a;margin-top:0}p{color:#475569;line-height:1.5}.url{display:flex;gap:.5rem;margin:1rem 0;align-items:stretch}input{flex:1;padding:.6rem .75rem;border:1px solid #cbd5e1;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f8fafc;color:#0f172a}button{padding:.6rem 1rem;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}button:hover{background:#1d4ed8}.ok{color:#16a34a;font-size:13px;margin-left:.5rem}pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:#f3f4f6;color:#374151;padding:.75rem;border-radius:6px;white-space:pre-wrap;word-break:break-word}</style></head><body><div class="box"><h1>Your IT admin needs to approve this app</h1><p>Forward the link below to a <strong>Global Admin</strong> or <strong>Cloud Application Administrator</strong> in your Microsoft 365 tenant. Once they grant consent, return here and try connecting again.</p><div class="url"><input id="u" readonly value="${escapeHtml(consentUrl)}"/><button onclick="navigator.clipboard.writeText(document.getElementById('u').value).then(()=>{document.getElementById('s').textContent='Copied ✓'})">Copy</button></div><span id="s" class="ok"></span><p style="font-size:12px;color:#94a3b8;margin-top:1.5rem">Diagnostic info (for support):</p><pre>${escapeHtml(diagnostic)}</pre></div></body></html>`;
+}
+
+function extractAadsts(text: string): string | null {
+  const m = /AADSTS(\d+)/.exec(text || "");
+  return m ? m[1] : null;
+}
+
+function renderAadstsResponse(
+  aadstsCode: string | null,
+  errorDescription: string,
+  stage: "oauth_error" | "token_exchange",
+): Response {
+  logger.error("mail.outlook.callback_aadsts_detected", {
+    aadsts_code: aadstsCode,
+    error_description: errorDescription,
+    stage,
+  });
+
+  const clientId = Deno.env.get("MICROSOFT_CLIENT_ID") ?? "";
+  const diagnostic = `AADSTS${aadstsCode ?? "?"} (${stage})\n${(errorDescription || "").slice(0, 200)}`;
+
+  if (aadstsCode === "65001" || aadstsCode === "90094") {
+    const consentUrl = `https://login.microsoftonline.com/common/adminconsent?client_id=${encodeURIComponent(clientId)}`;
+    return new Response(adminConsentPage(consentUrl, diagnostic), { headers: HTML_HEADERS });
+  }
+
+  if (aadstsCode === "50194" || aadstsCode === "500011") {
+    return new Response(
+      errorPage(
+        "This app isn't enabled for your organization yet",
+        "Your Microsoft 365 tenant isn't configured to use this application. Please contact support — there is no self-serve fix for this.",
+        diagnostic,
+      ),
+      { headers: HTML_HEADERS },
+    );
+  }
+
+  return new Response(
+    errorPage(
+      "Connection Failed",
+      "Microsoft declined the request. Please try again, or contact support with the details below.",
+      diagnostic,
+    ),
+    { status: 500, headers: HTML_HEADERS },
+  );
 }
 const HTML_HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
@@ -38,10 +90,10 @@ serve(async (req) => {
     const error = url.searchParams.get("error");
 
     if (error) {
-      logger.error("mail.outlook.callback_oauth_error", { error });
-      return new Response(errorPage("Authentication Failed", "Microsoft declined the request. Please try again."), {
-        headers: HTML_HEADERS,
-      });
+      const errorDescription = url.searchParams.get("error_description") ?? "";
+      logger.error("mail.outlook.callback_oauth_error", { error, error_description: errorDescription });
+      const aadstsCode = extractAadsts(errorDescription) ?? extractAadsts(error);
+      return renderAadstsResponse(aadstsCode, errorDescription || error, "oauth_error");
     }
 
     if (!code || !stateParam) {
@@ -111,9 +163,15 @@ serve(async (req) => {
     if (!tokenResp.ok) {
       const body = await tokenResp.text();
       logger.error("mail.outlook.callback_token_exchange_failed", { status: tokenResp.status, body });
-      return new Response(errorPage("Connection Failed", "Failed to exchange code for tokens. Please try again."), {
-        status: 500, headers: HTML_HEADERS,
-      });
+      let errorDescription = body;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed.error_description === "string") {
+          errorDescription = parsed.error_description;
+        }
+      } catch { /* body wasn't JSON — use raw text */ }
+      const aadstsCode = extractAadsts(errorDescription) ?? extractAadsts(body);
+      return renderAadstsResponse(aadstsCode, errorDescription, "token_exchange");
     }
 
     const tokens = await tokenResp.json();
