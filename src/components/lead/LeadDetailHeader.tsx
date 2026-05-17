@@ -24,6 +24,7 @@ type OriginContext = "dashboard" | "leads" | "inbox";
 interface LeadDetailHeaderProps {
   lead: LeadDetail;
   isConnected: boolean;
+  isMailLoading?: boolean;
   isDeleting: boolean;
   originContext: OriginContext;
   onDelete: () => void;
