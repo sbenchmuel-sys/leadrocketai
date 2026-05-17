@@ -57,9 +57,22 @@ export const CustomerEmailSchema = z.object({
   body: z.string().min(1).max(5000),
 }).strict();
 
+export const RiskFromMeetingSchema = z.object({
+  issue: z.string().min(1).max(240),
+  level: z.enum(['low', 'medium', 'high']),
+}).strict();
+
+export const ActionItemFromMeetingSchema = z.object({
+  description: z.string().min(1).max(240),
+  owner: z.string().min(1).max(120),
+  due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+}).strict();
+
 export const PostMeetingRecapSchema = z.object({
   internal_recap_bullets: z.array(z.string().min(1).max(240)),
   milestones_from_meeting: z.array(MilestoneFromMeetingSchema),
+  risks: z.array(RiskFromMeetingSchema).optional(),
+  action_items: z.array(ActionItemFromMeetingSchema).optional(),
   open_questions: z.array(z.string().min(1).max(200)),
   customer_email: CustomerEmailSchema,
 }).strict();

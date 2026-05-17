@@ -34,6 +34,7 @@ const DEFAULT_PROVIDERS = ["google_meet"];
 const STUCK_FETCHING_MS = 5 * 60 * 1000;
 const MAX_BACKOFF_MIN = 60;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const MAX_ANALYZE_PER_RUN = 5;
 
 interface TranscriptEmbed {
   id: string;
@@ -99,6 +100,8 @@ Deno.serve(async (req) => {
   let dispatched = 0;
   let skipped_backoff = 0;
   let expired_24h = 0;
+  let analyze_dispatched = 0;
+  let analyze_errors = 0;
   let errors = 0;
 
   try {
@@ -205,6 +208,74 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Phase 1.5: analyze sweep ──────────────────────────────────────
+    // Ready transcripts that don't yet have a meeting_ai_summaries row
+    // (UNIQUE on meeting_transcript_id) get dispatched to the analyzer.
+    // Window mirrors Phase 1: only recent transcripts (ready in the last
+    // 24h) — older ones gracefully time out instead of retrying forever.
+    // The analyzer is idempotent, so a duplicate dispatch is cheap.
+    stage = "analyze_sweep";
+    const analyzeWindowStart = new Date(now - TWENTY_FOUR_HOURS_MS).toISOString();
+    const { data: readyRaw, error: readyErr } = await supabase
+      .from("meeting_transcripts")
+      .select("id, meeting_ai_summaries(id)")
+      .eq("status", "ready")
+      .gte("ready_at", analyzeWindowStart)
+      .order("ready_at", { ascending: true });
+    if (readyErr) {
+      throw new Error(`analyze sweep lookup failed: ${readyErr.message}`);
+    }
+
+    const analyzeUrl = `${supabaseUrl}/functions/v1/meeting-transcript-analyze`;
+    let analyze_capped = false;
+    for (const row of (readyRaw ?? []) as Array<{ id: string; meeting_ai_summaries: Array<{ id: string }> | null }>) {
+      // Skip transcripts that already have a summary row.
+      const summaries = row.meeting_ai_summaries ?? [];
+      if (summaries.length > 0) continue;
+
+      // Per-run cap: a backlog should drain over several poller cycles
+      // rather than starving Phase 2 / exhausting the function timeout.
+      if (analyze_dispatched + analyze_errors >= MAX_ANALYZE_PER_RUN) {
+        analyze_capped = true;
+        break;
+      }
+
+      try {
+        const resp = await fetch(analyzeUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Secret": internalSecret,
+          },
+          body: JSON.stringify({ meetingTranscriptId: row.id }),
+        });
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => "");
+          analyze_errors++;
+          console.error(
+            "[transcript-poller] analyze_dispatch_failed",
+            JSON.stringify({
+              meetingTranscriptId: row.id,
+              status: resp.status,
+              body: body.slice(0, 200),
+            }),
+          );
+          continue;
+        }
+        await resp.text().catch(() => "");
+        analyze_dispatched++;
+      } catch (err) {
+        analyze_errors++;
+        console.error(
+          "[transcript-poller] analyze_dispatch_error",
+          JSON.stringify({
+            meetingTranscriptId: row.id,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    }
+
     // ── Phase 2: 24h-timeout sweep ────────────────────────────────────
     stage = "expired_sweep";
     const expiredCutoff = new Date(now - TWENTY_FOUR_HOURS_MS).toISOString();
@@ -237,6 +308,9 @@ Deno.serve(async (req) => {
       dispatched,
       skipped_backoff,
       expired_24h,
+      analyze_dispatched,
+      analyze_errors,
+      analyze_capped,
       errors,
       durationMs,
     };
