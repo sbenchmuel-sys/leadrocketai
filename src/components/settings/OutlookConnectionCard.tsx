@@ -144,8 +144,10 @@ export function OutlookConnectionCard() {
       callbackOrigin = "";
     }
 
+    const allowedOrigins = [callbackOrigin, window.location.origin].filter(Boolean);
+
     const handleOAuthMessage = (event: MessageEvent) => {
-      if (!callbackOrigin || event.origin !== callbackOrigin) return;
+      if (!allowedOrigins.includes(event.origin)) return;
       const data = event.data as { type?: string; provider?: string; ok?: boolean; email?: string; error?: string };
       if (data?.type !== "mail_oauth_result" || data.provider !== "outlook") return;
 
@@ -159,6 +161,27 @@ export function OutlookConnectionCard() {
 
     window.addEventListener("message", handleOAuthMessage);
     return () => window.removeEventListener("message", handleOAuthMessage);
+  }, [finishConnection]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("outlook_connected") !== "true") return;
+
+    const email = params.get("outlook_email") ?? undefined;
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(
+        { type: "mail_oauth_result", provider: "outlook", ok: true, email },
+        window.location.origin
+      );
+      window.close();
+      return;
+    }
+
+    void finishConnection(email);
+    params.delete("outlook_connected");
+    params.delete("outlook_email");
+    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash}`;
+    window.history.replaceState({}, "", nextUrl);
   }, [finishConnection]);
 
   const ensureWorkspace = async (): Promise<string> => {
