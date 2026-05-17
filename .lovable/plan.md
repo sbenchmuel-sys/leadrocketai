@@ -1,75 +1,101 @@
 
-## Goal
-
-When Outlook is the connected mail provider, no user-facing string should say "Gmail". Buttons, badges, and deep links should reflect the active provider, and "Open in Outlook" should open an Outlook compose window pre-filled the same way "Open in Gmail" does today. Personal Outlook mailboxes get the correct OWA host.
-
 ## Root cause
 
-Two hooks coexist:
+`outlook-callback` is failing on the DB upsert with:
 
-- `useGmailConnection()` — Gmail-only, reads `gmail_connections`. Several screens still gate UI on this.
-- `useMailSync()` — provider-aware, reads `mail_accounts` (Gmail + Outlook) with `gmail_connections` legacy fallback. Already exposes `provider`, `providerLabel`, `activeAccount`, `isConnected`.
+```
+duplicate key value violates unique constraint "mail_accounts_workspace_default_idx"
+```
 
-Anywhere UI gates on `useGmailConnection()`, an Outlook-only user falls through to the "Connect Gmail" branch. Some send paths also hit `gmail-send` directly, and `EmailActionDialog` has a hardcoded "Open in Gmail" deep link with no Outlook equivalent.
+That index is a partial unique index over `(workspace_id) WHERE is_default = true` — only one default mail account per workspace.
 
-## Changes
+In the callback, `isDefault` is computed as:
 
-### A. Provider-aware connection gating
+```ts
+const { count: existingCount } = await serviceClient
+  .from("mail_accounts")
+  .select("id", { count: "exact", head: true })
+  .eq("workspace_id", stateData.workspace_id)
+  .eq("provider", "outlook");        // ← only counts OUTLOOK rows
+const isDefault = (existingCount ?? 0) === 0;
+```
 
-1. `src/pages/LeadDetail.tsx` — replace `useGmailConnection().isConnected` with `useMailSync().isConnected`. Pass through to `LeadDetailHeader`.
-2. `src/components/lead/LeadDetailHeader.tsx` — change fallback label from `Connect Gmail` to `Connect inbox` (links to `/app/settings`).
+It only counts existing Outlook accounts in the workspace, ignoring any existing Gmail account. The user's workspace `5a259362-…` already has Gmail `s.benchmuel@gmail.com` with `is_default = true`. When connecting Outlook for the first time, `existingCount = 0` → `isDefault = true` → the upsert tries to insert a second row with `is_default = true` in the same workspace → unique index violates → upsert returns error → callback returns "Connection Failed" → the Outlook row is never saved.
 
-### B. "Open in Outlook" deep link in EmailActionDialog
+Consequences observed:
+- No `mail_accounts` row for Outlook in that workspace (confirmed in DB).
+- `useMailSync` keeps returning Gmail as the active provider.
+- `EmailActionDialog` shows "Open in Gmail" because `activeMailProvider === "gmail"`.
+- The Settings card never flips to "Connected" because `mail_accounts` has no row.
 
-3. `src/components/dashboard/EmailActionDialog.tsx`
-   - Add `buildOutlookComposeUrl(to, subject, body, email?)` that picks the OWA host **per account** based on the email domain:
-     - **Personal** (`outlook.com`, `hotmail.com`, `live.com`, `msn.com`, `passport.com`) → `https://outlook.live.com/owa/?path=/mail/action/compose&to=...&subject=...&body=...`
-     - **Work/school** (everything else, including custom domains on Microsoft 365) → `https://outlook.office.com/mail/deeplink/compose?to=...&subject=...&body=...`
-   - Helper `isPersonalOutlookDomain(email)` lives in `src/lib/mailProviders/composeUrl.ts` alongside an extracted `buildGmailComposeUrl` so both providers share one module.
-   - Generalize `handleOpenInGmail` → `handleOpenInProvider`. Branch on `activeMailProvider`. Save draft with `draft_type: 'outlook_compose'` for Outlook.
-   - Replace the two split buttons (Open in Gmail vs hidden) with one button whose label/icon/handler depends on `activeMailProvider`: `Open in Outlook` when Outlook, `Open in Gmail` when Gmail, hidden when nothing connected.
-   - Use `activeAccount?.email_address ?? connection?.gmail_email` to feed the compose URL builder so per-account host detection works.
+`gmail-callback` has the same shape (`is_default: true` then `update is_default = false WHERE email != current`), but in practice it survives because Gmail re-connects always hit `onConflict (workspace_id, email_address)` → UPDATE on the existing row, not a fresh INSERT, so no second `is_default = true` row is created.
 
-### C. Send paths still hitting `gmail-send` directly
+## Fix
 
-4. `src/components/inbox/ReplyComposer.tsx` (~lines 230–246) — replace the direct `supabase.functions.invoke("gmail-send", …)` call with `useMailSync().sendEmail(...)`. Drop the hardcoded "Gmail needs reconnection" string — the hook surfaces the right `providerLabel`.
+### A. `supabase/functions/outlook-callback/index.ts`
 
-### D. Optional polish F — rename to provider-neutral components
+Replace the `isDefault` computation so it respects existing defaults across **all** providers in the workspace, and only promotes the new Outlook account when there is genuinely no default yet.
 
-5. Move and rename:
-   - `src/components/gmail/GmailSyncButton.tsx` → `src/components/mail/MailSyncButton.tsx` (export `MailSyncButton`).
-   - `src/components/gmail/SendEmailButton.tsx` → `src/components/mail/SendEmailButton.tsx` (no rename, just relocate).
-   - Keep `src/components/gmail/GmailConnectionCard.tsx` where it is — it's the Gmail-specific settings card, intentionally separate from `OutlookConnectionCard.tsx`.
-6. Update imports:
-   - `src/components/lead/LeadDetailHeader.tsx`
-   - `src/components/lead/DraftsTab.tsx`
-   - `src/components/lead/MeetingsTab.tsx`
-   - Any other consumers found via grep on `@/components/gmail/(GmailSyncButton|SendEmailButton)`.
-7. Update the `Send via {providerLabel}` button text inside the moved `SendEmailButton` to also adapt its dialog title (already does via `providerLabel`).
-8. Comment in `DraftsTab.tsx` line 550 (`{/* Send via Gmail for email channel */}`) → `{/* Send via active mail provider */}`.
+```ts
+// Replaces lines 162–169
+const { data: existingDefault } = await serviceClient
+  .from("mail_accounts")
+  .select("id, email_address")
+  .eq("workspace_id", stateData.workspace_id)
+  .eq("is_default", true)
+  .maybeSingle();
 
-### E. Strings to leave alone
+// Also handle the re-connect case: if this same Outlook row is already
+// the default, preserve that — the upsert path will UPDATE, not INSERT.
+const isDefault =
+  !existingDefault ||
+  existingDefault.email_address.toLowerCase() === emailAddress.toLowerCase();
+```
 
-- `Terms.tsx`, `Privacy.tsx` — legal copy explicitly about Gmail.
-- `GmailConnectionCard.tsx` — Gmail-specific Settings card.
-- `ConnectInboxStep.tsx` — onboarding offers both options by design.
-- DB enums (`gmail_inbound`) and column names (`gmail_thread_id`, `gmail_message_id`) — internal identifiers; Outlook already reuses them.
-- `Leads.tsx` copy "Connect Gmail or Outlook" — correct when nothing is connected.
+No other changes to the callback. Subscription creation, redirect, and logging stay the same.
 
-## Implementation order
+### B. `supabase/functions/gmail-callback/index.ts` (defensive)
 
-1. Extract `buildGmailComposeUrl` and add `buildOutlookComposeUrl` + `isPersonalOutlookDomain` into `src/lib/mailProviders/composeUrl.ts`.
-2. Wire `EmailActionDialog` to the new helpers, generalize the button.
-3. Swap `LeadDetail` to `useMailSync`; relabel header fallback to "Connect inbox".
-4. Route `ReplyComposer` through `useMailSync().sendEmail`.
-5. Move + rename `GmailSyncButton` → `MailSyncButton`, relocate `SendEmailButton`, update all imports.
-6. Manual QA on Outlook-only workspace:
-   - Lead header shows "Sync Outlook", no "Connect Gmail".
-   - Composer button reads "Open in Outlook" and opens the correct OWA host based on the account's email domain (test with `@outlook.com` and a work `@company.com` if available).
-   - Inbox reply uses `outlook-send`.
-7. Repeat on Gmail-only workspace — confirm no regressions.
+Same hazard if a workspace ever has Outlook connected first and then Gmail. Lines 224–248 unconditionally set `is_default: true` then `update is_default = false WHERE email != current`. If `gmailEmail` does not already exist as a row in `mail_accounts`, the INSERT fires before the subsequent UPDATE, hitting the same partial-unique violation.
 
-## Open hazards / non-goals
+Mirror the Outlook fix:
 
-- Personal-vs-work detection is heuristic by email domain. A custom personal domain hosted on outlook.com would be misrouted to OWA business host, which still works (just opens the wrong tenant chooser). Acceptable for pilot.
-- Not refactoring `useGmailConnection` itself — still needed by `GmailConnectionCard` and the OAuth callback (`?gmail_connected=true`).
+```ts
+const { data: existingDefault } = await supabase
+  .from("mail_accounts")
+  .select("id, email_address")
+  .eq("workspace_id", membership.workspace_id)
+  .eq("is_default", true)
+  .maybeSingle();
+
+const isDefault =
+  !existingDefault ||
+  existingDefault.email_address.toLowerCase() === gmailEmail.toLowerCase();
+```
+
+Then pass `is_default: isDefault` into the upsert. Drop the post-upsert "clear other defaults" UPDATE (it is unsafe in general and unnecessary now — first writer wins; the user changes default explicitly in Settings).
+
+### C. Redeploy
+
+Deploy both edge functions: `outlook-callback` and `gmail-callback`.
+
+### D. Verification
+
+1. From the affected workspace, click "Connect Outlook" again and complete the OAuth dance.
+2. Expected: callback returns the redirect (not the error HTML), Settings card shows the Outlook address as connected with no "Default" badge (Gmail remains default), `mail_accounts` has a new row with `is_default = false`.
+3. `useMailSync.provider` still returns `gmail` (because Gmail is the default), so the composer correctly continues to show "Open in Gmail" — that is now expected.
+
+### E. Out of scope (call out, don't ship)
+
+- **Switching default provider from the UI**: `OutlookConnectionCard` shows a `is_default` badge but has no "Make default" button. After this fix, an Outlook user whose workspace already has Gmail will still see Gmail as primary in the composer. If the user wants the composer to say "Open in Outlook" without disconnecting Gmail, we need a small "Make default" action in Settings that flips `is_default` (and clears the other rows in a single transaction via an RPC). That is a separate feature.
+- The 3 pre-existing `status = 'error'` Outlook rows in `mail_accounts` are from older workspaces and unrelated to this bug — leave them alone.
+
+## Test plan summary
+
+| Step | Expected |
+|---|---|
+| Reconnect Outlook on the affected workspace | Redirects back with `?outlook_connected=true&outlook_email=…` |
+| `psql` check | New `mail_accounts` row, `provider=outlook`, `status=connected`, `is_default=false` |
+| Settings card | Shows Outlook as connected |
+| Edge logs for `outlook-callback` | No `callback_upsert_failed`; sees `mail.outlook.connected` |
+| Composer | Still shows "Open in Gmail" until user changes the default (separate UX) |

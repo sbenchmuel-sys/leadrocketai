@@ -159,14 +159,18 @@ serve(async (req) => {
       hasKey ? encryptToken(refresh_token) : Promise.resolve(refresh_token),
     ]);
 
-    // --- Check if this is the first Outlook account in the workspace ---
-    const { count: existingCount } = await serviceClient
+    // --- Determine default flag (one default per workspace across all providers) ---
+    const { data: existingDefault } = await serviceClient
       .from("mail_accounts")
-      .select("id", { count: "exact", head: true })
+      .select("id, email_address")
       .eq("workspace_id", stateData.workspace_id)
-      .eq("provider", "outlook");
+      .eq("is_default", true)
+      .maybeSingle();
 
-    const isDefault = (existingCount ?? 0) === 0;
+    const isDefault =
+      !existingDefault ||
+      (existingDefault.email_address ?? "").toLowerCase() ===
+        emailAddress.toLowerCase();
 
     // --- Upsert mail_account ---
     const { data: mailAccount, error: upsertErr } = await serviceClient
