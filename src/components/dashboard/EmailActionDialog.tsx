@@ -214,21 +214,7 @@ function getEmailMode(actionKey: string | null, hasThread: boolean): 'reply' | '
   return (actionType === "reply" && hasThread) ? 'reply' : 'new_outreach';
 }
 
-// Build Gmail compose URL
-function buildGmailComposeUrl(to: string, subject: string, body: string, fromEmail?: string): string {
-  const params = new URLSearchParams();
-  params.set("to", to);
-  params.set("su", subject);
-  params.set("body", body);
-  
-  if (fromEmail) {
-    params.set("authuser", fromEmail);
-    const encodedEmail = encodeURIComponent(fromEmail);
-    return `https://mail.google.com/mail/u/${encodedEmail}/?view=cm&fs=1&${params.toString()}`;
-  }
-  
-  return `https://mail.google.com/mail/?view=cm&fs=1&${params.toString()}`;
-}
+// Compose URL builders are imported from @/lib/mailProviders/composeUrl
 
 // One-click action button component
 interface ActionButtonProps {
