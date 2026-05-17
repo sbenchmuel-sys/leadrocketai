@@ -27,7 +27,7 @@ export default function LeadDetail() {
   const [activeTab, setActiveTab] = useState("timeline");
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
-  const { isConnected } = useMailSync();
+  const { isConnected, isLoading: isMailLoading } = useMailSync();
   const { workspaceId } = useWorkspace();
 
   const backRoute = originContext === "leads" ? "/app/leads" : originContext === "inbox" ? "/app/inbox" : "/app";
