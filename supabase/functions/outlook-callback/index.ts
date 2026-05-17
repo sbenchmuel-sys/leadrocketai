@@ -241,10 +241,6 @@ serve(async (req) => {
     redirectTarget.searchParams.set("outlook_connected", "true");
     redirectTarget.searchParams.set("outlook_email", emailAddress);
 
-    if (redirectTarget.origin === req.headers.get("Origin") || redirectTarget.origin.includes("lovable.app") || redirectTarget.origin.includes("lovableproject.com") || redirectTarget.origin === "https://drivepilot.app" || redirectTarget.origin === "https://www.drivepilot.app") {
-      return new Response(oauthResultPage(true, "outlook", emailAddress), { headers: HTML_HEADERS });
-    }
-
     return new Response(null, {
       status: 302,
       headers: { Location: redirectTarget.toString() },
