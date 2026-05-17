@@ -24,6 +24,7 @@ type OriginContext = "dashboard" | "leads" | "inbox";
 interface LeadDetailHeaderProps {
   lead: LeadDetail;
   isConnected: boolean;
+  isMailLoading?: boolean;
   isDeleting: boolean;
   originContext: OriginContext;
   onDelete: () => void;
@@ -95,7 +96,7 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
+  lead, isConnected, isMailLoading, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const motion = (lead.motion as Motion) || "outbound_prospecting";
@@ -152,7 +153,11 @@ export default function LeadDetailHeader({
             mode="followup"
           />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
-          {isConnected ? (
+          {isMailLoading ? (
+            <Button variant="outline" size="sm" disabled className="h-8 text-xs">
+              <Mail className="h-3.5 w-3.5 mr-1.5 opacity-50" />Inbox…
+            </Button>
+          ) : isConnected ? (
             <MailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (
             <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
