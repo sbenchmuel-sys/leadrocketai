@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,8 +78,6 @@ export function OutlookConnectionCard() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(ctxWorkspaceId);
   // null = unknown, true = configured, false = missing
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
-  const popupRef = useRef<Window | null>(null);
-  const pollRef = useRef<number | null>(null);
 
   const fetchHealth = useCallback(async (wsId: string) => {
     try {
@@ -121,69 +119,6 @@ export function OutlookConnectionCard() {
     setCredentialsConfigured(true);
   }, [ctxWorkspaceId, fetchHealth]);
 
-  const finishConnection = useCallback(async (email?: string) => {
-    if (pollRef.current !== null) {
-      window.clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    popupRef.current?.close();
-    popupRef.current = null;
-    setIsConnecting(false);
-
-    const wsId = workspaceId ?? ctxWorkspaceId;
-    if (wsId) await fetchHealth(wsId);
-    if (email) toast.success("Outlook connected", { description: email });
-  }, [ctxWorkspaceId, fetchHealth, workspaceId]);
-
-  useEffect(() => {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    let callbackOrigin = "";
-    try {
-      callbackOrigin = new URL(supabaseUrl).origin;
-    } catch {
-      callbackOrigin = "";
-    }
-
-    const allowedOrigins = [callbackOrigin, window.location.origin].filter(Boolean);
-
-    const handleOAuthMessage = (event: MessageEvent) => {
-      if (!allowedOrigins.includes(event.origin)) return;
-      const data = event.data as { type?: string; provider?: string; ok?: boolean; email?: string; error?: string };
-      if (data?.type !== "mail_oauth_result" || data.provider !== "outlook") return;
-
-      if (data.ok) {
-        void finishConnection(data.email);
-      } else {
-        setIsConnecting(false);
-        toast.error("Connection failed", { description: data.error || "Please try again." });
-      }
-    };
-
-    window.addEventListener("message", handleOAuthMessage);
-    return () => window.removeEventListener("message", handleOAuthMessage);
-  }, [finishConnection]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("outlook_connected") !== "true") return;
-
-    const email = params.get("outlook_email") ?? undefined;
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage(
-        { type: "mail_oauth_result", provider: "outlook", ok: true, email },
-        window.location.origin
-      );
-      window.close();
-      return;
-    }
-
-    void finishConnection(email);
-    params.delete("outlook_connected");
-    params.delete("outlook_email");
-    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash}`;
-    window.history.replaceState({}, "", nextUrl);
-  }, [finishConnection]);
-
   const ensureWorkspace = async (): Promise<string> => {
     if (workspaceId) return workspaceId;
     if (ctxWorkspaceId) return ctxWorkspaceId;
@@ -203,14 +138,13 @@ export function OutlookConnectionCard() {
       if (!token) throw new Error("Not authenticated");
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const redirectUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ workspaceId: wsId, redirectUrl }),
+        body: JSON.stringify({ workspaceId: wsId }),
       });
 
       const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
@@ -233,12 +167,14 @@ export function OutlookConnectionCard() {
         window.location.href = data.authUrl;
         return;
       }
-      popupRef.current = popup;
 
       // Poll until the popup closes, then refresh health
-      pollRef.current = window.setInterval(async () => {
+      const poll = setInterval(async () => {
         if (popup.closed) {
-          await finishConnection();
+          clearInterval(poll);
+          setIsConnecting(false);
+          const wsId = workspaceId ?? ctxWorkspaceId;
+          if (wsId) await fetchHealth(wsId);
         }
       }, 800);
     } catch (err) {
@@ -247,12 +183,6 @@ export function OutlookConnectionCard() {
       setIsConnecting(false);
     }
   };
-
-  useEffect(() => {
-    return () => {
-      if (pollRef.current !== null) window.clearInterval(pollRef.current);
-    };
-  }, []);
 
   const connectDisabled = isConnecting || credentialsConfigured === false;
   const connectTooltip =

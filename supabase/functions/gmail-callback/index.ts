@@ -222,19 +222,6 @@ serve(async (req) => {
         .maybeSingle();
 
       if (membership?.workspace_id) {
-        // Determine default flag — preserve any existing default across providers
-        const { data: existingDefault } = await supabase
-          .from("mail_accounts")
-          .select("id, email_address")
-          .eq("workspace_id", membership.workspace_id)
-          .eq("is_default", true)
-          .maybeSingle();
-
-        const isDefault =
-          !existingDefault ||
-          (existingDefault.email_address ?? "").toLowerCase() ===
-            gmailEmail.toLowerCase();
-
         const { error: maError } = await supabase
           .from("mail_accounts")
           .upsert({
@@ -244,14 +231,20 @@ serve(async (req) => {
             display_name: userInfo.name || gmailEmail,
             external_user_id: stateData.user_id,
             status: "connected",
-            is_default: isDefault,
+            is_default: true,
           }, { onConflict: "workspace_id,email_address", ignoreDuplicates: false });
 
         if (maError) {
           // Non-fatal: log but don't block the OAuth flow
           console.error("[gmail-callback] Failed to upsert mail_accounts:", maError);
         } else {
-          console.log(`[gmail-callback] mail_accounts upserted for ${gmailEmail} (is_default=${isDefault}) in workspace ${membership.workspace_id}`);
+          // If this is set as default, clear other defaults in the workspace
+          await supabase
+            .from("mail_accounts")
+            .update({ is_default: false })
+            .eq("workspace_id", membership.workspace_id)
+            .neq("email_address", gmailEmail);
+          console.log(`[gmail-callback] mail_accounts upserted for ${gmailEmail} as default in workspace ${membership.workspace_id}`);
         }
       } else {
         console.warn(`[gmail-callback] No workspace found for user ${stateData.user_id}, skipping mail_accounts upsert`);

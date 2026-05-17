@@ -24,7 +24,6 @@ import {
   type AvailableChannel,
 } from "@/lib/channels";
 import { refreshDashboard } from "@/lib/dashboardMetricsService";
-import { useMailSync } from "@/hooks/useMailSync";
 
 type PersonalizedSuggestion =
   | { subject: string; body: string }   // email
@@ -41,7 +40,6 @@ type Props = {
 
 export function ReplyComposer({ conversation, recommendedChannel, suggestions, leadId, onSent }: Props) {
   const { workspaceId } = useWorkspace();
-  const { sendEmail: sendMail, providerLabel: mailProviderLabel } = useMailSync();
   // Derive available channels — only email and whatsapp are implemented
   const [leadFields, setLeadFields] = useState<{
     email?: string | null;
@@ -229,20 +227,22 @@ export function ReplyComposer({ conversation, recommendedChannel, suggestions, l
           .eq("id", conversation.id)
           .single();
 
-        const sendResult = await sendMail(
-          emailIdentity.value,
-          `Re: ${conversation.contact_name}`,
-          body.trim(),
-          leadId ?? undefined,
-          undefined,
-          convData?.provider_thread_id || undefined,
-        );
+        const sendBody: Record<string, any> = {
+          to: emailIdentity.value,
+          subject: `Re: ${conversation.contact_name}`,
+          body: body.trim(),
+          threadId: convData?.provider_thread_id || undefined,
+        };
+        if (leadId) sendBody.leadId = leadId;
 
-        if (!sendResult.ok) {
-          if (sendResult.needsReconnect) {
-            throw new Error(`${mailProviderLabel} needs reconnection. Please reauthorize in Settings.`);
-          }
-          throw new Error(sendResult.error || "Failed to send email");
+        const { data: sendResult, error: sendErr } = await supabase.functions.invoke("gmail-send", {
+          body: sendBody,
+        });
+
+        if (sendErr) throw sendErr;
+        if (sendResult?.error) throw new Error(sendResult.error);
+        if (sendResult?.needsReconnect) {
+          throw new Error("Gmail needs reconnection. Please reauthorize in Settings.");
         }
 
         toast({ title: "Email sent", description: "Email delivered successfully." });

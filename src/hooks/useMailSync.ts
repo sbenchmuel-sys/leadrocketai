@@ -81,16 +81,12 @@ export function useMailSync() {
         return;
       }
 
-      // Try mail_accounts first (preferred — supports both providers).
-      // Require user_id NOT NULL to skip orphan/stub rows left behind by
-      // aborted OAuth flows (which would otherwise route sync to a provider
-      // that has no tokens and fail with "<provider> not connected").
+      // Try mail_accounts first (preferred — supports both providers)
       const { data: defaultAccount } = await supabase
         .from("mail_accounts")
         .select("id, provider, email_address, status, is_default, last_sync_at")
         .eq("status", "connected")
         .eq("is_default", true)
-        .not("user_id", "is", null)
         .maybeSingle();
 
       if (defaultAccount) {
@@ -98,12 +94,11 @@ export function useMailSync() {
         return;
       }
 
-      // Fallback: any connected mail_account with valid user_id
+      // Fallback: any connected mail_account
       const { data: anyAccount } = await supabase
         .from("mail_accounts")
         .select("id, provider, email_address, status, is_default, last_sync_at")
         .eq("status", "connected")
-        .not("user_id", "is", null)
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
