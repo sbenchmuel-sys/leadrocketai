@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +78,8 @@ export function OutlookConnectionCard() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(ctxWorkspaceId);
   // null = unknown, true = configured, false = missing
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   const fetchHealth = useCallback(async (wsId: string) => {
     try {
@@ -118,6 +120,46 @@ export function OutlookConnectionCard() {
     }
     setCredentialsConfigured(true);
   }, [ctxWorkspaceId, fetchHealth]);
+
+  const finishConnection = useCallback(async (email?: string) => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    popupRef.current?.close();
+    popupRef.current = null;
+    setIsConnecting(false);
+
+    const wsId = workspaceId ?? ctxWorkspaceId;
+    if (wsId) await fetchHealth(wsId);
+    if (email) toast.success("Outlook connected", { description: email });
+  }, [ctxWorkspaceId, fetchHealth, workspaceId]);
+
+  useEffect(() => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    let callbackOrigin = "";
+    try {
+      callbackOrigin = new URL(supabaseUrl).origin;
+    } catch {
+      callbackOrigin = "";
+    }
+
+    const handleOAuthMessage = (event: MessageEvent) => {
+      if (!callbackOrigin || event.origin !== callbackOrigin) return;
+      const data = event.data as { type?: string; provider?: string; ok?: boolean; email?: string; error?: string };
+      if (data?.type !== "mail_oauth_result" || data.provider !== "outlook") return;
+
+      if (data.ok) {
+        void finishConnection(data.email);
+      } else {
+        setIsConnecting(false);
+        toast.error("Connection failed", { description: data.error || "Please try again." });
+      }
+    };
+
+    window.addEventListener("message", handleOAuthMessage);
+    return () => window.removeEventListener("message", handleOAuthMessage);
+  }, [finishConnection]);
 
   const ensureWorkspace = async (): Promise<string> => {
     if (workspaceId) return workspaceId;
