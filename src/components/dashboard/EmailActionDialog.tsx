@@ -1412,15 +1412,17 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               Cancel
             </Button>
             
-            {activeMailProvider !== "outlook" && (
-              <Button 
-                onClick={handleOpenInGmail}
+            {activeMailProvider && (
+              <Button
+                onClick={handleOpenInProvider}
                 disabled={isGenerating || !body.trim()}
                 variant="outline"
                 className="gap-1"
               >
                 <Mail className="h-4 w-4" />
-                <span className="hidden sm:inline">Open in Gmail</span>
+                <span className="hidden sm:inline">
+                  Open in {activeMailProvider === "outlook" ? "Outlook" : "Gmail"}
+                </span>
               </Button>
             )}
             
