@@ -50,6 +50,7 @@ import {
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { buildGmailComposeUrl, buildOutlookComposeUrl } from "@/lib/mailProviders/composeUrl";
 import { supabase } from "@/integrations/supabase/client";
 import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem, type TimelineItem } from "@/lib/supabaseQueries";
 import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile, RepProfile } from "@/lib/repProfileQueries";
@@ -214,21 +215,7 @@ function getEmailMode(actionKey: string | null, hasThread: boolean): 'reply' | '
   return (actionType === "reply" && hasThread) ? 'reply' : 'new_outreach';
 }
 
-// Build Gmail compose URL
-function buildGmailComposeUrl(to: string, subject: string, body: string, fromEmail?: string): string {
-  const params = new URLSearchParams();
-  params.set("to", to);
-  params.set("su", subject);
-  params.set("body", body);
-  
-  if (fromEmail) {
-    params.set("authuser", fromEmail);
-    const encodedEmail = encodeURIComponent(fromEmail);
-    return `https://mail.google.com/mail/u/${encodedEmail}/?view=cm&fs=1&${params.toString()}`;
-  }
-  
-  return `https://mail.google.com/mail/?view=cm&fs=1&${params.toString()}`;
-}
+// Compose URL builders are imported from @/lib/mailProviders/composeUrl
 
 // One-click action button component
 interface ActionButtonProps {
@@ -783,11 +770,17 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     }
   }
 
-  async function handleOpenInGmail() {
+  async function handleOpenInProvider() {
     if (!to.trim() || !subject.trim() || !body.trim()) {
       toast.error("Please fill in all fields first");
       return;
     }
+
+    const isOutlook = activeMailProvider === "outlook";
+    const providerLabel = isOutlook ? "Outlook" : "Gmail";
+    const fromEmail = isOutlook
+      ? activeAccount?.email_address ?? null
+      : connection?.gmail_email ?? activeAccount?.email_address ?? null;
 
     const fullBody = getFullEmailBody();
     const effectiveActionKey = actionKey || lead.next_action_key || null;
@@ -797,7 +790,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
     try {
       await saveDraft(lead.id, {
         channel: 'email',
-        draft_type: 'gmail_compose',
+        draft_type: isOutlook ? 'outlook_compose' : 'gmail_compose',
         to_recipient: to.trim(),
         subject: subject.trim(),
         body_text: fullBody,
@@ -816,7 +809,7 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
         console.error("Failed to update meeting pack followup:", err);
       }
     }
-    
+
     // Add attachment reminder
     let bodyWithAttachments = fullBody;
     if (selectedAttachments.length > 0) {
@@ -826,10 +819,12 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
       bodyWithAttachments += `\n\n---\n[Remember to attach: ${attachmentNames}]`;
     }
 
-    const gmailUrl = buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, connection?.gmail_email);
-    window.open(gmailUrl, '_blank');
-    
-    // Update sequence state after Gmail compose (single atomic update including motion override)
+    const composeUrl = isOutlook
+      ? buildOutlookComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, fromEmail)
+      : buildGmailComposeUrl(to.trim(), subject.trim(), bodyWithAttachments, fromEmail ?? undefined);
+    window.open(composeUrl, '_blank');
+
+    // Update sequence state after compose (single atomic update including motion override)
     try {
       const motionOvr = getMotionOverrideValue();
       const intentUsed = getAITaskForAction(effectiveActionKey, threadEmails.length > 0, lead.motion, threadEmails.some(e => e.direction === 'outbound'));
@@ -845,21 +840,22 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
         motionOvr,
       );
       if (isOverride) {
-        console.log("[EmailActionDialog] Intent override logged (Gmail):", {
+        console.log(`[EmailActionDialog] Intent override logged (${providerLabel}):`, {
           suggested_intent: recommended,
           chosen_intent: intentUsed,
           previous_sequence_step: resolvedStep,
         });
       }
-      console.log("[EmailActionDialog] Sequence state updated after Gmail compose");
+      console.log(`[EmailActionDialog] Sequence state updated after ${providerLabel} compose`);
     } catch (seqErr) {
       console.warn("[EmailActionDialog] Sequence update failed (non-blocking):", seqErr);
     }
 
-    toast.success("Opening Gmail compose...");
+    toast.success(`Opening ${providerLabel} compose...`);
     onOpenChange(false);
     onSuccess?.();
   }
+
 
   // Determine email mode and dialog title
   const effectiveActionKey = actionKey || lead.next_action_key || null;
@@ -1416,15 +1412,17 @@ ${repProfile?.calendar_link ? `Calendar Link: ${repProfile.calendar_link}` : ''}
               Cancel
             </Button>
             
-            {activeMailProvider !== "outlook" && (
-              <Button 
-                onClick={handleOpenInGmail}
+            {activeMailProvider && (
+              <Button
+                onClick={handleOpenInProvider}
                 disabled={isGenerating || !body.trim()}
                 variant="outline"
                 className="gap-1"
               >
                 <Mail className="h-4 w-4" />
-                <span className="hidden sm:inline">Open in Gmail</span>
+                <span className="hidden sm:inline">
+                  Open in {activeMailProvider === "outlook" ? "Outlook" : "Gmail"}
+                </span>
               </Button>
             )}
             

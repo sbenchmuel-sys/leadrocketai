@@ -69,7 +69,7 @@ import {
   RefreshCw,
   AlertTriangle
 } from "lucide-react";
-import { SendEmailButton } from "@/components/gmail/SendEmailButton";
+import { SendEmailButton } from "@/components/mail/SendEmailButton";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { UpcomingMeetingsSection } from "@/components/lead/UpcomingMeetingsSection";

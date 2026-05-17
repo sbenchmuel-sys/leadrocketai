@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert";
 import { toast } from "sonner";
 
-interface GmailSyncButtonProps {
+interface MailSyncButtonProps {
   leadId: string;
   leadEmail: string;
   onSyncComplete?: () => void;
@@ -26,14 +26,14 @@ interface GmailSyncButtonProps {
   showLastSync?: boolean;
 }
 
-export function GmailSyncButton({
+export function MailSyncButton({
   leadId,
   leadEmail,
   onSyncComplete,
   variant = "outline",
   size = "sm",
   showLastSync = true,
-}: GmailSyncButtonProps) {
+}: MailSyncButtonProps) {
   const navigate = useNavigate();
   const { connectGmail } = useGmailConnection();
   const {

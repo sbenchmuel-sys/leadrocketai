@@ -13,7 +13,7 @@ import {
   SourceType, Motion, getDisplayPhase, DealStage, getOriginCategory,
 } from "@/lib/dashboardUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
-import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
+import { MailSyncButton } from "@/components/mail/MailSyncButton";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
 import { useMemo, useEffect, useState } from "react";
 import { calculateClosingPower, getMomentum } from "@/lib/closingPowerUtils";
@@ -153,10 +153,10 @@ export default function LeadDetailHeader({
           />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
           {isConnected ? (
-            <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
+            <MailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (
             <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
-              <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
+              <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect inbox</Link>
             </Button>
           )}
           <AlertDialog>

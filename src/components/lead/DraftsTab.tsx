@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database, Phone } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { SendEmailButton } from "@/components/gmail/SendEmailButton";
+import { SendEmailButton } from "@/components/mail/SendEmailButton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -547,7 +547,7 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                 </div>
               )}
             </div>
-            {/* Send via Gmail for email channel */}
+            {/* Send via active mail provider */}
             {channel === "email" && (
               <div className="flex gap-2 justify-end">
                 <SendEmailButton

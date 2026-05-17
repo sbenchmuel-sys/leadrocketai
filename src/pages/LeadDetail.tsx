@@ -9,7 +9,7 @@ import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import MeetingsTab from "@/components/lead/MeetingsTab";
-import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useMailSync } from "@/hooks/useMailSync";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
@@ -27,7 +27,7 @@ export default function LeadDetail() {
   const [activeTab, setActiveTab] = useState("timeline");
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
-  const { isConnected } = useGmailConnection();
+  const { isConnected } = useMailSync();
   const { workspaceId } = useWorkspace();
 
   const backRoute = originContext === "leads" ? "/app/leads" : originContext === "inbox" ? "/app/inbox" : "/app";
