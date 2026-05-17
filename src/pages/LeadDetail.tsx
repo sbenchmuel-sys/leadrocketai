@@ -97,6 +97,7 @@ export default function LeadDetail() {
       <LeadDetailHeader
         lead={lead}
         isConnected={isConnected}
+        isMailLoading={isMailLoading}
         isDeleting={isDeleting}
         originContext={originContext}
         onDelete={handleDelete}
