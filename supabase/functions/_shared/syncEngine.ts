@@ -183,7 +183,7 @@ export interface LeadUpdate {
   meeting_summary_count: number;
   nurture_outbound_count: number;
   last_nurture_outbound_at: string | null;
-  last_activity_at: string;
+  last_activity_at?: string;
   action_dismissed_at?: string | null;
   auto_nurture_eligible?: boolean;
 }
@@ -644,8 +644,19 @@ export function buildLeadUpdate(
     meeting_summary_count: metrics.meeting_summary_count,
     nurture_outbound_count: metrics.nurture_outbound_count,
     last_nurture_outbound_at: metrics.last_nurture_outbound_at,
-    last_activity_at: new Date().toISOString(),
   };
+
+  // Derive last_activity_at from the latest real event (inbound or outbound).
+  // Never bump to now() on a noop sync — that misleads the dashboard's
+  // "Last Activity" column. If no dates are known, omit the field so the
+  // DB trigger on lead_timeline_items / the existing value stands.
+  const activityDates = [metrics.last_outbound_at, metrics.last_inbound_at]
+    .filter(Boolean)
+    .map((d) => new Date(d as string).getTime())
+    .filter((t) => Number.isFinite(t));
+  if (activityDates.length > 0) {
+    (leadUpdate as LeadUpdate).last_activity_at = new Date(Math.max(...activityDates)).toISOString();
+  }
 
   // For active nurture/OOO, remove overwrite fields so they're not clobbered
   if (hasActiveNurture || hasActiveOOO) {
