@@ -4,6 +4,9 @@ import { getActionType } from "@/lib/dashboardUtils";
 import type { TabFilters, NextActionGroup } from "@/lib/dashboardStateCache";
 
 function isAutomationOn(lead: EnrichedLead): boolean {
+  // Consent gate: only count as "automation on" when user has explicitly opted in.
+  const hasConsent = !!(lead as any).automation_mode;
+  if (!hasConsent) return false;
   const hasSeq = !!(lead as any).eligible_at && lead.needs_action;
   const hasNurtureAuto = (lead as any).nurture_mode === "auto" && (lead as any).nurture_status === "active";
   return hasSeq || hasNurtureAuto;
