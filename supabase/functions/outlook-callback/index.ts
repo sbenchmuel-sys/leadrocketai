@@ -90,10 +90,10 @@ serve(async (req) => {
     const error = url.searchParams.get("error");
 
     if (error) {
-      logger.error("mail.outlook.callback_oauth_error", { error });
-      return new Response(errorPage("Authentication Failed", "Microsoft declined the request. Please try again."), {
-        headers: HTML_HEADERS,
-      });
+      const errorDescription = url.searchParams.get("error_description") ?? "";
+      logger.error("mail.outlook.callback_oauth_error", { error, error_description: errorDescription });
+      const aadstsCode = extractAadsts(errorDescription) ?? extractAadsts(error);
+      return renderAadstsResponse(aadstsCode, errorDescription || error, "oauth_error");
     }
 
     if (!code || !stateParam) {
