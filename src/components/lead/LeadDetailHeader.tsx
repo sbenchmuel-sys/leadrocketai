@@ -96,7 +96,7 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
+  lead, isConnected, isMailLoading, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const motion = (lead.motion as Motion) || "outbound_prospecting";
