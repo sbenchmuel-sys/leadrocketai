@@ -2422,6 +2422,8 @@ export type Database = {
           action_items: Json | null
           ai_model_used: string | null
           created_at: string
+          followup_email_body: string | null
+          followup_email_subject: string | null
           generated_at: string | null
           id: string
           lead_id: string
@@ -2437,6 +2439,8 @@ export type Database = {
           action_items?: Json | null
           ai_model_used?: string | null
           created_at?: string
+          followup_email_body?: string | null
+          followup_email_subject?: string | null
           generated_at?: string | null
           id?: string
           lead_id: string
@@ -2452,6 +2456,8 @@ export type Database = {
           action_items?: Json | null
           ai_model_used?: string | null
           created_at?: string
+          followup_email_body?: string | null
+          followup_email_subject?: string | null
           generated_at?: string | null
           id?: string
           lead_id?: string
