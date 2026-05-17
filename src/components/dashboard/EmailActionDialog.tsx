@@ -50,6 +50,7 @@ import {
 import { useAITask, AITaskType } from "@/hooks/useAITask";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { buildGmailComposeUrl, buildOutlookComposeUrl } from "@/lib/mailProviders/composeUrl";
 import { supabase } from "@/integrations/supabase/client";
 import { getLeadEmailThread, getLeadDetail, saveDraft, dismissLeadAction, EmailThreadItem, type TimelineItem } from "@/lib/supabaseQueries";
 import { updateMeetingPackFollowup, getSignatures, getDefaultSignature, getKnowledgeDocuments, RepSignature, KnowledgeDocument, getRepProfile, RepProfile } from "@/lib/repProfileQueries";
