@@ -232,19 +232,10 @@ serve(async (req) => {
       is_default: isDefault,
     });
 
-    // --- Redirect back to app (or show success page if redirect_url missing) ---
-    if (!stateData.redirect_url) {
-      return new Response(oauthResultPage(true, "outlook", emailAddress), { headers: HTML_HEADERS });
-    }
-
-    const redirectTarget = new URL(stateData.redirect_url);
-    redirectTarget.searchParams.set("outlook_connected", "true");
-    redirectTarget.searchParams.set("outlook_email", emailAddress);
-
-    return new Response(null, {
-      status: 302,
-      headers: { Location: redirectTarget.toString() },
-    });
+    // Always signal the opener via postMessage and close the popup.
+    // Redirecting the popup back into the SPA causes an auth-hydration race
+    // that lands users on the sign-in screen inside the popup.
+    return new Response(oauthResultPage(true, "outlook", emailAddress), { headers: HTML_HEADERS });
   } catch (err) {
     const errorId = crypto.randomUUID();
     logger.error("mail.outlook.callback_fatal", { error_id: errorId, error: String(err) });
