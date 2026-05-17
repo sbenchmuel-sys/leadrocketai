@@ -23,6 +23,15 @@ function escapeHtml(s: string): string {
 function errorPage(title: string, msg: string): string {
   return `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5}.box{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}h1{color:#ef4444}p{color:#666}</style></head><body><div class="box"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(msg)}</p><p>This window will close automatically…</p></div><script>setTimeout(()=>window.close(),3000)</script></body></html>`;
 }
+function oauthResultPage(ok: boolean, provider: string, emailOrError?: string): string {
+  const payload = JSON.stringify(
+    ok
+      ? { type: "mail_oauth_result", provider, ok: true, email: emailOrError ?? null }
+      : { type: "mail_oauth_result", provider, ok: false, error: emailOrError ?? "Connection failed" }
+  ).replace(/</g, "\\u003c");
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Connecting…</title><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:grid;place-items:center;font:14px system-ui,sans-serif;color:#64748b}</style></head><body><span>Finishing connection…</span><script>(function(){try{if(window.opener&&!window.opener.closed){window.opener.postMessage(${payload},'*')}}catch(e){}setTimeout(function(){window.close()},100)})();</script></body></html>`;
+}
 const HTML_HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
   "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
@@ -225,9 +234,7 @@ serve(async (req) => {
 
     // --- Redirect back to app (or show success page if redirect_url missing) ---
     if (!stateData.redirect_url) {
-      // No redirect URL — show a self-closing success page for popup flows
-      const successHtml = `<html><head><style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5}.box{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}h1{color:#16a34a}p{color:#666}</style></head><body><div class="box"><h1>✓ Connected!</h1><p>Your Outlook account has been connected successfully.</p><p>This window will close automatically…</p></div><script>window.close();setTimeout(()=>window.close(),1500)</script></body></html>`;
-      return new Response(successHtml, { headers: HTML_HEADERS });
+      return new Response(oauthResultPage(true, "outlook", emailAddress), { headers: HTML_HEADERS });
     }
 
     const redirectTarget = new URL(stateData.redirect_url);
