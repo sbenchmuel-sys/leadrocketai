@@ -183,7 +183,7 @@ export interface LeadUpdate {
   meeting_summary_count: number;
   nurture_outbound_count: number;
   last_nurture_outbound_at: string | null;
-  last_activity_at: string;
+  last_activity_at?: string;
   action_dismissed_at?: string | null;
   auto_nurture_eligible?: boolean;
 }
