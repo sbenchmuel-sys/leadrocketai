@@ -202,8 +202,14 @@ export function classifyRevenueState(
   const isOOO = !!oooUntil && new Date(oooUntil).getTime() > Date.now();
 
   // --- 0. AUTOMATION (highest priority — divert automated leads) ---
-  const hasSequenceAutomation = !!lead.eligible_at && lead.needs_action;
-  const hasNurtureAutomation = lead.nurture_mode === "auto" && lead.nurture_status === "active";
+  // Consent gate: a lead is only "in automation" when the user has explicitly
+  // opted in (automation_mode IS NOT NULL). Scheduling fields like eligible_at
+  // can be set by upstream processes for non-automated leads — those must not
+  // appear here. Mirrors the executor consent gate.
+  const automationMode = (lead as any).automation_mode as string | null | undefined;
+  const hasConsent = !!automationMode;
+  const hasSequenceAutomation = hasConsent && !!lead.eligible_at && lead.needs_action;
+  const hasNurtureAutomation = hasConsent && lead.nurture_mode === "auto" && lead.nurture_status === "active";
   if (hasSequenceAutomation || hasNurtureAutomation) return "automation";
 
   // --- SNOOZE GATE: if action_dismissed_at is in the future, suppress action_required ---
