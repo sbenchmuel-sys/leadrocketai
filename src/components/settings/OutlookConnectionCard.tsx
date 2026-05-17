@@ -202,6 +202,29 @@ export function OutlookConnectionCard() {
         throw new Error("Failed to get auth URL");
       }
 
+      const redirectUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ workspaceId: wsId, redirectUrl }),
+      });
+
+      const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
+
+      if (data.not_configured) {
+        setCredentialsConfigured(false);
+        throw new Error("Outlook integration not fully configured. Please contact your administrator.");
+      }
+      if (!resp.ok || !data.ok) {
+        throw new Error(data.error || `Request failed (${resp.status})`);
+      }
+      if (!data.authUrl) {
+        throw new Error("Failed to get auth URL");
+      }
+
       // Open in a popup to avoid breaking the preview iframe
       const popup = window.open(data.authUrl, "outlook_oauth", "width=520,height=650,left=200,top=100");
       if (!popup) {
@@ -209,14 +232,12 @@ export function OutlookConnectionCard() {
         window.location.href = data.authUrl;
         return;
       }
+      popupRef.current = popup;
 
       // Poll until the popup closes, then refresh health
-      const poll = setInterval(async () => {
+      pollRef.current = window.setInterval(async () => {
         if (popup.closed) {
-          clearInterval(poll);
-          setIsConnecting(false);
-          const wsId = workspaceId ?? ctxWorkspaceId;
-          if (wsId) await fetchHealth(wsId);
+          await finishConnection();
         }
       }, 800);
     } catch (err) {
