@@ -163,9 +163,15 @@ serve(async (req) => {
     if (!tokenResp.ok) {
       const body = await tokenResp.text();
       logger.error("mail.outlook.callback_token_exchange_failed", { status: tokenResp.status, body });
-      return new Response(errorPage("Connection Failed", "Failed to exchange code for tokens. Please try again."), {
-        status: 500, headers: HTML_HEADERS,
-      });
+      let errorDescription = body;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed.error_description === "string") {
+          errorDescription = parsed.error_description;
+        }
+      } catch { /* body wasn't JSON — use raw text */ }
+      const aadstsCode = extractAadsts(errorDescription) ?? extractAadsts(body);
+      return renderAadstsResponse(aadstsCode, errorDescription, "token_exchange");
     }
 
     const tokens = await tokenResp.json();
