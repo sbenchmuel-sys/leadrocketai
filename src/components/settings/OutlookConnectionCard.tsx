@@ -180,28 +180,6 @@ export function OutlookConnectionCard() {
       if (!token) throw new Error("Not authenticated");
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ workspaceId: wsId }),
-      });
-
-      const data = await resp.json().catch(() => ({ ok: false, error: "Invalid response" }));
-
-      if (data.not_configured) {
-        setCredentialsConfigured(false);
-        throw new Error("Outlook integration not fully configured. Please contact your administrator.");
-      }
-      if (!resp.ok || !data.ok) {
-        throw new Error(data.error || `Request failed (${resp.status})`);
-      }
-      if (!data.authUrl) {
-        throw new Error("Failed to get auth URL");
-      }
-
       const redirectUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
       const resp = await fetch(`${supabaseUrl}/functions/v1/outlook-auth`, {
         method: "POST",
@@ -246,6 +224,12 @@ export function OutlookConnectionCard() {
       setIsConnecting(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current !== null) window.clearInterval(pollRef.current);
+    };
+  }, []);
 
   const connectDisabled = isConnecting || credentialsConfigured === false;
   const connectTooltip =
