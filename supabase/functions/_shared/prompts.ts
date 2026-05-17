@@ -217,6 +217,8 @@ Return JSON ONLY:
 {
   "internal_recap_bullets": ["..."],
   "milestones_from_meeting": [{"description":"...","status":"completed|pending","date":null}],
+  "risks": [{"issue":"...","level":"low|medium|high"}],
+  "action_items": [{"description":"...","owner":"...","due_date":null}],
   "open_questions": ["..."],
   "customer_email": {"subject":"...","body":"..."}
 }
@@ -227,6 +229,8 @@ Rules:
 - Include clear next steps (who does what)
 - One CTA (e.g. confirm next meeting / share doc)
 - Use Knowledge Context if it helps answer questions raised
+- Risks: only include items grounded in the meeting (e.g. blockers, objections, concerns). Empty array if none.
+- Action items: one per commitment made in the meeting. Owner is a name or role; due_date is YYYY-MM-DD or null. Empty array if none.
 
 INPUT:
 Mode: {{MODE}}
