@@ -34,6 +34,7 @@ const DEFAULT_PROVIDERS = ["google_meet"];
 const STUCK_FETCHING_MS = 5 * 60 * 1000;
 const MAX_BACKOFF_MIN = 60;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const MAX_ANALYZE_PER_RUN = 5;
 
 interface TranscriptEmbed {
   id: string;
@@ -226,10 +227,18 @@ Deno.serve(async (req) => {
     }
 
     const analyzeUrl = `${supabaseUrl}/functions/v1/meeting-transcript-analyze`;
+    let analyze_capped = false;
     for (const row of (readyRaw ?? []) as Array<{ id: string; meeting_ai_summaries: Array<{ id: string }> | null }>) {
       // Skip transcripts that already have a summary row.
       const summaries = row.meeting_ai_summaries ?? [];
       if (summaries.length > 0) continue;
+
+      // Per-run cap: a backlog should drain over several poller cycles
+      // rather than starving Phase 2 / exhausting the function timeout.
+      if (analyze_dispatched + analyze_errors >= MAX_ANALYZE_PER_RUN) {
+        analyze_capped = true;
+        break;
+      }
 
       try {
         const resp = await fetch(analyzeUrl, {
@@ -301,6 +310,7 @@ Deno.serve(async (req) => {
       expired_24h,
       analyze_dispatched,
       analyze_errors,
+      analyze_capped,
       errors,
       durationMs,
     };
