@@ -2242,6 +2242,7 @@ export type Database = {
           provider: string
           refresh_token: string | null
           status: string
+          tenant_id: string | null
           token_expires_at: string | null
           updated_at: string
           user_id: string | null
@@ -2263,6 +2264,7 @@ export type Database = {
           provider: string
           refresh_token?: string | null
           status?: string
+          tenant_id?: string | null
           token_expires_at?: string | null
           updated_at?: string
           user_id?: string | null
@@ -2284,6 +2286,7 @@ export type Database = {
           provider?: string
           refresh_token?: string | null
           status?: string
+          tenant_id?: string | null
           token_expires_at?: string | null
           updated_at?: string
           user_id?: string | null
