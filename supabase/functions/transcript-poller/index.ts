@@ -30,7 +30,7 @@ const PROVIDER_TO_FETCH_FN: Record<string, string> = {
   teams: "teams-transcript-fetch",
 };
 
-const DEFAULT_PROVIDERS = ["google_meet"];
+const DEFAULT_PROVIDERS = ["google_meet", "teams"];
 const STUCK_FETCHING_MS = 5 * 60 * 1000;
 const MAX_BACKOFF_MIN = 60;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
