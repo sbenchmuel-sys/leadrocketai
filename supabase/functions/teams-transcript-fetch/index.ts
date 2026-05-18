@@ -119,6 +119,12 @@ function resultReason(result: TeamsTranscriptResult): string | null {
   return result.reason;
 }
 
+function resultDetail(result: TeamsTranscriptResult): string | null {
+  // deno-lint-ignore no-explicit-any
+  const d = (result as any).detail;
+  return typeof d === "string" && d.length > 0 ? d : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -313,10 +319,12 @@ serve(async (req) => {
     // 7. Map result to UPDATE
     stage = "persist_result";
     const reason = resultReason(result);
+    const detail = resultDetail(result);
     // deno-lint-ignore no-explicit-any
     const updates: Record<string, any> = {
       status: result.status,
       status_reason: reason,
+      provider_error_detail: detail,
     };
     if (result.status === "ready") {
       updates.transcript_text = result.vtt;
