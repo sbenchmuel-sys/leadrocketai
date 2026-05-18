@@ -2,8 +2,14 @@
 // Subscription Health Check — cron every 12 hours
 //
 // For each Outlook mail_account:
-//   - If subscription missing OR expires_at < 24h → renew
-//   - If renewal fails → mark account.status = "error", log reason
+//   - If we have ANY existing subscription row with a subscription_id,
+//     try PATCH (renew) first — even if the row is currently flagged
+//     as 'error'. PATCH does not trigger Graph's validation handshake,
+//     so it's far more reliable than CREATE.
+//   - Only fall through to CREATE if no row exists OR the PATCH returns
+//     404 (Graph removed the subscription on its side).
+//   - Tolerate transient failures via error_count: only after N
+//     consecutive failures do we escalate mail_accounts.status to 'error'.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -12,7 +18,6 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import {
   createOutlookSubscription,
   renewOutlookSubscription,
-  SUBSCRIPTION_LIFETIME_MS,
 } from "../_shared/outlookSubscription.ts";
 import { logger } from "../_shared/logger.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
@@ -24,6 +29,9 @@ const corsHeaders = {
 
 // Renew when subscription expires within 24 hours
 const RENEWAL_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Only escalate mail_accounts.status='error' after this many consecutive
+// failures. Keeps a single 502 from showing a red banner in the UI.
+const ESCALATE_AFTER_FAILURES = 3;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204 });
@@ -48,45 +56,97 @@ serve(async (req) => {
 
     const results: Array<{ account_id: string; action: string; ok: boolean; error?: string }> = [];
 
-    for (const account of accounts ?? []) {
+    for (const rawAccount of accounts ?? []) {
+      const account = rawAccount as { id: string; email_address: string; status: string };
       try {
         const accessToken = await getFreshOutlookToken(account.id, serviceClient);
 
-        // Check existing active subscription
-        const { data: existingSub } = await serviceClient
+        // Pull the most recent subscription row regardless of status.
+        // We want to try PATCH even on 'error' rows — PATCH is reliable
+        // and may succeed where a prior CREATE failed.
+        const { data: existingSubRaw } = await serviceClient
           .from("outlook_subscriptions")
-          .select("id, subscription_id, expiration_at")
+          .select("id, subscription_id, expiration_at, status, error_count")
           .eq("mail_account_id", account.id)
-          .eq("status", "active")
+          .order("updated_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
 
-        const now = Date.now();
-        const needsRenewal =
-          !existingSub ||
-          new Date(existingSub.expiration_at).getTime() - now < RENEWAL_WINDOW_MS;
+        const existingSub = existingSubRaw as
+          | {
+              id: string;
+              subscription_id: string;
+              expiration_at: string;
+              status: string;
+              error_count: number;
+            }
+          | null;
 
-        if (!needsRenewal) {
+        const now = Date.now();
+
+        // Skip only if the sub is healthy AND not within the renewal window.
+        const isHealthy = existingSub?.status === "active";
+        const isFarFromExpiry =
+          existingSub &&
+          new Date(existingSub.expiration_at).getTime() - now >= RENEWAL_WINDOW_MS;
+
+        if (isHealthy && isFarFromExpiry) {
           results.push({ account_id: account.id, action: "skip", ok: true });
           continue;
         }
 
-        if (existingSub) {
-          // Renew via PATCH
-          await renewOutlookSubscription(
-            account.id,
-            existingSub.subscription_id,
-            existingSub.id,
-            accessToken,
-            serviceClient
-          );
-          results.push({ account_id: account.id, action: "renewed", ok: true });
-        } else {
-          // Create fresh subscription
-          await createOutlookSubscription(account.id, accessToken, serviceClient);
-          results.push({ account_id: account.id, action: "created", ok: true });
+        // ── Try PATCH first if we have a subscription_id ──
+        // This is the safe, handshake-free path. Works for routine
+        // renewals, retry-after-transient-error, and even attempts to
+        // revive a sub we previously marked 'removed' (Graph may still
+        // accept the PATCH if it hasn't actually expired their side yet).
+        if (existingSub?.subscription_id) {
+          try {
+            await renewOutlookSubscription(
+              account.id,
+              existingSub.subscription_id,
+              existingSub.id,
+              accessToken,
+              serviceClient
+            );
+            results.push({ account_id: account.id, action: "renewed", ok: true });
+
+            // Restore account status if it was in error
+            if (account.status === "error") {
+              await serviceClient
+                .from("mail_accounts")
+                .update({ status: "connected", error_reason: null, updated_at: new Date().toISOString() })
+                .eq("id", account.id);
+            }
+            continue;
+          } catch (patchErr) {
+            const status = (patchErr as Error & { status?: number }).status;
+            // 404 → subscription is genuinely gone on Graph's side.
+            // Fall through to CREATE. Any other status → treat as transient.
+            if (status !== 404) {
+              throw patchErr;
+            }
+            logger.info("mail.outlook.subscription_patch_404_fallthrough", {
+              mail_account_id: account.id,
+              subscription_id: existingSub.subscription_id,
+            });
+            // Mark the dead row 'removed' before CREATE so we don't try
+            // to PATCH this id again on the next run.
+            await serviceClient
+              .from("outlook_subscriptions")
+              .update({
+                status: "removed",
+                error_reason: "Graph returned 404 on PATCH",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", existingSub.id);
+          }
         }
 
-        // Restore account status if it was in error
+        // ── CREATE path (no existing sub, or PATCH returned 404) ──
+        await createOutlookSubscription(account.id, accessToken, serviceClient);
+        results.push({ account_id: account.id, action: "created", ok: true });
+
         if (account.status === "error") {
           await serviceClient
             .from("mail_accounts")
@@ -102,19 +162,51 @@ serve(async (req) => {
           error: reason,
         });
 
-        await Promise.all([
-          serviceClient
+        // Read current error_count (may have been bumped by a lifecycle event)
+        // so escalation reflects truly consecutive failures.
+        const { data: currentSubRaw } = await serviceClient
+          .from("outlook_subscriptions")
+          .select("id, error_count")
+          .eq("mail_account_id", account.id)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const currentSub = currentSubRaw as { id: string; error_count: number } | null;
+        const newErrorCount = (currentSub?.error_count ?? 0) + 1;
+        const shouldEscalate = newErrorCount >= ESCALATE_AFTER_FAILURES;
+
+        // Always bump the subscription row's error_count + reason.
+        if (currentSub) {
+          await serviceClient
+            .from("outlook_subscriptions")
+            .update({
+              error_count: newErrorCount,
+              error_reason: reason,
+              // Only flip the sub row's status to 'error' once we've
+              // crossed the escalation threshold, so a single transient
+              // 502 doesn't take the sub out of contention for PATCH.
+              ...(shouldEscalate ? { status: "error" } : {}),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", currentSub.id);
+        }
+
+        // Only flip mail_accounts.status to 'error' (the thing the UI
+        // shows as a red banner) on sustained failure.
+        if (shouldEscalate) {
+          await serviceClient
             .from("mail_accounts")
             .update({ status: "error", error_reason: reason, updated_at: new Date().toISOString() })
-            .eq("id", account.id),
-          serviceClient
-            .from("outlook_subscriptions")
-            .update({ status: "error", error_reason: reason, updated_at: new Date().toISOString() })
-            .eq("mail_account_id", account.id)
-            .eq("status", "active"),
-        ]);
+            .eq("id", account.id);
+        }
 
-        results.push({ account_id: account.id, action: "error", ok: false, error: reason });
+        results.push({
+          account_id: account.id,
+          action: shouldEscalate ? "error_escalated" : "error_tolerated",
+          ok: false,
+          error: reason,
+        });
       }
     }
 
@@ -122,7 +214,8 @@ serve(async (req) => {
       total: results.length,
       renewed: results.filter((r) => r.action === "renewed").length,
       created: results.filter((r) => r.action === "created").length,
-      errors: results.filter((r) => !r.ok).length,
+      tolerated: results.filter((r) => r.action === "error_tolerated").length,
+      escalated: results.filter((r) => r.action === "error_escalated").length,
     });
 
     return new Response(JSON.stringify({ ok: true, results }), {
@@ -137,3 +230,4 @@ serve(async (req) => {
     });
   }
 });
+
