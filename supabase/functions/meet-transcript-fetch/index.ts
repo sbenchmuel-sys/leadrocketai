@@ -163,6 +163,7 @@ async function upsertTranscriptRow(
   existing: TranscriptRow | null,
   status: "fetching" | "failed",
   statusReason: string | null,
+  providerErrorDetail: string | null,
 ): Promise<string> {
   const nowIso = new Date().toISOString();
   if (existing) {
@@ -172,6 +173,7 @@ async function upsertTranscriptRow(
       .update({
         status,
         status_reason: statusReason,
+        provider_error_detail: providerErrorDetail,
         last_attempt_at: nowIso,
         fetch_attempts: nextAttempts,
       })
@@ -193,6 +195,7 @@ async function upsertTranscriptRow(
       provider: "google_meet",
       status,
       status_reason: statusReason,
+      provider_error_detail: providerErrorDetail,
       fetch_attempts: 1,
       last_attempt_at: nowIso,
     })
@@ -335,6 +338,7 @@ serve(async (req) => {
           existing,
           "failed",
           "TOKEN_INVALID",
+          null,
         );
         return jsonResponse(200, {
           ok: true,
@@ -354,6 +358,7 @@ serve(async (req) => {
       existing,
       "fetching",
       null,
+      null,
     );
 
     // 6. Call helper
@@ -364,10 +369,13 @@ serve(async (req) => {
     // 7. Map result to UPDATE
     stage = "persist_result";
     const reason = resultReason(result);
+    const providerErrorDetail =
+      result.status === "failed" ? (result.detail ?? null) : null;
     // deno-lint-ignore no-explicit-any
     const updates: Record<string, any> = {
       status: result.status,
       status_reason: reason,
+      provider_error_detail: providerErrorDetail,
     };
     if (result.status === "ready") {
       updates.transcript_text = JSON.stringify(result.entries);
