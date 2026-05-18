@@ -488,7 +488,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     </Card>
   );
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && !showAddForm) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && !showAddForm) {
     return (
       <div className="space-y-6">
         <UpcomingMeetingsSection leadId={leadId} />
@@ -509,7 +509,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     );
   }
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && showAddForm) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && showAddForm) {
     return (
       <div className="space-y-6">
         <UpcomingMeetingsSection leadId={leadId} />
