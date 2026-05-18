@@ -11,7 +11,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "./encryption.ts";
 import { logger } from "./logger.ts";
 import { OutlookGraphClient, MicrosoftCredentialsMissingError } from "./outlookGraphClient.ts";
-import { OUTLOOK_MAIL_SCOPES_STRING } from "./outlookScopes.ts";
+import {
+  OUTLOOK_MAIL_SCOPES_STRING,
+  extractTenantIdFromAccessToken,
+} from "./outlookScopes.ts";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -43,7 +46,7 @@ export async function getFreshOutlookToken(
 ): Promise<string> {
   const { data: account, error } = await serviceSupabase
     .from("mail_accounts")
-    .select("id, email_address, access_token, refresh_token, token_expires_at, status")
+    .select("id, email_address, access_token, refresh_token, token_expires_at, status, tenant_id")
     .eq("id", mailAccountId)
     .eq("provider", "outlook")
     .single();
@@ -87,6 +90,13 @@ export async function getFreshOutlookToken(
       hasKey ? encryptToken(newRefreshToken) : Promise.resolve(newRefreshToken),
     ]);
 
+    // Backfill tenant_id for accounts connected before the column existed —
+    // lets the frontend reconsent hook stop nudging existing personal-account
+    // users without forcing them to disconnect/reconnect.
+    const existingTenantId = (account as { tenant_id?: string | null }).tenant_id ?? null;
+    const refreshedTenantId =
+      existingTenantId ?? extractTenantIdFromAccessToken(newAccessToken);
+
     await serviceSupabase
       .from("mail_accounts")
       .update({
@@ -95,6 +105,7 @@ export async function getFreshOutlookToken(
         token_expires_at: newExpiresAt.toISOString(),
         status: "connected",
         error_reason: null,
+        ...(refreshedTenantId && !existingTenantId ? { tenant_id: refreshedTenantId } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", mailAccountId);

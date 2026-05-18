@@ -95,12 +95,19 @@ serve(async (req) => {
           continue;
         }
 
-        // ── Try PATCH first if we have a subscription_id ──
+        // ── Try PATCH first if we have a real subscription_id ──
         // This is the safe, handshake-free path. Works for routine
         // renewals, retry-after-transient-error, and even attempts to
         // revive a sub we previously marked 'removed' (Graph may still
         // accept the PATCH if it hasn't actually expired their side yet).
-        if (existingSub?.subscription_id) {
+        // `pending:` rows are local placeholders inserted by the catch
+        // handler when CREATE has never succeeded — skipping PATCH on
+        // those keeps CREATE in rotation every tick.
+        const hasRealSubscription =
+          !!existingSub?.subscription_id &&
+          !existingSub.subscription_id.startsWith("pending:");
+
+        if (hasRealSubscription && existingSub) {
           try {
             await renewOutlookSubscription(
               account.id,
@@ -190,6 +197,25 @@ serve(async (req) => {
               updated_at: new Date().toISOString(),
             })
             .eq("id", currentSub.id);
+        } else {
+          // CREATE has never produced a row for this account, so without
+          // an INSERT here the counter resets to 1 on every cron tick and
+          // we never escalate. Insert a placeholder row carrying the
+          // running error_count; createOutlookSubscription's upsert
+          // (onConflict: mail_account_id) will overwrite it cleanly when
+          // CREATE eventually succeeds. The synthetic subscription_id is
+          // never sent to Graph — PATCH against it returns 404, falling
+          // through to CREATE on the next tick.
+          await serviceClient
+            .from("outlook_subscriptions")
+            .insert({
+              mail_account_id: account.id,
+              subscription_id: `pending:${crypto.randomUUID()}`,
+              expiration_at: new Date().toISOString(),
+              status: shouldEscalate ? "error" : "active",
+              error_count: newErrorCount,
+              error_reason: reason,
+            });
         }
 
         // Only flip mail_accounts.status to 'error' (the thing the UI

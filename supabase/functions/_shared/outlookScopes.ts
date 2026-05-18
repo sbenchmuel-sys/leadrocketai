@@ -42,3 +42,28 @@ export const OUTLOOK_FULL_OAUTH_SCOPES = [
 export const OUTLOOK_MAIL_SCOPES_STRING = OUTLOOK_MAIL_SCOPES.join(" ");
 export const OUTLOOK_CALENDAR_SCOPES_STRING = OUTLOOK_CALENDAR_SCOPES.join(" ");
 export const OUTLOOK_FULL_OAUTH_SCOPES_STRING = OUTLOOK_FULL_OAUTH_SCOPES.join(" ");
+
+// Microsoft's consumer (personal-account) tenant. Tokens issued for
+// outlook.com / hotmail.com / live.com sign-ins always carry this as
+// their `tid` claim. `OnlineMeetingTranscript.Read.All` is a work/school
+// delegated-only permission, so personal-tenant tokens never carry it
+// even when the user successfully consents to the broader bundle —
+// the reconsent hook MUST skip the transcript-scope check for these
+// accounts or they get nudged to reconnect on every page load.
+export const OUTLOOK_PERSONAL_TENANT_ID = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+// Decode the `tid` claim from a Microsoft access token (a JWT). Returns
+// null if the token is malformed or the claim is missing — callers should
+// treat null as "tenant unknown" rather than "definitely work/school".
+export function extractTenantIdFromAccessToken(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padding = (4 - (payload.length % 4)) % 4;
+    const json = JSON.parse(atob(payload + "=".repeat(padding)));
+    return typeof json.tid === "string" ? json.tid : null;
+  } catch {
+    return null;
+  }
+}

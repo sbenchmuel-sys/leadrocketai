@@ -101,7 +101,7 @@ async function handleLifecycleEvent(
 
   const { data: sub } = await serviceClient
     .from("outlook_subscriptions")
-    .select("id, mail_account_id, client_state, status")
+    .select("id, mail_account_id, client_state, status, error_count")
     .eq("subscription_id", subscriptionId)
     .maybeSingle();
 

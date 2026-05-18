@@ -15,7 +15,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken } from "../_shared/encryption.ts";
 import { createOutlookSubscription } from "../_shared/outlookSubscription.ts";
 import { logger } from "../_shared/logger.ts";
-import { OUTLOOK_FULL_OAUTH_SCOPES_STRING } from "../_shared/outlookScopes.ts";
+import {
+  OUTLOOK_FULL_OAUTH_SCOPES_STRING,
+  extractTenantIdFromAccessToken,
+} from "../_shared/outlookScopes.ts";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -180,6 +183,11 @@ serve(async (req) => {
       ? grantedScopeStr.split(/\s+/).filter(Boolean)
       : [];
 
+    // Read `tid` from the access token JWT. The reconsent hook uses this
+    // to skip the transcript-scope nudge for personal accounts (which can
+    // never carry that delegated permission).
+    const tenantId = extractTenantIdFromAccessToken(access_token);
+
     if (!access_token || !refresh_token) {
       logger.error("mail.outlook.callback_missing_tokens", { tokens });
       return new Response(errorPage("Connection Failed", "Incomplete token response. Please try again."), {
@@ -243,6 +251,7 @@ serve(async (req) => {
           refresh_token: encRefresh,
           token_expires_at: tokenExpiresAt,
           granted_scopes: grantedScopes,
+          tenant_id: tenantId,
           needs_reconnect: false,
           error_reason: null,
           updated_at: new Date().toISOString(),
