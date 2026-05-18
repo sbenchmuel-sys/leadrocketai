@@ -91,6 +91,7 @@ interface Lead {
 export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesAdded }: MeetingsTabProps) {
   const [meetingPacks, setMeetingPacks] = useState<MeetingPackItem[]>([]);
   const [zoomSummaries, setZoomSummaries] = useState<MeetingSummaryItem[]>([]);
+  const [capturedSummaries, setCapturedSummaries] = useState<any[]>([]);
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -204,18 +205,24 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
   const loadData = async () => {
     try {
-      const [packs, summaries, leadsResult] = await Promise.all([
+      const [packs, summaries, leadsResult, captured] = await Promise.all([
         getLeadMeetingPacks(leadId),
         getLeadMeetingSummaries(leadId),
         supabase
           .from("leads")
           .select("id, name, company, email")
           .order("last_activity_at", { ascending: false })
-          .limit(100)
+          .limit(100),
+        supabase
+          .from("meeting_ai_summaries")
+          .select("id, summary, milestones, action_items, open_questions, risks, followup_email_subject, followup_email_body, generated_at, meeting_transcript_id")
+          .eq("lead_id", leadId)
+          .order("generated_at", { ascending: false }),
       ]);
       setMeetingPacks(packs);
       setZoomSummaries(summaries);
       setAllLeads(leadsResult.data || []);
+      setCapturedSummaries(captured.data || []);
       // Auto-expand the first/most recent meeting
       if (packs.length > 0 && expandedIds.size === 0) {
         setExpandedIds(new Set([packs[0].id]));
@@ -481,7 +488,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     </Card>
   );
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && !showAddForm) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && !showAddForm) {
     return (
       <div className="space-y-6">
         <UpcomingMeetingsSection leadId={leadId} />
@@ -502,7 +509,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     );
   }
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && showAddForm) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && showAddForm) {
     return (
       <div className="space-y-6">
         <UpcomingMeetingsSection leadId={leadId} />
@@ -524,6 +531,174 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
         )}
       </div>
       {addMeetingForm}
+
+      {/* Captured Meeting Transcripts (auto from Google Meet / Teams) */}
+      {capturedSummaries.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <h3 className="font-medium">Captured Meeting Transcripts</h3>
+            <Badge variant="secondary" className="text-xs">{capturedSummaries.length}</Badge>
+          </div>
+          {capturedSummaries.map((s) => {
+            const milestones = Array.isArray(s.milestones) ? s.milestones : [];
+            const actionItems = Array.isArray(s.action_items) ? s.action_items : [];
+            const openQs = Array.isArray(s.open_questions) ? s.open_questions : [];
+            const risks = Array.isArray(s.risks) ? s.risks : [];
+            return (
+              <Card key={s.id} className="overflow-hidden">
+                <CardHeader className="py-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-primary" />
+                      Meeting Recap
+                    </CardTitle>
+                    <span className="text-xs text-muted-foreground">
+                      {s.generated_at ? format(parseISO(s.generated_at), "MMM d, yyyy 'at' h:mm a") : ""}
+                    </span>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {s.summary && (
+                    <div className="bg-muted/50 rounded-lg p-3">
+                      <pre className="text-sm whitespace-pre-wrap font-sans">{s.summary}</pre>
+                    </div>
+                  )}
+
+                  {milestones.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-blue-500" />
+                        Milestones
+                      </h4>
+                      <div className="space-y-1">
+                        {milestones.map((m: any, i: number) => (
+                          <div key={i} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
+                            <span className="text-sm flex-1">{m.description}</span>
+                            <Badge variant={m.status === "completed" ? "secondary" : "outline"} className="text-xs">
+                              {m.status || "pending"}
+                            </Badge>
+                            {m.date && <span className="text-xs text-muted-foreground">{m.date}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {actionItems.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        Action Items
+                      </h4>
+                      <div className="space-y-1">
+                        {actionItems.map((a: any, i: number) => (
+                          <div key={i} className="flex items-start gap-3 p-2 bg-muted/50 rounded">
+                            <span className="text-sm flex-1">
+                              {a.description}
+                              {a.owner && <span className="text-muted-foreground"> — {a.owner}</span>}
+                            </span>
+                            {a.due_date && <span className="text-xs text-muted-foreground">{a.due_date}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {openQs.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <HelpCircle className="h-4 w-4 text-amber-500" />
+                        Open Questions
+                      </h4>
+                      <div className="bg-amber-500/10 rounded-lg p-3 space-y-1">
+                        {openQs.map((q: string, i: number) => (
+                          <p key={i} className="text-sm flex gap-2"><span className="text-amber-500">?</span>{q}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {risks.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-destructive" />
+                        Risks
+                      </h4>
+                      <div className="space-y-1">
+                        {risks.map((r: any, i: number) => (
+                          <div key={i} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
+                            <span className="text-sm flex-1">{r.issue}</span>
+                            <Badge variant="outline" className="text-xs">{r.level}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {s.followup_email_body && (
+                    <div className="space-y-2 pt-2 border-t">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-primary" />
+                        Prepared Follow-up Email
+                      </h4>
+                      {s.followup_email_subject && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-medium text-muted-foreground">Subject:</span>
+                          <span>{s.followup_email_subject}</span>
+                        </div>
+                      )}
+                      <div className="bg-muted/50 rounded-lg p-3">
+                        <pre className="text-sm whitespace-pre-wrap font-sans">{s.followup_email_body}</pre>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(s.followup_email_body || "");
+                            toast.success("Email copied");
+                          }}
+                        >
+                          <Copy className="h-3 w-3 mr-1" />
+                          Copy
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              await saveDraft(leadId, {
+                                channel: "email",
+                                draft_type: "post_meeting_followup",
+                                subject: s.followup_email_subject || `Follow-up: Meeting with ${leadName}`,
+                                body_text: s.followup_email_body,
+                                to_recipient: leadEmail,
+                              });
+                              toast.success("Email saved as draft");
+                            } catch (err) {
+                              console.error(err);
+                              toast.error("Failed to save draft");
+                            }
+                          }}
+                        >
+                          <Save className="h-3 w-3 mr-1" />
+                          Save as Draft
+                        </Button>
+                        <SendEmailButton
+                          to={leadEmail}
+                          subject={s.followup_email_subject || `Follow-up: Meeting with ${leadName}`}
+                          body={s.followup_email_body || ""}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
       {/* Zoom Meeting Summaries Section */}
       {zoomSummaries.length > 0 && (
         <div className="space-y-3">
