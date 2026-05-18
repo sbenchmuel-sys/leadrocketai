@@ -205,18 +205,24 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
   const loadData = async () => {
     try {
-      const [packs, summaries, leadsResult] = await Promise.all([
+      const [packs, summaries, leadsResult, captured] = await Promise.all([
         getLeadMeetingPacks(leadId),
         getLeadMeetingSummaries(leadId),
         supabase
           .from("leads")
           .select("id, name, company, email")
           .order("last_activity_at", { ascending: false })
-          .limit(100)
+          .limit(100),
+        supabase
+          .from("meeting_ai_summaries")
+          .select("id, summary, milestones, action_items, open_questions, risks, followup_email_subject, followup_email_body, generated_at, meeting_transcript_id")
+          .eq("lead_id", leadId)
+          .order("generated_at", { ascending: false }),
       ]);
       setMeetingPacks(packs);
       setZoomSummaries(summaries);
       setAllLeads(leadsResult.data || []);
+      setCapturedSummaries(captured.data || []);
       // Auto-expand the first/most recent meeting
       if (packs.length > 0 && expandedIds.size === 0) {
         setExpandedIds(new Set([packs[0].id]));
