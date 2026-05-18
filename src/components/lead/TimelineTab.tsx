@@ -836,14 +836,13 @@ function MeetingEntry({ item, defaultOpen, onToggleHide }: { item: TimelineItem;
         </CollapsibleTrigger>
         <CollapsibleContent className="animate-accordion-down">
           <div className="pl-3 pb-2 space-y-2">
-            {aiSummary && (
-              <p className="text-[13px] text-foreground leading-relaxed">{aiSummary}</p>
-            )}
-            {item.snippet_text && (
+            {aiSummary ? (
+              <p className="text-[13px] text-foreground whitespace-pre-wrap leading-relaxed">{aiSummary}</p>
+            ) : item.snippet_text ? (
               <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
                 {item.snippet_text}
               </p>
-            )}
+            ) : null}
           </div>
         </CollapsibleContent>
       </div>
