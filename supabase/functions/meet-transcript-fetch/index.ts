@@ -370,10 +370,20 @@ serve(async (req) => {
     // 7. Map result to UPDATE
     stage = "persist_result";
     const reason = resultReason(result);
+    const detail = resultDetail(result);
+    if (result.status === "failed" || result.status === "unavailable") {
+      console.error("[meet-transcript-fetch] provider_error", {
+        calendarEventId,
+        status: result.status,
+        reason,
+        detail,
+      });
+    }
     // deno-lint-ignore no-explicit-any
     const updates: Record<string, any> = {
       status: result.status,
       status_reason: reason,
+      provider_error_detail: detail,
     };
     if (result.status === "ready") {
       updates.transcript_text = JSON.stringify(result.entries);
