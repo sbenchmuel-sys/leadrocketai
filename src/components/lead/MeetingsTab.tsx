@@ -91,6 +91,7 @@ interface Lead {
 export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesAdded }: MeetingsTabProps) {
   const [meetingPacks, setMeetingPacks] = useState<MeetingPackItem[]>([]);
   const [zoomSummaries, setZoomSummaries] = useState<MeetingSummaryItem[]>([]);
+  const [capturedSummaries, setCapturedSummaries] = useState<any[]>([]);
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
