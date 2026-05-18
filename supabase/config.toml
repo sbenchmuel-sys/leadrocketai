@@ -99,3 +99,12 @@ verify_jwt = false
 [functions.cron-dispatcher]
 verify_jwt = false
 
+# Per-meeting transcript fetchers invoked by transcript-poller with the
+# X-Internal-Secret header (no user JWT). Gateway must skip JWT verification
+# or the cron-dispatched call is rejected before requirePrivilegedCaller runs.
+[functions.meet-transcript-fetch]
+verify_jwt = false
+
+[functions.teams-transcript-fetch]
+verify_jwt = false
+

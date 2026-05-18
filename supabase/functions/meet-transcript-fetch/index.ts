@@ -40,6 +40,8 @@ interface CalendarEventRow {
   lead_id: string | null;
   platform: string | null;
   meeting_url: string | null;
+  start_time: string | null;
+  end_time: string | null;
   raw_event: Record<string, unknown> | null;
 }
 
@@ -257,7 +259,9 @@ serve(async (req) => {
     // 1. Load calendar_event
     const { data: evRaw, error: evErr } = await supabase
       .from("calendar_events")
-      .select("id, user_id, workspace_id, lead_id, platform, meeting_url, raw_event")
+      .select(
+        "id, user_id, workspace_id, lead_id, platform, meeting_url, start_time, end_time, raw_event",
+      )
       .eq("id", calendarEventId)
       .maybeSingle();
     if (evErr) {
@@ -365,7 +369,13 @@ serve(async (req) => {
     // 6. Call helper
     stage = "fetch_transcript";
     const client = new GoogleMeetClient(accessToken);
-    const result = await client.fetchTranscriptForMeetingCode(meetingCode);
+    // Pass the event window so the client picks the conference that
+    // actually overlapped this meeting, not the most-recent reuse of
+    // the same Meet link.
+    const result = await client.fetchTranscriptForMeetingCode(meetingCode, {
+      startTime: ev.start_time,
+      endTime: ev.end_time,
+    });
 
     // 7. Map result to UPDATE
     stage = "persist_result";

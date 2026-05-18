@@ -3,8 +3,12 @@
 //
 // Given an OAuth access token with scope
 //   https://www.googleapis.com/auth/meetings.space.readonly
-// resolves a meeting code to the transcript entries of the most
-// recent ended conference in that space.
+// resolves a meeting code to the transcript entries of the
+// conference that overlapped the calendar event's time window.
+//
+// "Most recent ended conference" is wrong when the same Meet link
+// is reused for a later meeting — a backfill/retry for an older
+// event would then pick up the wrong conference's transcript.
 //
 // Pure HTTP wrapper: caller supplies the access token. No token
 // lookup, refresh, or DB calls happen here. Expected non-ready
@@ -47,6 +51,18 @@ export type MeetTranscriptResult =
   | { status: "pending"; reason: MeetPendingReason }
   | { status: "unavailable"; reason: MeetUnavailableReason }
   | { status: "failed"; reason: MeetFailedReason; detail?: string };
+
+export interface MeetEventWindow {
+  // ISO timestamps from calendar_events. `endTime` is null when the event
+  // hasn't ended yet — callers in that state should not be fetching a
+  // transcript anyway, but we accept it and fall back to most-recent.
+  startTime: string | null;
+  endTime: string | null;
+}
+
+// A meeting can start a little early or run a little long; allow some
+// slack on both sides when matching a conference to a calendar event.
+const CONFERENCE_MATCH_BUFFER_MS = 30 * 60 * 1000;
 
 type ConferenceRecord = {
   name: string;
@@ -93,12 +109,15 @@ export class GoogleMeetClient {
 
   /**
    * Resolves a meeting code (e.g. "mnr-xxxx-xxx") to the transcript
-   * entries of the most recent ended conference in that space.
+   * entries of the conference that overlapped the given event window.
+   * When the same Meet link is reused for multiple meetings, the window
+   * lets us pick the right conference instead of the most recent one.
    * Returns a discriminated-union result; does not throw on expected
    * "no transcript" outcomes.
    */
   async fetchTranscriptForMeetingCode(
     meetingCode: string,
+    eventWindow: MeetEventWindow,
   ): Promise<MeetTranscriptResult> {
     if (!meetingCode || typeof meetingCode !== "string") {
       throw new Error("meetingCode must be a non-empty string");
@@ -108,7 +127,7 @@ export class GoogleMeetClient {
       const spaceName = await this.resolveSpaceName(meetingCode);
 
       const records = await this.listConferenceRecords(spaceName);
-      const endedRecord = pickMostRecentEnded(records);
+      const endedRecord = pickConferenceForWindow(records, eventWindow);
       if (!endedRecord) {
         return { status: "pending", reason: "CONFERENCE_NOT_ENDED" };
       }
@@ -117,16 +136,30 @@ export class GoogleMeetClient {
       if (transcripts.length === 0) {
         return { status: "unavailable", reason: "NO_TRANSCRIPT_AVAILABLE" };
       }
-      const fileGenerated = transcripts.find((t) => t.state === "FILE_GENERATED");
-      if (!fileGenerated) {
+
+      // Stopping + restarting transcription in the same conference creates
+      // multiple transcript resources. Wait until every session has reached
+      // FILE_GENERATED — otherwise we'd mark the row 'ready' with a partial
+      // transcript and the analyzer would run against incomplete text.
+      const ready = transcripts.filter((t) => t.state === "FILE_GENERATED");
+      if (ready.length === 0 || ready.length < transcripts.length) {
         return { status: "pending", reason: "TRANSCRIPT_STILL_PROCESSING" };
       }
 
-      const entries = await this.listAllTranscriptEntries(fileGenerated.name);
+      // Concatenate in start-time order so speakers appear in chronological
+      // sequence across stop/restart boundaries.
+      ready.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+
+      const entries: MeetTranscriptEntry[] = [];
+      for (const t of ready) {
+        const chunk = await this.listAllTranscriptEntries(t.name);
+        entries.push(...chunk);
+      }
+
       return {
         status: "ready",
         providerMeetingId: endedRecord.name,
-        transcriptName: fileGenerated.name,
+        transcriptName: ready.map((t) => t.name).join(","),
         entries,
       };
     } catch (err) {
@@ -214,10 +247,47 @@ export class GoogleMeetClient {
   }
 }
 
-function pickMostRecentEnded(
+// Returns the ended conference whose start time falls inside the calendar
+// event's window (with a buffer for early/late starts). Falls back to the
+// most recent ended conference only when the caller didn't supply usable
+// bounds — never when bounds are present but nothing matches.
+function pickConferenceForWindow(
   records: ConferenceRecord[],
+  eventWindow: MeetEventWindow,
 ): ConferenceRecord | null {
-  return records.find((r) => !!r.endTime) ?? null;
+  const ended = records.filter((r) => !!r.endTime);
+  if (ended.length === 0) return null;
+
+  const eventStart = eventWindow.startTime
+    ? new Date(eventWindow.startTime).getTime()
+    : Number.NaN;
+  const eventEnd = eventWindow.endTime
+    ? new Date(eventWindow.endTime).getTime()
+    : Number.NaN;
+
+  // Without parseable bounds, preserve the previous "most recent ended"
+  // behavior. Callers always pass real timestamps in production; this
+  // branch exists for tests and future callers that genuinely have none.
+  if (Number.isNaN(eventStart) || Number.isNaN(eventEnd)) {
+    return ended[0];
+  }
+
+  for (const r of ended) {
+    if (!r.startTime) continue;
+    const t = new Date(r.startTime).getTime();
+    if (Number.isNaN(t)) continue;
+    if (
+      t >= eventStart - CONFERENCE_MATCH_BUFFER_MS &&
+      t <= eventEnd + CONFERENCE_MATCH_BUFFER_MS
+    ) {
+      return r;
+    }
+  }
+
+  // Nothing overlaps the event window — could be the meeting was cancelled,
+  // or the Meet link will only be used later. Return null and let the
+  // caller treat it as pending; the 24h sweep eventually marks unavailable.
+  return null;
 }
 
 function mapHttpError(err: MeetHttpError): MeetTranscriptResult {
