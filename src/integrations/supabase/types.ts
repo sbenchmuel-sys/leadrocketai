@@ -2627,6 +2627,7 @@ export type Database = {
           last_attempt_at: string | null
           lead_id: string
           provider: string
+          provider_error_detail: string | null
           provider_meeting_id: string | null
           ready_at: string | null
           status: string
@@ -2644,6 +2645,7 @@ export type Database = {
           last_attempt_at?: string | null
           lead_id: string
           provider: string
+          provider_error_detail?: string | null
           provider_meeting_id?: string | null
           ready_at?: string | null
           status?: string
@@ -2661,6 +2663,7 @@ export type Database = {
           last_attempt_at?: string | null
           lead_id?: string
           provider?: string
+          provider_error_detail?: string | null
           provider_meeting_id?: string | null
           ready_at?: string | null
           status?: string
