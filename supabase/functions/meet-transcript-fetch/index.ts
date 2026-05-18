@@ -209,6 +209,12 @@ function resultReason(result: MeetTranscriptResult): string | null {
   return result.reason;
 }
 
+function resultDetail(result: MeetTranscriptResult): string | null {
+  // deno-lint-ignore no-explicit-any
+  const d = (result as any).detail;
+  return typeof d === "string" && d.length > 0 ? d : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
