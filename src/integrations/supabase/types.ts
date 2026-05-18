@@ -3108,6 +3108,7 @@ export type Database = {
           change_types: string[]
           client_state: string | null
           created_at: string
+          error_count: number
           error_reason: string | null
           expiration_at: string
           id: string
@@ -3123,6 +3124,7 @@ export type Database = {
           change_types?: string[]
           client_state?: string | null
           created_at?: string
+          error_count?: number
           error_reason?: string | null
           expiration_at: string
           id?: string
@@ -3138,6 +3140,7 @@ export type Database = {
           change_types?: string[]
           client_state?: string | null
           created_at?: string
+          error_count?: number
           error_reason?: string | null
           expiration_at?: string
           id?: string
