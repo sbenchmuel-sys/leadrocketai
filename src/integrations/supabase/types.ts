@@ -1304,10 +1304,11 @@ export type Database = {
           ai_intent: string | null
           ai_reply_worthy: boolean | null
           ai_summary: string | null
-          body_text: string
+          body_text: string | null
           cc_emails: string[]
           dedupe_key: string | null
           direction: string | null
+          expires_at: string
           from_email: string | null
           gmail_message_id: string | null
           gmail_thread_id: string | null
@@ -1325,10 +1326,11 @@ export type Database = {
           ai_intent?: string | null
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
-          body_text: string
+          body_text?: string | null
           cc_emails?: string[]
           dedupe_key?: string | null
           direction?: string | null
+          expires_at?: string
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
@@ -1346,10 +1348,11 @@ export type Database = {
           ai_intent?: string | null
           ai_reply_worthy?: boolean | null
           ai_summary?: string | null
-          body_text?: string
+          body_text?: string | null
           cc_emails?: string[]
           dedupe_key?: string | null
           direction?: string | null
+          expires_at?: string
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
@@ -1882,6 +1885,7 @@ export type Database = {
           dedupe_key: string
           direction: string | null
           event_type: string
+          expires_at: string
           hidden: boolean
           id: string
           lead_id: string
@@ -1904,6 +1908,7 @@ export type Database = {
           dedupe_key: string
           direction?: string | null
           event_type: string
+          expires_at?: string
           hidden?: boolean
           id?: string
           lead_id: string
@@ -1926,6 +1931,7 @@ export type Database = {
           dedupe_key?: string
           direction?: string | null
           event_type?: string
+          expires_at?: string
           hidden?: boolean
           id?: string
           lead_id?: string
