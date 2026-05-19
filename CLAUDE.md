@@ -31,7 +31,7 @@ When changing a schedule, update both. The DB is the truth; the migration is the
 
 These are not just marketing claims — they constrain implementation:
 
-- **Raw message bodies auto-purge after 72 hours** — enforced by `message-cleanup` edge function (hourly cron).
+- **Raw message bodies auto-purge after 72 hours** — enforced by `message-cleanup` edge function (hourly cron) with a DB-level `expire_old_messages()` fallback (also hourly). Covers `messages.body_ciphertext` (WhatsApp/SMS), `interactions.body_text` (email body), and `lead_timeline_items.snippet_text` (email snippet). Each row gets `expires_at = occurred_at + 72h` on insert. Metadata (subjects, participants, `ai_summary`, FKs) is preserved.
 - **Call audio + transcripts auto-purge after 90 days** — verify retention logic before changing call pipeline.
 - **OAuth tokens encrypted at rest with AES-256-GCM** — `supabase/functions/_shared/encryption.ts`. Never store unencrypted.
 - **Workspace isolation enforced via RLS** — `is_workspace_member()` and `is_workspace_admin()` SECURITY DEFINER helpers are used in all user-facing policies.
