@@ -22,26 +22,51 @@ Deno.serve(async (req) => {
   );
 
   try {
-    // Null out expired message bodies while keeping metadata intact.
-    // This preserves foreign keys (conversation_id, sender_identity_id, workspace_id)
-    // and all non-body columns so timeline/analytics remain functional.
-    const { data, error } = await supabase
-      .from("messages")
-      .update({ body_ciphertext: null })
-      .lt("expires_at", new Date().toISOString())
-      .not("body_ciphertext", "is", null)
-      .select("id");
+    const nowIso = new Date().toISOString();
 
-    if (error) {
-      console.error("[message-cleanup] Update failed:", error);
-      return new Response(JSON.stringify({ error: error.message }), {
+    // Null out expired raw bodies across the three tables that hold them:
+    //   - messages.body_ciphertext        — WhatsApp / SMS (encrypted)
+    //   - interactions.body_text          — email body (plaintext)
+    //   - lead_timeline_items.snippet_text — email body snippet (plaintext)
+    // Metadata (FKs, subjects, ai_summary, timestamps) is preserved so
+    // timeline/analytics keep working after the body is gone.
+    const [messagesRes, interactionsRes, timelineRes] = await Promise.all([
+      supabase
+        .from("messages")
+        .update({ body_ciphertext: null })
+        .lt("expires_at", nowIso)
+        .not("body_ciphertext", "is", null)
+        .select("id"),
+      supabase
+        .from("interactions")
+        .update({ body_text: null })
+        .lt("expires_at", nowIso)
+        .not("body_text", "is", null)
+        .select("id"),
+      supabase
+        .from("lead_timeline_items")
+        .update({ snippet_text: null })
+        .lt("expires_at", nowIso)
+        .not("snippet_text", "is", null)
+        .select("id"),
+    ]);
+
+    const firstError = messagesRes.error ?? interactionsRes.error ?? timelineRes.error;
+    if (firstError) {
+      console.error("[message-cleanup] Update failed:", firstError);
+      return new Response(JSON.stringify({ error: firstError.message }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const purgedCount = data?.length ?? 0;
-    console.log(`[message-cleanup] Purged ${purgedCount} expired message bodies`);
+    const messagesPurged = messagesRes.data?.length ?? 0;
+    const interactionsPurged = interactionsRes.data?.length ?? 0;
+    const timelinePurged = timelineRes.data?.length ?? 0;
+    console.log(
+      `[message-cleanup] Purged bodies — messages: ${messagesPurged}, ` +
+        `interactions: ${interactionsPurged}, lead_timeline_items: ${timelinePurged}`
+    );
 
     // Also clean up old cron_run_log entries (>30 days)
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -56,7 +81,15 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ ok: true, purged: purgedCount, cron_logs_purged: logsPurged }),
+      JSON.stringify({
+        ok: true,
+        purged: {
+          messages: messagesPurged,
+          interactions: interactionsPurged,
+          lead_timeline_items: timelinePurged,
+        },
+        cron_logs_purged: logsPurged,
+      }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
