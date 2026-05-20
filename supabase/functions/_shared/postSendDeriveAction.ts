@@ -21,8 +21,12 @@
 //     gmail-send is a future cleanup.
 //
 // What this does NOT do (deliberate scope):
-//   • Does not recompute meeting_packs follow-up state — gmail/outlook
-//     sync owns that side effect. Helper just reads the meeting count.
+//   • Does not WRITE meeting_packs bookkeeping — gmail-sync /
+//     outlook-sync own the "[Sent via Outlook]" side-effect on
+//     meeting_packs.follow_up_email_body. We do READ meeting_packs to
+//     compute `hasMeetingWithoutFollowup` accurately (otherwise an
+//     SMS/WhatsApp/voice send could clear a still-valid post-meeting
+//     recap reminder).
 //   • Does not call AI analysis paths — those stay in each send fn
 //     where they already exist for channel-specific reasons.
 //   • Does not touch interactions / timeline writes — the caller owns
@@ -122,12 +126,44 @@ async function runRecompute(
     return;
   }
 
-  // 3. Meeting count — used by deriveStage + buildLeadUpdate. We do
-  // NOT recompute hasMeetingWithoutFollowup here (see module comment).
-  const { count: meetingCount } = await supabase
+  // 3. Meeting packs — used both for meetingCount (deriveStage +
+  // buildLeadUpdate) and for hasMeetingWithoutFollowup (deriveAction's
+  // POST_MEETING_RECAP_DUE branch). Hardcoding `hasMeetingWithoutFollowup=false`
+  // here would let a non-email send clobber an already-correct "Send
+  // post-meeting recap" reminder — for leads on SMS/WhatsApp/voice-only
+  // channels, indefinitely. Mirror gmail-sync's per-pack logic but WITHOUT
+  // the "[Sent via Outlook]" meeting_pack side-effect — that bookkeeping
+  // stays in gmail-sync / outlook-sync (next mail sync catches up; ~20-min
+  // worst case, acceptable since we're not clobbering state in the meantime).
+  const { data: meetingPacks } = await supabase
     .from("meeting_packs")
-    .select("id", { count: "exact", head: true })
+    .select("id, follow_up_email_body, meeting_date, created_at")
     .eq("lead_id", leadId);
+
+  const meetingCount = meetingPacks?.length ?? 0;
+
+  let hasMeetingWithoutFollowup = false;
+  for (const mp of (meetingPacks ?? []) as Array<{
+    id: string;
+    follow_up_email_body: string | null;
+    meeting_date: string | null;
+    created_at: string | null;
+  }>) {
+    if (mp.follow_up_email_body && mp.follow_up_email_body.trim() !== "") continue;
+    const referenceDate = mp.meeting_date ?? mp.created_at;
+    if (referenceDate) {
+      const { data: postMeetingEmails } = await supabase
+        .from("interactions")
+        .select("id")
+        .eq("lead_id", leadId)
+        .eq("direction", "outbound")
+        .gt("occurred_at", referenceDate)
+        .limit(1);
+      if (postMeetingEmails && postMeetingEmails.length > 0) continue;
+    }
+    hasMeetingWithoutFollowup = true;
+    break;
+  }
 
   const { metrics, hasClosingKeywords } = computeMetricsFromInteractions(
     (allInteractions ?? []) as Array<{
@@ -136,7 +172,7 @@ async function runRecompute(
       occurred_at: string;
       body_text: string | null;
     }>,
-    meetingCount ?? 0,
+    meetingCount,
   );
 
   // 4. Workspace cadence / timezone for deriveAction guardrails.
@@ -183,7 +219,7 @@ async function runRecompute(
     metrics,
     nurtureCadence,
     stage,
-    /* hasMeetingWithoutFollowup */ false,
+    hasMeetingWithoutFollowup,
     hasFutureMeeting,
     recentOutbound7d,
     recentOutbound30d,
