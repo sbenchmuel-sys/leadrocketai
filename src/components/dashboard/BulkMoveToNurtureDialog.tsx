@@ -100,10 +100,12 @@ export function BulkMoveToNurtureDialog({
 
       const updates = targets.map((c) => {
         // For BLOCKED leads on the Move-all path, clear the executor
-        // consent gate at the same time as the motion flip — otherwise
-        // a `full_auto` outbound lead would have its consent gate still
-        // armed after the motion change and the executor would keep
-        // firing until the next sync recomputes state.
+        // consent gate (`automation_mode IS NOT NULL` per
+        // automation-executor/index.ts) at the same time as the motion
+        // flip — otherwise the executor would keep firing until the
+        // next sync recomputes state. Any non-null mode counts as
+        // consent given, so we null it out unconditionally for blocked
+        // rows regardless of which specific mode they were on.
         const isBlocked = !c.eligible;
         const extra: { automation_mode?: string | null } = isBlocked
           ? { automation_mode: null }

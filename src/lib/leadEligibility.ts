@@ -28,19 +28,22 @@ const OUTBOUND_SENDER_MOTIONS: ReadonlySet<string> = new Set([
   "inbound_response",
 ]);
 
-// `automation_mode === 'full_auto'` is the executor's consent gate
-// (see supabase/functions/_shared/syncEngine.ts) — a lead without this
-// flag will not have automation firing against it, so moving it to
-// nurture cannot clobber an in-flight sequence.
-const LIVE_SENDER_MODE = "full_auto";
-
 /**
  * Bulk move-to-nurture categorization.
  *
- * BLOCKED if the lead currently has the executor consent gate set
- * (`automation_mode='full_auto'`) AND is on an outbound sender motion.
- * Flipping such a lead to nurture silently cuts off the in-progress
- * sequence; the rep should explicitly opt in.
+ * BLOCKED if the executor consent gate is open (`automation_mode IS NOT
+ * NULL`) AND the lead is on an outbound sender motion. Flipping such a
+ * lead to nurture silently cuts off the in-progress sequence; the rep
+ * should explicitly opt in.
+ *
+ * The executor's actual consent gate is `automation_mode IS NOT NULL`
+ * (see supabase/functions/automation-executor/index.ts and the
+ * syncEngine CONSENT GATE strip in _shared/syncEngine.ts). Every
+ * non-null mode (`manual`, `suggest_only`, `hybrid`, `full_auto`) is
+ * treated as "consent given" by the executor. `BulkAutomationDialog`
+ * happens to set `full_auto` specifically, but checking only for
+ * `full_auto` here would miss leads opted in by other paths and let
+ * them get clobbered — see Codex review on PR #40.
  *
  * Otherwise ELIGIBLE — including leads already on nurture (the move
  * is a no-op for them).
@@ -52,10 +55,10 @@ export function categorizeForNurtureMove(
     (lead as { automation_mode?: string | null }).automation_mode ?? null;
   const motion = lead.motion;
 
-  const isLiveSender = automationMode === LIVE_SENDER_MODE;
+  const hasExecutorConsent = automationMode !== null;
   const isOutboundMotion = motion ? OUTBOUND_SENDER_MOTIONS.has(motion) : false;
 
-  if (isLiveSender && isOutboundMotion) {
+  if (hasExecutorConsent && isOutboundMotion) {
     return { lead, eligible: false, flag: "active_outbound_sequence" };
   }
   return { lead, eligible: true, flag: null };
