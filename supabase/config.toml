@@ -108,3 +108,11 @@ verify_jwt = false
 [functions.teams-transcript-fetch]
 verify_jwt = false
 
+# Phase 1 backfill that populates lead_timeline_items.intent from
+# heuristic detectors. Invoked manually with X-Internal-Secret or
+# service-role token; no user JWT. Registration was missed in PR #38
+# and added here in Phase 1.5 — see KNOWN_ISSUES.md "Edge function
+# config.toml registration".
+[functions.classify-timeline-intent-backfill]
+verify_jwt = false
+

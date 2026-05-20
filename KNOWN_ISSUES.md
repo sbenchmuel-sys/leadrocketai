@@ -15,9 +15,34 @@ Phases referenced here are the action-queue redesign rollout:
 
 ---
 
-## PR #38 — classify-timeline-intent-backfill not registered in config.toml
+## Edge function config.toml registration
 
-The `classify-timeline-intent-backfill` edge function source was committed in PR #38 but not registered in `supabase/config.toml`, so it was not auto-deployed on merge and required a separate manual deployment before it could be invoked. Phase 2a should ensure any new edge functions are registered in `supabase/config.toml` as part of the same PR that adds the function source.
+**Status: closed by Phase 1.5.**
+
+When a new edge function is added under `supabase/functions/<name>/`,
+its source alone is not enough — `supabase/config.toml` must also
+contain a `[functions.<name>]` block (typically with
+`verify_jwt = false` for functions that authenticate via
+`requireScheduledCaller` / `X-Internal-Secret` / service-role rather
+than user JWT). Without that block, Lovable does not auto-deploy the
+function on merge and the documented invocation paths silently fail.
+
+History:
+- **PR #38** landed `classify-timeline-intent-backfill` without its
+  config.toml entry, requiring a separate manual deployment. The
+  X-Internal-Secret invocation path documented in PR #38's operator
+  runbook was broken until Phase 1.5 backfilled the registration;
+  service-role JWT invocation still worked because Supabase's gateway
+  validates service-role tokens even when `verify_jwt` defaults to
+  true.
+- **PR #39** added `classify-timeline-intent-sample` with its
+  registration in the same PR — the correct pattern.
+- **Phase 1.5** added the missing `classify-timeline-intent-backfill`
+  registration alongside the bulk-move-to-nurture guardrail work.
+
+**Going forward:** every PR that adds a new edge function MUST include
+the corresponding `[functions.<name>]` block in `supabase/config.toml`
+in the same PR. This is a hard requirement, not a follow-up.
 
 ---
 
@@ -39,16 +64,24 @@ Sales Brain redesign conversation (planned Phase 3).
 ## Bulk operations
 
 ### Bulk-move-to-nurture clobbering risk
-**Scheduled fix: Phase 1.5.**
+**Status: closed by Phase 1.5.**
 [BULK_OPS_INVENTORY.md §B2](BULK_OPS_INVENTORY.md#b2-bulk-move-to-nurture).
-"Move to Nurture" in `LeadTable.tsx` updates `motion`, `nurture_status`,
-`nurture_mode`, `nurture_cadence`, `next_action_key`, `eligible_at`,
-`action_reason_code`, and `mode_changed_at` on every selected lead with
-no eligibility check or warning — leads already running an outbound
-sequence get clobbered mid-flight and the customer sees half a
-sequence followed by a nurture switch. Phase 1.5 will add an
-active-automation eligibility check and a per-lead confirm dialog
-modelled on `BulkAutomationDialog`'s `categorizeLead()` flag pattern.
+Originally: "Move to Nurture" in `LeadTable.tsx` updated `motion`,
+`nurture_status`, `nurture_mode`, `nurture_cadence`, `next_action_key`,
+`eligible_at`, `action_reason_code`, and `mode_changed_at` on every
+selected lead with no eligibility check or warning — leads already
+running an outbound sequence got clobbered mid-flight and the customer
+saw half a sequence followed by a nurture switch.
+
+Phase 1.5 introduced `categorizeForNurtureMove()` in
+[src/lib/leadEligibility.ts](src/lib/leadEligibility.ts) (modelled on
+`BulkAutomationDialog`'s `categorizeLead()` flag pattern) and replaced
+the inline `AlertDialog` with `<BulkMoveToNurtureDialog>` which surfaces
+the ELIGIBLE/BLOCKED partition and gives the rep three actions:
+**Move all** (also clears `automation_mode` on BLOCKED leads to halt
+the executor), **Move only the N eligible** (skips BLOCKED leads),
+or **Cancel**. Every affected lead gets an `insertSystemNote()`
+audit row recording the action and the rep who took it.
 
 ### Bulk stage and bulk source change fire without confirmation
 **Scheduled fix: Phase 2b.**
