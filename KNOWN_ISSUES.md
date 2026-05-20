@@ -218,6 +218,47 @@ flickering "Reply Now → goes away on next sync" UX. Two-line fix in
 Phase 2a (re-read `has_future_meeting` immediately before the
 end-of-sync `deriveAction` call).
 
+### `intent_router` writes a granular vocabulary not in the migration's documented list
+**Scheduled reconciliation: Phase 2a follow-up.**
+[20260520120000_lead_timeline_items_intent.sql](supabase/migrations/20260520120000_lead_timeline_items_intent.sql)
+documents the column's allowed values as
+`human_reply, calendar_accept, calendar_invite, meeting_confirmation,
+zoom_recap, ooo_reply, bounce, unsubscribe, defer_request,
+manual_handled, unknown`. The Phase 2a AI cron
+([classify-inbound/index.ts](supabase/functions/classify-inbound/index.ts))
+writes the `intent_router` prompt's own vocabulary instead:
+`book_meeting, pricing, technical_sdk, security_privacy,
+legal_procurement, partnership, support, not_sure` — i.e. it
+sub-classifies what the migration calls `human_reply` rather than
+writing the bucket label. The column has no CHECK constraint yet, so
+this is currently a documentation gap, not a runtime error. Two
+follow-ups need to land together before a CHECK can be added:
+- Decide whether the column stores the bucket (`human_reply`) with
+  the sub-intent in `status_json.ai_intent`, or stores the granular
+  value directly (current behaviour). Queue UI filtering
+  (AUDIT.md "Hide rows whose latest inbound has `intent IN
+  ('calendar_accept', 'ooo_reply', 'bounce', 'zoom_recap')`")
+  works either way today because the granular values aren't in the
+  hide-list, but downstream consumers need a single answer.
+- Once decided, update the migration comment, then add a CHECK
+  constraint that covers both heuristic and AI vocabularies.
+
+### `intent_router` does not return a confidence score
+**Scheduled enhancement: Phase 2a follow-up.**
+The PR brief for [classify-inbound/index.ts](supabase/functions/classify-inbound/index.ts)
+specified a "low confidence → write NULL" branch, conditional on the
+classifier returning a confidence score. The current `intent_router`
+prompt in [_shared/prompts.ts](supabase/functions/_shared/prompts.ts)
+returns `intent_primary, urgency, reply_worthy, suggested_motion,
+questions_extracted, tone` — no `confidence`. The cron therefore
+reduces the brief's threshold check to "JSON parse failed or
+out-of-vocab intent → leave NULL for a retry." When the prompt is
+updated to return a confidence score, add a numeric threshold check
+in `classify-inbound` ahead of the UPDATE and route low-confidence
+results through the same NULL path; a `confidence` column on
+`lead_timeline_items` is deliberately deferred until the prompt
+actually returns one.
+
 ### Body-aware meeting detector gap — accepts hide embedded questions
 **Scheduled fix: Phase 2a.**
 [EDGE_CASES.md §4](EDGE_CASES.md#4-calendar-accept-with-substantive-reply).

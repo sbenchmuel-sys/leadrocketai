@@ -122,3 +122,10 @@ verify_jwt = false
 [functions.classify-timeline-intent-sample]
 verify_jwt = false
 
+# Phase 2a AI classifier cron. Invoked every 60 seconds by
+# cron-dispatcher (target=classify-inbound). Authenticates via
+# X-Internal-Secret / service-role through requireScheduledCaller;
+# no user JWT is sent so the gateway must skip verification.
+[functions.classify-inbound]
+verify_jwt = false
+
