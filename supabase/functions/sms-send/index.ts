@@ -302,11 +302,19 @@ Deno.serve(async (req) => {
         } catch (aiError) {
           console.error("[sms-send] AI analysis error:", aiError);
         }
-      }
 
-      // Recompute needs_action / next_action_* now that the outbound is
-      // persisted. Owns its own try/catch — never fails the send.
-      postSendDeriveAction(supabase, { leadId, logPrefix: "[sms-send]" });
+        // Recompute needs_action / next_action_* now that the outbound is
+        // persisted. Owns its own try/catch — never fails the send.
+        //
+        // Gated on `!skipStateUpdate`: when `automation-executor` calls
+        // `sms-send` with `skipStateUpdate=true`, the executor itself owns
+        // next-step scheduling. Running our generic deriveAction-based
+        // recompute on top would race and clobber the executor's
+        // deterministic `needs_action` / `next_action_*` / `eligible_at`
+        // writes. Phase 1.7 will wire automation-executor into this same
+        // helper deliberately; until then, the executor stays canonical.
+        postSendDeriveAction(supabase, { leadId, logPrefix: "[sms-send]" });
+      }
     } catch (err) {
       console.error("[sms-send] Background task error:", err);
     }

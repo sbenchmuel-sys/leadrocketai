@@ -367,8 +367,44 @@ export function deriveAction(
   const DAY = 24 * HOUR;
 
   // STOP/PAUSE RULES
+  //
+  // `pause_when_meeting_scheduled` historically returned early on any
+  // `has_future_meeting=true`, treating "meeting on calendar" as "no
+  // action of any kind". That's too aggressive when the customer also
+  // sent an unanswered reply ("Accepted: Demo — can you send pricing?"):
+  // the meeting-confirmation handler in gmail-sync / outlook-sync now
+  // detects the substantive-question override (EDGE_CASES #4), writes
+  // `has_future_meeting=true` to record the meeting, and relies on us
+  // here NOT to suppress the reply prompt.
+  //
+  // We pause OUTBOUND follow-ups, but when there's an unanswered inbound
+  // we return the REPLY_PENDING / wait_reply_threshold result inline —
+  // we do NOT fall through to the rest of deriveAction. Falling through
+  // would let the NURTURE_DUE / REENGAGE_DUE / FOLLOWUP_DUE / BREAKUP_DUE
+  // branches reach a lead whose meeting we deliberately want to protect
+  // from proactive outbound (those branches gate on stop_on_any_reply,
+  // which workspaces can disable). Inlining the REPLY_PENDING decision
+  // keeps the pause guard's semantics fully contained.
   if (stopPauseRules.pause_when_meeting_scheduled && hasFutureMeeting) {
-    return { needs_action: false, next_action_key: "paused_meeting_scheduled", next_action_label: "Paused - meeting scheduled", eligible_at: null, action_reason_code: null };
+    const inboundTime = metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0;
+    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    const hasUnansweredInbound = inboundTime > 0 && inboundTime > outboundTime;
+    if (!hasUnansweredInbound) {
+      return { needs_action: false, next_action_key: "paused_meeting_scheduled", next_action_label: "Paused - meeting scheduled", eligible_at: null, action_reason_code: null };
+    }
+    // Unanswered inbound on a scheduled meeting. Mirror REPLY_PENDING
+    // semantics from the dedicated branch below: if elapsed exceeds the
+    // mode's `reply_pending_hours`, surface "Reply to customer";
+    // otherwise surface "Waiting for reply threshold". Either way, do
+    // NOT fall through.
+    const elapsed = now - inboundTime;
+    const thresholdMs = modeSettings.reply_pending_hours * HOUR;
+    if (elapsed > thresholdMs) {
+      const jitter = getDeterministicJitter(leadId, "reply_now", guardrails.jitter_percent);
+      const eligibleAt = new Date(inboundTime + thresholdMs * (1 + jitter));
+      return { needs_action: true, next_action_key: "reply_now", next_action_label: "Reply to customer", eligible_at: eligibleAt.toISOString(), action_reason_code: "REPLY_PENDING" };
+    }
+    return { needs_action: false, next_action_key: "wait_reply_threshold", next_action_label: "Waiting for reply threshold", eligible_at: null, action_reason_code: null };
   }
 
   // GUARDRAILS
