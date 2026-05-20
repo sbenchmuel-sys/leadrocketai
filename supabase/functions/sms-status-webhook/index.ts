@@ -45,6 +45,24 @@ const ALLOWED_STATUSES = new Set([
   "read",
 ]);
 
+// Status rank — higher = more advanced/terminal. Lower ranks cannot
+// overwrite higher ranks (prevents out-of-order Twilio callbacks from
+// downgrading a delivered/failed message back to sent/queued).
+const STATUS_RANK: Record<string, number> = {
+  queued: 10,
+  sending: 15,
+  sent: 20,
+  delivered: 30,
+  read: 35,
+  undelivered: 40,
+  failed: 40,
+};
+
+function rankOf(status: unknown): number {
+  if (typeof status !== "string") return 0;
+  return STATUS_RANK[status.toLowerCase()] ?? 0;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return twiml(405);
@@ -171,15 +189,50 @@ Deno.serve(async (req) => {
   const now = new Date().toISOString();
   const existingMeta = (timelineItem.metadata_json ?? {}) as Record<string, unknown>;
 
+  const incomingRank = rankOf(messageStatus);
+  const existingStatus = typeof existingMeta.status === "string" ? existingMeta.status : null;
+  const existingRank = existingStatus
+    ? (typeof existingMeta.status_rank === "number" ? existingMeta.status_rank as number : rankOf(existingStatus))
+    : 0;
+
+  // Stale/out-of-order: keep existing status but record that we saw the callback.
+  if (existingStatus && incomingRank < existingRank) {
+    const staleMeta = {
+      ...existingMeta,
+      last_status_callback_at: now,
+    };
+    await supabase
+      .from("lead_timeline_items")
+      .update({ metadata_json: staleMeta })
+      .eq("id", timelineItem.id);
+
+    console.log("[sms-status-webhook] stale_status_ignored", {
+      messageSid,
+      incoming: messageStatus,
+      incomingRank,
+      existing: existingStatus,
+      existingRank,
+    });
+    return twiml(200);
+  }
+
   const nextMeta: Record<string, unknown> = {
     ...existingMeta,
     status: messageStatus,
+    status_rank: incomingRank,
     status_updated_at: now,
+    last_status_callback_at: now,
   };
   if (errorCode) nextMeta.error_code = errorCode;
   if (errorMessage) nextMeta.error_message = errorMessage;
-  if (TERMINAL_DELIVERED.has(messageStatus)) nextMeta.delivered_at = now;
-  if (TERMINAL_FAILED.has(messageStatus)) nextMeta.failed_at = now;
+  // Only stamp terminal timestamps on the transition into that state;
+  // never clear an existing terminal timestamp.
+  if (TERMINAL_DELIVERED.has(messageStatus) && !existingMeta.delivered_at) {
+    nextMeta.delivered_at = now;
+  }
+  if (TERMINAL_FAILED.has(messageStatus) && !existingMeta.failed_at) {
+    nextMeta.failed_at = now;
+  }
 
   const { error: updateErr } = await supabase
     .from("lead_timeline_items")
@@ -194,6 +247,7 @@ Deno.serve(async (req) => {
     });
     return twiml(200);
   }
+
 
   console.log("[sms-status-webhook] status_reconciled", {
     messageSid,
