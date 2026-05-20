@@ -8,6 +8,7 @@ audit docs ([AUDIT.md](AUDIT.md), [EDGE_CASES.md](EDGE_CASES.md),
 Phases referenced here are the action-queue redesign rollout:
 - **Phase 1** — schema + backfill + dead-code cleanup (current).
 - **Phase 1.5** — bulk-move-to-nurture guardrail (ships immediately after Phase 1).
+- **Phase 1.6** — close the executor consent-gate race surfaced by Codex on PR #40.
 - **Phase 2a** — sync-path detector wiring, classifier, UI for new column.
 - **Phase 2b** — Lead List bulk-mover redesign.
 - **Phase 2.5** — runtime scans to size deferred risks.
@@ -15,9 +16,85 @@ Phases referenced here are the action-queue redesign rollout:
 
 ---
 
-## PR #38 — classify-timeline-intent-backfill not registered in config.toml
+## Edge function config.toml registration
 
-The `classify-timeline-intent-backfill` edge function source was committed in PR #38 but not registered in `supabase/config.toml`, so it was not auto-deployed on merge and required a separate manual deployment before it could be invoked. Phase 2a should ensure any new edge functions are registered in `supabase/config.toml` as part of the same PR that adds the function source.
+**Status: closed by Phase 1.5.**
+
+When a new edge function is added under `supabase/functions/<name>/`,
+its source alone is not enough — `supabase/config.toml` must also
+contain a `[functions.<name>]` block (typically with
+`verify_jwt = false` for functions that authenticate via
+`requireScheduledCaller` / `X-Internal-Secret` / service-role rather
+than user JWT). Without that block, Lovable does not auto-deploy the
+function on merge and the documented invocation paths silently fail.
+
+History:
+- **PR #38** landed `classify-timeline-intent-backfill` without its
+  config.toml entry, requiring a separate manual deployment. The
+  X-Internal-Secret invocation path documented in PR #38's operator
+  runbook was broken until Phase 1.5 backfilled the registration;
+  service-role JWT invocation still worked because Supabase's gateway
+  validates service-role tokens even when `verify_jwt` defaults to
+  true.
+- **PR #39 / #41** added `classify-timeline-intent-sample` with its
+  registration in the same PR — the correct pattern. (PR #39 itself
+  merged into a stale base branch; PR #41 re-landed the same commit
+  against main — see the "Stacked PR retarget discipline" note in
+  memory.)
+- **Phase 1.5** added the missing `classify-timeline-intent-backfill`
+  registration alongside the bulk-move-to-nurture guardrail work.
+
+**Going forward:** every PR that adds a new edge function MUST include
+the corresponding `[functions.<name>]` block in `supabase/config.toml`
+in the same PR. This is a hard requirement, not a follow-up.
+
+---
+
+## automation-executor consent-gate race against in-flight mutations
+
+**Scheduled fix: Phase 1.6.**
+
+Surfaced by Codex on [PR #40](https://github.com/sbenchmuel-sys/leadrocketai/pull/40)
+in the review of commit `47dbd887`. The Phase 1.5 bulk-move-to-nurture
+dialog clears `automation_mode` on BLOCKED leads in the same UPDATE as
+the motion flip, but that mitigation does not close the race window
+inside `automation-executor`'s send loop:
+
+1. **Candidate query** ([automation-executor/index.ts:253](supabase/functions/automation-executor/index.ts#L253))
+   gates on `automation_mode IS NOT NULL` and pulls the eligible lead
+   set for the tick.
+2. **Safety refetch** ([automation-executor/index.ts:408–413](supabase/functions/automation-executor/index.ts#L408))
+   re-reads each lead before sending — but the SELECT list is
+   `last_inbound_at, last_outbound_at, has_future_meeting, motion,
+   stage, needs_action, eligible_at, status, unsubscribed`. It does
+   **NOT** include `automation_mode`, so a consent-withdrawal that
+   landed since the candidate query is invisible.
+3. **Multi-await window** between refetch and provider send: stop-
+   conditions check, multi-participant guard (one query for the last
+   inbound), min-gap check, per-lead caps check (own queries), draft
+   lookup/generation (calls `ai_task` over HTTP — multiple seconds),
+   claim insert, then `gmail-send` / `outlook-send` / `sms-send`.
+
+If a bulk-move-to-nurture (or any other path that nulls
+`automation_mode`) lands inside that window, the executor still has a
+stale snapshot of consent and sends one stale outbound. Phase 1.5
+narrows the warning gap to zero but does not close this race window.
+
+**Phase 1.6 fix (small):**
+- Add `automation_mode` to the safety-refetch SELECT.
+- After the refetch, if `freshLead.automation_mode == null` (or if
+  `freshLead.motion === 'nurture'`), mark the `automation_log` row
+  status `"skipped"` with `error_message="Consent withdrawn or motion
+  changed mid-flight"` and `continue` before the send call.
+- Telemetry: count these skips so we can size how often the race
+  actually fires in production.
+
+**Why now (Phase 1.6) and not in Phase 1.5:** scope discipline. Phase
+1.5's mandate was the bulk-move dialog and audit trail; editing
+automation-executor's hot path is a separate concern with its own
+review surface area. Phase 1.5 ships as a strict improvement over the
+silent clobbering it replaces; Phase 1.6 is a small focused PR
+touching only the executor.
 
 ---
 
@@ -39,16 +116,24 @@ Sales Brain redesign conversation (planned Phase 3).
 ## Bulk operations
 
 ### Bulk-move-to-nurture clobbering risk
-**Scheduled fix: Phase 1.5.**
+**Status: closed by Phase 1.5.**
 [BULK_OPS_INVENTORY.md §B2](BULK_OPS_INVENTORY.md#b2-bulk-move-to-nurture).
-"Move to Nurture" in `LeadTable.tsx` updates `motion`, `nurture_status`,
-`nurture_mode`, `nurture_cadence`, `next_action_key`, `eligible_at`,
-`action_reason_code`, and `mode_changed_at` on every selected lead with
-no eligibility check or warning — leads already running an outbound
-sequence get clobbered mid-flight and the customer sees half a
-sequence followed by a nurture switch. Phase 1.5 will add an
-active-automation eligibility check and a per-lead confirm dialog
-modelled on `BulkAutomationDialog`'s `categorizeLead()` flag pattern.
+Originally: "Move to Nurture" in `LeadTable.tsx` updated `motion`,
+`nurture_status`, `nurture_mode`, `nurture_cadence`, `next_action_key`,
+`eligible_at`, `action_reason_code`, and `mode_changed_at` on every
+selected lead with no eligibility check or warning — leads already
+running an outbound sequence got clobbered mid-flight and the customer
+saw half a sequence followed by a nurture switch.
+
+Phase 1.5 introduced `categorizeForNurtureMove()` in
+[src/lib/leadEligibility.ts](src/lib/leadEligibility.ts) (modelled on
+`BulkAutomationDialog`'s `categorizeLead()` flag pattern) and replaced
+the inline `AlertDialog` with `<BulkMoveToNurtureDialog>` which surfaces
+the ELIGIBLE/BLOCKED partition and gives the rep three actions:
+**Move all** (also clears `automation_mode` on BLOCKED leads to halt
+the executor), **Move only the N eligible** (skips BLOCKED leads),
+or **Cancel**. Every affected lead gets an `insertSystemNote()`
+audit row recording the action and the rep who took it.
 
 ### Bulk stage and bulk source change fire without confirmation
 **Scheduled fix: Phase 2b.**
