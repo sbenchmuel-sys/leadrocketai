@@ -8,7 +8,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { differenceInDays, parseISO } from "date-fns";
 import type { EnrichedLead, DealStage, Motion, RevenueState } from "@/lib/dashboardUtils";
-import { enrichLead, classifyRevenueState } from "@/lib/dashboardUtils";
+import { enrichLead, classifyRevenueState, INTENT_HIDE_FROM_QUEUE } from "@/lib/dashboardUtils";
 import { isDemoMode } from "@/lib/demoMode";
 import { demoLeads } from "@/lib/demoData";
 
@@ -88,6 +88,57 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   }
 
   return (data || []).map(enrichLead);
+}
+
+/**
+ * PR C — Build the set of lead IDs whose latest inbound timeline row
+ * has an `intent` in `INTENT_HIDE_FROM_QUEUE` (calendar_accept,
+ * ooo_reply, bounce, zoom_recap). Used by `classifyRevenueState` to
+ * suppress action_required for noise inbounds so the CommandStrip
+ * "Action Required" badge stays accurate when the Queue UI (PR D)
+ * applies the same hide-rule.
+ *
+ * Implementation: one query for all inbound timeline rows for the
+ * given leads, scanned in occurred_at DESC order; first row per
+ * lead_id wins. NULL intent (not yet classified by PR A's cron) is
+ * treated as "not hidden" — we don't want to gate the UI on async
+ * classification.
+ */
+async function fetchIntentHiddenLeadIds(
+  leadIds: string[],
+): Promise<Set<string>> {
+  if (leadIds.length === 0) return new Set();
+
+  // Cap at 5000 rows to stay safely under Supabase's default 1000-row
+  // PostgREST limit per request (we use a higher tier — see the .limit
+  // calls elsewhere in this file). A workspace with >5k inbound rows
+  // would only see slight count drift; the Queue UI filter still
+  // works per-row.
+  const { data, error } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, intent")
+    .eq("event_type", "email_inbound")
+    .in("lead_id", leadIds)
+    .order("occurred_at", { ascending: false })
+    .limit(5000);
+
+  if (error) {
+    // Non-fatal — fall back to "no hidden ids" so the dashboard renders
+    // identical to pre-PR-C behaviour rather than erroring out.
+    console.warn("[dashboardMetrics] intent fetch failed:", error.message);
+    return new Set();
+  }
+
+  const seen = new Set<string>();
+  const hidden = new Set<string>();
+  for (const row of data ?? []) {
+    const id = (row as { lead_id?: string }).lead_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const intent = (row as { intent?: string | null }).intent;
+    if (intent && INTENT_HIDE_FROM_QUEUE.has(intent)) hidden.add(id);
+  }
+  return hidden;
 }
 
 async function fetchChampionByGroup(
@@ -308,7 +359,13 @@ export async function getDashboardMetrics(
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
   );
-  const championByGroup = await fetchChampionByGroup(groupIds);
+  // PR C — parallel: champion lookup + latest-inbound-intent lookup.
+  // Both are independent of the per-lead classify loop below.
+  const leadIds = leads.map((l) => l.id);
+  const [championByGroup, intentHiddenIds] = await Promise.all([
+    fetchChampionByGroup(groupIds),
+    fetchIntentHiddenLeadIds(leadIds),
+  ]);
 
   const staleLeads = deriveStaleLeads(leads);
   const nurtureCandidates = deriveNurtureCandidates(leads);
@@ -350,7 +407,7 @@ export async function getDashboardMetrics(
       lead.revenueState = undefined;
       continue;
     }
-    const state = classifyRevenueState(lead, warmingUpIds, nurtureIds);
+    const state = classifyRevenueState(lead, warmingUpIds, nurtureIds, intentHiddenIds);
     lead.revenueState = state;
     if (isVisibleInTab(lead)) revenueStateCounts[state]++;
   }

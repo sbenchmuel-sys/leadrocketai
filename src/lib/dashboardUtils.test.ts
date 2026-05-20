@@ -115,3 +115,46 @@ describe("classifyRevenueState — recent outbound suppression", () => {
     expect(classifyRevenueState(lead, new Set(), new Set())).not.toBe("action_required");
   });
 });
+
+describe("classifyRevenueState — intent hide-list (PR C)", () => {
+  it("suppresses action_required when lead is in the intent-hidden set", () => {
+    const lead = makeLead({
+      needs_action: true,
+      last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
+      last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
+    });
+    const hidden = new Set([lead.id]);
+    expect(classifyRevenueState(lead, new Set(), new Set(), hidden)).not.toBe("action_required");
+  });
+
+  it("does NOT suppress when lead is not in the hidden set", () => {
+    const lead = makeLead({
+      needs_action: true,
+      last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
+      last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
+    });
+    const hidden = new Set<string>(); // empty
+    expect(classifyRevenueState(lead, new Set(), new Set(), hidden)).toBe("action_required");
+  });
+
+  it("falls back to current behaviour when intentHiddenIds is omitted", () => {
+    const lead = makeLead({
+      needs_action: true,
+      last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
+      last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
+    });
+    expect(classifyRevenueState(lead, new Set(), new Set())).toBe("action_required");
+  });
+
+  it("automation still wins over intent-hidden (action_required gate is lower priority)", () => {
+    const lead = makeLead({
+      needs_action: true,
+      eligible_at: new Date(Date.now() + DAY).toISOString(),
+      last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
+      last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
+    });
+    (lead as any).automation_mode = "full_auto";
+    const hidden = new Set([lead.id]);
+    expect(classifyRevenueState(lead, new Set(), new Set(), hidden)).toBe("automation");
+  });
+});

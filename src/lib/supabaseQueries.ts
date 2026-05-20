@@ -1776,6 +1776,15 @@ export interface LeadActionSnapshot {
   action_reason_code: string | null;
 }
 
+/** PR C — extended snapshot returned by `mark_action_handled` RPC. Includes
+ *  the dismissal columns so the undo path can fully restore prior state
+ *  (and not just the visible action_* fields). Compatible with
+ *  `LeadActionSnapshot` for the legacy `setLeadPermanentDismiss` callers. */
+export interface LeadActionSnapshotFull extends LeadActionSnapshot {
+  action_dismissed_at: string | null;
+  action_permanently_dismissed: boolean;
+}
+
 export async function setLeadPermanentDismiss(
   leadId: string,
   dismissed: boolean,
@@ -1816,6 +1825,87 @@ export async function setLeadPermanentDismiss(
     .eq('id', leadId);
   if (error) throw error;
   return captured;
+}
+
+/** PR C — atomic Queue UI "mark handled" / "undo" via the
+ *  `mark_action_handled` SECURITY DEFINER RPC.
+ *
+ *  Why a new function instead of extending `setLeadPermanentDismiss`:
+ *   - Single server-side transaction (snapshot + write) so concurrent
+ *     syncs can't land a torn snapshot between the SELECT and UPDATE.
+ *   - Always sets `action_dismissed_at = now()` even when permanent —
+ *     fixes the re-arm trap for permanent-dismissed leads tracked in
+ *     KNOWN_ISSUES.md.
+ *   - Returns the full prior state (including `action_dismissed_at` and
+ *     `action_permanently_dismissed`) so the Undo toast can restore
+ *     EVERYTHING, not just the visible action_* fields.
+ *
+ *  Existing `dismissLeadAction` and `setLeadPermanentDismiss` callers
+ *  stay on the old client-side paths for now; PR D will migrate them
+ *  to this RPC when it lands the Queue UI. */
+export async function markActionHandled(
+  leadId: string,
+  opts: { permanent?: boolean } = {},
+): Promise<LeadActionSnapshotFull> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  // Auth warmup — mirrors `setTimelineFollowupState`. Cold-tab first
+  // clicks were occasionally hitting RLS denial because the auth header
+  // hadn't fully attached to the supabase-js client yet.
+  await supabase.auth.getSession();
+
+  const args = {
+    p_lead_id: leadId,
+    p_permanent: opts.permanent ?? false,
+    p_restore: null,
+  };
+
+  const isTransient = (e: unknown): boolean => {
+    if (!e) return false;
+    const err = e as { code?: string; message?: string; name?: string };
+    if (err.code === '42501') return true;
+    if (typeof err.message === 'string' && /Not authenticated|Failed to fetch|NetworkError|fetch/i.test(err.message)) return true;
+    if (err.name === 'TypeError') return true;
+    return false;
+  };
+
+  let first: { data: unknown; error: unknown } | null = null;
+  try {
+    first = await supabase.rpc('mark_action_handled', args);
+  } catch (thrown) {
+    if (!isTransient(thrown)) throw thrown;
+    console.warn('[markActionHandled] transient throw — retrying after 400ms', thrown);
+    first = { data: null, error: thrown };
+  }
+  if (!first.error) return first.data as LeadActionSnapshotFull;
+  if (!isTransient(first.error)) throw first.error;
+
+  console.warn('[markActionHandled] transient error — retrying after 400ms', first.error);
+  await new Promise((r) => setTimeout(r, 400));
+  const { data: retryData, error: retryError } = await supabase.rpc('mark_action_handled', args);
+  if (retryError) throw retryError;
+  return retryData as LeadActionSnapshotFull;
+}
+
+/** PR C — Undo companion for `markActionHandled`. Pass the snapshot
+ *  returned by `markActionHandled` to restore the lead's prior state
+ *  atomically. */
+export async function undoMarkActionHandled(
+  leadId: string,
+  snapshot: LeadActionSnapshotFull,
+): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+
+  await supabase.auth.getSession();
+
+  const args = {
+    p_lead_id: leadId,
+    p_permanent: false,
+    p_restore: snapshot as unknown as Record<string, unknown>,
+  };
+
+  const { error } = await supabase.rpc('mark_action_handled', args);
+  if (error) throw error;
 }
 
 // ============================================
