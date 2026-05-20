@@ -122,3 +122,8 @@ verify_jwt = false
 [functions.classify-timeline-intent-sample]
 verify_jwt = false
 
+
+# Twilio posts SMS delivery-status callbacks here. No user JWT,
+# signature is verified in code via X-Twilio-Signature.
+[functions.sms-status-webhook]
+verify_jwt = false
