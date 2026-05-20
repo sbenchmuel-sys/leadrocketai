@@ -136,6 +136,17 @@ Deno.serve(async (req) => {
   const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
   const twilioAuth = btoa(`${accountSid}:${authToken}`);
 
+  // Twilio will POST delivery-status events back to this URL.
+  // Must be the public Supabase Functions URL (Twilio signs against it).
+  const statusCallbackUrl = `${supabaseUrl}/functions/v1/sms-status-webhook`;
+
+  const twilioParams: Record<string, string> = {
+    To: to,
+    From: senderNumber,
+    Body: messageBody,
+    StatusCallback: statusCallbackUrl,
+  };
+
   let twilioResponse: Response;
   try {
     twilioResponse = await fetch(twilioUrl, {
@@ -144,11 +155,7 @@ Deno.serve(async (req) => {
         "Authorization": `Basic ${twilioAuth}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({
-        To: to,
-        From: senderNumber,
-        Body: messageBody,
-      }),
+      body: new URLSearchParams(twilioParams),
     });
   } catch (fetchErr) {
     console.error("[sms-send] Twilio fetch error:", fetchErr);
