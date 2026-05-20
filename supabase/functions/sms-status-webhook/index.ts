@@ -45,6 +45,24 @@ const ALLOWED_STATUSES = new Set([
   "read",
 ]);
 
+// Status rank — higher = more advanced/terminal. Lower ranks cannot
+// overwrite higher ranks (prevents out-of-order Twilio callbacks from
+// downgrading a delivered/failed message back to sent/queued).
+const STATUS_RANK: Record<string, number> = {
+  queued: 10,
+  sending: 15,
+  sent: 20,
+  delivered: 30,
+  read: 35,
+  undelivered: 40,
+  failed: 40,
+};
+
+function rankOf(status: unknown): number {
+  if (typeof status !== "string") return 0;
+  return STATUS_RANK[status.toLowerCase()] ?? 0;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return twiml(405);
