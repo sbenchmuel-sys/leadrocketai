@@ -35,8 +35,11 @@ History:
   service-role JWT invocation still worked because Supabase's gateway
   validates service-role tokens even when `verify_jwt` defaults to
   true.
-- **PR #39** added `classify-timeline-intent-sample` with its
-  registration in the same PR — the correct pattern.
+- **PR #39 / #41** added `classify-timeline-intent-sample` with its
+  registration in the same PR — the correct pattern. (PR #39 itself
+  merged into a stale base branch; PR #41 re-landed the same commit
+  against main — see the "Stacked PR retarget discipline" note in
+  memory.)
 - **Phase 1.5** added the missing `classify-timeline-intent-backfill`
   registration alongside the bulk-move-to-nurture guardrail work.
 

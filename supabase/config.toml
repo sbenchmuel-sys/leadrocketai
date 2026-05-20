@@ -116,3 +116,9 @@ verify_jwt = false
 [functions.classify-timeline-intent-backfill]
 verify_jwt = false
 
+# Read-only Phase 1 spot-check helper for lead_timeline_items.intent.
+# Invoked manually with X-Internal-Secret or service-role token; no
+# user JWT is sent, so the gateway must skip verification.
+[functions.classify-timeline-intent-sample]
+verify_jwt = false
+
