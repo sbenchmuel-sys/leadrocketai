@@ -15,6 +15,21 @@ Phases referenced here are the action-queue redesign rollout:
 
 ---
 
+## ActionRequiredPanel.tsx — pending decision
+
+File has zero call-sites but was actively co-maintained alongside
+PriorityActions in PR 2.4 (May 4 commit 25fe9ad) and Codex triage
+cleanup (May 11 commit 4296e6f). Behavior mirrors PriorityActions
+(snooze, permanent-dismiss with Undo toast). Migration
+20260504100001 references both as parallel surfaces.
+
+Status: NOT deleted in PR #38. Author does not recall whether recent
+edits were intentional warming or reflexive parallel maintenance.
+Possible Sales Brain surfacing artifact — re-evaluate during the
+Sales Brain redesign conversation (planned Phase 3).
+
+---
+
 ## Bulk operations
 
 ### Bulk-move-to-nurture clobbering risk
