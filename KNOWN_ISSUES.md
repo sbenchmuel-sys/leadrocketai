@@ -15,6 +15,12 @@ Phases referenced here are the action-queue redesign rollout:
 
 ---
 
+## PR #38 — classify-timeline-intent-backfill not registered in config.toml
+
+The `classify-timeline-intent-backfill` edge function source was committed in PR #38 but not registered in `supabase/config.toml`, so it was not auto-deployed on merge and required a separate manual deployment before it could be invoked. Phase 2a should ensure any new edge functions are registered in `supabase/config.toml` as part of the same PR that adds the function source.
+
+---
+
 ## ActionRequiredPanel.tsx — pending decision
 
 File has zero call-sites but was actively co-maintained alongside
