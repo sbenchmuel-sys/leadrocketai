@@ -1997,6 +1997,7 @@ export type Database = {
           action_instructions: string | null
           action_permanently_dismissed: boolean
           action_reason_code: string | null
+          action_resurfaced_at: string | null
           auto_created: boolean
           auto_nurture_eligible: boolean | null
           automation_mode: string | null
@@ -2071,6 +2072,7 @@ export type Database = {
           action_instructions?: string | null
           action_permanently_dismissed?: boolean
           action_reason_code?: string | null
+          action_resurfaced_at?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
@@ -2145,6 +2147,7 @@ export type Database = {
           action_instructions?: string | null
           action_permanently_dismissed?: boolean
           action_reason_code?: string | null
+          action_resurfaced_at?: string | null
           auto_created?: boolean
           auto_nurture_eligible?: boolean | null
           automation_mode?: string | null
