@@ -6,6 +6,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isInternalCaller, assertLeadAccess } from "../_shared/authz.ts";
 import { projectTimelineItem } from "../_shared/timelineProjector.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -302,6 +303,10 @@ Deno.serve(async (req) => {
           console.error("[sms-send] AI analysis error:", aiError);
         }
       }
+
+      // Recompute needs_action / next_action_* now that the outbound is
+      // persisted. Owns its own try/catch — never fails the send.
+      postSendDeriveAction(supabase, { leadId, logPrefix: "[sms-send]" });
     } catch (err) {
       console.error("[sms-send] Background task error:", err);
     }

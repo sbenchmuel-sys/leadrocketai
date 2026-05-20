@@ -185,6 +185,8 @@ export interface LeadUpdate {
   last_nurture_outbound_at: string | null;
   last_activity_at?: string;
   action_dismissed_at?: string | null;
+  action_permanently_dismissed?: boolean;
+  action_resurfaced_at?: string;
   auto_nurture_eligible?: boolean;
 }
 
@@ -585,17 +587,21 @@ export function buildLeadUpdate(
   automationMode: string | null = null,
 ): LeadUpdate {
   const dismissedAt = actionDismissedAt ? new Date(actionDismissedAt).getTime() : 0;
-  const lastInteractionTime = Math.max(
-    metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0,
-    metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0
-  );
+  // RE-ARM RULE (Phase 2a, HANDOFF-locked): only fresh INBOUND activity
+  // clears `action_dismissed_at` / `action_permanently_dismissed`. A rep's
+  // own outbound (`last_outbound_at` advancing) used to also re-arm the
+  // dismissal via MAX(inbound, outbound) — that yanked just-handled leads
+  // back into the queue the moment the rep typed a follow-up. The
+  // companion `action_resurfaced_at` stamp below records the clear so the
+  // Queue UI can show a "↻ Resurfaced" pill.
+  const lastInboundTime = metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0;
 
   let finalAction = actionResult;
   let shouldClearDismissal = false;
 
-  if (dismissedAt > 0 && dismissedAt > lastInteractionTime) {
+  if (dismissedAt > 0 && dismissedAt > lastInboundTime) {
     finalAction = { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null, auto_nurture_eligible: actionResult.auto_nurture_eligible };
-  } else if (dismissedAt > 0 && lastInteractionTime > dismissedAt) {
+  } else if (dismissedAt > 0 && lastInboundTime > dismissedAt) {
     shouldClearDismissal = true;
   }
 
@@ -671,10 +677,16 @@ export function buildLeadUpdate(
   }
 
   if (shouldClearDismissal) {
+    // CLEAR-CONDITIONS (Phase 2a verified): both `action_dismissed_at` and
+    // `action_permanently_dismissed` are cleared together when, and ONLY
+    // when, `lastInboundTime > dismissedAt` (i.e. a fresh inbound after
+    // the dismissal — rep's own outbounds no longer re-arm the queue per
+    // the HANDOFF-locked decision above). `action_resurfaced_at` is
+    // stamped in the same UPDATE so the audit trail and the column
+    // states stay atomic.
     leadUpdate.action_dismissed_at = null;
-    // PR 2.4 — a fresh inbound also re-arms a permanently-dismissed lead.
-    // Same trigger, parallel column.
-    (leadUpdate as Record<string, unknown>).action_permanently_dismissed = false;
+    leadUpdate.action_permanently_dismissed = false;
+    leadUpdate.action_resurfaced_at = new Date().toISOString();
   }
   if (finalAction.auto_nurture_eligible !== undefined) leadUpdate.auto_nurture_eligible = finalAction.auto_nurture_eligible;
 

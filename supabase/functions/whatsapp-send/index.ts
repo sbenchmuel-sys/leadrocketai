@@ -7,6 +7,7 @@ import { encryptToken } from "../_shared/encryption.ts";
 import { WhatsAppService } from "../_shared/whatsapp/service.ts";
 import { assertConversationAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -218,6 +219,10 @@ Deno.serve(async (req) => {
           dedupe_key: whatsappDedupeKey("outbound", providerMessageId, waInteraction.id),
         }).catch(e => console.warn("[whatsapp-send] Timeline projection failed:", e));
       }
+
+      // Recompute needs_action / next_action_* now that the outbound is
+      // persisted. Owns its own try/catch — never fails the send.
+      postSendDeriveAction(supabase, { leadId: bridgeLeadId, logPrefix: "[whatsapp-send]" });
     }
   } catch (bridgeErr: any) {
     console.warn("[whatsapp-send] Non-blocking interaction bridge failed:", bridgeErr.message);

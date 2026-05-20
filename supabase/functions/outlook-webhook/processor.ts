@@ -489,22 +489,29 @@ async function processChangeNotification(
   {
     const meetingResult = detectMeetingConfirmation(messageSubject || "", bodyText);
     if (meetingResult.isConfirmed) {
+      // Body-aware override (EDGE_CASES #4): when a calendar-accept also
+      // carries a substantive commercial question, keep needs_action open.
+      const override = meetingResult.hasSubstantiveQuestion;
       logger.info("mail.outlook.meeting_confirmed", {
         lead_id: leadRow.id,
         confidence: meetingResult.confidence,
         matched: meetingResult.matchedText,
+        substantive_question: override,
+        matched_keywords: meetingResult.matchedKeywords,
       });
 
-      await serviceClient.from("leads").update({
-        has_future_meeting: true,
-        needs_action: false,
-      }).eq("id", leadRow.id);
+      const leadUpdate: Record<string, unknown> = { has_future_meeting: true };
+      if (!override) leadUpdate.needs_action = false;
+      await serviceClient.from("leads").update(leadUpdate).eq("id", leadRow.id);
 
+      const noteBody = override
+        ? `📅 Meeting confirmed — "${meetingResult.matchedText}". Reply still needed — substantive question detected (matched: ${meetingResult.matchedKeywords.join(", ")}).`
+        : `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`;
       await createCanonicalInteraction(serviceClient, {
         lead_id: leadRow.id,
         type: "system_note",
         source: "automation",
-        body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
+        body_text: noteBody,
         occurred_at: new Date().toISOString(),
         workspace_id: leadRow.workspace_id ?? null,
         provider: "automation",

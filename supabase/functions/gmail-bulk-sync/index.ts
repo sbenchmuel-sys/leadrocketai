@@ -513,17 +513,25 @@ async function syncLeadEmails(
       if (direction === "inbound" && !isBounce) {
         const meetingResult = detectMeetingConfirmation(subject, bodyText);
         if (meetingResult.isConfirmed) {
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed (${meetingResult.confidence}): "${meetingResult.matchedText}"`);
-          await serviceSupabase.from("leads").update({
-            has_future_meeting: true,
-            needs_action: false,
-          }).eq("id", leadId);
+          // Body-aware override (EDGE_CASES #4): see gmail-sync for rationale.
+          const override = meetingResult.hasSubstantiveQuestion;
+          const leadUpdate: Record<string, unknown> = { has_future_meeting: true };
+          if (!override) leadUpdate.needs_action = false;
 
+          console.log(
+            `[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed (${meetingResult.confidence}): "${meetingResult.matchedText}"`
+            + (override ? ` — keeping action open, matched: ${meetingResult.matchedKeywords.join(", ")}` : ""),
+          );
+          await serviceSupabase.from("leads").update(leadUpdate).eq("id", leadId);
+
+          const noteBody = override
+            ? `📅 Meeting confirmed — "${meetingResult.matchedText}". Reply still needed — substantive question detected (matched: ${meetingResult.matchedKeywords.join(", ")}).`
+            : `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`;
           await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId,
             type: "system_note",
             source: "automation",
-            body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
+            body_text: noteBody,
             occurred_at: new Date().toISOString(),
             provider: "automation",
           });
@@ -673,15 +681,23 @@ async function syncLeadEmails(
         if (direction === "inbound" && !isBounceT) {
           const meetingResult = detectMeetingConfirmation(subject, bodyText);
           if (meetingResult.isConfirmed) {
-            console.log(`[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed in thread (${meetingResult.confidence}): "${meetingResult.matchedText}"`);
-            await serviceSupabase.from("leads").update({
-              has_future_meeting: true,
-              needs_action: false,
-            }).eq("id", leadId);
+            // Body-aware override (EDGE_CASES #4): see gmail-sync for rationale.
+            const override = meetingResult.hasSubstantiveQuestion;
+            const leadUpdate: Record<string, unknown> = { has_future_meeting: true };
+            if (!override) leadUpdate.needs_action = false;
 
+            console.log(
+              `[gmail-bulk-sync] Lead ${leadId}: Meeting confirmed in thread (${meetingResult.confidence}): "${meetingResult.matchedText}"`
+              + (override ? ` — keeping action open, matched: ${meetingResult.matchedKeywords.join(", ")}` : ""),
+            );
+            await serviceSupabase.from("leads").update(leadUpdate).eq("id", leadId);
+
+            const noteBody = override
+              ? `📅 Meeting confirmed — "${meetingResult.matchedText}". Reply still needed — substantive question detected (matched: ${meetingResult.matchedKeywords.join(", ")}).`
+              : `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`;
             await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId, type: "system_note", source: "automation",
-              body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
+              body_text: noteBody,
               occurred_at: new Date().toISOString(), provider: "automation",
             });
           }
