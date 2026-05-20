@@ -1889,6 +1889,7 @@ export type Database = {
           hidden: boolean
           id: string
           intent: string | null
+          intent_version: string | null
           lead_id: string
           metadata_json: Json | null
           occurred_at: string
@@ -1913,6 +1914,7 @@ export type Database = {
           hidden?: boolean
           id?: string
           intent?: string | null
+          intent_version?: string | null
           lead_id: string
           metadata_json?: Json | null
           occurred_at?: string
@@ -1937,6 +1939,7 @@ export type Database = {
           hidden?: boolean
           id?: string
           intent?: string | null
+          intent_version?: string | null
           lead_id?: string
           metadata_json?: Json | null
           occurred_at?: string
