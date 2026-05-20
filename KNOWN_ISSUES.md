@@ -203,20 +203,15 @@ action queue rather than as a confirmed reply that clears
 `needs_action`.
 
 ### Stale `hasFutureMeeting` variable in gmail-sync / outlook-sync
-**Scheduled fix: Phase 2a.**
+**Status: closed by Phase 2a (PR B).**
 [EDGE_CASES.md §1](EDGE_CASES.md#1-detector-disagreement-ooo--meeting-confirmation).
-`hasFutureMeeting` is read once at
-[gmail-sync/index.ts:224](supabase/functions/gmail-sync/index.ts:224)
-and [outlook-sync/index.ts:155](supabase/functions/outlook-sync/index.ts:155)
-before the message loop. If a meeting confirmation in the same batch
-sets `has_future_meeting=true`, the local variable stays `false` and
-the end-of-sync `deriveAction()` is called with the stale value, so
-the `pause_when_meeting_scheduled` guard at
-[_shared/syncEngine.ts:368](supabase/functions/_shared/syncEngine.ts:368)
-does not fire on the run that detected the meeting. Causes a
-flickering "Reply Now → goes away on next sync" UX. Two-line fix in
-Phase 2a (re-read `has_future_meeting` immediately before the
-end-of-sync `deriveAction` call).
+PR B inserts a fresh `SELECT has_future_meeting` immediately before
+the end-of-sync `deriveAction()` call in both
+[gmail-sync/index.ts](supabase/functions/gmail-sync/index.ts) and
+[outlook-sync/index.ts](supabase/functions/outlook-sync/index.ts).
+`gmail-bulk-sync` was deliberately left untouched — it uses its own
+local `deriveAction` (line 224) rather than the shared one, and lives
+in a separate hot path that PR B was not chartered to refactor.
 
 ### `intent_router` writes a granular vocabulary not in the migration's documented list
 **Scheduled reconciliation: Phase 2a follow-up.**
@@ -260,46 +255,74 @@ results through the same NULL path; a `confidence` column on
 actually returns one.
 
 ### Body-aware meeting detector gap — accepts hide embedded questions
-**Scheduled fix: Phase 2a.**
+**Status: closed by Phase 2a (PR B).**
 [EDGE_CASES.md §4](EDGE_CASES.md#4-calendar-accept-with-substantive-reply).
-`detectMeetingConfirmation()` returns on subject match alone and
-never inspects body for embedded substantive content
-([_shared/meetingConfirmation.ts:48–57](supabase/functions/_shared/meetingConfirmation.ts:48)).
-"Accepted: Demo Thursday — by the way, can you send pricing?" gets
-classified as a clean meeting confirmation and the pricing question
-disappears from the queue. Phase 2a fix: when `confidence === "subject"`,
-also scan body for `?` plus commercial keywords (`pricing`, `price`,
-`cost`, `quote`, `proposal`, `contract`, `timeline`, `when`, `how`)
-and return a softer result so the meeting handler does not blanket-set
-`needs_action=false`.
+`detectMeetingConfirmation()` now returns
+`hasSubstantiveQuestion: true` + `matchedKeywords: string[]` when the
+subject matches a calendar-accept pattern AND the body contains both
+`?` and any keyword from the exported `MEETING_OVERRIDE_KEYWORDS`
+constant in [_shared/meetingConfirmation.ts](supabase/functions/_shared/meetingConfirmation.ts).
+The four callers (gmail-sync, outlook-sync, gmail-bulk-sync ×2,
+outlook-webhook) keep `has_future_meeting=true` but skip the
+`needs_action=false` write when the override fires, and write a
+distinct `system_note` row noting the matched keywords for audit.
+
+### Voice call deriveAction is a no-op until calls write to `interactions`
+**Scheduled fix: Phase 2b or later.**
+PR B (Phase 2a) wires `postSendDeriveAction` into
+[twilio-voice-webhook/index.ts](supabase/functions/twilio-voice-webhook/index.ts)
+on completed outbound calls — but `twilio-voice-webhook` writes
+only to `call_sessions` + `lead_timeline_items`, not to
+`interactions`. The helper computes metrics by reading `interactions`
+only, so for voice the recompute sees no fresh outbound and is a
+silent no-op. Two ways to close the gap:
+- Insert a voice row into `interactions` (matching the SMS pattern)
+  in twilio-voice-webhook. Smallest surface, but risks downstream
+  code that assumes `interactions` is email/text-only.
+- Migrate `computeMetricsFromInteractions` to read from
+  `lead_timeline_items` instead. Bigger change; aligns with the
+  `interactions → lead_timeline_items` cutover already in flight per
+  CLAUDE.md.
+
+### Permanent dismiss without snooze is a re-arm trap
+**Status: pre-existing; out of scope for PR B.**
+[setLeadPermanentDismiss](src/lib/supabaseQueries.ts:1779) sets
+`action_permanently_dismissed=true` without also stamping
+`action_dismissed_at`. `buildLeadUpdate` in
+[_shared/syncEngine.ts](supabase/functions/_shared/syncEngine.ts)
+gates the re-arm logic on `dismissedAt > 0` (i.e. requires
+`action_dismissed_at` to be non-null). A fresh inbound on a lead
+that's permanently-dismissed-only (no snooze timestamp) does NOT
+re-arm — the lead stays dismissed forever. PR B did not touch this
+gate (scope was the inbound-only narrowing). Smallest fix: have
+`setLeadPermanentDismiss` also stamp `action_dismissed_at = now()`,
+or generalize the gate to also look at the boolean column.
 
 ---
 
 ## Action-queue UI gaps
 
 ### No "this lead was resurfaced" audit signal
-**Scheduled fix: Phase 2a.**
+**Status: closed by Phase 2a (PR B).**
 [EDGE_CASES.md §9](EDGE_CASES.md#9-why-is-this-back--surfacing-resurfacing).
-[_shared/syncEngine.ts:673–678](supabase/functions/_shared/syncEngine.ts:673)
-silently clears `action_dismissed_at` and
-`action_permanently_dismissed` whenever a fresh inbound arrives —
-no audit-log row, no column stamped, no UI badge. Reps see leads
-they dismissed reappear in their queue with no explanation. Phase
-2a will add `action_resurfaced_at timestamptz` (or a parallel
-`lead_action_events` log table) stamped at the moment the dismissal
-clears. UI shows a "↻ Resurfaced 2h ago" pill.
+PR B adds `leads.action_resurfaced_at timestamptz` (migration
+`20260521000000_add_action_resurfaced_at`) and stamps it in the
+SAME UPDATE that clears `action_dismissed_at` /
+`action_permanently_dismissed` in
+[_shared/syncEngine.ts buildLeadUpdate](supabase/functions/_shared/syncEngine.ts).
+Atomicity prevents a transient "cleared but not resurfaced" window.
+The Queue UI (PR D) reads this for the "↻ Resurfaced" pill — no
+consumer wired up yet in PR B.
 
 ### Inbound-only re-arm decided (May 2026)
-**Implementation: Phase 2a.**
-Decision: only fresh INBOUND activity should clear a dismissed
-action. Today
-[_shared/syncEngine.ts:586–600](supabase/functions/_shared/syncEngine.ts:586)
-treats `lastInteractionTime = MAX(last_outbound_at, last_inbound_at)`,
-which means the rep's own outbound send also re-arms a just-handled
-lead. Phase 2a will narrow that comparison to `last_inbound_at` only
-(see EDGE_CASES.md §3 caveat for the original framing) so a "mark
-handled → I'll follow up" rep flow doesn't immediately yank the lead
-back into the queue when the rep sends.
+**Status: closed by Phase 2a (PR B).**
+PR B narrows the re-arm comparison in
+[_shared/syncEngine.ts buildLeadUpdate](supabase/functions/_shared/syncEngine.ts)
+from `lastInteractionTime = MAX(last_outbound_at, last_inbound_at)`
+to `lastInboundTime = last_inbound_at`. A rep's own outbound no
+longer re-arms a just-handled lead. The dismissal-clear path now
+fires only when `lastInboundTime > dismissedAt`, and stamps
+`action_resurfaced_at` in the same UPDATE for audit.
 
 ### Timezone rendering of `eligible_at`
 **Scheduled for adoption-time: Phase 2a.**

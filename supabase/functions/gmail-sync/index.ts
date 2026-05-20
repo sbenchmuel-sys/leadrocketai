@@ -459,17 +459,28 @@ serve(async (req) => {
         if (direction === "inbound" && !isBounce) {
           const meetingResult = detectMeetingConfirmation(subject, bodyText);
           if (meetingResult.isConfirmed) {
-            console.log(`[gmail-sync] Lead ${leadId}: Meeting confirmed (${meetingResult.confidence}): "${meetingResult.matchedText}"`);
-            await serviceSupabase.from("leads").update({
-              has_future_meeting: true,
-              needs_action: false,
-            }).eq("id", leadId);
+            // Body-aware override (EDGE_CASES #4): when a calendar-accept also
+            // contains a substantive commercial question (e.g. "Accepted: Demo —
+            // can you send pricing?"), we still flag the meeting but DO NOT
+            // suppress needs_action. The pricing question must reach the queue.
+            const override = meetingResult.hasSubstantiveQuestion;
+            const leadUpdate: Record<string, unknown> = { has_future_meeting: true };
+            if (!override) leadUpdate.needs_action = false;
 
+            console.log(
+              `[gmail-sync] Lead ${leadId}: Meeting confirmed (${meetingResult.confidence}): "${meetingResult.matchedText}"`
+              + (override ? ` — keeping action open, matched: ${meetingResult.matchedKeywords.join(", ")}` : ""),
+            );
+            await serviceSupabase.from("leads").update(leadUpdate).eq("id", leadId);
+
+            const noteBody = override
+              ? `📅 Meeting confirmed — "${meetingResult.matchedText}". Reply still needed — substantive question detected (matched: ${meetingResult.matchedKeywords.join(", ")}).`
+              : `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`;
             await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId,
               type: "system_note",
               source: "automation",
-              body_text: `📅 Meeting confirmed — "${meetingResult.matchedText}". No reply needed.`,
+              body_text: noteBody,
               occurred_at: new Date().toISOString(),
               workspace_id: leadData?.workspace_id ?? null,
               provider: "automation",
@@ -637,8 +648,18 @@ serve(async (req) => {
     ).length;
 
     const stage = deriveStage(currentStage, metrics, hasClosingKeywords);
+
+    // EDGE_CASES #1: `hasFutureMeeting` was read from `leadData` at line 224,
+    // BEFORE the per-message loop. If a meeting-confirmation in this batch
+    // set has_future_meeting=true (lines ~485-487), the local stays stale
+    // and the pause_when_meeting_scheduled guard in deriveAction misses
+    // until the next sync. Re-read fresh from the DB right before deriveAction.
+    const { data: refreshedLead } = await serviceSupabase
+      .from("leads").select("has_future_meeting").eq("id", leadId).maybeSingle();
+    const freshHasFutureMeeting = refreshedLead?.has_future_meeting ?? hasFutureMeeting;
+
     const actionResult = deriveAction(
-      leadId, metrics, nurtureCadence, stage, hasMeetingWithoutFollowup, hasFutureMeeting,
+      leadId, metrics, nurtureCadence, stage, hasMeetingWithoutFollowup, freshHasFutureMeeting,
       recentOutbound7d, recentOutbound30d, modeSettings, cadenceSettings.guardrails,
       cadenceSettings.stop_pause_rules, cadenceSettings.flows, timezone, strategy, leadMotion
     );

@@ -8,6 +8,7 @@ import { mapTwilioStatus, enqueueCallJob, CALL_DEFAULTS } from "../_shared/callC
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
 import { resolvePhoneMapping } from "../_shared/phoneMapping.ts";
 import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -251,6 +252,13 @@ async function handleCallStatus(
       }, { triggerRecompute: status === "completed" });
 
       logger.info("call_timeline_projected", { callSid, leadId: sess.lead_id, status });
+
+      // Recompute needs_action / next_action_* on completed outbound calls
+      // (only the outbound direction counts as "the rep just acted"). Owns
+      // its own try/catch — never fails the webhook response.
+      if (status === "completed" && sess.direction === "outbound") {
+        postSendDeriveAction(supabase, { leadId: sess.lead_id as string, logPrefix: "[twilio-voice-webhook]" });
+      }
     }
   }
 }
