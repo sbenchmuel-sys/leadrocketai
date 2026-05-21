@@ -52,7 +52,7 @@ in the same PR. This is a hard requirement, not a follow-up.
 
 ## automation-executor consent-gate race against in-flight mutations
 
-**Status: closed by Phase 1.6.**
+**Status: closed by Phase 1.6 ([PR #47](https://github.com/sbenchmuel-sys/leadrocketai/pull/47)).**
 
 Originally surfaced by Codex on
 [PR #40](https://github.com/sbenchmuel-sys/leadrocketai/pull/40)
