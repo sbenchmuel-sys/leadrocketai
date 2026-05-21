@@ -1901,7 +1901,7 @@ export async function undoMarkActionHandled(
   const args = {
     p_lead_id: leadId,
     p_permanent: false,
-    p_restore: snapshot as unknown as Record<string, unknown>,
+    p_restore: snapshot as unknown as Json,
   };
 
   const { error } = await supabase.rpc('mark_action_handled', args);
