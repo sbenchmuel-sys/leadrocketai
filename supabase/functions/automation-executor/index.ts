@@ -421,15 +421,21 @@ serve(async (req) => {
           continue;
         }
 
-        // ── CONSENT-GATE RACE GUARD (Phase 1.6) ─────────────────────
-        // The candidate query gated on automation_mode IS NOT NULL, but a
-        // consent withdrawal (bulk move-to-nurture, manual mode flip, etc.)
-        // could have landed between that query and this point — including
-        // during the multi-await window below (stop conditions, multi-
-        // participant query, min-gap, caps, draft fetch / ai_task HTTP
-        // call, provider send). Re-check on the fresh row before any
-        // provider call to close that window. Per-lead skip via `continue`
-        // — one consent withdrawal must not abort the entire tick.
+        // ── EARLY CONSENT-GATE RACE GUARD (Phase 1.6) ───────────────
+        // First of two layers (see also the LATE check immediately
+        // before the provider fetch below). This early check is the
+        // CHEAP PATH: the candidate query gated on automation_mode IS
+        // NOT NULL, but a consent withdrawal (bulk move-to-nurture,
+        // manual mode flip, etc.) could have landed between that query
+        // and this refetch. Bailing here lets us skip the entire
+        // multi-await chain that follows (stop-conditions, multi-
+        // participant query, min-gap, caps, draft fetch, the `ai_task`
+        // HTTP roundtrip) — meaning no wasted `ai_task` tokens on a
+        // lead whose consent we already know is gone. The LATE check
+        // closes the race window THIS check cannot see — withdrawals
+        // landing AFTER this refetch but BEFORE the provider call.
+        // Per-lead skip via `continue` — one consent withdrawal must
+        // not abort the entire tick.
         if (freshLead.automation_mode == null || freshLead.motion === "nurture") {
           logger.info("automation.skipped_consent_race", {
             lead_id: lead.id,
@@ -1099,6 +1105,50 @@ serve(async (req) => {
           continue;
         }
         const claimId = claimRow?.id;
+
+        // ── LATE CONSENT-GATE RACE GUARD (Phase 1.6 follow-up) ─────────────
+        // Two-layer consent check by design:
+        //   • The early check (after the safety refetch above) is the CHEAP
+        //     PATH — it catches consent withdrawals that landed before the
+        //     refetch and lets us bail before spending `ai_task` tokens on
+        //     an already-withdrawn lead.
+        //   • This late check is the TRUE RACE CLOSER. The window between
+        //     the early check and here covers the multi-second await chain
+        //     (stop-conditions, multi-participant query, min-gap, per-lead
+        //     caps, draft lookup, the `ai_task` HTTP roundtrip — usually
+        //     the longest leg — and the pre-send claim insert above). A
+        //     consent withdrawal landing anywhere in that window is
+        //     invisible to the early check. The minimal SELECT here
+        //     immediately before the provider fetch shrinks the remaining
+        //     race window to a single network roundtrip to the provider.
+        // Skip shape is intentionally indistinguishable from the early
+        // check (same status, same error_message, same telemetry event) —
+        // operators don't need to tell them apart in production logs.
+        // Fail-closed: if the lookup itself errors (null `lateLead`), we
+        // skip rather than send — better one extra skipped tick than one
+        // stale outbound. The claim row is left for stale-claim recovery
+        // to expire on the next tick if the .update() also fails.
+        const { data: lateLead } = await supabase
+          .from("leads")
+          .select("automation_mode, motion")
+          .eq("id", lead.id)
+          .single();
+
+        if (lateLead == null || lateLead.automation_mode == null || lateLead.motion === "nurture") {
+          logger.info("automation.skipped_consent_race", {
+            lead_id: lead.id,
+            workspace_id: freshLead.workspace_id,
+          });
+          await supabase.from("automation_log")
+            .update({
+              status: "skipped",
+              error_message: "Consent withdrawn or motion changed mid-flight",
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", claimId);
+          skipped++;
+          continue;
+        }
 
         // Send via appropriate channel + provider
         let sendResponse: Response;
