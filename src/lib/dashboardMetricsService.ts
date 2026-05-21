@@ -98,29 +98,27 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
  * "Action Required" badge stays accurate when the Queue UI (PR D)
  * applies the same hide-rule.
  *
- * Implementation: one query for all inbound timeline rows for the
- * given leads, scanned in occurred_at DESC order; first row per
- * lead_id wins. NULL intent (not yet classified by PR A's cron) is
- * treated as "not hidden" — we don't want to gate the UI on async
- * classification.
+ * Implementation: delegate the per-lead reduction to the
+ * `get_latest_intents_for_leads` SECURITY DEFINER RPC
+ * (migration 20260521020000). The RPC returns at most one row per
+ * input lead via `DISTINCT ON (lead_id)`, so there's no client-side
+ * de-duplication and no row cap to worry about. Earlier revisions
+ * paginated 5000 rows of inbound timeline items and reduced
+ * client-side; that approach silently dropped leads in workspaces
+ * with dense inbound history (Codex P2 on PR #44).
+ *
+ * NULL intent (not yet classified by PR A's cron) is filtered out
+ * inside the RPC — callers treat absence as "not hidden", so the UI
+ * never depends on async classification.
  */
 async function fetchIntentHiddenLeadIds(
   leadIds: string[],
 ): Promise<Set<string>> {
   if (leadIds.length === 0) return new Set();
 
-  // Cap at 5000 rows to stay safely under Supabase's default 1000-row
-  // PostgREST limit per request (we use a higher tier — see the .limit
-  // calls elsewhere in this file). A workspace with >5k inbound rows
-  // would only see slight count drift; the Queue UI filter still
-  // works per-row.
-  const { data, error } = await supabase
-    .from("lead_timeline_items")
-    .select("lead_id, intent")
-    .eq("event_type", "email_inbound")
-    .in("lead_id", leadIds)
-    .order("occurred_at", { ascending: false })
-    .limit(5000);
+  const { data, error } = await supabase.rpc("get_latest_intents_for_leads", {
+    p_lead_ids: leadIds,
+  });
 
   if (error) {
     // Non-fatal — fall back to "no hidden ids" so the dashboard renders
@@ -129,14 +127,11 @@ async function fetchIntentHiddenLeadIds(
     return new Set();
   }
 
-  const seen = new Set<string>();
   const hidden = new Set<string>();
-  for (const row of data ?? []) {
-    const id = (row as { lead_id?: string }).lead_id;
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const intent = (row as { intent?: string | null }).intent;
-    if (intent && INTENT_HIDE_FROM_QUEUE.has(intent)) hidden.add(id);
+  for (const row of (data ?? []) as Array<{ lead_id: string; intent: string | null }>) {
+    if (row.intent && INTENT_HIDE_FROM_QUEUE.has(row.intent)) {
+      hidden.add(row.lead_id);
+    }
   }
   return hidden;
 }
