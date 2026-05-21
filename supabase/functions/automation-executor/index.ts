@@ -17,6 +17,7 @@ import {
   type ExecutionSettings,
 } from "../_shared/executionSettings.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
+import { logger } from "../_shared/logger.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -407,13 +408,35 @@ serve(async (req) => {
         // SAFETY RE-CHECK
         const { data: freshLead, error: freshErr } = await supabase
           .from("leads")
-          .select("last_inbound_at, last_outbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed")
+          .select("last_inbound_at, last_outbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed, automation_mode, workspace_id")
           .eq("id", lead.id)
           .single();
 
         if (freshErr || !freshLead) {
           logEntry.status = "skipped";
           logEntry.error_message = "Could not re-fetch lead";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
+        // ── CONSENT-GATE RACE GUARD (Phase 1.6) ─────────────────────
+        // The candidate query gated on automation_mode IS NOT NULL, but a
+        // consent withdrawal (bulk move-to-nurture, manual mode flip, etc.)
+        // could have landed between that query and this point — including
+        // during the multi-await window below (stop conditions, multi-
+        // participant query, min-gap, caps, draft fetch / ai_task HTTP
+        // call, provider send). Re-check on the fresh row before any
+        // provider call to close that window. Per-lead skip via `continue`
+        // — one consent withdrawal must not abort the entire tick.
+        if (freshLead.automation_mode == null || freshLead.motion === "nurture") {
+          logger.info("automation.skipped_consent_race", {
+            lead_id: lead.id,
+            workspace_id: freshLead.workspace_id,
+          });
+          logEntry.status = "skipped";
+          logEntry.error_message = "Consent withdrawn or motion changed mid-flight";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;

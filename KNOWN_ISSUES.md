@@ -52,48 +52,55 @@ in the same PR. This is a hard requirement, not a follow-up.
 
 ## automation-executor consent-gate race against in-flight mutations
 
-**Scheduled fix: Phase 1.6.**
+**Status: closed by Phase 1.6.**
 
-Surfaced by Codex on [PR #40](https://github.com/sbenchmuel-sys/leadrocketai/pull/40)
-in the review of commit `47dbd887`. The Phase 1.5 bulk-move-to-nurture
-dialog clears `automation_mode` on BLOCKED leads in the same UPDATE as
-the motion flip, but that mitigation does not close the race window
+Originally surfaced by Codex on
+[PR #40](https://github.com/sbenchmuel-sys/leadrocketai/pull/40)
+in the review of commit `47dbd887`. Phase 1.5's bulk-move-to-nurture
+dialog clears `automation_mode` on BLOCKED leads in the same UPDATE
+as the motion flip, but that mitigation did not close the race window
 inside `automation-executor`'s send loop:
 
 1. **Candidate query** ([automation-executor/index.ts:253](supabase/functions/automation-executor/index.ts#L253))
    gates on `automation_mode IS NOT NULL` and pulls the eligible lead
    set for the tick.
 2. **Safety refetch** ([automation-executor/index.ts:408–413](supabase/functions/automation-executor/index.ts#L408))
-   re-reads each lead before sending — but the SELECT list is
-   `last_inbound_at, last_outbound_at, has_future_meeting, motion,
-   stage, needs_action, eligible_at, status, unsubscribed`. It does
-   **NOT** include `automation_mode`, so a consent-withdrawal that
-   landed since the candidate query is invisible.
+   re-read each lead before sending — but the original SELECT list
+   (`last_inbound_at, last_outbound_at, has_future_meeting, motion,
+   stage, needs_action, eligible_at, status, unsubscribed`) did
+   **NOT** include `automation_mode`, so a consent withdrawal that
+   landed since the candidate query was invisible.
 3. **Multi-await window** between refetch and provider send: stop-
    conditions check, multi-participant guard (one query for the last
    inbound), min-gap check, per-lead caps check (own queries), draft
    lookup/generation (calls `ai_task` over HTTP — multiple seconds),
    claim insert, then `gmail-send` / `outlook-send` / `sms-send`.
 
-If a bulk-move-to-nurture (or any other path that nulls
-`automation_mode`) lands inside that window, the executor still has a
-stale snapshot of consent and sends one stale outbound. Phase 1.5
-narrows the warning gap to zero but does not close this race window.
+If a bulk-move-to-nurture (or any other path that nulled
+`automation_mode`) landed inside that window, the executor still had
+a stale snapshot of consent and sent one stale outbound. Phase 1.5
+narrowed the warning gap to zero but did not close this race window.
 
-**Phase 1.6 fix (small):**
-- Add `automation_mode` to the safety-refetch SELECT.
-- After the refetch, if `freshLead.automation_mode == null` (or if
-  `freshLead.motion === 'nurture'`), mark the `automation_log` row
-  status `"skipped"` with `error_message="Consent withdrawn or motion
-  changed mid-flight"` and `continue` before the send call.
-- Telemetry: count these skips so we can size how often the race
-  actually fires in production.
+**Phase 1.6 fix (shipped):**
+- `automation_mode` (and `workspace_id` for telemetry correlation) added
+  to the safety-refetch SELECT.
+- New consent-gate race guard placed AFTER the refetch and BEFORE any
+  stop-condition / multi-participant / min-gap / caps / draft / `ai_task`
+  / provider call: if `freshLead.automation_mode == null` OR
+  `freshLead.motion === "nurture"`, the per-attempt `automation_log` row
+  is written with `status="skipped"` and
+  `error_message="Consent withdrawn or motion changed mid-flight"`, then
+  `continue` (per-lead skip — one withdrawal does not abort the tick).
+- Telemetry: structured INFO log line
+  `automation.skipped_consent_race { lead_id, workspace_id }` via the
+  shared `logger` helper, so operators can grep production logs to size
+  how often the race actually fires.
 
-**Why now (Phase 1.6) and not in Phase 1.5:** scope discipline. Phase
-1.5's mandate was the bulk-move dialog and audit trail; editing
+**Why Phase 1.6 and not Phase 1.5:** scope discipline. Phase 1.5's
+mandate was the bulk-move dialog and audit trail; editing
 automation-executor's hot path is a separate concern with its own
-review surface area. Phase 1.5 ships as a strict improvement over the
-silent clobbering it replaces; Phase 1.6 is a small focused PR
+review surface area. Phase 1.5 shipped as a strict improvement over
+the silent clobbering it replaced; Phase 1.6 is the small focused PR
 touching only the executor.
 
 ---
