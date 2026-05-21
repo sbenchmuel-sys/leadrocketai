@@ -257,6 +257,42 @@ async function handleCallStatus(
       // (only the outbound direction counts as "the rep just acted"). Owns
       // its own try/catch — never fails the webhook response.
       if (status === "completed" && sess.direction === "outbound") {
+        // PR C.5 — write an `interactions` row so `postSendDeriveAction`'s
+        // `computeMetricsFromInteractions` sees the call as a fresh outbound.
+        // PR B wired the helper in but voice was previously a silent no-op
+        // because the timeline projector writes only to `lead_timeline_items`
+        // + `call_sessions`, never to `interactions`. Row shape mirrors
+        // sms-send's outbound interaction exactly. Uses upsert with
+        // `ignoreDuplicates` so a re-fired Twilio status webhook on the same
+        // CallSid no-ops on the dedupe_key unique index instead of 23505-ing.
+        try {
+          const { error: interactionErr } = await supabase
+            .from("interactions")
+            .upsert({
+              lead_id: sess.lead_id,
+              type: "voice_outbound",
+              source: "voice",
+              direction: "outbound",
+              occurred_at: sess.started_at ?? new Date().toISOString(),
+              body_text: snippet,
+              from_email: fromNumber, // reusing field for caller number (matches SMS pattern)
+              to_email: toNumber,     // reusing field for recipient number (matches SMS pattern)
+              dedupe_key: `voice:outbound:${sess.id}`,
+            }, { onConflict: "dedupe_key", ignoreDuplicates: true });
+          if (interactionErr) {
+            logger.warn("voice_interaction_insert_error", {
+              callSid, leadId: sess.lead_id, error: interactionErr.message,
+            });
+          }
+        } catch (err) {
+          // Belt-and-suspenders: catch any non-DB-error throw (network,
+          // serialization). The webhook MUST always return 200 to Twilio.
+          logger.warn("voice_interaction_insert_threw", {
+            callSid, leadId: sess.lead_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
         postSendDeriveAction(supabase, { leadId: sess.lead_id as string, logPrefix: "[twilio-voice-webhook]" });
       }
     }
