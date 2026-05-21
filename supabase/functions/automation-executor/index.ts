@@ -17,6 +17,7 @@ import {
   type ExecutionSettings,
 } from "../_shared/executionSettings.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
+import { logger } from "../_shared/logger.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -407,13 +408,50 @@ serve(async (req) => {
         // SAFETY RE-CHECK
         const { data: freshLead, error: freshErr } = await supabase
           .from("leads")
-          .select("last_inbound_at, last_outbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed")
+          .select("last_inbound_at, last_outbound_at, has_future_meeting, motion, stage, needs_action, eligible_at, status, unsubscribed, automation_mode, workspace_id")
           .eq("id", lead.id)
           .single();
 
         if (freshErr || !freshLead) {
           logEntry.status = "skipped";
           logEntry.error_message = "Could not re-fetch lead";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
+        // ── EARLY CONSENT-GATE RACE GUARD (Phase 1.6) ───────────────
+        // First of two layers (see also the LATE check immediately
+        // before the provider fetch below). This early check is the
+        // CHEAP PATH: the candidate query gated on automation_mode IS
+        // NOT NULL, but a consent withdrawal (bulk move-to-nurture,
+        // manual mode flip, etc.) could have landed between that query
+        // and this refetch. Bailing here lets us skip the entire
+        // multi-await chain that follows (stop-conditions, multi-
+        // participant query, min-gap, caps, draft fetch, the `ai_task`
+        // HTTP roundtrip) — meaning no wasted `ai_task` tokens on a
+        // lead whose consent we already know is gone. The LATE check
+        // closes the race window THIS check cannot see — withdrawals
+        // landing AFTER this refetch but BEFORE the provider call.
+        // Per-lead skip via `continue` — one consent withdrawal must
+        // not abort the entire tick.
+        //
+        // SIGNAL: `automation_mode IS NULL` is the consent signal.
+        // Motion is orthogonal: a `motion === "nurture"` lead with
+        // `nurture_mode === "automatic"` is a legitimate auto-send
+        // path and is gated downstream at the
+        // `lead.nurture_mode !== "automatic"` review-mode check, not
+        // here. Bulk-move-to-nurture clears `automation_mode` in the
+        // same UPDATE as the motion flip, so the consent withdrawal
+        // is visible through this column regardless of the motion.
+        if (freshLead.automation_mode == null) {
+          logger.info("automation.skipped_consent_race", {
+            lead_id: lead.id,
+            workspace_id: freshLead.workspace_id,
+          });
+          logEntry.status = "skipped";
+          logEntry.error_message = "Consent withdrawn mid-flight";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
@@ -1076,6 +1114,55 @@ serve(async (req) => {
           continue;
         }
         const claimId = claimRow?.id;
+
+        // ── LATE CONSENT-GATE RACE GUARD (Phase 1.6 follow-up) ─────────────
+        // Two-layer consent check by design:
+        //   • The early check (after the safety refetch above) is the CHEAP
+        //     PATH — it catches consent withdrawals that landed before the
+        //     refetch and lets us bail before spending `ai_task` tokens on
+        //     an already-withdrawn lead.
+        //   • This late check is the TRUE RACE CLOSER. The window between
+        //     the early check and here covers the multi-second await chain
+        //     (stop-conditions, multi-participant query, min-gap, per-lead
+        //     caps, draft lookup, the `ai_task` HTTP roundtrip — usually
+        //     the longest leg — and the pre-send claim insert above). A
+        //     consent withdrawal landing anywhere in that window is
+        //     invisible to the early check. The minimal SELECT here
+        //     immediately before the provider fetch shrinks the remaining
+        //     race window to a single network roundtrip to the provider.
+        // Skip shape is intentionally indistinguishable from the early
+        // check (same status, same error_message, same telemetry event) —
+        // operators don't need to tell them apart in production logs.
+        // Fail-closed: if the lookup itself errors (null `lateLead`), we
+        // skip rather than send — better one extra skipped tick than one
+        // stale outbound. The claim row is left for stale-claim recovery
+        // to expire on the next tick if the .update() also fails.
+        //
+        // SIGNAL: `automation_mode IS NULL` is the consent signal — same
+        // as the early check. Motion is orthogonal (see early-check
+        // comment above for the full reasoning). Selecting only that one
+        // column keeps this check as cheap as possible.
+        const { data: lateLead } = await supabase
+          .from("leads")
+          .select("automation_mode")
+          .eq("id", lead.id)
+          .single();
+
+        if (lateLead == null || lateLead.automation_mode == null) {
+          logger.info("automation.skipped_consent_race", {
+            lead_id: lead.id,
+            workspace_id: freshLead.workspace_id,
+          });
+          await supabase.from("automation_log")
+            .update({
+              status: "skipped",
+              error_message: "Consent withdrawn mid-flight",
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", claimId);
+          skipped++;
+          continue;
+        }
 
         // Send via appropriate channel + provider
         let sendResponse: Response;
