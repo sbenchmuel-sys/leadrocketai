@@ -136,18 +136,27 @@ export function useQueueSnapshot(opts: UseQueueSnapshotOpts): QueueSnapshot {
 
   // Mirror of `snapshot` for synchronous reads from callbacks that
   // can't safely close over state (chip-change effect, mutation
-  // callbacks). Updated atomically inside every setSnapshot call so
-  // the ref never lags React's view by more than the same render.
+  // callbacks). All writers (refresh, removeLead, restoreLead) follow
+  // the same ref-first / setState-second order — so the ref is the
+  // synchronous source of truth and `snapshot` (React state) lags by
+  // at most one render commit. Never read `snapshot` from a callback
+  // that may fire before the next commit; read this ref instead.
   const snapshotRef = useRef<QueueLeadRow[]>([]);
 
   const refresh = useCallback(async () => {
     try {
       setError(null);
       const { leads, hiddenCount: hc } = await fetchQueueLeads({ showAll });
-      setSnapshot(leads);
+      // Update the synchronous ref BEFORE queueing the React state
+      // update, so any callback that fires between this line and the
+      // commit (e.g. a chip-change effect, a rapid mutation) reads
+      // the post-refresh snapshot — not the pre-refresh one. The same
+      // ref-first / setState-second order is used in removeLead /
+      // restoreLead so all paths share one synchronous source of truth.
       snapshotRef.current = leads;
-      setHiddenCount(hc);
       snapshotOrderRef.current = leads.map((l) => l.id);
+      setSnapshot(leads);
+      setHiddenCount(hc);
       // Authoritative reset of `currentCount` — full re-fetch trumps
       // any optimistic state from before refresh.
       setCurrentCount(applyChipFilter(leads, chip).length);
@@ -207,35 +216,46 @@ export function useQueueSnapshot(opts: UseQueueSnapshotOpts): QueueSnapshot {
   // Both removeLead and restoreLead update `snapshot` AND
   // `currentCount` together. Per the invariant on `currentCount`
   // above, the optimistic update is authoritative until the next 30s
-  // poll arrives. We use the functional setSnapshot form to read the
-  // pre-mutation state inside the updater, capture whether the
-  // operation actually changed anything, and only then apply the
-  // matching ±1 to currentCount via the functional setCurrentCount.
-  // Closure-variable-from-updater is a known wart in strict mode
-  // (updater may run twice) but the captured value is a pure function
-  // of (prev, lead) so re-execution produces the same result.
+  // poll arrives.
+  //
+  // CRITICAL — synchronous computation (Codex follow-up on PR #46):
+  // We do NOT use setSnapshot's functional-updater form to compute
+  // `next` and the chip-match decision. React 18 queues updater
+  // functions to run during render, not synchronously inside the
+  // setSnapshot() call. An earlier version of this hook tried to
+  // capture a "did this match the chip?" boolean inside the updater
+  // and read it AFTER setSnapshot returned — that read fires before
+  // the updater has run, so it observed the initial `false` and
+  // skipped the ±1 currentCount adjustment. Symptoms: phantom
+  // "1 new item" banners right after Mark-handled, phantom
+  // "1 resolved" banners right after Undo.
+  //
+  // The fix: derive `next` synchronously from `snapshotRef.current`
+  // (the synchronous mirror of `snapshot` that all paths maintain
+  // ref-first / setState-second), write the ref, then call
+  // setSnapshot with the absolute value. The chip-match check is a
+  // pure function of (lead, chip) so it doesn't need to read state.
+  // setCurrentCount uses the functional form because React DOES
+  // run THAT updater synchronously enough that batched ±1 deltas
+  // compose correctly.
 
   const removeLead = useCallback(
     (lead: QueueLeadRow) => {
-      let didRemoveMatchingChip = false;
-      setSnapshot((prev) => {
-        const idx = prev.findIndex((l) => l.id === lead.id);
-        if (idx < 0) {
-          didRemoveMatchingChip = false;
-          return prev;
-        }
-        didRemoveMatchingChip = leadMatchesChip(lead, chip);
-        const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
-        snapshotRef.current = next;
-        return next;
-      });
-      if (didRemoveMatchingChip) {
-        // Codex P2: optimistic count update so the banner stays at
-        // delta=0 across the mutation. Without this, after a remove
-        // the snapshot's chip-filtered length drops by 1 but
-        // currentCount (last poll) doesn't, so newItemsDelta swings
-        // to +1 and the rep sees a false "1 new item" banner until
-        // the next 30s tick. Math.max guards a paranoid underflow.
+      const prev = snapshotRef.current;
+      const idx = prev.findIndex((l) => l.id === lead.id);
+      if (idx < 0) return; // not in snapshot — nothing to remove
+
+      const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+      snapshotRef.current = next;
+      setSnapshot(next);
+
+      if (leadMatchesChip(lead, chip)) {
+        // Optimistic count update so the banner stays at delta=0
+        // across the mutation. Without this, the snapshot's chip-
+        // filtered length drops by 1 but currentCount (last poll)
+        // doesn't, so newItemsDelta swings to +1 and the rep sees
+        // a false "1 new item" banner until the next 30s tick.
+        // Math.max guards a paranoid underflow.
         setCurrentCount((c) => Math.max(0, c - 1));
       }
     },
@@ -244,42 +264,39 @@ export function useQueueSnapshot(opts: UseQueueSnapshotOpts): QueueSnapshot {
 
   const restoreLead = useCallback(
     (lead: QueueLeadRow) => {
-      let didInsertMatchingChip = false;
-      setSnapshot((prev) => {
-        // Avoid duplicates if restoreLead is called twice.
-        if (prev.some((l) => l.id === lead.id)) {
-          didInsertMatchingChip = false;
-          return prev;
-        }
-        didInsertMatchingChip = leadMatchesChip(lead, chip);
-        // Place the lead back at its original index from the original
-        // snapshot order. Falls back to append if the order is unknown.
-        const order = snapshotOrderRef.current;
-        const idx = order.indexOf(lead.id);
-        if (idx < 0) {
-          const next = [...prev, lead];
-          snapshotRef.current = next;
-          return next;
-        }
+      const prev = snapshotRef.current;
+      // Avoid duplicates if restoreLead is called twice.
+      if (prev.some((l) => l.id === lead.id)) return;
+
+      // Place the lead back at its original index from the original
+      // snapshot order. Falls back to append if the order is unknown
+      // (e.g. the lead was never in the post-refresh snapshot).
+      const order = snapshotOrderRef.current;
+      const origIdx = order.indexOf(lead.id);
+      let next: QueueLeadRow[];
+      if (origIdx < 0) {
+        next = [...prev, lead];
+      } else {
         // Walk `prev` and find where to insert: keep the same
         // relative order as the original snapshot. Find the first
         // existing lead in `prev` whose original index is > our index.
         let insertAt = prev.length;
         for (let i = 0; i < prev.length; i += 1) {
           const existingIdx = order.indexOf(prev[i].id);
-          if (existingIdx > idx) {
+          if (existingIdx > origIdx) {
             insertAt = i;
             break;
           }
         }
-        const next = prev.slice();
-        next.splice(insertAt, 0, lead);
-        snapshotRef.current = next;
-        return next;
-      });
-      if (didInsertMatchingChip) {
-        // Codex P2 companion to removeLead's decrement — keeps the
-        // banner at delta=0 across an Undo round-trip.
+        next = [...prev.slice(0, insertAt), lead, ...prev.slice(insertAt)];
+      }
+
+      snapshotRef.current = next;
+      setSnapshot(next);
+
+      if (leadMatchesChip(lead, chip)) {
+        // Companion to removeLead's decrement — keeps the banner at
+        // delta=0 across an Undo round-trip.
         setCurrentCount((c) => c + 1);
       }
     },
