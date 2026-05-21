@@ -285,18 +285,20 @@ silent no-op. Two ways to close the gap:
   CLAUDE.md.
 
 ### Permanent dismiss without snooze is a re-arm trap
-**Status: pre-existing; out of scope for PR B.**
-[setLeadPermanentDismiss](src/lib/supabaseQueries.ts:1779) sets
-`action_permanently_dismissed=true` without also stamping
-`action_dismissed_at`. `buildLeadUpdate` in
-[_shared/syncEngine.ts](supabase/functions/_shared/syncEngine.ts)
-gates the re-arm logic on `dismissedAt > 0` (i.e. requires
-`action_dismissed_at` to be non-null). A fresh inbound on a lead
-that's permanently-dismissed-only (no snooze timestamp) does NOT
-re-arm — the lead stays dismissed forever. PR B did not touch this
-gate (scope was the inbound-only narrowing). Smallest fix: have
-`setLeadPermanentDismiss` also stamp `action_dismissed_at = now()`,
-or generalize the gate to also look at the boolean column.
+**Status: closed for new callers by PR C; legacy caller still trapped.**
+PR C's `mark_action_handled` RPC
+([20260521010000_mark_action_handled.sql](supabase/migrations/20260521010000_mark_action_handled.sql))
+always stamps `action_dismissed_at = now()`, even when
+`p_permanent=true` — that closes the trap for any code path that
+adopts the RPC. The pre-existing
+[setLeadPermanentDismiss](src/lib/supabaseQueries.ts:1779) wrapper
+still writes `action_permanently_dismissed=true` WITHOUT touching
+`action_dismissed_at`, so leads dismissed via PriorityActions today
+remain in the trap until PR D migrates that surface to the new
+`markActionHandled` / `undoMarkActionHandled` wrappers in
+[supabaseQueries.ts](src/lib/supabaseQueries.ts). Out of scope to
+migrate every existing caller in PR C; the goal there was the RPC
+contract + Queue UI consumer.
 
 ---
 
@@ -325,15 +327,16 @@ fires only when `lastInboundTime > dismissedAt`, and stamps
 `action_resurfaced_at` in the same UPDATE for audit.
 
 ### Timezone rendering of `eligible_at`
-**Scheduled for adoption-time: Phase 2a.**
-[EDGE_CASES.md §11](EDGE_CASES.md#11-time-zones--eligible_at-rendering).
-Today nothing in the UI renders `eligible_at` as a user-visible
-time, so there is no current bug. When the queue page starts showing
-"Eligible at 9:30 AM" or "Fires in 3h", the formatter must read
-workspace timezone from
-[`workspaces.timezone`](supabase/migrations/20260430200000_workspace_timezone.sql)
-via `WorkspaceContext` rather than defaulting to browser TZ. Track
-as a precondition on the Phase 2a queue page work.
+**Status: closed by PR C.**
+PR C lands the [eligibleAtFormat.ts](src/lib/eligibleAtFormat.ts)
+helpers (`formatEligibleAtAbsolute`, `formatEligibleAtRelative`,
+`formatEligibleAt`) and exposes `workspace_timezone` via
+[WorkspaceContext](src/contexts/WorkspaceContext.tsx). The formatter
+uses `Intl.DateTimeFormat` with an explicit `timeZone` option so
+absolute renders convert UTC `eligible_at` to workspace wall-clock;
+NULL workspace TZ falls back to UTC (not browser TZ). Test coverage
+in [eligibleAtFormat.test.ts](src/lib/eligibleAtFormat.test.ts).
+PR D's Queue UI will consume these helpers.
 
 ---
 

@@ -6,12 +6,20 @@ export interface WorkspaceMembership {
   workspace_id: string;
   role: string;
   workspace_name: string;
+  /** IANA timezone name (e.g. "America/New_York"). NULL when the workspace
+   *  hasn't been configured — readers should fall back to UTC for display
+   *  (see src/lib/eligibleAtFormat.ts). Automation send paths fail closed
+   *  on NULL per migration 20260430200000_workspace_timezone.sql. */
+  workspace_timezone: string | null;
 }
 
 interface WorkspaceContextType {
   workspaceId: string | null;
   workspaceRole: string | null;
   workspaceName: string | null;
+  /** PR C — exposed for time-aware UI formatters (Queue page eligible_at,
+   *  etc.). NULL when not configured; formatters fall back to UTC. */
+  workspaceTimezone: string | null;
   workspaces: WorkspaceMembership[];
   isLoading: boolean;
   switchWorkspace: (workspaceId: string) => void;
@@ -27,6 +35,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceRole, setWorkspaceRole] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [workspaceTimezone, setWorkspaceTimezone] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceMembership[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -36,6 +45,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setWorkspaceId(ws.workspace_id);
     setWorkspaceRole(ws.role);
     setWorkspaceName(ws.workspace_name);
+    setWorkspaceTimezone(ws.workspace_timezone);
     localStorage.setItem(STORAGE_KEY, wsId);
   }, [workspaces]);
 
@@ -44,6 +54,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setWorkspaceId(null);
       setWorkspaceRole(null);
       setWorkspaceName(null);
+      setWorkspaceTimezone(null);
       setWorkspaces([]);
       setIsLoading(false);
       return;
@@ -59,19 +70,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         .eq("user_id", user.id);
 
       if (memberships && memberships.length > 0) {
-        // Fetch workspace names
+        // Fetch workspace names + timezones
         const wsIds = memberships.map(m => m.workspace_id);
         const { data: wsData } = await supabase
           .from("workspaces")
-          .select("id, name")
+          .select("id, name, timezone")
           .in("id", wsIds);
 
-        const nameMap = new Map((wsData ?? []).map(w => [w.id, w.name]));
-        const allWs: WorkspaceMembership[] = memberships.map(m => ({
-          workspace_id: m.workspace_id,
-          role: m.role,
-          workspace_name: nameMap.get(m.workspace_id) ?? "Workspace",
-        }));
+        const wsByIdRow = new Map(
+          (wsData ?? []).map(w => [w.id, { name: w.name, timezone: (w as { timezone?: string | null }).timezone ?? null }]),
+        );
+        const allWs: WorkspaceMembership[] = memberships.map(m => {
+          const row = wsByIdRow.get(m.workspace_id);
+          return {
+            workspace_id: m.workspace_id,
+            role: m.role,
+            workspace_name: row?.name ?? "Workspace",
+            workspace_timezone: row?.timezone ?? null,
+          };
+        });
         setWorkspaces(allWs);
 
         // Pick active: saved preference → first
@@ -80,6 +97,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setWorkspaceId(active.workspace_id);
         setWorkspaceRole(active.role);
         setWorkspaceName(active.workspace_name);
+        setWorkspaceTimezone(active.workspace_timezone);
         setIsLoading(false);
         return;
       }
@@ -112,20 +130,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
             const { data: ws } = await supabase
               .from("workspaces")
-              .select("name")
+              .select("name, timezone")
               .eq("id", invitation.workspace_id)
               .maybeSingle();
 
             const name = ws?.name ?? "Workspace";
+            const tz = (ws as { timezone?: string | null } | null)?.timezone ?? null;
             const membership: WorkspaceMembership = {
               workspace_id: invitation.workspace_id,
               role: invitation.role,
               workspace_name: name,
+              workspace_timezone: tz,
             };
             setWorkspaces([membership]);
             setWorkspaceId(invitation.workspace_id);
             setWorkspaceRole(invitation.role);
             setWorkspaceName(name);
+            setWorkspaceTimezone(tz);
             setIsLoading(false);
             return;
           }
@@ -146,15 +167,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           .maybeSingle();
 
         if (newMembership) {
+          // Freshly auto-provisioned workspace has no timezone set yet —
+          // owner configures it before automation can fire.
           const membership: WorkspaceMembership = {
             workspace_id: newMembership.workspace_id,
             role: newMembership.role,
             workspace_name: "My Workspace",
+            workspace_timezone: null,
           };
           setWorkspaces([membership]);
           setWorkspaceId(newMembership.workspace_id);
           setWorkspaceRole(newMembership.role);
           setWorkspaceName("My Workspace");
+          setWorkspaceTimezone(null);
         }
       }
     } catch (err) {
@@ -176,6 +201,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         workspaceId,
         workspaceRole,
         workspaceName,
+        workspaceTimezone,
         workspaces,
         isLoading,
         switchWorkspace,

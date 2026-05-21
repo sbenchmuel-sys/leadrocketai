@@ -185,17 +185,43 @@ export const REVENUE_STATE_LABELS: Record<RevenueState, string> = {
 };
 
 /**
+ * Intent values on `lead_timeline_items.intent` that should NOT
+ * surface a lead as "Action Required" — they're noise replies, not
+ * real questions. Reused by the Queue UI (PR D) for the same filter.
+ *
+ * Conservative on purpose: every value here is one of the
+ * deterministic Phase 1 detectors (gmail-sync / outlook-sync writes,
+ * classify-timeline-intent-backfill assigns). The granular AI vocab
+ * from PR A (`book_meeting`, `pricing`, …) is NEVER in this list —
+ * those ARE real questions and must surface.
+ */
+export const INTENT_HIDE_FROM_QUEUE: ReadonlySet<string> = new Set([
+  "calendar_accept",
+  "ooo_reply",
+  "bounce",
+  "zoom_recap",
+]);
+
+/**
  * Classify a lead into exactly ONE Revenue State.
  * Priority order (highest → lowest):
  *   Automation > Action Required > Heating Up > Long Cycle > Nurture > Active.
  *
  * Must be called AFTER enrichment so hasMeeting / stage / needs_action are populated.
  * warmingUpIds and nurtureIds are pre-computed sets from the metrics service.
+ *
+ * `intentHiddenIds` (PR C, optional): leads whose latest inbound has
+ * an intent in `INTENT_HIDE_FROM_QUEUE` are suppressed from
+ * action_required regardless of `needs_action`. Without this, the
+ * CommandStrip "Action Required" badge will overcount once the Queue
+ * UI (PR D) applies intent-based hiding — "12 actions" badge, 7 rows
+ * actually shown. Leaving it `undefined` preserves current behaviour.
  */
 export function classifyRevenueState(
   lead: EnrichedLead,
   warmingUpIds: Set<string>,
-  nurtureIds: Set<string>
+  nurtureIds: Set<string>,
+  intentHiddenIds?: ReadonlySet<string>,
 ): RevenueState {
   // --- OOO GATE: if lead is currently out of office, suppress action_required escalation ---
   const oooUntil = (lead as any).ooo_until as string | null;
@@ -231,10 +257,19 @@ export function classifyRevenueState(
     Date.now() - lastOutboundTs < THREE_DAYS_MS &&
     lastInboundTs <= lastOutboundTs;
 
+  // --- INTENT GATE (PR C): suppress action_required when the latest
+  //     inbound is classified as noise (`calendar_accept`, `ooo_reply`,
+  //     `bounce`, `zoom_recap`). Keeps the CommandStrip badge accurate
+  //     when the Queue UI applies the same hide-rule. Falsy when the
+  //     caller didn't pass the set (legacy callers) — preserves
+  //     current behaviour. ---
+  const isIntentHidden = intentHiddenIds?.has(lead.id) === true;
+
   // --- 1. ACTION REQUIRED ---
   // Skip action_required escalation for OOO, snoozed, permanently-dismissed,
-  // or leads we just contacted (recent outbound, no later inbound).
-  if (!isOOO && !isSnoozed && !isPermanentlyDismissed && !recentOutboundWithoutReply) {
+  // leads we just contacted (recent outbound, no later inbound), or leads
+  // whose latest inbound was classified as noise.
+  if (!isOOO && !isSnoozed && !isPermanentlyDismissed && !recentOutboundWithoutReply && !isIntentHidden) {
     if (lead.needs_action) return "action_required";
     // Unreplied inbound: explicit check that inbound is strictly after outbound.
     // Suppress if a future meeting is already set — the meeting IS the response.

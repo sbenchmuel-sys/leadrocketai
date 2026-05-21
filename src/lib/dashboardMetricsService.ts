@@ -8,7 +8,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { differenceInDays, parseISO } from "date-fns";
 import type { EnrichedLead, DealStage, Motion, RevenueState } from "@/lib/dashboardUtils";
-import { enrichLead, classifyRevenueState } from "@/lib/dashboardUtils";
+import { enrichLead, classifyRevenueState, INTENT_HIDE_FROM_QUEUE } from "@/lib/dashboardUtils";
 import { isDemoMode } from "@/lib/demoMode";
 import { demoLeads } from "@/lib/demoData";
 
@@ -88,6 +88,52 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   }
 
   return (data || []).map(enrichLead);
+}
+
+/**
+ * PR C — Build the set of lead IDs whose latest inbound timeline row
+ * has an `intent` in `INTENT_HIDE_FROM_QUEUE` (calendar_accept,
+ * ooo_reply, bounce, zoom_recap). Used by `classifyRevenueState` to
+ * suppress action_required for noise inbounds so the CommandStrip
+ * "Action Required" badge stays accurate when the Queue UI (PR D)
+ * applies the same hide-rule.
+ *
+ * Implementation: delegate the per-lead reduction to the
+ * `get_latest_intents_for_leads` SECURITY DEFINER RPC
+ * (migration 20260521020000). The RPC returns at most one row per
+ * input lead via `DISTINCT ON (lead_id)`, so there's no client-side
+ * de-duplication and no row cap to worry about. Earlier revisions
+ * paginated 5000 rows of inbound timeline items and reduced
+ * client-side; that approach silently dropped leads in workspaces
+ * with dense inbound history (Codex P2 on PR #44).
+ *
+ * NULL intent (not yet classified by PR A's cron) is filtered out
+ * inside the RPC — callers treat absence as "not hidden", so the UI
+ * never depends on async classification.
+ */
+async function fetchIntentHiddenLeadIds(
+  leadIds: string[],
+): Promise<Set<string>> {
+  if (leadIds.length === 0) return new Set();
+
+  const { data, error } = await supabase.rpc("get_latest_intents_for_leads", {
+    p_lead_ids: leadIds,
+  });
+
+  if (error) {
+    // Non-fatal — fall back to "no hidden ids" so the dashboard renders
+    // identical to pre-PR-C behaviour rather than erroring out.
+    console.warn("[dashboardMetrics] intent fetch failed:", error.message);
+    return new Set();
+  }
+
+  const hidden = new Set<string>();
+  for (const row of (data ?? []) as Array<{ lead_id: string; intent: string | null }>) {
+    if (row.intent && INTENT_HIDE_FROM_QUEUE.has(row.intent)) {
+      hidden.add(row.lead_id);
+    }
+  }
+  return hidden;
 }
 
 async function fetchChampionByGroup(
@@ -308,7 +354,13 @@ export async function getDashboardMetrics(
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
   );
-  const championByGroup = await fetchChampionByGroup(groupIds);
+  // PR C — parallel: champion lookup + latest-inbound-intent lookup.
+  // Both are independent of the per-lead classify loop below.
+  const leadIds = leads.map((l) => l.id);
+  const [championByGroup, intentHiddenIds] = await Promise.all([
+    fetchChampionByGroup(groupIds),
+    fetchIntentHiddenLeadIds(leadIds),
+  ]);
 
   const staleLeads = deriveStaleLeads(leads);
   const nurtureCandidates = deriveNurtureCandidates(leads);
@@ -350,7 +402,7 @@ export async function getDashboardMetrics(
       lead.revenueState = undefined;
       continue;
     }
-    const state = classifyRevenueState(lead, warmingUpIds, nurtureIds);
+    const state = classifyRevenueState(lead, warmingUpIds, nurtureIds, intentHiddenIds);
     lead.revenueState = state;
     if (isVisibleInTab(lead)) revenueStateCounts[state]++;
   }
