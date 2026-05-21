@@ -268,21 +268,18 @@ outlook-webhook) keep `has_future_meeting=true` but skip the
 distinct `system_note` row noting the matched keywords for audit.
 
 ### Voice call deriveAction is a no-op until calls write to `interactions`
-**Scheduled fix: Phase 2b or later.**
-PR B (Phase 2a) wires `postSendDeriveAction` into
+**Status: closed by Phase 2a (PR C.5).**
 [twilio-voice-webhook/index.ts](supabase/functions/twilio-voice-webhook/index.ts)
-on completed outbound calls — but `twilio-voice-webhook` writes
-only to `call_sessions` + `lead_timeline_items`, not to
-`interactions`. The helper computes metrics by reading `interactions`
-only, so for voice the recompute sees no fresh outbound and is a
-silent no-op. Two ways to close the gap:
-- Insert a voice row into `interactions` (matching the SMS pattern)
-  in twilio-voice-webhook. Smallest surface, but risks downstream
-  code that assumes `interactions` is email/text-only.
-- Migrate `computeMetricsFromInteractions` to read from
-  `lead_timeline_items` instead. Bigger change; aligns with the
-  `interactions → lead_timeline_items` cutover already in flight per
-  CLAUDE.md.
+now writes an `interactions` row on every `completed` outbound call,
+immediately before invoking `postSendDeriveAction`. Row shape mirrors
+sms-send's outbound interaction (type=`voice_outbound`, source=`voice`,
+direction=`outbound`, from/to_email reused for phone numbers,
+dedupe_key=`voice:outbound:<call_session_id>`). The insert uses
+`upsert(..., { onConflict: "dedupe_key", ignoreDuplicates: true })` so
+re-fired Twilio status callbacks on the same CallSid no-op on the
+existing unique partial index. The broader Option B (migrating
+`computeMetricsFromInteractions` to read from `lead_timeline_items`)
+remains deferred to the `interactions → lead_timeline_items` cleanup.
 
 ### Permanent dismiss without snooze is a re-arm trap
 **Status: closed for new callers by PR C; legacy caller still trapped.**
