@@ -2,7 +2,7 @@
 // Database query functions for Deal Assistant
 
 import { supabase } from '@/integrations/supabase/client';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database, Json } from '@/integrations/supabase/types';
 import { isDemoMode } from '@/lib/demoMode';
 import { getDemoLeadDetail, getDemoInteractions, getDemoDrafts } from '@/lib/demoData';
 
