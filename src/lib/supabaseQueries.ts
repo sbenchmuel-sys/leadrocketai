@@ -1877,14 +1877,14 @@ export async function markActionHandled(
     console.warn('[markActionHandled] transient throw — retrying after 400ms', thrown);
     first = { data: null, error: thrown };
   }
-  if (!first.error) return first.data as LeadActionSnapshotFull;
+  if (!first.error) return first.data as unknown as LeadActionSnapshotFull;
   if (!isTransient(first.error)) throw first.error;
 
   console.warn('[markActionHandled] transient error — retrying after 400ms', first.error);
   await new Promise((r) => setTimeout(r, 400));
   const { data: retryData, error: retryError } = await supabase.rpc('mark_action_handled', args);
   if (retryError) throw retryError;
-  return retryData as LeadActionSnapshotFull;
+  return retryData as unknown as LeadActionSnapshotFull;
 }
 
 /** PR C — Undo companion for `markActionHandled`. Pass the snapshot
