@@ -436,13 +436,22 @@ serve(async (req) => {
         // landing AFTER this refetch but BEFORE the provider call.
         // Per-lead skip via `continue` — one consent withdrawal must
         // not abort the entire tick.
-        if (freshLead.automation_mode == null || freshLead.motion === "nurture") {
+        //
+        // SIGNAL: `automation_mode IS NULL` is the consent signal.
+        // Motion is orthogonal: a `motion === "nurture"` lead with
+        // `nurture_mode === "automatic"` is a legitimate auto-send
+        // path and is gated downstream at the
+        // `lead.nurture_mode !== "automatic"` review-mode check, not
+        // here. Bulk-move-to-nurture clears `automation_mode` in the
+        // same UPDATE as the motion flip, so the consent withdrawal
+        // is visible through this column regardless of the motion.
+        if (freshLead.automation_mode == null) {
           logger.info("automation.skipped_consent_race", {
             lead_id: lead.id,
             workspace_id: freshLead.workspace_id,
           });
           logEntry.status = "skipped";
-          logEntry.error_message = "Consent withdrawn or motion changed mid-flight";
+          logEntry.error_message = "Consent withdrawn mid-flight";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
@@ -1128,13 +1137,18 @@ serve(async (req) => {
         // skip rather than send — better one extra skipped tick than one
         // stale outbound. The claim row is left for stale-claim recovery
         // to expire on the next tick if the .update() also fails.
+        //
+        // SIGNAL: `automation_mode IS NULL` is the consent signal — same
+        // as the early check. Motion is orthogonal (see early-check
+        // comment above for the full reasoning). Selecting only that one
+        // column keeps this check as cheap as possible.
         const { data: lateLead } = await supabase
           .from("leads")
-          .select("automation_mode, motion")
+          .select("automation_mode")
           .eq("id", lead.id)
           .single();
 
-        if (lateLead == null || lateLead.automation_mode == null || lateLead.motion === "nurture") {
+        if (lateLead == null || lateLead.automation_mode == null) {
           logger.info("automation.skipped_consent_race", {
             lead_id: lead.id,
             workspace_id: freshLead.workspace_id,
@@ -1142,7 +1156,7 @@ serve(async (req) => {
           await supabase.from("automation_log")
             .update({
               status: "skipped",
-              error_message: "Consent withdrawn or motion changed mid-flight",
+              error_message: "Consent withdrawn mid-flight",
               completed_at: new Date().toISOString(),
             })
             .eq("id", claimId);

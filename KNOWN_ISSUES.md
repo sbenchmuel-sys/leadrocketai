@@ -84,17 +84,43 @@ narrowed the warning gap to zero but did not close this race window.
 **Phase 1.6 fix (shipped):**
 - `automation_mode` (and `workspace_id` for telemetry correlation) added
   to the safety-refetch SELECT.
-- New consent-gate race guard placed AFTER the refetch and BEFORE any
-  stop-condition / multi-participant / min-gap / caps / draft / `ai_task`
-  / provider call: if `freshLead.automation_mode == null` OR
-  `freshLead.motion === "nurture"`, the per-attempt `automation_log` row
-  is written with `status="skipped"` and
-  `error_message="Consent withdrawn or motion changed mid-flight"`, then
-  `continue` (per-lead skip — one withdrawal does not abort the tick).
-- Telemetry: structured INFO log line
+- **Two layered consent-gate race guards**, both gating on
+  `automation_mode IS NULL` alone (see correction note below):
+  - **Early guard** placed AFTER the safety refetch and BEFORE the
+    multi-await chain (stop-condition / multi-participant / min-gap /
+    caps / draft fetch / `ai_task` HTTP roundtrip). This is the cheap
+    path — bails before spending `ai_task` tokens on an already-
+    withdrawn lead.
+  - **Late guard** placed AFTER the pre-send claim insert and
+    IMMEDIATELY BEFORE the provider fetch (`gmail-send` /
+    `outlook-send` / `sms-send`). This is the true race closer — the
+    window between the early guard and the late guard covers the
+    full multi-second await chain, which is where withdrawals can
+    actually land. The late guard does a minimal
+    `SELECT automation_mode` and shrinks the remaining race window to
+    a single network roundtrip to the provider. On skip it UPDATEs
+    the claim row by `claimId` to `status="skipped"` (mirroring the
+    existing SMS-no-phone post-claim skip pattern); fail-closed if
+    the lookup itself errors.
+- On either guard firing, the `automation_log` row is written with
+  `status="skipped"` and `error_message="Consent withdrawn mid-flight"`,
+  then `continue` (per-lead skip — one withdrawal does not abort the
+  tick).
+- Telemetry: both guards emit the same structured INFO log line
   `automation.skipped_consent_race { lead_id, workspace_id }` via the
-  shared `logger` helper, so operators can grep production logs to size
-  how often the race actually fires.
+  shared `logger` helper (intentionally indistinguishable in production
+  logs — operators do not need to tell them apart to grep counts).
+
+**Correction during review (Codex P1 on PR #47):** the original Phase
+1.6 brief included `freshLead.motion === "nurture"` as a second trigger
+for both guards. That was wrong: a `motion === "nurture"` lead with
+`nurture_mode === "automatic"` is a legitimate auto-send path, and is
+gated downstream at the existing `lead.nurture_mode !== "automatic"`
+review-mode check — not by consent. Bulk-move-to-nurture additionally
+clears `automation_mode` in the same UPDATE as the motion flip
+(Phase 1.5), so the consent withdrawal is visible through that one
+column regardless of the motion. The shipped guards therefore rely on
+`automation_mode IS NULL` alone; motion is orthogonal to consent.
 
 **Why Phase 1.6 and not Phase 1.5:** scope discipline. Phase 1.5's
 mandate was the bulk-move dialog and audit trail; editing
