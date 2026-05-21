@@ -282,20 +282,48 @@ existing unique partial index. The broader Option B (migrating
 remains deferred to the `interactions → lead_timeline_items` cleanup.
 
 ### Permanent dismiss without snooze is a re-arm trap
-**Status: closed for new callers by PR C; legacy caller still trapped.**
-PR C's `mark_action_handled` RPC
+**Status: closed by PR D.** PR C's `mark_action_handled` RPC
 ([20260521010000_mark_action_handled.sql](supabase/migrations/20260521010000_mark_action_handled.sql))
-always stamps `action_dismissed_at = now()`, even when
-`p_permanent=true` — that closes the trap for any code path that
-adopts the RPC. The pre-existing
-[setLeadPermanentDismiss](src/lib/supabaseQueries.ts:1779) wrapper
-still writes `action_permanently_dismissed=true` WITHOUT touching
-`action_dismissed_at`, so leads dismissed via PriorityActions today
-remain in the trap until PR D migrates that surface to the new
-`markActionHandled` / `undoMarkActionHandled` wrappers in
-[supabaseQueries.ts](src/lib/supabaseQueries.ts). Out of scope to
-migrate every existing caller in PR C; the goal there was the RPC
-contract + Queue UI consumer.
+always stamps `action_dismissed_at = now()` even when
+`p_permanent=true`. PR D migrated the LIVE callers of
+`setLeadPermanentDismiss` to `markActionHandled` /
+`undoMarkActionHandled`:
+
+| Migrated call site | Before | After |
+|---|---|---|
+| `src/components/dashboard/PriorityActions.tsx` (Dismiss dropdown + Undo) | `setLeadPermanentDismiss(id, true)` / `setLeadPermanentDismiss(id, false, snapshot)` | `markActionHandled(id, { permanent: true })` / `undoMarkActionHandled(id, snapshot)` |
+| `src/pages/Queue.tsx` (Mark as handled + Undo) | n/a — new surface | `markActionHandled(id, { permanent: true })` / `undoMarkActionHandled(id, snapshot)` |
+
+`setLeadPermanentDismiss` itself is now `@deprecated` in
+[supabaseQueries.ts](src/lib/supabaseQueries.ts). The only remaining
+caller is the dead-code `ActionRequiredPanel.tsx`, which is not
+imported anywhere (verified per AUDIT.md §B1) and is slated for
+Phase 3 deletion together with the function.
+
+### Legacy `dismissLeadAction` callers preserved intentionally (PR D)
+**Status: documented, not a bug.**
+PR D's hard constraint says "no new callers of `dismissLeadAction`"
+for **rep-is-dismissing** semantics, but `dismissLeadAction` is also
+the canonical wrapper for **N-day snooze** (sets
+`action_dismissed_at = now() + N days`). `markActionHandled` only
+supports `action_dismissed_at = now()`, so snooze paths cannot use
+it. Live callers retained after PR D:
+
+- `PriorityActions.tsx:100` — snooze 1 / 3 / 7 days from the
+  dashboard X-overflow menu.
+- `Queue.tsx` (handleSnooze) — snooze 3 / 5 / 7 days from the
+  Queue card's `[Snooze ▾]` dropdown.
+- `EmailActionDialog.tsx:814` — 1-day snooze after the rep clicks
+  "Open in Gmail" on a post-meeting recap. The Gmail-compose flow
+  may not result in a send; the short snooze gives the rep room to
+  finish before the action resurfaces.
+
+Dead-code caller (not imported anywhere, slated for Phase 3 delete):
+- `ActionRequiredPanel.tsx:43`.
+
+If we ever want a unified atomic snooze, the right move is to extend
+`mark_action_handled` with a `p_snooze_interval interval` argument
+and migrate all three live callers together. Out of scope for PR D.
 
 ---
 

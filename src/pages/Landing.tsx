@@ -50,7 +50,7 @@ export default function Landing() {
           <div className="flex items-center gap-3">
             {user ? (
               <Button size="sm" asChild>
-                <Link to="/app">Go to Dashboard</Link>
+                <Link to="/app/queue">Open app</Link>
               </Button>
             ) : (
               <>

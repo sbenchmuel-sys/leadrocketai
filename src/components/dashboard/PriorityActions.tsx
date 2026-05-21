@@ -12,7 +12,7 @@ import { Mail, FileText, Eye, Send, X, RefreshCw, Wand2, Loader2, Check } from "
 import { EnrichedLead, getActionType, STAGE_LABELS, DealStage, RevenueState } from "@/lib/dashboardUtils";
 import { NurtureSwitchDialog } from "./NurtureSwitchDialog";
 import { EmailActionDialog } from "./EmailActionDialog";
-import { dismissLeadAction, setLeadPermanentDismiss } from "@/lib/supabaseQueries";
+import { dismissLeadAction, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
@@ -108,18 +108,25 @@ export function PriorityActions({ leads, allLeads, revenueStateFilter, onLeadUpd
     }
   };
 
-  // PR 2.4 — permanent dismiss with 5-second undo toast.
+  // PR D — Permanent dismiss now goes through the atomic
+  // `mark_action_handled` RPC (PR C) instead of the legacy two-step
+  // `setLeadPermanentDismiss`. The RPC fixes the "permanent-dismiss-
+  // without-snooze re-arm trap" tracked in KNOWN_ISSUES.md by always
+  // stamping `action_dismissed_at = now()`, and returns the full
+  // pre-dismiss snapshot so Undo can restore EVERY field (including
+  // `action_dismissed_at` and `action_permanently_dismissed`) — not
+  // just the visible action_* columns.
   const handlePermanentDismiss = async (lead: EnrichedLead) => {
     setDismissingId(lead.id);
     try {
-      const snapshot = await setLeadPermanentDismiss(lead.id, true);
+      const snapshot = await markActionHandled(lead.id, { permanent: true });
       toast.success(`Dismissed ${lead.name}`, {
         duration: 5000,
         action: {
           label: "Undo",
           onClick: async () => {
             try {
-              await setLeadPermanentDismiss(lead.id, false, snapshot ?? undefined);
+              await undoMarkActionHandled(lead.id, snapshot);
               toast.success("Undone");
               onLeadUpdated?.();
             } catch (err) {

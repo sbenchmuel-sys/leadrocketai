@@ -82,7 +82,7 @@ export default function ContactDetail() {
       <div className="text-center py-12">
         <p className="text-muted-foreground">Contact not found</p>
         <Button asChild className="mt-4">
-          <Link to="/app">Back to dashboard</Link>
+          <Link to="/app/dashboard">Back to dashboard</Link>
         </Button>
       </div>
     );

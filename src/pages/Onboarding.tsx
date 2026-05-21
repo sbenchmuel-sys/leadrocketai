@@ -63,7 +63,7 @@ export default function Onboarding() {
           <div className="flex items-center justify-between">
             {profile?.onboarding_done ? (
               <Button variant="ghost" size="sm" asChild className="text-muted-foreground hover:text-foreground -ml-2">
-                <Link to="/app">
+                <Link to="/app/dashboard">
                   <ArrowLeft className="size-4" />
                   Dashboard
                 </Link>
