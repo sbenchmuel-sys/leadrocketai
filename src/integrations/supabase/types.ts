@@ -3991,6 +3991,13 @@ export type Database = {
         Returns: string
       }
       expire_old_messages: { Args: never; Returns: undefined }
+      get_latest_intents_for_leads: {
+        Args: { p_lead_ids: string[] }
+        Returns: {
+          intent: string
+          lead_id: string
+        }[]
+      }
       get_workspace_role: {
         Args: { _user_id: string; _workspace_id: string }
         Returns: Database["public"]["Enums"]["workspace_role"]
@@ -4009,6 +4016,10 @@ export type Database = {
       is_workspace_member: {
         Args: { _user_id: string; _workspace_id: string }
         Returns: boolean
+      }
+      mark_action_handled: {
+        Args: { p_lead_id: string; p_permanent?: boolean; p_restore?: Json }
+        Returns: Json
       }
       match_knowledge_chunks:
         | {
