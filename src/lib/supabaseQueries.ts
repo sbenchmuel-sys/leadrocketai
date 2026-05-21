@@ -2,7 +2,7 @@
 // Database query functions for Deal Assistant
 
 import { supabase } from '@/integrations/supabase/client';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database, Json } from '@/integrations/supabase/types';
 import { isDemoMode } from '@/lib/demoMode';
 import { getDemoLeadDetail, getDemoInteractions, getDemoDrafts } from '@/lib/demoData';
 
@@ -1877,14 +1877,14 @@ export async function markActionHandled(
     console.warn('[markActionHandled] transient throw — retrying after 400ms', thrown);
     first = { data: null, error: thrown };
   }
-  if (!first.error) return first.data as LeadActionSnapshotFull;
+  if (!first.error) return first.data as unknown as LeadActionSnapshotFull;
   if (!isTransient(first.error)) throw first.error;
 
   console.warn('[markActionHandled] transient error — retrying after 400ms', first.error);
   await new Promise((r) => setTimeout(r, 400));
   const { data: retryData, error: retryError } = await supabase.rpc('mark_action_handled', args);
   if (retryError) throw retryError;
-  return retryData as LeadActionSnapshotFull;
+  return retryData as unknown as LeadActionSnapshotFull;
 }
 
 /** PR C — Undo companion for `markActionHandled`. Pass the snapshot
@@ -1901,7 +1901,7 @@ export async function undoMarkActionHandled(
   const args = {
     p_lead_id: leadId,
     p_permanent: false,
-    p_restore: snapshot as unknown as Record<string, unknown>,
+    p_restore: snapshot as unknown as Json,
   };
 
   const { error } = await supabase.rpc('mark_action_handled', args);
