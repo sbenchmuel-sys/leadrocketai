@@ -77,7 +77,7 @@ export default function Queue() {
     refresh,
     removeLead,
     restoreLead,
-  } = useQueueSnapshot({ chip });
+  } = useQueueSnapshot({ chip, showAll });
 
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
@@ -140,8 +140,10 @@ export default function Queue() {
       : UNDO_DURATION_MS_DESKTOP;
 
   const handleMarkHandled = async (lead: QueueLeadRow) => {
-    // Optimistic: remove from snapshot first.
-    removeLead(lead.id);
+    // Optimistic: remove from snapshot first. Pass the full row so
+    // the hook can also adjust `currentCount` to match — keeps the
+    // "N new items" banner at delta=0 across the mutation (Codex P2).
+    removeLead(lead);
     let snap: LeadActionSnapshotFull | null = null;
     try {
       snap = await markActionHandled(lead.id, { permanent: true });
@@ -179,7 +181,7 @@ export default function Queue() {
     // now()` and a forward-dated interval is the whole point of snooze.
     // See PR description "Migration disposition" table — this is the
     // one dismissLeadAction caller deliberately preserved.
-    removeLead(lead.id);
+    removeLead(lead);
     try {
       await dismissLeadAction(lead.id, days);
     } catch (err) {
