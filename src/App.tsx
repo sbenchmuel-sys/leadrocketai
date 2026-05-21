@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
@@ -15,6 +15,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import Queue from "./pages/Queue";
 import Inbox from "./pages/Inbox";
 import Leads from "./pages/Leads";
 import LeadDetail from "./pages/LeadDetail";
@@ -72,7 +73,12 @@ const App = () => (
                   </ProtectedRoute>
                 }
               >
-                <Route index element={<Dashboard />} />
+                {/* PR D: /app/queue is the new default landing page.
+                    Dashboard moves to /app/dashboard — kept fully
+                    functional as the launch escape hatch. */}
+                <Route index element={<Navigate to="/app/queue" replace />} />
+                <Route path="queue" element={<Queue />} />
+                <Route path="dashboard" element={<Dashboard />} />
                 <Route path="inbox" element={<Inbox />} />
                 <Route path="leads" element={<Leads />} />
                 <Route path="leads/:id" element={<LeadDetail />} />

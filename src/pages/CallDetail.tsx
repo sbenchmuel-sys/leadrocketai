@@ -259,7 +259,7 @@ export default function CallDetail() {
     return (
       <div className="text-center py-12">
         <p className="text-muted-foreground">Call not found</p>
-        <Button asChild className="mt-4"><Link to="/app">Back</Link></Button>
+        <Button asChild className="mt-4"><Link to="/app/dashboard">Back</Link></Button>
       </div>
     );
   }
@@ -284,7 +284,7 @@ export default function CallDetail() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" asChild>
-          <Link to="/app"><ArrowLeft className="h-4 w-4" /></Link>
+          <Link to="/app/dashboard"><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
         <DirectionIcon className="h-5 w-5 text-primary" />
         <div>

@@ -37,9 +37,12 @@ export default function ProtectedOnboardingRoute({ children }: { children: React
     );
   }
 
-  // Already completed onboarding -> go to dashboard
+  // Already completed onboarding -> land on the app's default page,
+  // which is now the Queue (PR D — /app redirects to /app/queue).
+  // Explicit path avoids a double-redirect for users coming through
+  // onboarding completion.
   if (profile.onboarding_done) {
-    return <Navigate to="/app" replace />;
+    return <Navigate to="/app/queue" replace />;
   }
 
   return <>{children}</>;

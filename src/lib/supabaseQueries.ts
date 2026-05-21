@@ -1743,6 +1743,24 @@ export async function getLeadEmailThread(
 // LEAD ACTION MANAGEMENT
 // ============================================
 
+/**
+ * Snooze a lead's action for `snoozeDays` (sets `action_dismissed_at`
+ * to a future timestamp). Cleared by syncEngine on a fresh inbound.
+ *
+ * Note (PR D): this function survives the dismiss-call-site migration
+ * because `markActionHandled` does NOT support a forward-dated
+ * interval — it only sets `action_dismissed_at = now()`. Snooze N
+ * days requires a different timestamp. Live callers that are
+ * deliberately preserved:
+ *   • `PriorityActions.tsx` snooze dropdown (1 / 3 / 7 days)
+ *   • `Queue.tsx` snooze dropdown (3 / 5 / 7 days, via the same path)
+ *   • `EmailActionDialog.tsx` post-recap default (1 day) — the
+ *     "open in Gmail" flow may not result in a send, so the short
+ *     snooze gives the rep room to finish before the action resurfaces.
+ * Do NOT add new callers for "rep is dismissing this lead" semantics
+ * — those go through `markActionHandled` (atomic, returns full
+ * snapshot for undo).
+ */
 export async function dismissLeadAction(leadId: string, snoozeDays: number = 1): Promise<void> {
   if (!leadId) throw new Error('Missing leadId');
 
@@ -1768,7 +1786,16 @@ export async function dismissLeadAction(leadId: string, snoozeDays: number = 1):
 /** PR 2.4 — true permanent dismiss of an action_required reminder. Cleared
  *  by syncEngine on a fresh inbound. The 5-second Undo toast calls this
  *  with `dismissed=false` and the snapshot returned by the dismiss call so
- *  the action fields are restored, not just `action_permanently_dismissed`. */
+ *  the action fields are restored, not just `action_permanently_dismissed`.
+ *
+ *  PR D — `setLeadPermanentDismiss` is now @deprecated; all live callers
+ *  migrated to `markActionHandled` / `undoMarkActionHandled` (the atomic
+ *  SECURITY DEFINER RPC) which closes the "permanent-dismiss-without-
+ *  snooze re-arm trap" tracked in KNOWN_ISSUES.md. The remaining
+ *  caller is the dead-code `ActionRequiredPanel.tsx` (not imported
+ *  anywhere — slated for Phase 3 deletion). The interface itself is
+ *  retained because `markActionHandled` returns the extended
+ *  `LeadActionSnapshotFull` which composes onto this shape. */
 export interface LeadActionSnapshot {
   needs_action: boolean;
   next_action_key: string | null;
@@ -1785,6 +1812,13 @@ export interface LeadActionSnapshotFull extends LeadActionSnapshot {
   action_permanently_dismissed: boolean;
 }
 
+/** @deprecated PR D — Use `markActionHandled` / `undoMarkActionHandled`
+ *  instead. This function performs a two-step SELECT-then-UPDATE that
+ *  can land an inconsistent snapshot under concurrent syncs, and it
+ *  doesn't set `action_dismissed_at` (the "permanent-dismiss-without-
+ *  snooze re-arm trap"). The atomic RPC fixes both. Kept here only for
+ *  the dead-code `ActionRequiredPanel.tsx` import; Phase 3 will delete
+ *  both the panel and this function together. */
 export async function setLeadPermanentDismiss(
   leadId: string,
   dismissed: boolean,

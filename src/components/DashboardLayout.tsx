@@ -2,7 +2,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical } from "lucide-react";
+import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical, ListChecks } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
@@ -28,8 +28,13 @@ type NavItem = {
   managerOnly?: boolean;
 };
 
+// PR D — Queue is the new default landing page (`/app` redirects to
+// `/app/queue`). Dashboard stays in the nav as the one-click escape
+// hatch since Phase 1.7's kill switch is deferred. Order matters:
+// Queue first (default), Dashboard second.
 const navItems: NavItem[] = [
-{ to: "/app", icon: LayoutDashboard, label: "Dashboard" },
+{ to: "/app/queue", icon: ListChecks, label: "Queue" },
+{ to: "/app/dashboard", icon: LayoutDashboard, label: "Dashboard" },
 { to: "/app/leads", icon: Users, label: "Leads" },
 { to: "/app/inbox", icon: Inbox, label: "Inbox" },
 { to: "/app/knowledge", icon: BookOpen, label: "Knowledge Base" },
