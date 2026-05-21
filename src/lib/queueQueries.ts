@@ -184,18 +184,33 @@ export async function fetchQueueLeads(opts?: {
 }): Promise<{ leads: QueueLeadRow[]; hiddenCount: number }> {
   const nowIso = new Date().toISOString();
 
-  // Step 1 — pull queue-candidate leads.
-  // Note: `or("action_dismissed_at.is.null,action_dismissed_at.lt." + iso)`
-  // covers "no snooze" OR "snooze expired". `eq("action_permanently_dismissed", false)`
-  // and `eq("needs_action", true)` close the gate.
+  // Step 1 — pull queue-candidate leads. The three filters narrow this
+  // hard:
+  //   `needs_action = true`                  (the gating flag)
+  //   `action_permanently_dismissed = false` (cleared by syncEngine on
+  //                                           fresh inbound; PR B)
+  //   `action_dismissed_at IS NULL OR < now` (snooze expired)
+  //
+  // No `.order()` or `.limit()` — earlier revisions had
+  // `.order("last_inbound_at" DESC).limit(500)`, which truncated the
+  // result BEFORE the client-side urgency sort. A `reply_now` lead
+  // with an old `last_inbound_at` (high urgency, old timestamp) could
+  // fall outside the 500-row window and silently disappear from the
+  // queue — even though urgency-wise it should sort to the top. Same
+  // shape of bug PR C fixed for `intentHiddenIds` (CommandStrip
+  // overcount). Codex P1 on PR #46.
+  //
+  // The actionable set is bounded by the three filters above. PostgREST's
+  // `db-max-rows` is the upstream safety net — if a workspace ever
+  // exceeds that (well into the thousands of simultaneously-actionable
+  // leads), surfacing the error is the right call, not silently
+  // dropping the highest-priority rows.
   const { data: leadRows, error: leadsErr } = await supabase
     .from("leads")
     .select(QUEUE_LEAD_COLUMNS)
     .eq("needs_action", true)
     .eq("action_permanently_dismissed", false)
-    .or(`action_dismissed_at.is.null,action_dismissed_at.lt.${nowIso}`)
-    .order("last_inbound_at", { ascending: false, nullsFirst: false })
-    .limit(500);
+    .or(`action_dismissed_at.is.null,action_dismissed_at.lt.${nowIso}`);
 
   if (leadsErr) {
     console.error("[queueQueries] leads fetch error:", leadsErr);
