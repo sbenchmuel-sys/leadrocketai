@@ -3990,7 +3990,14 @@ export type Database = {
         Args: { encrypted_token: string; encryption_key: string }
         Returns: string
       }
-      expire_old_messages: { Args: never; Returns: undefined }
+      expire_old_messages: {
+        Args: never
+        Returns: {
+          interactions_purged: number
+          lead_timeline_items_purged: number
+          messages_purged: number
+        }[]
+      }
       get_latest_intents_for_leads: {
         Args: { p_lead_ids: string[] }
         Returns: {
