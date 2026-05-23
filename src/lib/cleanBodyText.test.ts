@@ -141,4 +141,55 @@ describe("cleanBodyText", () => {
     const out = cleanBodyText({ snippet_text: raw });
     expect(out).toBe("");
   });
+
+  it("falls back to subject when ai_summary and snippet_text are both null (72h purge case)", () => {
+    const out = cleanBodyText({
+      ai_summary: null,
+      snippet_text: null,
+      subject: "Re: Pricing follow-up",
+    });
+    expect(out).toBe("Re: Pricing follow-up");
+  });
+
+  it("falls back to subject when snippet reduces to nothing after quote/sig stripping", () => {
+    const raw = "-- \nSam\nFounder, Acme";
+    const out = cleanBodyText({
+      snippet_text: raw,
+      subject: "Q3 pricing question",
+    });
+    expect(out).toBe("Q3 pricing question");
+  });
+
+  it("prefers ai_summary over subject", () => {
+    const out = cleanBodyText({
+      ai_summary: "Asks about Q3 tiers.",
+      snippet_text: null,
+      subject: "Re: Pricing",
+    });
+    expect(out).toBe("Asks about Q3 tiers.");
+  });
+
+  it("prefers snippet_text over subject when snippet has content", () => {
+    const out = cleanBodyText({
+      ai_summary: null,
+      snippet_text: "Thanks, sounds good.",
+      subject: "Re: Pricing",
+    });
+    expect(out).toBe("Thanks, sounds good.");
+  });
+
+  it("returns empty string when all three fields are null", () => {
+    const out = cleanBodyText({
+      ai_summary: null,
+      snippet_text: null,
+      subject: null,
+    });
+    expect(out).toBe("");
+  });
+
+  it("trims and clamps an over-long subject", () => {
+    const long = "Subject ".repeat(40);
+    const out = cleanBodyText({ subject: long });
+    expect(out.length).toBeLessThanOrEqual(220);
+  });
 });

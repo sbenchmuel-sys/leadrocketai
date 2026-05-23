@@ -155,6 +155,7 @@ export interface QueueLatestInbound {
   occurred_at: string;
   ai_summary: string | null;
   snippet_text: string | null;
+  subject: string | null;
   intent: string | null;
 }
 
@@ -292,6 +293,15 @@ async function fetchHiddenLeadIds(leadIds: string[]): Promise<Set<string>> {
  * If this becomes a real problem in production, the right fix is a
  * dedicated RPC like `get_latest_inbound_for_leads(uuid[])` — same
  * shape as `get_latest_intents_for_leads`. Out of scope for PR D.
+ *
+ * `subject` is selected as a final fallback for `cleanBodyText`. The 72h
+ * raw-body purge (message-cleanup) nulls `snippet_text` past
+ * `occurred_at + 72h`, while `subject` is preserved metadata. Without
+ * the subject fallback, every Follow-up-due card (latest inbound is
+ * typically days old) renders "[No preview available]". `ai_summary`
+ * isn't written by the inbound sync paths today (gmail-sync doesn't
+ * pass it, classify-inbound only writes `intent`), so it almost never
+ * fills the gap.
  */
 export async function fetchLatestInbounds(
   leadIds: string[],
@@ -300,7 +310,7 @@ export async function fetchLatestInbounds(
 
   const { data, error } = await supabase
     .from("lead_timeline_items")
-    .select("lead_id, occurred_at, snippet_text, metadata_json, intent")
+    .select("lead_id, occurred_at, snippet_text, subject, metadata_json, intent")
     .in("lead_id", leadIds)
     .eq("event_type", "email_inbound")
     .order("occurred_at", { ascending: false })
@@ -316,6 +326,7 @@ export async function fetchLatestInbounds(
     lead_id: string;
     occurred_at: string;
     snippet_text: string | null;
+    subject: string | null;
     metadata_json: Record<string, unknown> | null;
     intent: string | null;
   }>) {
@@ -328,6 +339,7 @@ export async function fetchLatestInbounds(
       occurred_at: row.occurred_at,
       ai_summary: typeof meta.ai_summary === "string" ? (meta.ai_summary as string) : null,
       snippet_text: row.snippet_text,
+      subject: row.subject,
       intent: row.intent,
     });
   }

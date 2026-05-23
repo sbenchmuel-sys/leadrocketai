@@ -129,6 +129,7 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
   const body = cleanBodyText({
     ai_summary: latestInbound?.ai_summary ?? null,
     snippet_text: latestInbound?.snippet_text ?? null,
+    subject: latestInbound?.subject ?? null,
   });
 
   const buttonLabel = queueButtonLabel({

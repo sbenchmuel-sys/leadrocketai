@@ -10,6 +10,11 @@
 // excess whitespace so a deep historical thread doesn't fill the
 // card.
 //
+// `subject` is the final fallback. The 72h raw-body purge nulls
+// `snippet_text` on rows older than 72h while `subject` is preserved
+// metadata, so without this fallback Follow-up-due cards (whose latest
+// inbound is typically days old) all render "[No preview available]".
+//
 // Pure, no React, no DB — see cleanBodyText.test.ts.
 // ============================================================
 
@@ -98,11 +103,12 @@ function clampToTwoLines(raw: string): string {
 export interface CleanBodyInput {
   ai_summary?: string | null;
   snippet_text?: string | null;
+  subject?: string | null;
 }
 
 /**
  * Produce the Queue card "clean body" preview from a timeline row.
- * Returns "" when both inputs are empty — caller renders the
+ * Returns "" when all inputs are empty — caller renders the
  * "[No preview available]" placeholder.
  */
 export function cleanBodyText(input: CleanBodyInput): string {
@@ -114,9 +120,17 @@ export function cleanBodyText(input: CleanBodyInput): string {
   }
 
   const snippet = (input.snippet_text ?? "").trim();
-  if (!snippet) return "";
+  if (snippet) {
+    const stripped = stripQuotesAndSignature(snippet);
+    const collapsed = collapseWhitespace(stripped);
+    const clamped = clampToTwoLines(collapsed);
+    if (clamped) return clamped;
+    // Snippet was non-empty but reduced to nothing (signature-only,
+    // quote-only). Fall through to subject.
+  }
 
-  const stripped = stripQuotesAndSignature(snippet);
-  const collapsed = collapseWhitespace(stripped);
-  return clampToTwoLines(collapsed);
+  const subject = (input.subject ?? "").trim();
+  if (subject) return clampToTwoLines(collapseWhitespace(subject));
+
+  return "";
 }
