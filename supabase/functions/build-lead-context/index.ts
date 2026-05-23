@@ -126,7 +126,7 @@ serve(async (req) => {
         .limit(10),
       // 3. Timeline items (replaces raw interactions)
       adminClient.from("lead_timeline_items")
-        .select("channel, direction, event_type, subject, snippet_text, occurred_at")
+        .select("channel, direction, event_type, subject, snippet_text, metadata_json, occurred_at")
         .eq("lead_id", lead_id)
         .eq("hidden", false)
         .order("occurred_at", { ascending: false })
@@ -178,7 +178,11 @@ serve(async (req) => {
     const timelineItems = interactionsResult.data || [];
     const interactionLines = timelineItems.slice(0, 10).map((t: any) => {
       const dir = t.direction === "inbound" ? "IN" : t.direction === "outbound" ? "OUT" : "";
-      return `[${dir}] [${t.channel}] ${t.subject || t.event_type}: ${(t.snippet_text || "").slice(0, 150)}`;
+      // ai_summary first: it's paraphrased but durable past the 72h body purge.
+      // snippet_text is raw but ephemeral — only present for <72h rows.
+      // For consistency across the lead's history, prefer the summary.
+      const body = (t.metadata_json?.ai_summary as string | undefined) ?? t.snippet_text ?? "";
+      return `[${dir}] [${t.channel}] ${t.subject || t.event_type}: ${body.slice(0, 150)}`;
     });
     const previousInteractionsSummary = interactionLines.join("\n") || "No interactions recorded yet.";
 

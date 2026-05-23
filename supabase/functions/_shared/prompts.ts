@@ -71,6 +71,7 @@ export const PROMPTS: Record<string, string> = {
 Return JSON ONLY in this exact schema:
 {
   "intent_primary": "book_meeting|pricing|technical_sdk|security_privacy|legal_procurement|partnership|support|not_sure",
+  "ai_summary": "...",
   "urgency": "high|medium|low",
   "reply_worthy": true,
   "suggested_motion": "outbound_prospecting|inbound_response|nurture|closing|post_meeting",
@@ -83,6 +84,28 @@ Rules:
 - suggested_motion=inbound_response if urgency high OR explicit request for call/demo/pricing/procurement steps.
 - Extract explicit questions verbatim into questions_extracted.
 - If unclear, intent_primary="not_sure" and reply_worthy=true.
+
+Summary rules:
+- ai_summary: 1–2 sentences paraphrasing what the sender said. Preserve
+  specifics (numbers, dates, named entities, deadlines, product/tier
+  references, role titles). Do NOT generalize — bad: "Asks about
+  pricing." Good: "Asks for Q3 enterprise pricing on the 50-seat tier
+  and whether the 2-week pilot terms from our March call still apply."
+  Omit greetings, signatures, and quoted replies.
+
+- Match the source language. If the customer wrote in Spanish, write
+  the summary in Spanish. Preserve product/tier names and proper nouns
+  verbatim regardless of language.
+
+- If the email body is under ~50 words of substantive content (after
+  stripping greetings, signatures, quoted replies), return the body
+  text VERBATIM instead of paraphrasing. Short emails like "ok",
+  "sounds great", or "looking forward to the meeting" should survive
+  the purge in their original form — paraphrasing them risks
+  hallucination and produces less useful output than preservation.
+
+- Do not include personal identifiers (SSN, financial account numbers,
+  passwords, API keys) even if present in the source email.
 
 INPUT:
 Lead Context:

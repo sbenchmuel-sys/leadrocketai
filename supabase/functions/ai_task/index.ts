@@ -701,7 +701,20 @@ async function routeOffer(
         .limit(10);
 
       if (recentTimeline && recentTimeline.length > 0) {
-        const dedupeCtx = buildDedupeContext(recentTimeline as any[]);
+        // ai_summary first: it's paraphrased but durable past the 72h body purge.
+        // snippet_text is raw but ephemeral — only present for <72h rows.
+        // For consistency across the lead's history, prefer the summary.
+        // (The URL/CTA regex inside buildDedupeContext still scans
+        // metadata_json for links, which are preserved through purge.)
+        const recentForDedupe = (recentTimeline as Array<{
+          snippet_text: string | null;
+          metadata_json: Record<string, unknown> | null;
+        }>).map((r) => ({
+          snippet_text:
+            ((r.metadata_json?.ai_summary as string | undefined) ?? r.snippet_text ?? ""),
+          metadata_json: r.metadata_json ?? {},
+        }));
+        const dedupeCtx = buildDedupeContext(recentForDedupe);
 
         // Try to find first offer that passes all dedupe checks
         for (const offer of scored) {
@@ -967,6 +980,19 @@ const PRO_MODEL_TASKS = [
 ];
 
 const LITE_MODEL_TASKS = ["intent_router", "analyze_outgoing_email"];
+
+// Per-task max_tokens overrides. Defaults are tuned for email-body
+// generation (2048 / 4096 with custom instructions). Smaller, structured
+// tasks (intent_router) cap much tighter to prevent runaway output costs
+// and to enforce the brief's "1–2 sentence ai_summary" budget.
+//
+// intent_router returns: intent_primary + urgency + reply_worthy +
+// suggested_motion + questions_extracted + tone + ai_summary (~150 tok).
+// 400 covers the JSON overhead with comfortable headroom; anything
+// larger means the model is rambling and should be clipped.
+const TASK_MAX_TOKENS: Record<string, number> = {
+  intent_router: 400,
+};
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
   let result = template;
@@ -1935,13 +1961,14 @@ ${customInstructionsText}
       systemPrompt += `\n\nIMPORTANT SYSTEM OVERRIDE: The user has provided mandatory campaign instructions. You MUST fulfill every instruction. Do NOT drop them for brevity. Instructions: ${customInstructionsText}`;
     }
 
+    const taskMaxTokens = TASK_MAX_TOKENS[task];
     const aiRequestBody: Record<string, unknown> = {
       model,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: hasCustomInstructions ? 4096 : 2048,
+      max_tokens: taskMaxTokens ?? (hasCustomInstructions ? 4096 : 2048),
     };
 
     if (streamRequested) aiRequestBody.stream = true;
