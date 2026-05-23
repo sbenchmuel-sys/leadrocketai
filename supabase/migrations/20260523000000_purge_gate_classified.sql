@@ -81,7 +81,14 @@ BEGIN
   -- Email bodies on interactions: gate on the paired timeline row's
   -- intent (when one exists), OR on the 7-day hard cap.
   -- Pair link: timeline.source_table='interactions' AND
-  -- timeline.source_id=interactions.id (see canonicalInteraction.ts).
+  -- timeline.source_id=interactions.id::text (see canonicalInteraction.ts).
+  --
+  -- Type cast: `lead_timeline_items.source_id` is declared `text` (see
+  -- 20260324154224 — "text for flexibility" so non-UUID source ids work).
+  -- `interactions.id` is uuid. A bare `lti.source_id = i.id` would raise
+  -- `operator does not exist: text = uuid` and abort the whole purge RPC
+  -- — Codex P1 on PR #49. Cast the uuid to text to keep the comparison
+  -- safe regardless of how source_id was written.
   WITH purged AS (
     UPDATE public.interactions i
     SET body_text = NULL
@@ -93,7 +100,7 @@ BEGIN
           SELECT 1
           FROM public.lead_timeline_items lti
           WHERE lti.source_table = 'interactions'
-            AND lti.source_id = i.id
+            AND lti.source_id = i.id::text
             AND lti.intent IS NOT NULL
         )
         -- Fall-through: an interactions row with NO paired timeline row

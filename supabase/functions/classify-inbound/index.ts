@@ -361,13 +361,34 @@ Deno.serve(async (req) => {
 
         const { intent: intentPrimary, ai_summary } = classification;
 
+        // Atomic-or-nothing enforcement: if the intent is NOT in the
+        // skip-list, ai_summary is REQUIRED. A row that parses to a
+        // substantive intent but no summary must be treated as a parse
+        // failure — otherwise we'd write `intent` and the `intent IS
+        // NULL` candidate query would never pick it back up, leaving
+        // the row permanently without a durable summary and degrading
+        // reply context after the 72h purge.
+        //
+        // (Codex P1 on PR #49 — without this, a model that drops the
+        // ai_summary field for any reason silently produces classified-
+        // but-summary-less rows.)
+        const isSkipListIntent = SKIP_AI_SUMMARY_INTENTS.has(intentPrimary);
+        if (!isSkipListIntent && ai_summary === null) {
+          logger.warn("classify_inbound_ai_summary_missing_for_substantive_intent", {
+            row_id: row.id,
+            intent: intentPrimary,
+            content_preview: aiData.content.slice(0, 120),
+          });
+          counts.failed++;
+          continue;
+        }
+
         // Build the metadata_json merge payload. Only merge ai_summary
         // when it's a non-empty string AND the intent is not in the
         // skip list (auto-replies / calendar acks / bounces never need
         // a body summary). Preserves existing fields (from_email,
         // to_emails, ...) via row-level spread.
-        const shouldWriteSummary =
-          ai_summary !== null && !SKIP_AI_SUMMARY_INTENTS.has(intentPrimary);
+        const shouldWriteSummary = ai_summary !== null && !isSkipListIntent;
 
         const nextMetadata = shouldWriteSummary
           ? { ...(row.metadata_json ?? {}), ai_summary }
