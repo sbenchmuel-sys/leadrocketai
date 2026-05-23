@@ -419,6 +419,55 @@ Specific commitments:
 
 ---
 
+## `ai_summary` durability gaps (post-Phase 2a write-and-fallback)
+
+### Pre-PR historical rows past 72h have header-only reply context
+**Status: documented, no fix planned.**
+The `ai_summary` write path was added by the `ai_summary_write_and_fallback`
+PR (Phase 2a follow-up). For inbound emails that arrived BEFORE that PR
+shipped AND whose `snippet_text` has since been purged by the original
+72h cron, there is no durable body signal in `metadata_json`. Reply
+drafting for those threads falls back to subject + participants + intent
+classification only. Going-forward inbounds populate `ai_summary` before
+the 72h purge (via the new classification-gated purge), so this is a
+strictly historical gap that drains naturally as those threads age out
+of relevance.
+
+### v1-classified rows are stuck without `ai_summary`
+**Status: documented, no auto-fix planned.**
+Rows classified under `intent_version = 'intent_router/v1'` (~322
+legacy rows pre-Phase 2a plus any classified in the brief window between
+v1 deploy and v2 deploy) have `intent` set but no `ai_summary` in
+`metadata_json`. They are NOT auto-re-classified by the cron — the
+candidate query gates on `intent IS NULL`, so a row with v1 intent is
+considered "done" and stays v1 indefinitely. The read fallback in
+[build-lead-context/index.ts:181](supabase/functions/build-lead-context/index.ts)
+and [ai_task/index.ts:703](supabase/functions/ai_task/index.ts) handles
+the missing `ai_summary` gracefully (falls through to `snippet_text`,
+which is itself null past 72h — so context degrades to subject/headers
+for v1 rows whose bodies have purged).
+
+A targeted re-classification path is possible (clear `intent` on v1
+rows where `snippet_text` is still non-null and bump them through the
+v2 cron), but is deliberately deferred — the population is small and
+aging, and reclassifying carries a non-zero risk of changing the intent
+value, which would ripple into queue filtering decisions reps may have
+already taken action on.
+
+### PII handling in `ai_summary` is best-effort, not guaranteed
+**Status: documented.**
+The v2 `intent_router` prompt instructs the model to omit personal
+identifiers (SSN, financial account numbers, passwords, API keys) from
+`ai_summary` even when present in the source email. Real-world enterprise
+sales emails rarely contain these, but the rule is a soft guard, not a
+guarantee. If a customer-side leak surfaces an identifier into a sales
+thread, the model could echo it into `ai_summary` and the summary then
+survives the 72h body purge. If we ever see this in practice, the right
+fix is a post-classification redaction pass (regex strip of the obvious
+patterns), not a tighter prompt — the model is not reliable here.
+
+---
+
 ## Open research
 
 ### Rep behaviour questions (pending answers)

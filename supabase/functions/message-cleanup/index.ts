@@ -22,47 +22,42 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const nowIso = new Date().toISOString();
-
-    // Null out expired raw bodies across the three tables that hold them:
-    //   - messages.body_ciphertext        — WhatsApp / SMS (encrypted)
-    //   - interactions.body_text          — email body (plaintext)
-    //   - lead_timeline_items.snippet_text — email body snippet (plaintext)
+    // Delegate the actual purge to `expire_old_messages()` — the SQL
+    // function is the single source of truth for the classification-
+    // gated purge logic (see migration `_purge_gate_classified.sql`).
+    // The edge function is a thin wrapper that just invokes it and
+    // structures the response, so the gate logic can't drift between
+    // the application-layer cron path and the DB-level fallback cron.
+    //
+    // Purges across the three tables that hold raw bodies:
+    //   - messages.body_ciphertext        — WhatsApp / SMS (unconditional 72h)
+    //   - interactions.body_text          — email body (gated on paired timeline
+    //                                       row's intent OR 7-day hard cap)
+    //   - lead_timeline_items.snippet_text — email snippet (gated on this row's
+    //                                       own intent OR 7-day hard cap)
     // Metadata (FKs, subjects, ai_summary, timestamps) is preserved so
     // timeline/analytics keep working after the body is gone.
-    const [messagesRes, interactionsRes, timelineRes] = await Promise.all([
-      supabase
-        .from("messages")
-        .update({ body_ciphertext: null })
-        .lt("expires_at", nowIso)
-        .not("body_ciphertext", "is", null)
-        .select("id"),
-      supabase
-        .from("interactions")
-        .update({ body_text: null })
-        .lt("expires_at", nowIso)
-        .not("body_text", "is", null)
-        .select("id"),
-      supabase
-        .from("lead_timeline_items")
-        .update({ snippet_text: null })
-        .lt("expires_at", nowIso)
-        .not("snippet_text", "is", null)
-        .select("id"),
-    ]);
+    const { data: purgeRows, error: purgeErr } = await supabase.rpc(
+      "expire_old_messages",
+    );
 
-    const firstError = messagesRes.error ?? interactionsRes.error ?? timelineRes.error;
-    if (firstError) {
-      console.error("[message-cleanup] Update failed:", firstError);
-      return new Response(JSON.stringify({ error: firstError.message }), {
+    if (purgeErr) {
+      console.error("[message-cleanup] expire_old_messages RPC failed:", purgeErr);
+      return new Response(JSON.stringify({ error: purgeErr.message }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const messagesPurged = messagesRes.data?.length ?? 0;
-    const interactionsPurged = interactionsRes.data?.length ?? 0;
-    const timelinePurged = timelineRes.data?.length ?? 0;
+    // RPC returns a single-row TABLE — Supabase serializes that as an array.
+    const purge = (Array.isArray(purgeRows) ? purgeRows[0] : purgeRows) as {
+      messages_purged?: number;
+      interactions_purged?: number;
+      lead_timeline_items_purged?: number;
+    } | null;
+    const messagesPurged = purge?.messages_purged ?? 0;
+    const interactionsPurged = purge?.interactions_purged ?? 0;
+    const timelinePurged = purge?.lead_timeline_items_purged ?? 0;
     console.log(
       `[message-cleanup] Purged bodies — messages: ${messagesPurged}, ` +
         `interactions: ${interactionsPurged}, lead_timeline_items: ${timelinePurged}`

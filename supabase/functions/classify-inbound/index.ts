@@ -5,8 +5,22 @@
 //   • event_type = 'email_inbound'
 //   • intent IS NULL  (Phase 1 deterministic detectors didn't match)
 // and classifies each via `ai_task.intent_router`, writing the
-// returned `intent_primary` to `intent` and "intent_router/v1" to
-// `intent_version`.
+// returned `intent_primary` to `intent`, the returned `ai_summary` to
+// `metadata_json.ai_summary` (atomically — see below), and the current
+// `INTENT_VERSION` to `intent_version`.
+//
+// ai_summary is the durable, paraphrased counterpart to `snippet_text`
+// that survives the 72h body purge (see CLAUDE.md "Public product
+// commitments" + migration `_purge_gate_classified`). Reply-drafting
+// context builders (`build-lead-context`, `ai_task` offer dedup) prefer
+// `ai_summary` over `snippet_text` so reply quality doesn't degrade
+// after purge.
+//
+// Atomic-or-nothing write: intent + ai_summary are written in a SINGLE
+// UPDATE. If parsing of EITHER field fails (malformed JSON, missing
+// field, out-of-vocab intent), we leave the row's `intent` NULL so the
+// next tick retries. This avoids the "intent written, ai_summary
+// missing, row marked classified so never retried" failure mode.
 //
 // Cron-driven (every 60 seconds via cron-dispatcher). NOT inlined
 // into gmail-sync / outlook-sync / outlook-webhook — that decision
@@ -49,7 +63,13 @@ const BATCH_SIZE = 25;
 // Classifier identifier written to `intent_version`. Bump the suffix
 // when the prompt or model selection changes in a way that should
 // trigger re-classification of older rows.
-const INTENT_VERSION = "intent_router/v1";
+//
+// v2 marker: prompt now also returns `ai_summary` (paraphrased
+// 1–2 sentence durable summary). v1 rows do NOT have ai_summary in
+// metadata_json — the read-side fallback in build-lead-context /
+// ai_task handles the null gracefully. v1 rows are NOT auto-re-
+// classified — they stay v1 (see KNOWN_ISSUES.md).
+const INTENT_VERSION = "intent_router/v2";
 
 // Allowed values returned by ai_task.intent_router (see
 // supabase/functions/_shared/prompts.ts → PROMPTS.intent_router).
@@ -73,6 +93,24 @@ const ALLOWED_INTENTS: ReadonlySet<string> = new Set([
 // minute. Mirrors the `unknown` value documented in
 // 20260520120000_lead_timeline_items_intent.sql.
 const NO_SIGNAL_INTENT = "unknown";
+
+// Intents for which we DO NOT write `ai_summary` — no rep ever drafts
+// a reply to these requiring body content (auto-replies, calendar
+// acks, bounces, unsubscribes). Saves tokens AND avoids paraphrasing
+// content that's already a structured artifact (calendar invite,
+// OOO auto-text) into something less useful than the original.
+//
+// Intent is STILL written for these rows (queue filtering depends on
+// it) — only ai_summary is skipped.
+const SKIP_AI_SUMMARY_INTENTS: ReadonlySet<string> = new Set([
+  NO_SIGNAL_INTENT,
+  "calendar_accept",
+  "ooo_reply",
+  "bounce",
+  "zoom_recap",
+  "meeting_confirmation",
+  "unsubscribe",
+]);
 
 interface TimelineRow {
   id: string;
@@ -123,17 +161,39 @@ function buildEmailText(row: TimelineRow): string {
   return lines.join("\n");
 }
 
-function extractIntent(content: string): string | null {
+interface Classification {
+  intent: string;
+  /** May be null when the model omits the field (older clients) — caller
+   *  treats that as "no summary this run" and skips the summary write. */
+  ai_summary: string | null;
+}
+
+function extractClassification(content: string): Classification | null {
   // intent_router is prompted to return JSON ONLY, but the AI gateway
   // occasionally wraps responses in code fences or prose. Scan for
   // the first balanced-looking object literal and parse that.
   const match = content.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
-    const parsed = JSON.parse(match[0]) as { intent_primary?: unknown };
+    const parsed = JSON.parse(match[0]) as {
+      intent_primary?: unknown;
+      ai_summary?: unknown;
+    };
     if (typeof parsed.intent_primary !== "string") return null;
-    const value = parsed.intent_primary.trim();
-    return ALLOWED_INTENTS.has(value) ? value : null;
+    const intent = parsed.intent_primary.trim();
+    if (!ALLOWED_INTENTS.has(intent)) return null;
+
+    // ai_summary parsing: required by the v2 prompt but tolerated as
+    // missing/empty so a model that omits the field doesn't block the
+    // intent write. The skip-list above also drops summary writes for
+    // intent classes where no rep ever needs the body content.
+    let summary: string | null = null;
+    if (typeof parsed.ai_summary === "string") {
+      const trimmed = parsed.ai_summary.trim();
+      if (trimmed.length > 0) summary = trimmed;
+    }
+
+    return { intent, ai_summary: summary };
   } catch {
     return null;
   }
@@ -161,11 +221,18 @@ Deno.serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Priority sort: `expires_at ASC NULLS LAST, occurred_at ASC` —
+    // near-expiry rows get classified first. Prevents a backlog from
+    // accumulating at the back of the queue during a large offline-sync
+    // (e.g. a workspace just hooked up Gmail and 2k inbounds arrive in
+    // a single batch — without this, the oldest occurred_at ties up the
+    // first N runs while the freshest-but-about-to-purge rows wait).
     const { data: rows, error: fetchErr } = await admin
       .from("lead_timeline_items")
       .select("id, lead_id, subject, snippet_text, metadata_json")
       .eq("event_type", "email_inbound")
       .is("intent", null)
+      .order("expires_at", { ascending: true, nullsFirst: false })
       .order("occurred_at", { ascending: true })
       .limit(BATCH_SIZE);
 
@@ -271,16 +338,19 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const intentPrimary = extractIntent(aiData.content);
-        if (!intentPrimary) {
-          // Parse failure or out-of-vocab response. Leave intent NULL
-          // so a future run (or a future classifier version) can retry.
+        const classification = extractClassification(aiData.content);
+        if (!classification) {
+          // Parse failure, out-of-vocab intent, or missing intent.
+          // Leave intent NULL so a future run (or a future classifier
+          // version) can retry. Atomic-or-nothing: we never write one
+          // field without the other being parseable.
+          //
           // NOTE: intent_router does not currently return a confidence
           // score per its prompt schema, so the low-confidence-→-NULL
-          // branch described in the PR brief reduces to "parse failed
+          // branch described in earlier briefs reduces to "parse failed
           // → NULL" here. If/when the prompt gains `confidence`, add
-          // a threshold check above and route low-confidence results
-          // through the same NULL path.
+          // a threshold check and route low-confidence results through
+          // the same NULL path.
           logger.warn("classify_inbound_ai_parse_failed", {
             row_id: row.id,
             content_preview: aiData.content.slice(0, 120),
@@ -289,13 +359,35 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        const { intent: intentPrimary, ai_summary } = classification;
+
+        // Build the metadata_json merge payload. Only merge ai_summary
+        // when it's a non-empty string AND the intent is not in the
+        // skip list (auto-replies / calendar acks / bounces never need
+        // a body summary). Preserves existing fields (from_email,
+        // to_emails, ...) via row-level spread.
+        const shouldWriteSummary =
+          ai_summary !== null && !SKIP_AI_SUMMARY_INTENTS.has(intentPrimary);
+
+        const nextMetadata = shouldWriteSummary
+          ? { ...(row.metadata_json ?? {}), ai_summary }
+          : undefined;
+
+        // Single UPDATE — intent + (optional) ai_summary land together
+        // or not at all. The `.is("intent", null)` guard makes
+        // concurrent runs idempotent: the loser silently no-ops.
+        const updatePayload: Record<string, unknown> = {
+          intent: intentPrimary,
+          intent_version: INTENT_VERSION,
+          updated_at: new Date().toISOString(),
+        };
+        if (nextMetadata !== undefined) {
+          updatePayload.metadata_json = nextMetadata;
+        }
+
         const { error: updErr } = await admin
           .from("lead_timeline_items")
-          .update({
-            intent: intentPrimary,
-            intent_version: INTENT_VERSION,
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq("id", row.id)
           .is("intent", null);
 
