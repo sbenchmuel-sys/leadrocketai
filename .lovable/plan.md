@@ -1,102 +1,55 @@
 ## Problem
 
-`leads.last_activity_at` is being bumped to **now()** every time a user runs an email sync, even when no new messages arrived. This makes the dashboard's "Last Activity" column show "Today" for every synced lead — misleading, and especially bad in a workspace already nervous about unexpected automation behavior.
+149/149 recent inbound rows are classified but have no `ai_summary` (v1 classifier never wrote it). The 72h purge already wiped `snippet_text` + `interactions.body_text`, so Queue cards show "[No preview available]" with only a subject if any. New inbounds will be fine going forward (v2 writes ai_summary atomically), but the visible backlog looks bad to pilots.
 
-Root cause is in `supabase/functions/_shared/syncEngine.ts` line 647:
+## Plan
 
-```ts
-last_activity_at: new Date().toISOString(),
-```
+### 1. Extend inbound retention from 72h → 7 days (migration)
 
-This runs unconditionally on every per-lead sync (used by `useMailSync` → Gmail + Outlook single-lead sync). `gmail-bulk-sync` already does it correctly (max of inbound/outbound), but the per-lead path doesn't.
+Change `public.expire_old_messages()`:
+- **`lead_timeline_items.snippet_text`**: for `event_type='email_inbound'` rows, gate stays "intent IS NOT NULL OR 7d hard cap" — but the early-purge "intent IS NOT NULL" path now also requires `metadata_json->>'ai_summary' IS NOT NULL`. So a classified-but-unsummarized row waits the full 7 days instead of being purged at 72h.
+- **`interactions.body_text`**: same change — inbound rows require the paired timeline row's `ai_summary` to exist before early-purge; otherwise wait 7 days.
+- **Outbound + non-inbound event types: unchanged** (72h unconditional). Outbound has no preview problem.
+- `messages.body_ciphertext` (WhatsApp/SMS): unchanged (72h unconditional, no classifier path).
 
-Several other writers also hardcode `new Date().toISOString()` even when the event being recorded has a real, earlier timestamp (`gmail-send`, `outlook-send`, `outlook-webhook`, manual upload, etc.). For genuinely new events that's fine (the event IS happening now), but it's fragile — any writer that forgets to set it correctly silently corrupts the field.
+This both stops the bleeding AND gives the backfill job a working window.
 
-## Goal
+### 2. New edge function: `backfill-inbound-summaries`
 
-`last_activity_at` should equal the timestamp of the **latest real activity** on the lead across all channels (email, WhatsApp, SMS, call, meeting, note), regardless of which code path wrote the timeline row.
+Single-shot, idempotent, runnable on-demand:
 
-## Fix — two layers
+1. Select rows from `lead_timeline_items` where `event_type='email_inbound'` AND `metadata_json->>'ai_summary' IS NULL` AND `occurred_at > now() - interval '14 days'`, joined to `interactions` for body access. Batch of 50.
+2. For each row, in order of preference:
+   - **(a) Body still present** (`interactions.body_text` or `snippet_text` not null): run the existing v2 classifier prompt, write `ai_summary` back into `metadata_json`. Also restore `snippet_text` from the body if it was nulled.
+   - **(b) Body purged but `gmail_message_id` / Outlook ID present**: use the lead's owner_user_id → look up the connected mail account → refetch the message via Gmail/Outlook API (reusing existing `GmailProvider` / `OutlookProvider` token-decrypt + fetch paths). Classify. Write `ai_summary` AND restore `snippet_text` (it'll re-purge naturally at the new 7-day boundary, which is fine — by then we have ai_summary).
+   - **(c) Refetch fails (token revoked, message deleted, 404)**: synthesize a degraded summary from subject + sender name + workspace context, e.g. `"Reply from {sender_name} ({company}) — subject: {subject}"`. Mark with a small `metadata_json.ai_summary_source = 'subject_fallback'` flag so we can audit later.
+3. Returns `{ processed, refetched, fallback_synth, failed }`.
 
-### Layer 1 (primary): DB trigger on `lead_timeline_items`
+No cron schedule — runs once manually. If results are good, run again with widened window if needed.
 
-Add an `AFTER INSERT OR UPDATE` trigger on `lead_timeline_items` that does:
+### 3. UI: no changes
 
-```sql
-UPDATE leads
-SET last_activity_at = GREATEST(
-  COALESCE(last_activity_at, 'epoch'::timestamptz),
-  NEW.occurred_at
-)
-WHERE id = NEW.lead_id
-  AND NEW.occurred_at <= now() + interval '5 minutes';  -- clock-skew guard
-```
+`cleanBodyText.ts` already prefers `ai_summary` → `snippet_text` → `subject`, and the Queue card already calls it. Once `ai_summary` is populated, "[No preview available]" disappears.
 
-Notes:
-- `GREATEST` ensures we never move the field backwards.
-- The 5-min ceiling prevents a bad row with a future `occurred_at` from poisoning the field.
-- Skip channels that shouldn't count as activity if we decide any are noise (initially: count everything — system notes are rare and meaningful).
-- Trigger is `SECURITY DEFINER` so it runs regardless of RLS context.
+## Technical details
 
-This makes the field self-healing and channel-agnostic. Future channels added (Teams transcripts, LinkedIn, etc.) get correct `last_activity_at` for free as long as they project to `lead_timeline_items` — which they already must per the canonical-interaction pattern.
+**Files to add:**
+- `supabase/migrations/<ts>_extend_inbound_purge_window.sql` — replaces `expire_old_messages()` with the gated inbound branch.
+- `supabase/functions/backfill-inbound-summaries/index.ts` — backfill worker.
 
-### Layer 2: Fix `syncEngine.ts` to stop bumping the field on every sync
+**Files to touch:**
+- `supabase/functions/_shared/mailProviders/` or wherever Gmail/Outlook fetch-by-id helpers live — reuse, don't duplicate. If a single-message fetch helper doesn't exist server-side I'll add a thin `getMessageById(provider, messageId)` shared util.
+- `CLAUDE.md` — update the "72h" wording in the Public product commitments section to reflect the inbound 7-day extension.
+- `mem://logic/message-retention-policy` — update to reflect the new inbound branch.
 
-In `supabase/functions/_shared/syncEngine.ts`, replace the unconditional `new Date().toISOString()` with the same logic `gmail-bulk-sync` uses — max of `metrics.last_outbound_at` and `metrics.last_inbound_at`, and **don't include the field at all** if there are no dates (let the trigger / existing value stand, never overwrite with `now()`).
+**Invocation:**
+After deploy I'll call `backfill-inbound-summaries` via `supabase--curl_edge_functions` in batches until `processed=0`, then report counts (refetched vs synth vs failed).
 
-```ts
-const activityDates = [metrics.last_outbound_at, metrics.last_inbound_at]
-  .filter(Boolean)
-  .map(d => new Date(d!).getTime());
-
-if (activityDates.length > 0) {
-  leadUpdate.last_activity_at = new Date(Math.max(...activityDates)).toISOString();
-}
-// else: omit — preserve existing value
-```
-
-With Layer 1 in place this is belt-and-suspenders, but it also cuts unnecessary writes on noop syncs.
-
-### Layer 3 (one-time): backfill
-
-Run a one-shot recompute so existing corrupted values are corrected immediately:
-
-```sql
-UPDATE leads l
-SET last_activity_at = COALESCE(
-  (SELECT MAX(occurred_at) FROM lead_timeline_items WHERE lead_id = l.id),
-  l.created_at
-);
-```
-
-## Edge cases considered
-
-| Case | Behavior |
-|---|---|
-| Sync runs, no new messages | `last_activity_at` unchanged (was: bumped to now) |
-| New inbound email arrives via webhook | Projector inserts timeline row → trigger updates `last_activity_at` to the email's `occurred_at` |
-| Outbound send (Gmail/Outlook/SMS/WhatsApp) | Send code's optimistic `now()` update is correct (event is happening now); trigger reconciles when timeline row lands |
-| Historical email backfill via `gmail-bulk-sync` | Multiple rows insert; trigger picks the latest `occurred_at`, never moves backwards |
-| Call / meeting / note added | Same — trigger updates from the timeline insert |
-| Manual user note via `TimelineTab` | Already passes a real `occurred_at`; trigger handles correctly |
-| Clock-skew / bad row with future timestamp | 5-min ceiling rejects it |
-| Lead with no timeline items yet (just imported) | `last_activity_at` stays at whatever the import set (usually `created_at`) |
-| Hidden / soft-deleted timeline rows | Trigger fires anyway; if we want to exclude `hidden=true`, add `AND (NEW.metadata_json->>'hidden')::bool IS NOT TRUE` |
-
-## Files changed
-
-- **New migration**: `supabase/migrations/<ts>_last_activity_at_from_timeline.sql`
-  - Trigger function + trigger on `lead_timeline_items`
-  - One-time backfill `UPDATE`
-- **`supabase/functions/_shared/syncEngine.ts`** — replace line 647 with conditional max-of-metrics
-- *(optional cleanup, not required for the fix)*: remove hardcoded `last_activity_at: new Date().toISOString()` in `outlook-webhook` etc. and rely on the trigger. Leaving them is harmless because `GREATEST` protects against regressions, so I'd leave them for now to keep this PR small.
+**Reversibility:**
+The purge function change is a pure SQL replacement — easy to revert. The backfill only writes into `metadata_json.ai_summary` (and optionally `snippet_text`), which the existing purge will manage going forward.
 
 ## Out of scope
 
-- Not changing how `last_inbound_at` / `last_outbound_at` are derived — those are channel-specific and already correct.
-- Not changing the dashboard UI formatting (`formatDistanceToNow` etc.) — fix is upstream.
-- Not touching `interactions` (legacy, being retired per CLAUDE.md).
-
-## Why a trigger rather than just fixing callers
-
-There are 25+ writers that touch `last_activity_at`. A trigger guarantees correctness even if a future code path forgets — and `GREATEST` means no caller can ever silently move the field backwards. Aligns with how `lead_timeline_items` is already the canonical comms ledger.
+- Changing 72h for `messages` (WhatsApp/SMS) — those don't have the preview issue.
+- Permanent retention extension beyond the resolution window — once v2 classifier coverage is proven on a full retention cycle, we revisit returning to 72h.
+- Backfilling rows older than 14 days — bodies are long gone and ROI is low.
