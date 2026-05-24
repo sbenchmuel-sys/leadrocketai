@@ -1731,9 +1731,39 @@ export async function getLeadEmailThread(
   );
   const emails = merged.slice(0, limit);
 
-  // Build thread summary for AI context (unchanged format).
+  // Enrich body_text from `interactions` where available — the timeline
+  // mirror caps snippet_text at 500 chars, but `interactions.body_text`
+  // holds the full body (retained 30 days). Critical for in-thread reply
+  // coherence: the AI needs the actual prose, not a 500-char snippet.
+  const messageIds = emails.map(e => e.gmail_message_id).filter((id): id is string => !!id);
+  if (messageIds.length > 0) {
+    try {
+      const { data: fullBodies } = await supabase
+        .from('interactions')
+        .select('gmail_message_id, body_text')
+        .eq('lead_id', leadId)
+        .in('gmail_message_id', messageIds);
+      const byMsgId = new Map<string, string>();
+      for (const r of (fullBodies as { gmail_message_id: string; body_text: string | null }[] | null) ?? []) {
+        if (r.gmail_message_id && r.body_text && r.body_text.length > 0) {
+          byMsgId.set(r.gmail_message_id, r.body_text);
+        }
+      }
+      for (const e of emails) {
+        if (e.gmail_message_id && byMsgId.has(e.gmail_message_id)) {
+          const full = byMsgId.get(e.gmail_message_id)!;
+          if (full.length > (e.body_text?.length ?? 0)) e.body_text = full;
+        }
+      }
+    } catch (err) {
+      console.warn('[getLeadEmailThread] body_text enrichment failed', err);
+    }
+  }
+
+  // Build thread summary for AI context. 2000 chars/message × 10 messages
+  // ≈ 20k chars of real thread history — enough for nuanced replies.
   const threadSummary = emails
-    .map(e => `[${e.direction.toUpperCase()}] ${e.from_email} → ${e.to_email}\nSubject: ${e.subject || 'No subject'}\n${e.body_text?.slice(0, 500) || ''}`)
+    .map(e => `[${e.direction.toUpperCase()}] ${e.from_email} → ${e.to_email}\nSubject: ${e.subject || 'No subject'}\n${e.body_text?.slice(0, 2000) || ''}`)
     .join('\n\n---\n\n');
 
   return { emails, threadSummary };
