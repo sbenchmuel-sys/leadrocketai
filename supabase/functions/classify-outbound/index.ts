@@ -47,24 +47,26 @@ function buildEmailText(row: OutboundRow): string {
   return lines.join("\n");
 }
 
-async function summarize(supabaseUrl: string, serviceKey: string, emailText: string): Promise<string | null> {
+async function summarize(emailText: string): Promise<string | null> {
+  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!apiKey) return null;
   const prompt = `Summarize this OUTBOUND sales email we sent to a prospect in 1-2 sentences. Capture the key ask, commitment, or offer. No preamble, no quotes — just the summary.
 
 ${emailText}`;
 
   try {
-    const res = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        task: "freeform",
-        payload: { prompt, model: "google/gemini-2.5-flash-lite" },
+        model: "google/gemini-2.5-flash-lite",
+        messages: [{ role: "user", content: prompt }],
       }),
     });
-    if (!res.ok) return null;
-    const data = await res.json() as { ok?: boolean; content?: string };
-    if (!data?.ok || typeof data.content !== "string") return null;
-    const cleaned = data.content.trim().replace(/^["']|["']$/g, "");
+    if (!res.ok) { await res.text(); return null; }
+    const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+    const content = data?.choices?.[0]?.message?.content?.trim() ?? "";
+    const cleaned = content.replace(/^["']|["']$/g, "");
     return cleaned.length > 0 ? cleaned.slice(0, 500) : null;
   } catch {
     return null;
