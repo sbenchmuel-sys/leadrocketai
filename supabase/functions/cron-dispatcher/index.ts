@@ -37,6 +37,7 @@ const ALLOWED_TARGETS = new Set([
   "calendar-sync",
   "transcript-poller",
   "classify-inbound",
+  "classify-outbound",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)
