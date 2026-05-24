@@ -49,7 +49,7 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|Hi\s+[\p{L}\p{N}]|Hey\s+[\p{L}\p{N}]|Hello\s+[\p{L}\p{N}]|Dear\s+[\p{L}\p{N}]|Thank you\s+[\p{L}\p{N}]|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+[\p{L}\p{N}][^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
 const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
@@ -73,6 +73,20 @@ function getInboundWarmIntroViolation(content: string, payload: Record<string, u
   }
   if (!/(book|schedule|chat|call|meet|availability|available)/i.test(text)) return "missing meeting CTA";
   return null;
+}
+
+function getLeadFirstNameFromContext(leadContext?: string): string | null {
+  const rawName = leadContext?.match(/^Name:\s*(.+)$/m)?.[1]?.trim();
+  if (!rawName) return null;
+
+  const candidate = rawName
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .match(/[\p{L}\p{N}][\p{L}\p{N}'’.-]{1,}/u)?.[0]
+    ?.replace(/[.,;:!?]+$/u, "");
+
+  if (!candidate || /^(?:unknown|none|null|n\/a)$/i.test(candidate)) return null;
+  return candidate;
 }
 
 function stripSelfChecksAndDuplicateBodies(text: string): string {
