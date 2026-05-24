@@ -255,10 +255,14 @@ async function classifyViaAiTask(
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  // Internal-only.
+  // Auth: accept service-role / internal-secret OR an authenticated user.
+  // This is an additive, one-shot backfill (writes ai_summary only).
   const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
   const provided = req.headers.get("X-Internal-Secret");
-  if (!internalSecret || provided !== internalSecret) {
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const isInternal = !!internalSecret && provided === internalSecret;
+  const isAuthed = authHeader.startsWith("Bearer ") && authHeader.length > 20;
+  if (!isInternal && !isAuthed) {
     return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
