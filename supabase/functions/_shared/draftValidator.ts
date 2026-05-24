@@ -68,6 +68,15 @@ const COLD_DISCOVERY_PHRASES = [
 
 const SIGNOFF_LINE_RE = /^(?:Best|Thanks|Thank you|Regards|Kind regards|Cheers|Sincerely|Warmly)[,!.\s]?$/i;
 
+function hasAddressedGreeting(line: string): boolean {
+  const remainder = line
+    .replace(/^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)\b/iu, "")
+    .replace(/^[\s,.:;!\-–—]+/u, "")
+    .trim();
+
+  return /[\p{L}\p{N}]{2,}/u.test(remainder);
+}
+
 export function validateDraft(body: string, ctx: ValidationContext): ValidationResult {
   const errors: string[] = [];
   const codes: string[] = [];
@@ -107,8 +116,7 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
     codes.push("missing_greeting");
   } else if (ctx.lead_first_name) {
     // Greeting must address the lead (not just "Hi,")
-    const looksAddressed = new RegExp(`^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)[\\s,]+\\w`, "i").test(firstNonEmpty);
-    if (!looksAddressed) {
+    if (!hasAddressedGreeting(firstNonEmpty)) {
       errors.push("Greeting does not address recipient");
       codes.push("greeting_unaddressed");
     }

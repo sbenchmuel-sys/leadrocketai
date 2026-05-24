@@ -49,7 +49,7 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thank you\s+\w|[A-Z][a-z]{1,20},)\s*$/i;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+[\p{L}\p{N}][^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
 const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
@@ -61,7 +61,7 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[A-Z][a-z]{1,20},)/i.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
 
 function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
   const text = (content || "").trim();
@@ -73,6 +73,20 @@ function getInboundWarmIntroViolation(content: string, payload: Record<string, u
   }
   if (!/(book|schedule|chat|call|meet|availability|available)/i.test(text)) return "missing meeting CTA";
   return null;
+}
+
+function getLeadFirstNameFromContext(leadContext?: string): string | null {
+  const rawName = leadContext?.match(/^Name:\s*(.+)$/m)?.[1]?.trim();
+  if (!rawName) return null;
+
+  const candidate = rawName
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .match(/[\p{L}\p{N}][\p{L}\p{N}'’.-]{1,}/u)?.[0]
+    ?.replace(/[.,;:!?]+$/u, "");
+
+  if (!candidate || /^(?:unknown|none|null|n\/a)$/i.test(candidate)) return null;
+  return candidate;
 }
 
 function stripSelfChecksAndDuplicateBodies(text: string): string {
@@ -2099,8 +2113,7 @@ STRICT REWRITE REQUIRED:
     // This catches cases where reasoning stripping consumed the first line, or the
     // model simply omitted the greeting despite the prompt instruction.
     if (content && EMAIL_BODY_TASKS.has(task)) {
-      const nameMatch = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m);
-      const leadFirst = nameMatch?.[1] ?? "";
+      const leadFirst = getLeadFirstNameFromContext(payload.lead_context as string | undefined) ?? "";
       if (leadFirst && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(content)) {
         console.warn(`[ai_task] [${task}] Missing greeting — prepending "Hi ${leadFirst},"`);
         content = `Hi ${leadFirst},\n\n${content}`;
@@ -2119,7 +2132,7 @@ STRICT REWRITE REQUIRED:
     // unresolved placeholders, inbound cold-framing, missing CTAs.
     // If validation fails, attempt one strict-repair regeneration.
     if (EMAIL_BODY_TASKS.has(task)) {
-      const leadFirstFromCtx = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m)?.[1] ?? null;
+      const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
       const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
 
