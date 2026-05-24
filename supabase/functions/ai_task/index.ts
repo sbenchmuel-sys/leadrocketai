@@ -2179,6 +2179,26 @@ Output ONLY the final email body.`;
         }
       }
 
+      // Last-resort deterministic patch for greeting issues before refusing.
+      if (!validation.ok && leadFirstFromCtx &&
+          (validation.codes.includes("greeting_unaddressed") || validation.codes.includes("missing_greeting"))) {
+        const lines = content.split("\n");
+        const firstIdx = lines.findIndex((l) => l.trim().length > 0);
+        const greetingLine = `Hi ${leadFirstFromCtx},`;
+        if (firstIdx >= 0 && /^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)\b/i.test(lines[firstIdx].trim())) {
+          lines[firstIdx] = greetingLine;
+        } else {
+          lines.unshift(greetingLine, "");
+        }
+        const patched = lines.join("\n");
+        const patchedValidation = validateDraft(patched, validationCtx);
+        if (patchedValidation.ok) {
+          content = patched;
+          validation = patchedValidation;
+          console.log(`[ai_task] [${task}] Greeting auto-patched`);
+        }
+      }
+
       // If still invalid after repair, refuse to return content.
       if (!validation.ok) {
         return new Response(JSON.stringify({
