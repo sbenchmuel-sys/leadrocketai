@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
       const emailText = buildEmailText(row);
       if (!emailText) { skipped++; continue; }
 
-      const summary = await summarize(supabaseUrl, serviceKey, emailText);
+      const summary = await summarize(emailText);
       if (!summary) { failed++; continue; }
 
       const nextMeta = { ...(row.metadata_json ?? {}), ai_summary: summary, ai_summary_version: SUMMARY_VERSION };
