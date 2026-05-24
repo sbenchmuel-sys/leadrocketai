@@ -2113,8 +2113,7 @@ STRICT REWRITE REQUIRED:
     // This catches cases where reasoning stripping consumed the first line, or the
     // model simply omitted the greeting despite the prompt instruction.
     if (content && EMAIL_BODY_TASKS.has(task)) {
-      const nameMatch = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m);
-      const leadFirst = nameMatch?.[1] ?? "";
+      const leadFirst = getLeadFirstNameFromContext(payload.lead_context as string | undefined) ?? "";
       if (leadFirst && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(content)) {
         console.warn(`[ai_task] [${task}] Missing greeting — prepending "Hi ${leadFirst},"`);
         content = `Hi ${leadFirst},\n\n${content}`;
@@ -2133,7 +2132,7 @@ STRICT REWRITE REQUIRED:
     // unresolved placeholders, inbound cold-framing, missing CTAs.
     // If validation fails, attempt one strict-repair regeneration.
     if (EMAIL_BODY_TASKS.has(task)) {
-      const leadFirstFromCtx = (payload.lead_context as string | undefined)?.match(/^Name:\s*(\S+)/m)?.[1] ?? null;
+      const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
       const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
 
