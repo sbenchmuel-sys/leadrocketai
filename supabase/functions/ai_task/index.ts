@@ -49,7 +49,7 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|Hi\s+\w|Hey\s+\w|Hello\s+\w|Dear\s+\w|Thank you\s+\w|[A-Z][a-z]{1,20},)\s*$/i;
+const greetingLineRe = /^(?:Subject:|Hi\s+[\p{L}\p{N}]|Hey\s+[\p{L}\p{N}]|Hello\s+[\p{L}\p{N}]|Dear\s+[\p{L}\p{N}]|Thank you\s+[\p{L}\p{N}]|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
 const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
@@ -61,7 +61,7 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[A-Z][a-z]{1,20},)/i.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
 
 function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
   const text = (content || "").trim();
