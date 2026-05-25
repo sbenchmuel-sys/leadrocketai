@@ -14,6 +14,7 @@ import { Pencil, Loader2, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { LeadDetail } from "@/lib/supabaseQueries";
+import { clearDraftCache } from "@/lib/generateDraft";
 
 const editLeadSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(100),
@@ -102,6 +103,12 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
         .eq("id", lead.id);
 
       if (error) throw error;
+
+      // Invalidate any in-memory draft cache for this lead so the next
+      // regenerate uses the updated name/company/title/etc. instead of
+      // serving a stale draft (e.g. "Hi Wjauregui," derived from the
+      // email local-part before a real name was filled in).
+      clearDraftCache(lead.id);
 
       toast.success("Lead updated successfully");
       setOpen(false);
