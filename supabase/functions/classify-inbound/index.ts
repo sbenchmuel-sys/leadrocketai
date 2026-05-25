@@ -168,35 +168,87 @@ interface Classification {
   ai_summary: string | null;
 }
 
-function extractClassification(content: string): Classification | null {
-  // intent_router is prompted to return JSON ONLY, but the AI gateway
-  // occasionally wraps responses in code fences or prose. Scan for
-  // the first balanced-looking object literal and parse that.
-  const match = content.match(/\{[\s\S]*\}/);
-  if (!match) return null;
+/**
+ * Robustly extract a JSON object from an AI response that may be:
+ *  - wrapped in ```json … ``` markdown fences
+ *  - prefixed/suffixed with prose
+ *  - truncated mid-object (we attempt to recover the longest balanced prefix)
+ */
+function tryParseJsonObject(raw: string): Record<string, unknown> | null {
+  if (!raw) return null;
+  // Strip markdown code fences (```json … ``` or plain ```).
+  let s = raw
+    .replace(/```json\s*/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  // Direct parse first.
   try {
-    const parsed = JSON.parse(match[0]) as {
-      intent_primary?: unknown;
-      ai_summary?: unknown;
-    };
-    if (typeof parsed.intent_primary !== "string") return null;
-    const intent = parsed.intent_primary.trim();
-    if (!ALLOWED_INTENTS.has(intent)) return null;
+    const v = JSON.parse(s);
+    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  } catch { /* fall through */ }
 
-    // ai_summary parsing: required by the v2 prompt but tolerated as
-    // missing/empty so a model that omits the field doesn't block the
-    // intent write. The skip-list above also drops summary writes for
-    // intent classes where no rep ever needs the body content.
-    let summary: string | null = null;
-    if (typeof parsed.ai_summary === "string") {
-      const trimmed = parsed.ai_summary.trim();
-      if (trimmed.length > 0) summary = trimmed;
-    }
+  // Locate the first object.
+  const start = s.indexOf("{");
+  if (start === -1) return null;
+  s = s.slice(start);
 
-    return { intent, ai_summary: summary };
-  } catch {
-    return null;
+  // Try the greedy {…} slice first.
+  const greedyEnd = s.lastIndexOf("}");
+  if (greedyEnd > 0) {
+    try {
+      const v = JSON.parse(s.slice(0, greedyEnd + 1));
+      if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* fall through */ }
   }
+
+  // Walk forward and find every balanced closing brace; try parsing each candidate
+  // from longest to shortest. Handles truncation by recovering the longest valid prefix.
+  const candidates: number[] = [];
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) candidates.push(i);
+    }
+  }
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    try {
+      const v = JSON.parse(s.slice(0, candidates[i] + 1));
+      if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+function extractClassification(content: string): Classification | null {
+  const parsed = tryParseJsonObject(content) as {
+    intent_primary?: unknown;
+    ai_summary?: unknown;
+  } | null;
+  if (!parsed) return null;
+  if (typeof parsed.intent_primary !== "string") return null;
+  const intent = parsed.intent_primary.trim();
+  if (!ALLOWED_INTENTS.has(intent)) return null;
+
+  let summary: string | null = null;
+  if (typeof parsed.ai_summary === "string") {
+    const trimmed = parsed.ai_summary.trim();
+    if (trimmed.length > 0) summary = trimmed;
+  }
+
+  return { intent, ai_summary: summary };
 }
 
 Deno.serve(async (req) => {
