@@ -1145,7 +1145,40 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
               <CollapsibleContent>
                 <CardContent className="space-y-6 pt-0">
-                  {/* Internal Recap */}
+                  {/* Empty-pack regenerate prompt (AI failed during creation) */}
+                  {pack.internal_recap_bullets.length === 0
+                    && pack.open_questions.length === 0
+                    && pack.milestones.length === 0
+                    && !pack.follow_up_email_body
+                    && pack.raw_notes && pack.raw_notes.trim().length > 0 && (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
+                        <div className="space-y-1 flex-1">
+                          <p className="text-sm font-medium">AI recap was not generated</p>
+                          <p className="text-xs text-muted-foreground">
+                            The AI returned an empty response when this meeting was added. Your notes are saved — regenerate to produce the recap, milestones, and follow-up email.
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => regenerateRecapForPack(pack)}
+                        disabled={generatingRecapId === pack.id}
+                      >
+                        {generatingRecapId === pack.id ? (
+                          <><Loader2 className="h-3 w-3 mr-2 animate-spin" />Regenerating…</>
+                        ) : (
+                          <><Sparkles className="h-3 w-3 mr-2" />Regenerate Recap</>
+                        )}
+                      </Button>
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">View saved notes</summary>
+                        <pre className="mt-2 whitespace-pre-wrap font-sans text-muted-foreground bg-background/50 rounded p-2 max-h-48 overflow-auto">{pack.raw_notes}</pre>
+                      </details>
+                    </div>
+                  )}
+
                   {pack.internal_recap_bullets.length > 0 && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
