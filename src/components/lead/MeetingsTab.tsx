@@ -140,9 +140,15 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
         meeting_link: lead.meeting_link || "",
       });
 
-      let recapData: Record<string, unknown> | null = null;
-      if (recapResult.ok && recapResult.content) {
-        try { recapData = JSON.parse(extractJson(recapResult.content)); } catch (e) { console.error("Failed to parse recap:", e); }
+      if (!recapResult.ok || !recapResult.content) {
+        throw new Error(recapResult.error || "AI returned an empty recap — please try again");
+      }
+      let recapData: Record<string, unknown>;
+      try {
+        recapData = JSON.parse(extractJson(recapResult.content));
+      } catch (e) {
+        console.error("Failed to parse recap:", e, recapResult.content);
+        throw new Error("AI returned an invalid recap format — please try again");
       }
 
       // Step 2: Extract milestones
@@ -186,9 +192,72 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
       onMilestonesAdded?.();
     } catch (err) {
       console.error("Failed to add meeting summary:", err);
-      toast.error("Failed to add meeting summary");
+      toast.error(err instanceof Error ? err.message : "Failed to add meeting summary");
     } finally {
       setIsAddingMeeting(false);
+    }
+  };
+
+  const regenerateRecapForPack = async (pack: MeetingPackItem) => {
+    if (!pack.raw_notes || !pack.raw_notes.trim()) {
+      toast.error("This meeting has no saved notes to regenerate from");
+      return;
+    }
+    setGeneratingRecapId(pack.id);
+    try {
+      const lead = await getLeadDetail(leadId);
+      const leadContext = `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nStrategy: ${lead.strategy}\nStatus: ${lead.status}`;
+      const kb = await getKnowledgeChunks(true);
+      const knowledgeContext = kb.slice(0, 5).map(k => k.content.slice(0, 500)).join("\n---\n");
+      const cleanedNotes = pack.raw_notes.split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0].slice(0, 3000).trim();
+
+      toast.info("Step 1/2: Generating recap...");
+      const recapResult = await runTask("post_meeting_recap", {
+        mode: lead.strategy,
+        lead_context: leadContext,
+        meeting_summary: cleanedNotes,
+        knowledge_context: knowledgeContext,
+        meeting_link: lead.meeting_link || "",
+      });
+      if (!recapResult.ok || !recapResult.content) {
+        throw new Error(recapResult.error || "AI returned an empty recap — please try again");
+      }
+      let recapData: Record<string, unknown>;
+      try { recapData = JSON.parse(extractJson(recapResult.content)); } catch (e) {
+        console.error("Failed to parse recap:", e);
+        throw new Error("AI returned an invalid recap format — please try again");
+      }
+
+      toast.info("Step 2/2: Extracting milestones...");
+      const milestonesResult = await runTask("extract_milestones_risks", {
+        lead_context: leadContext,
+        interactions_text: cleanedNotes,
+      });
+      let milestonesData: { milestones: Array<{ description: string; status?: string; date?: string }> } = { milestones: [] };
+      if (milestonesResult.ok && milestonesResult.content) {
+        try { milestonesData = JSON.parse(extractJson(milestonesResult.content)); } catch (e) { console.error("Failed to parse milestones:", e); }
+      }
+
+      await updateMeetingPack(pack.id, {
+        internal_recap_bullets: (recapData?.internal_recap_bullets as string[]) || [],
+        open_questions: (recapData?.open_questions as string[]) || [],
+        milestones: (milestonesData.milestones || []).map(m => ({
+          description: m.description,
+          status: (m.status || "pending") as "completed" | "pending",
+          date: m.date || null,
+        })),
+        follow_up_email_subject: (recapData?.customer_email as Record<string, string>)?.subject || null,
+        follow_up_email_body: (recapData?.customer_email as Record<string, string>)?.body || null,
+      });
+
+      toast.success("Recap regenerated!");
+      loadData();
+      onMilestonesAdded?.();
+    } catch (err) {
+      console.error("Failed to regenerate recap:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to regenerate recap");
+    } finally {
+      setGeneratingRecapId(null);
     }
   };
 
@@ -1076,7 +1145,40 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
 
               <CollapsibleContent>
                 <CardContent className="space-y-6 pt-0">
-                  {/* Internal Recap */}
+                  {/* Empty-pack regenerate prompt (AI failed during creation) */}
+                  {pack.internal_recap_bullets.length === 0
+                    && pack.open_questions.length === 0
+                    && pack.milestones.length === 0
+                    && !pack.follow_up_email_body
+                    && pack.raw_notes && pack.raw_notes.trim().length > 0 && (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
+                        <div className="space-y-1 flex-1">
+                          <p className="text-sm font-medium">AI recap was not generated</p>
+                          <p className="text-xs text-muted-foreground">
+                            The AI returned an empty response when this meeting was added. Your notes are saved — regenerate to produce the recap, milestones, and follow-up email.
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => regenerateRecapForPack(pack)}
+                        disabled={generatingRecapId === pack.id}
+                      >
+                        {generatingRecapId === pack.id ? (
+                          <><Loader2 className="h-3 w-3 mr-2 animate-spin" />Regenerating…</>
+                        ) : (
+                          <><Sparkles className="h-3 w-3 mr-2" />Regenerate Recap</>
+                        )}
+                      </Button>
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">View saved notes</summary>
+                        <pre className="mt-2 whitespace-pre-wrap font-sans text-muted-foreground bg-background/50 rounded p-2 max-h-48 overflow-auto">{pack.raw_notes}</pre>
+                      </details>
+                    </div>
+                  )}
+
                   {pack.internal_recap_bullets.length > 0 && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
