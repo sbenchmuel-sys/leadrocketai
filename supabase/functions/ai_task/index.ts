@@ -1636,8 +1636,8 @@ serve(async (req) => {
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
     // Gate meeting_link for cold outbound tasks. Semantics: keep the link by
-    // default; strip ONLY when custom instructions explicitly opt out
-    // ("no meeting", "skip the calendar", "without booking link", etc.).
+    // default; strip ONLY when custom instructions explicitly opt out of the
+    // CTA itself (not just constrain scheduling).
     // The previous opt-in regex silently dropped the link whenever instructions
     // mentioned anything else (e.g. "mention the conference"), which masked the
     // includeMeetingCTA campaign setting from the user's perspective. Templates
@@ -1646,9 +1646,16 @@ serve(async (req) => {
     const COLD_OUTBOUND_TASKS = new Set(["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup", "re_engagement_intro"]);
     if (COLD_OUTBOUND_TASKS.has(task) && enhancedPayload.meeting_link) {
       const instructions = String(enhancedPayload.custom_instructions || "").toLowerCase();
-      const explicitOptOut = /\bno\s+(?:meeting|calendar|booking)|\bdon'?t\s+(?:include|mention|add|push)\s+(?:a\s+)?(?:meeting|calendar|book)|\bskip\s+(?:the\s+)?(?:meeting|calendar|booking)|\bwithout\s+(?:a\s+)?(?:meeting|calendar|booking)|\bomit\s+(?:the\s+)?(?:meeting|calendar|booking)/i.test(instructions);
+      // True CTA opt-outs only. Require the meeting/calendar/booking word to be
+      // paired with a CTA noun (link/cta/button/invite/url/request) OR with an
+      // explicit "don't include/mention/add/push/attach" verb phrase. This
+      // avoids stripping the link on scheduling notes like "no meeting on Tuesday"
+      // (Codex P2 on PR #50).
+      const optOutNounRe = /\b(?:no|skip|omit|exclude|without|remove)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
+      const optOutVerbRe = /\b(?:don'?t|do\s+not)\s+(?:include|mention|add|push|attach|insert)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\b/i;
+      const explicitOptOut = optOutNounRe.test(instructions) || optOutVerbRe.test(instructions);
       if (explicitOptOut) {
-        console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — explicit opt-out in custom instructions`);
+        console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — explicit CTA opt-out in custom instructions`);
         delete enhancedPayload.meeting_link;
       }
     }

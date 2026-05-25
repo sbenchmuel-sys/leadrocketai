@@ -297,10 +297,15 @@ export function buildCampaignPayloadFields(input: ClientCampaignResolverInput): 
   // Step-scope the action_instructions blob to the current step so STEP 2/3/4
   // text doesn't leak into the STEP 1 prompt. Mirrors what
   // automation-executor does server-side via parseLegacyInstructions.
-  const scopedInstructions = extractStepScopedInstructions(
-    input.action_instructions ?? null,
-    preview.step_number,
-  );
+  //
+  // Only step-scope when the caller passed a non-null action_key. resolveStepPreview
+  // falls back to step 1 when action_key is null, but using that fallback here would
+  // silently truncate the blob to STEP 1 text for tasks that have no clean sequence
+  // position (Codex P1 on PR #50). Falls through to the raw blob in that case so
+  // the user's other-step instructions are preserved.
+  const scopedInstructions = input.action_key
+    ? extractStepScopedInstructions(input.action_instructions ?? null, preview.step_number)
+    : (input.action_instructions ?? null);
 
   // Build the same text block that formatInstructionForPrompt produces server-side
   const parts: string[] = [];

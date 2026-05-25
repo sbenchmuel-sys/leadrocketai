@@ -191,11 +191,19 @@ function inferActionKey(taskType: AITaskType, ctx: ResolvedContext): string | nu
   return TASK_TO_ACTION[taskType] || null;
 }
 
-/** Extract step number (1–4) from an action_key like "send_pre_2" or "nurture_3". */
-function inferStepFromActionKey(actionKey: string | null): number {
-  if (!actionKey) return 1;
+/**
+ * Extract step number (1–4) from an action_key like "send_pre_2" or "nurture_3".
+ * Returns null when no step can be inferred — callers should treat null as
+ * "skip step-scoping and use the whole campaign blob". Tasks that lack a
+ * clean sequence position (reply_to_thread, post_meeting_followup_email,
+ * inbound_followup_*, etc.) cause inferActionKey to return null. Silently
+ * defaulting to step 1 here would truncate the campaign blob to STEP 1
+ * text only and drop the user's STEP 2/3/4 instructions (Codex P1 on PR #50).
+ */
+function inferStepFromActionKey(actionKey: string | null): number | null {
+  if (!actionKey) return null;
   const m = actionKey.match(/(\d+)/);
-  if (!m) return 1;
+  if (!m) return null;
   return Math.max(1, Math.min(parseInt(m[1], 10), 4));
 }
 // ============================================
@@ -541,11 +549,16 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
 
    // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions.
-    // Step-scope the campaign blob so STEP 2/3/4 text doesn't bleed into a STEP 1 email.
+    // Step-scope the campaign blob so STEP 2/3/4 text doesn't bleed into a STEP 1 email,
+    // but only when the task maps cleanly to a sequence position. For tasks without one
+    // (reply_to_thread, post_meeting_followup_email, inbound_followup_*, etc.) we keep the
+    // whole blob — truncating to STEP 1 would silently drop the user's other-step text.
     const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
     const actionKeyForStep = inferActionKey(finalIntent, resolvedContext);
     const stepNumberForStep = inferStepFromActionKey(actionKeyForStep);
-    const scopedLeadInstructions = extractStepScopedInstructions(leadInstructions, stepNumberForStep);
+    const scopedLeadInstructions = stepNumberForStep === null
+      ? leadInstructions
+      : extractStepScopedInstructions(leadInstructions, stepNumberForStep);
     const mergedInstructions = mergeInstructions(instructions || null, scopedLeadInstructions);
     const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
@@ -745,11 +758,14 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
   });
 
   // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions.
-  // Step-scope the campaign blob (mirrors streamDraft path).
+  // Step-scope the campaign blob (mirrors streamDraft path); preserve whole blob when the
+  // task has no clean sequence position to avoid silently dropping STEP 2/3/4 text.
   const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
   const actionKeyForStep2 = inferActionKey(finalIntent, resolvedContext);
   const stepNumberForStep2 = inferStepFromActionKey(actionKeyForStep2);
-  const scopedLeadInstructions2 = extractStepScopedInstructions(leadInstructions2, stepNumberForStep2);
+  const scopedLeadInstructions2 = stepNumberForStep2 === null
+    ? leadInstructions2
+    : extractStepScopedInstructions(leadInstructions2, stepNumberForStep2);
   const mergedInstructions2 = mergeInstructions(instructions || null, scopedLeadInstructions2);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
 
