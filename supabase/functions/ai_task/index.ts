@@ -1675,16 +1675,29 @@ serve(async (req) => {
 
     console.log(`[ai_task] Flags — playbook: ${playbookId}, motion: ${motion}, first_touch: ${isFirstTouch}, has_inbound: ${hasInbound}`);
 
-    // Gate meeting_link: only pass to cold outbound tasks if custom instructions explicitly request it
+    // Gate meeting_link for cold outbound tasks. Semantics: keep the link by
+    // default; strip ONLY when custom instructions explicitly opt out of the
+    // CTA itself (not just constrain scheduling).
+    // The previous opt-in regex silently dropped the link whenever instructions
+    // mentioned anything else (e.g. "mention the conference"), which masked the
+    // includeMeetingCTA campaign setting from the user's perspective. Templates
+    // still control whether a meeting CTA is appropriate per step (e.g.
+    // pre_email_1_intro's GOAL says "get a reply, not pitch a meeting").
     const COLD_OUTBOUND_TASKS = new Set(["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup", "re_engagement_intro"]);
     if (COLD_OUTBOUND_TASKS.has(task) && enhancedPayload.meeting_link) {
       const instructions = String(enhancedPayload.custom_instructions || "").toLowerCase();
-      const mentionsMeeting = /meeting|calendar|book.*time|schedule.*call|meeting.*cta|include.*cta/i.test(instructions);
-      if (!mentionsMeeting) {
-        console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — not requested in custom instructions`);
+      // True CTA opt-outs only. Both regexes require the meeting/calendar/booking
+      // word to be paired with an unambiguous CTA noun (link/cta/button/invite/
+      // url/request) — either a removal verb in front ("skip the meeting link")
+      // or a "don't include" verb in front ("don't add the calendar CTA"). This
+      // avoids stripping the link on scheduling notes like "no meeting on Tuesday"
+      // or "don't mention meeting on Tuesday" (Codex P2 + P2-followup on PR #50).
+      const optOutNounRe = /\b(?:no|skip|omit|exclude|without|remove)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
+      const optOutVerbRe = /\b(?:don'?t|do\s+not)\s+(?:include|mention|add|push|attach|insert)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
+      const explicitOptOut = optOutNounRe.test(instructions) || optOutVerbRe.test(instructions);
+      if (explicitOptOut) {
+        console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — explicit CTA opt-out in custom instructions`);
         delete enhancedPayload.meeting_link;
-      } else {
-        console.log(`[ai_task] ✅ Meeting link kept for ${task} — requested in custom instructions`);
       }
     }
 
@@ -1692,7 +1705,8 @@ serve(async (req) => {
     const hasCustomInstructions = !!(enhancedPayload.custom_instructions && String(enhancedPayload.custom_instructions).trim().length > 0);
     const customInstructionsText = hasCustomInstructions ? String(enhancedPayload.custom_instructions).trim() : "";
 
-    // Default word limits per task (no instructions)
+    // Default word limits per task (no instructions). Only applied to tasks
+    // whose templates reference {{LENGTH_OVERRIDE}} — currently the cold-outbound set.
     const DEFAULT_LENGTHS: Record<string, string> = {
       pre_email_1_intro: "40–75 words. Target 55 words. If you write more than 75 words, start over.",
       pre_email_2_followup: "Under 50 words. Count them.",
@@ -1707,35 +1721,51 @@ serve(async (req) => {
       pre_email_4_breakup: "40–70 words. You have custom instructions to fulfill — prioritize them over default brevity.",
     };
 
-    if (COLD_OUTBOUND_TASKS.has(task)) {
-      // Inject the dynamic LENGTH_OVERRIDE
-      enhancedPayload.LENGTH_OVERRIDE = hasCustomInstructions
-        ? (INSTRUCTION_LENGTHS[task] || DEFAULT_LENGTHS[task] || "Under 75 words.")
-        : (DEFAULT_LENGTHS[task] || "Under 75 words.");
+    // Broader set: every task whose template should treat custom instructions
+    // as mandatory (not just word-count-cappable suggestions). Includes the
+    // cold-outbound set plus inbound replies, nurtures, post-meeting, and
+    // reply-to-thread. Tasks NOT in this set fall back to topLevelInstructionBlock
+    // + system prompt only.
+    const EMAIL_INSTRUCTION_TASKS = new Set([
+      ...COLD_OUTBOUND_TASKS,
+      "email_intro_fast", "email_intro_nurture",
+      "inbound_intro", "inbound_followup_1", "inbound_followup_2",
+      "nurture_email_single", "post_meeting_followup_email",
+      "reply_to_thread",
+    ]);
 
-      // Inject INSTRUCTIONS_PRIORITY_BLOCK — appears BEFORE length in the prompt
+    if (EMAIL_INSTRUCTION_TASKS.has(task)) {
       if (hasCustomInstructions) {
         enhancedPayload.INSTRUCTIONS_PRIORITY_BLOCK = `=== MANDATORY CUSTOM INSTRUCTIONS (READ BEFORE LENGTH) ===
 You MUST fulfill ALL of the following instructions. They take priority over word count targets.
 If an instruction says "offer starter kit" → the email MUST mention the starter kit.
 If an instruction says "include meeting CTA" → the email MUST include a meeting/calendar link.
 If an instruction says "mention X" → the email MUST mention X.
-Do NOT drop any instruction to save words. Instead, use the expanded word limit below.
+Do NOT drop any instruction to save words. Instead, expand the email slightly.
 
 Instructions:
 ${customInstructionsText}
 === END MANDATORY INSTRUCTIONS ===`;
-        
         enhancedPayload.INSTRUCTION_CTA_NOTE = "\nNote: If custom instructions specify a particular CTA or offer, use that INSTEAD of a generic question.";
         console.log(`[ai_task] ✅ Instructions injected as priority block for ${task}: "${customInstructionsText.slice(0, 80)}..."`);
       } else {
         enhancedPayload.INSTRUCTIONS_PRIORITY_BLOCK = "";
         enhancedPayload.INSTRUCTION_CTA_NOTE = "";
       }
+    }
 
-      // Remove old custom_instructions to avoid duplication — it's now in INSTRUCTIONS_PRIORITY_BLOCK
+    if (COLD_OUTBOUND_TASKS.has(task)) {
+      // Inject the dynamic LENGTH_OVERRIDE — only cold-outbound templates use this placeholder
+      enhancedPayload.LENGTH_OVERRIDE = hasCustomInstructions
+        ? (INSTRUCTION_LENGTHS[task] || DEFAULT_LENGTHS[task] || "Under 75 words.")
+        : (DEFAULT_LENGTHS[task] || "Under 75 words.");
+
+      // Remove custom_instructions to avoid duplication — cold-outbound templates
+      // no longer reference {{CUSTOM_INSTRUCTIONS}}; they use {{INSTRUCTIONS_PRIORITY_BLOCK}}.
       delete enhancedPayload.custom_instructions;
     }
+    // Non-cold email tasks keep custom_instructions in payload so existing
+    // {{CUSTOM_INSTRUCTIONS}} placeholders in those templates still render.
 
     const taskBody = replaceTemplateVars(taskPrompt, enhancedPayload);
 

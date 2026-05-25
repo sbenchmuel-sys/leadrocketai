@@ -79,6 +79,56 @@ export function serializeCampaignInstructions(settings: LegacyCampaignSettings):
 }
 
 /**
+ * Filter the raw action_instructions blob to only the rules and step
+ * relevant to the email being generated. Without this, every step in a
+ * campaign would receive instructions intended for all 4 steps and the
+ * model has to guess which to apply (it generally guesses wrong).
+ *
+ * Returns the same text format the rest of the pipeline expects:
+ * CAMPAIGN RULES + (only) STEP {stepNumber} INSTRUCTIONS.
+ * Mirrors parseLegacyInstructions in supabase/functions/_shared/campaignResolver.ts.
+ */
+export function extractStepScopedInstructions(
+  raw: string | null,
+  stepNumber: number,
+): string | null {
+  if (!raw) return null;
+
+  const lines = raw.split("\n");
+  const globalLines: string[] = [];
+  const stepLines: Record<number, string[]> = {};
+  let currentBlock: number | null = null;
+
+  for (const line of lines) {
+    const stepMatch = line.match(/^STEP\s+(\d+)\s+INSTRUCTIONS\s*:/i);
+    if (stepMatch) {
+      currentBlock = parseInt(stepMatch[1], 10);
+      stepLines[currentBlock] = [];
+    } else if (currentBlock !== null) {
+      stepLines[currentBlock].push(line);
+    } else {
+      globalLines.push(line);
+    }
+  }
+
+  // No step markers at all → treat as plain text, return as-is.
+  if (Object.keys(stepLines).length === 0) {
+    return raw.trim() || null;
+  }
+
+  const parts: string[] = [];
+  const globalText = globalLines.join("\n").trim();
+  if (globalText) parts.push(globalText);
+
+  const currentStepText = (stepLines[stepNumber] || []).join("\n").trim();
+  if (currentStepText) {
+    parts.push(`STEP ${stepNumber} INSTRUCTIONS:\n${currentStepText}`);
+  }
+
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+/**
  * Parse raw action_instructions text back into the legacy settings shape.
  * Used when loading existing campaign data for editing.
  */

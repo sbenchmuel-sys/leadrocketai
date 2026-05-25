@@ -10,6 +10,7 @@ import type { CanonicalChannel } from "@/lib/channels";
 import {
   OUTBOUND_STEPS,
   NURTURE_STEPS,
+  extractStepScopedInstructions,
   type StepType,
 } from "@/lib/campaignTypes";
 
@@ -293,6 +294,19 @@ export function buildCampaignPayloadFields(input: ClientCampaignResolverInput): 
 } {
   const preview = resolveStepPreview(input);
 
+  // Step-scope the action_instructions blob to the current step so STEP 2/3/4
+  // text doesn't leak into the STEP 1 prompt. Mirrors what
+  // automation-executor does server-side via parseLegacyInstructions.
+  //
+  // Only step-scope when the caller passed a non-null action_key. resolveStepPreview
+  // falls back to step 1 when action_key is null, but using that fallback here would
+  // silently truncate the blob to STEP 1 text for tasks that have no clean sequence
+  // position (Codex P1 on PR #50). Falls through to the raw blob in that case so
+  // the user's other-step instructions are preserved.
+  const scopedInstructions = input.action_key
+    ? extractStepScopedInstructions(input.action_instructions ?? null, preview.step_number)
+    : (input.action_instructions ?? null);
+
   // Build the same text block that formatInstructionForPrompt produces server-side
   const parts: string[] = [];
   parts.push(`=== CAMPAIGN INSTRUCTION (STRUCTURED) ===`);
@@ -315,9 +329,9 @@ export function buildCampaignPayloadFields(input: ClientCampaignResolverInput): 
       parts.push(`- ${hint}`);
     }
   }
-  if (input.action_instructions?.trim()) {
+  if (scopedInstructions?.trim()) {
     parts.push(`\nCAMPAIGN CUSTOM INSTRUCTIONS (user-provided, MANDATORY):`);
-    parts.push(input.action_instructions.trim());
+    parts.push(scopedInstructions.trim());
   }
   parts.push(`=== END CAMPAIGN INSTRUCTION ===`);
 
@@ -329,7 +343,7 @@ export function buildCampaignPayloadFields(input: ClientCampaignResolverInput): 
       step_number: preview.step_number,
       max_word_count: preview.max_word_count,
       cta_type: preview.cta_type,
-      has_custom_instructions: !!(input.action_instructions?.trim()),
+      has_custom_instructions: !!(scopedInstructions?.trim()),
     },
   };
 }
