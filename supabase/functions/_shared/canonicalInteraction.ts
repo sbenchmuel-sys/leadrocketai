@@ -227,6 +227,29 @@ export async function createCanonicalInteraction(
         return { interaction_id: null, timeline_projected: false, duplicate: true, error: "duplicate_unresolved" };
       }
       console.log(`[canonicalInteraction] Duplicate skipped (dedupe_key=${dedupeKey}) → existing ${interactionId}`);
+
+      // BACKFILL: If we have fresh body_text from the provider but the existing
+      // row had its body purged (NULL/empty), refill it. This lets a Gmail/Outlook
+      // re-sync restore history that was wiped by the 72h cleanup job.
+      if (input.body_text && input.body_text.length > 0) {
+        const { data: existing } = await supabase
+          .from("interactions")
+          .select("body_text")
+          .eq("id", interactionId)
+          .maybeSingle();
+        if (existing && (existing.body_text === null || existing.body_text === "")) {
+          const { error: refillErr } = await supabase
+            .from("interactions")
+            .update({ body_text: input.body_text })
+            .eq("id", interactionId)
+            .or("body_text.is.null,body_text.eq.");
+          if (refillErr) {
+            console.warn(`[canonicalInteraction] Body refill failed for ${interactionId}: ${refillErr.message}`);
+          } else {
+            console.log(`[canonicalInteraction] Body refilled for ${interactionId}`);
+          }
+        }
+      }
     } else {
       // Non-duplicate error — genuine failure
       return { interaction_id: null, timeline_projected: false, duplicate: false, error: insertErr.message };
