@@ -1646,13 +1646,14 @@ serve(async (req) => {
     const COLD_OUTBOUND_TASKS = new Set(["pre_email_1_intro", "pre_email_2_followup", "pre_email_3_followup", "pre_email_4_breakup", "re_engagement_intro"]);
     if (COLD_OUTBOUND_TASKS.has(task) && enhancedPayload.meeting_link) {
       const instructions = String(enhancedPayload.custom_instructions || "").toLowerCase();
-      // True CTA opt-outs only. Require the meeting/calendar/booking word to be
-      // paired with a CTA noun (link/cta/button/invite/url/request) OR with an
-      // explicit "don't include/mention/add/push/attach" verb phrase. This
+      // True CTA opt-outs only. Both regexes require the meeting/calendar/booking
+      // word to be paired with an unambiguous CTA noun (link/cta/button/invite/
+      // url/request) — either a removal verb in front ("skip the meeting link")
+      // or a "don't include" verb in front ("don't add the calendar CTA"). This
       // avoids stripping the link on scheduling notes like "no meeting on Tuesday"
-      // (Codex P2 on PR #50).
+      // or "don't mention meeting on Tuesday" (Codex P2 + P2-followup on PR #50).
       const optOutNounRe = /\b(?:no|skip|omit|exclude|without|remove)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
-      const optOutVerbRe = /\b(?:don'?t|do\s+not)\s+(?:include|mention|add|push|attach|insert)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\b/i;
+      const optOutVerbRe = /\b(?:don'?t|do\s+not)\s+(?:include|mention|add|push|attach|insert)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
       const explicitOptOut = optOutNounRe.test(instructions) || optOutVerbRe.test(instructions);
       if (explicitOptOut) {
         console.log(`[ai_task] 🚫 Stripped meeting_link for ${task} — explicit CTA opt-out in custom instructions`);
