@@ -6,6 +6,7 @@ import type { AITaskType } from "@/hooks/useAITask";
 import type { Motion } from "@/lib/dashboardUtils";
 import { contextResolver, type ResolvedContext } from "@/lib/contextResolver";
 import { buildCampaignPayloadFields } from "@/lib/campaignResolver";
+import { extractStepScopedInstructions } from "@/lib/campaignTypes";
 import { playbookResolver, type PlaybookRecommendation } from "@/lib/playbookResolver";
 import { scoreAndSelectModel, type AIModel } from "@/lib/complexityScorer";
 import { formatWorkspaceContext } from "@/lib/workspaceProfileQueries";
@@ -188,6 +189,14 @@ function inferActionKey(taskType: AITaskType, ctx: ResolvedContext): string | nu
     inbound_intro: "send_pre_1",
   };
   return TASK_TO_ACTION[taskType] || null;
+}
+
+/** Extract step number (1–4) from an action_key like "send_pre_2" or "nurture_3". */
+function inferStepFromActionKey(actionKey: string | null): number {
+  if (!actionKey) return 1;
+  const m = actionKey.match(/(\d+)/);
+  if (!m) return 1;
+  return Math.max(1, Math.min(parseInt(m[1], 10), 4));
 }
 // ============================================
 
@@ -531,9 +540,13 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
   // Step 4: Complexity scoring + model selection
   const complexity = scoreAndSelectModel(resolvedContext, finalIntent, channel, instructions);
 
-   // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+   // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions.
+    // Step-scope the campaign blob so STEP 2/3/4 text doesn't bleed into a STEP 1 email.
     const leadInstructions = (resolvedContext.lead as any).action_instructions as string | null;
-    const mergedInstructions = mergeInstructions(instructions || null, leadInstructions);
+    const actionKeyForStep = inferActionKey(finalIntent, resolvedContext);
+    const stepNumberForStep = inferStepFromActionKey(actionKeyForStep);
+    const scopedLeadInstructions = extractStepScopedInstructions(leadInstructions, stepNumberForStep);
+    const mergedInstructions = mergeInstructions(instructions || null, scopedLeadInstructions);
     const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions);
 
     // PR 2.4 — per-email reply targeting. When the user picked a specific
@@ -731,9 +744,13 @@ export async function generateDraft(input: GenerateDraftInput): Promise<DraftPip
     finalIntent: override_intent ? `${finalIntent} (override)` : finalIntent,
   });
 
-  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions
+  // Step 5: Build raw payload — merge lead's saved action_instructions with user-provided instructions.
+  // Step-scope the campaign blob (mirrors streamDraft path).
   const leadInstructions2 = (resolvedContext.lead as any).action_instructions as string | null;
-  const mergedInstructions2 = mergeInstructions(instructions || null, leadInstructions2);
+  const actionKeyForStep2 = inferActionKey(finalIntent, resolvedContext);
+  const stepNumberForStep2 = inferStepFromActionKey(actionKeyForStep2);
+  const scopedLeadInstructions2 = extractStepScopedInstructions(leadInstructions2, stepNumberForStep2);
+  const mergedInstructions2 = mergeInstructions(instructions || null, scopedLeadInstructions2);
   const aiPayload = buildAIPayload(resolvedContext, finalIntent, mergedInstructions2);
 
   // PR 2.4 — per-email reply targeting (mirror of streamDraft path).

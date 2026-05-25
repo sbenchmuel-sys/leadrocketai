@@ -97,6 +97,8 @@ You are writing an intro email reply for a high-urgency regulated B2B lead.
 GOAL
 Respond clearly, create confidence, and book a meeting soon.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -138,6 +140,8 @@ You are writing a value-led intro email reply for a regulated B2B lead.
 
 GOAL
 Be helpful, provide 1–2 value points, share 1 resource, invite a call without pressure.
+
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
 
 INPUTS
 Lead Context:
@@ -427,6 +431,8 @@ You are writing the first response email to an inbound lead who has expressed in
 GOAL
 Acknowledge their message, provide one relevant value point, and propose a clear meeting next step. Convert interest into a conversation — NOT a cold pitch and NOT cold discovery.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -472,6 +478,8 @@ You are writing Follow-up 1 to a WARM inbound lead. They contacted us first (web
 GOAL
 Stay warm. Reference your prior reply briefly, gently re-offer the meeting. NOT a cold discovery question. NOT a new pitch. NOT pressure.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 INPUTS
 Lead Context:
 {{LEAD_CONTEXT}}
@@ -515,6 +523,8 @@ You are writing Follow-up 2 (final warm nudge) to a WARM inbound lead who hasn't
 
 GOAL
 Close the loop politely while keeping the door open. Make it easy for them to say yes or simply confirm timing has shifted.
+
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
 
 INPUTS
 Lead Context:
@@ -845,6 +855,8 @@ You are generating a re-engagement email for a lead you have an EXISTING relatio
 GOAL
 Re-open the conversation with a fresh, relevant angle based on your shared history, milestones, and AI-recommended next steps. Do NOT repeat previous outreach angles.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 CRITICAL CONTEXT:
 This lead has gone quiet after previous engagement. Your last email said:
 {{LAST_OUTBOUND_BODY}}
@@ -893,9 +905,6 @@ Knowledge Context:
 
 Meeting Link:
 {{MEETING_LINK}}
-
-Custom Instructions:
-{{CUSTOM_INSTRUCTIONS}}
 
 CONSTRAINTS
 - 90–140 words
@@ -1028,6 +1037,8 @@ Generate the next email in a nurture sequence.
 GOAL
 Create one value-driven follow-up email that builds on previous emails in the sequence.
 
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
+
 KB-GROUNDING CHECK:
 - The "value point" MUST come from Knowledge Context
 - If KB has no relevant insight for this lead/theme → share a neutral observation from Lead Context or ask a question
@@ -1061,6 +1072,9 @@ Previous Emails in Sequence:
 Knowledge Context:
 {{KNOWLEDGE_CONTEXT}}
 
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
 OUTPUT
 Return ONLY the email body text. No JSON. No markdown. No subject line.`,
 
@@ -1070,6 +1084,8 @@ Generate a personalized follow-up email based on the meeting and FULL email thre
 GOAL
 If this is the FIRST follow-up after a meeting: Thank them, summarize key points, propose next steps.
 If a follow-up was ALREADY sent (check PREVIOUS_EMAILS and LAST_OUTBOUND): Write a brief check-in referencing what was previously shared.
+
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
 
 CRITICAL TEMPORAL AWARENESS:
 - The current date is provided in the system prompt. Use it to judge recency.
@@ -1130,6 +1146,9 @@ Knowledge Context (relevant to this lead):
 
 Meeting Link:
 {{MEETING_LINK}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
 
 OUTPUT
 Return ONLY the email body text.`,
@@ -1202,6 +1221,8 @@ You are generating a reply to an ongoing email thread in a regulated B2B sales c
 
 GOAL
 Write a relevant, professional reply that directly addresses the latest inbound email while considering the full thread context.
+
+{{INSTRUCTIONS_PRIORITY_BLOCK}}
 
 CONSTRAINTS
 - 80–180 words
