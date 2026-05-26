@@ -1,6 +1,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ConversationList } from "./ConversationList";
+import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
+import { MailLastSyncedChip } from "@/components/mail/MailLastSyncedChip";
+import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ConversationThread } from "./ConversationThread";
 import { ReplyComposer } from "./ReplyComposer";
 import { LeadContextPanel, fetchLeadSnapshot, type LeadSnapshot } from "./LeadContextPanel";
@@ -88,6 +93,34 @@ export function InboxView() {
   const [leadIntelligence, setLeadIntelligence] = useState<LeadIntelligence | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("next");
   const [threadReloadKey, setThreadReloadKey] = useState(0);
+  const [convoListReloadKey, setConvoListReloadKey] = useState(0);
+  const [isRefreshingList, setIsRefreshingList] = useState(false);
+
+  const handleListRefresh = useCallback(() => {
+    setIsRefreshingList(true);
+    setConvoListReloadKey(k => k + 1);
+    // ConversationList's loader will flip isLoading false on completion,
+    // but we don't have direct visibility — release the spinner shortly.
+    setTimeout(() => setIsRefreshingList(false), 600);
+  }, []);
+
+  useVisibilityRefresh(handleListRefresh);
+
+  // Live-refresh the conversation list when ANY new timeline item lands
+  // in the workspace. This catches inbound emails, sent outbound, and
+  // system_note rows without needing the user to reload.
+  const { workspaceId } = useWorkspace();
+  useRealtimeSubscription(
+    {
+      table: "lead_timeline_items",
+      filter: workspaceId ? `workspace_id=eq.${workspaceId}` : undefined,
+      enabled: !!workspaceId,
+      event: "INSERT",
+    },
+    () => {
+      setConvoListReloadKey(k => k + 1);
+    }
+  );
 
   // Filter state — re-render on change
   const [inboxState, setInboxState] = useState<InboxState>(getInboxState);
@@ -155,6 +188,15 @@ export function InboxView() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)]">
+      <div className="shrink-0 flex items-center justify-between gap-3 mb-2 flex-wrap">
+        <MailReconnectChip />
+        <MailLastSyncedChip
+          prefix="Inbox · "
+          onRefresh={handleListRefresh}
+          isRefreshing={isRefreshingList}
+          className="ml-auto"
+        />
+      </div>
       <Tabs defaultValue="active" className="flex flex-col h-full">
         <TabsList className="w-fit shrink-0">
           <TabsTrigger value="active">Active</TabsTrigger>
@@ -274,6 +316,7 @@ export function InboxView() {
                     selectedId={selectedConvo?.id ?? null}
                     onSelect={handleConvoSelect}
                     inboxState={inboxState}
+                    reloadKey={convoListReloadKey}
                   />
                 </div>
               </div>

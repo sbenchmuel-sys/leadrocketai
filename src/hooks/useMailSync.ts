@@ -57,6 +57,26 @@ function isReconnectError(error: string): boolean {
   return reconnectPhrases.some(phrase => lowerError.includes(phrase));
 }
 
+// Persist needs_reconnect state to mail_accounts so the global banner +
+// inline chips can react without each surface re-classifying errors.
+// Best-effort: a failure here must not block the sync result.
+async function persistReconnectFlag(accountId: string | undefined, value: boolean, errorReason?: string | null) {
+  if (!accountId) return;
+  try {
+    const payload: Record<string, unknown> = { needs_reconnect: value };
+    if (value) {
+      payload.status = "error";
+      if (errorReason) payload.error_reason = errorReason;
+    } else {
+      payload.status = "connected";
+      payload.error_reason = null;
+    }
+    await supabase.from("mail_accounts").update(payload).eq("id", accountId);
+  } catch (err) {
+    console.warn("[useMailSync] Failed to persist needs_reconnect flag:", err);
+  }
+}
+
 interface MilestoneItem {
   description: string;
   status: "completed" | "pending";
@@ -195,6 +215,7 @@ export function useMailSync() {
 
         setError(errorMsg);
         if (needsReconnect) {
+          await persistReconnectFlag(activeAccount?.id, true, errorMsg);
           toast.error(`${providerLabel} needs reconnection`, {
             description: `Go to Settings to reconnect your ${providerLabel} account`,
           });
@@ -211,6 +232,7 @@ export function useMailSync() {
         const needsReconnect = isReconnectError(errorMsg) || !!data.needsReconnect;
         setError(errorMsg);
         if (needsReconnect) {
+          await persistReconnectFlag(activeAccount?.id, true, errorMsg);
           toast.error(`${providerLabel} needs reconnection`, {
             description: `Go to Settings to reconnect your ${providerLabel} account`,
           });
@@ -219,6 +241,9 @@ export function useMailSync() {
         }
         return { ok: false, error: errorMsg, needsReconnect };
       }
+
+      // Sync succeeded — clear any stale needs_reconnect flag
+      await persistReconnectFlag(activeAccount?.id, false);
 
       if (data.synced > 0) {
         toast.success(`Synced ${data.synced} email${data.synced > 1 ? "s" : ""} from ${providerLabel}`);
@@ -347,6 +372,7 @@ export function useMailSync() {
 
         setError(errorMsg);
         if (needsReconnect) {
+          await persistReconnectFlag(activeAccount?.id, true, errorMsg);
           toast.error(`${providerLabel} needs reconnection`, {
             description: `Go to Settings to reconnect your ${providerLabel} account`,
           });
@@ -363,6 +389,7 @@ export function useMailSync() {
         const needsReconnect = isReconnectError(errorMsg) || !!data.needsReconnect;
         setError(errorMsg);
         if (needsReconnect) {
+          await persistReconnectFlag(activeAccount?.id, true, errorMsg);
           toast.error(`${providerLabel} needs reconnection`, {
             description: `Go to Settings to reconnect your ${providerLabel} account`,
           });
@@ -371,6 +398,9 @@ export function useMailSync() {
         }
         return { ok: false, error: errorMsg, needsReconnect };
       }
+
+      // Send succeeded — clear any stale needs_reconnect flag
+      await persistReconnectFlag(activeAccount?.id, false);
 
       toast.success("Email sent successfully!");
 

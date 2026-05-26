@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Plus, LayoutGrid, Table2 } from "lucide-react";
 import { useAutomationPoller } from "@/hooks/useAutomationPoller";
+import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
 import { isDemoMode } from "@/lib/demoMode";
 import { flags } from "@/lib/featureFlags";
 import {
@@ -98,6 +99,8 @@ export default function Dashboard() {
       requestAnimationFrame(() => window.scrollTo(0, scrollY));
     }
   }, [loadData, location.key]);
+
+  useVisibilityRefresh(loadData);
 
   useEffect(() => {
     return () => { setDashboardScroll(window.scrollY); };

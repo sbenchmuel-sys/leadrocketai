@@ -232,6 +232,8 @@ serve(async (req) => {
             external_user_id: stateData.user_id,
             status: "connected",
             is_default: true,
+            needs_reconnect: false,
+            error_reason: null,
           }, { onConflict: "workspace_id,email_address", ignoreDuplicates: false });
 
         if (maError) {

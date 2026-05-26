@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { Loader2, Brain, AlertTriangle, Target, CheckCircle, Shield, Zap, ExternalLink, TrendingUp, RefreshCw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -86,6 +87,8 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
   const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [enrichment, setEnrichment] = useState<EnrichmentRow | null | undefined>(undefined);
   const [leadSignals, setLeadSignals] = useState<LeadSignal[]>([]);
+  const [latestTimelineAt, setLatestTimelineAt] = useState<string | null>(null);
+  const [currentEventCount, setCurrentEventCount] = useState<number>(0);
 
   const isCompact = mode === "compact";
   const maxItems = isCompact ? 3 : 10;
@@ -168,15 +171,84 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
     }
   }, [lead.id]);
 
+  // ── Load latest timeline activity (for staleness comparison) ──
+  const loadTimelineHead = useCallback(async () => {
+    try {
+      const [{ count }, { data: latest }] = await Promise.all([
+        supabase
+          .from("lead_timeline_items")
+          .select("id", { count: "exact", head: true })
+          .eq("lead_id", lead.id),
+        supabase
+          .from("lead_timeline_items")
+          .select("occurred_at")
+          .eq("lead_id", lead.id)
+          .order("occurred_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      setCurrentEventCount(count ?? 0);
+      setLatestTimelineAt(latest?.occurred_at ?? null);
+    } catch {
+      // Non-fatal — staleness indicator just won't render.
+    }
+  }, [lead.id]);
+
   useEffect(() => {
     loadIntelligence();
     loadEnrichment();
     loadLeadSignals();
-  }, [loadIntelligence, loadEnrichment, loadLeadSignals]);
+    loadTimelineHead();
+  }, [loadIntelligence, loadEnrichment, loadLeadSignals, loadTimelineHead]);
+
+  // Live-refresh when the intelligence row is recomputed (manual or auto)
+  // OR when new timeline activity arrives — the latter feeds the
+  // stale-by-evidence indicator without requiring a poll.
+  useRealtimeSubscription(
+    {
+      table: "lead_intelligence",
+      filter: `lead_id=eq.${lead.id}`,
+      enabled: !!lead.id,
+    },
+    () => {
+      loadIntelligence();
+    }
+  );
+  useRealtimeSubscription(
+    {
+      table: "lead_timeline_items",
+      filter: `lead_id=eq.${lead.id}`,
+      enabled: !!lead.id,
+      event: "INSERT",
+    },
+    () => {
+      loadTimelineHead();
+    }
+  );
 
   const signals: EnrichmentSignal[] = enrichment?.signals ?? [];
   const enrichmentExpired = enrichment === null || (enrichment && new Date(enrichment.expires_at) < new Date());
   const showEnrichButton = enrichment === null || enrichmentExpired;
+
+  // ── Stale-by-evidence: signals that the cached intelligence no longer reflects reality.
+  // Three independent triggers — any one is enough to warn the user.
+  const staleReason: string | null = (() => {
+    if (!hasCanonical || !lastComputedAt) return null;
+    const computedMs = new Date(lastComputedAt).getTime();
+    const ageMs = Date.now() - computedMs;
+
+    if (latestTimelineAt && new Date(latestTimelineAt).getTime() > computedMs) {
+      return "New activity since last analysis";
+    }
+    const cachedCount = (sourceCounts as { timeline_items?: number } | null)?.timeline_items ?? 0;
+    if (currentEventCount > cachedCount) {
+      return `${currentEventCount - cachedCount} new event${currentEventCount - cachedCount === 1 ? "" : "s"} since last analysis`;
+    }
+    if (ageMs > 24 * 60 * 60 * 1000) {
+      return "Analysis is over 24 hours old";
+    }
+    return null;
+  })();
 
   // ── Enrich handler ──
   const handleEnrich = async (force = false) => {
@@ -265,6 +337,15 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
               Intelligence
             </CardTitle>
             <div className="flex items-center gap-2">
+              {staleReason && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-300"
+                  title={staleReason}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+                  {staleReason}
+                </span>
+              )}
               {lastComputedAt && (
                 <span className="text-[10px] text-muted-foreground">
                   {formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}

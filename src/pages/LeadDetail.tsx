@@ -10,6 +10,7 @@ import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import MeetingsTab from "@/components/lead/MeetingsTab";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
@@ -72,6 +73,12 @@ export default function LeadDetail() {
   useEffect(() => {
     loadLead();
   }, [id]);
+
+  useVisibilityRefresh(() => {
+    if (!id) return;
+    loadLead();
+    setRefreshKey(prev => prev + 1);
+  });
 
   if (isLoading) {
     return (

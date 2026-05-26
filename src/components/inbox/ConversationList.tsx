@@ -11,9 +11,11 @@ type Props = {
   selectedId: string | null;
   onSelect: (convo: ConversationListItem) => void;
   inboxState: InboxState;
+  /** Bump to force a re-fetch (e.g. from a refresh button or visibility hook). */
+  reloadKey?: number;
 };
 
-export function ConversationList({ filter, selectedId, onSelect, inboxState }: Props) {
+export function ConversationList({ filter, selectedId, onSelect, inboxState, reloadKey = 0 }: Props) {
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -23,6 +25,7 @@ export function ConversationList({ filter, selectedId, onSelect, inboxState }: P
     channelFilter: inboxState.channelFilter,
     quickChip: inboxState.quickChip,
     sortBy: inboxState.sortBy,
+    reloadKey,
   });
 
   useEffect(() => {
