@@ -26,9 +26,20 @@
 // preview need in the interim.
 //
 // Auth: requires X-Internal-Secret. Idempotent — processes rows
-// where ai_summary IS NULL OR was written by a pre-v2 prompt.
+// where ai_summary IS NULL OR was written by a pre-v2 prompt OR
+// is a prior subject-fallback synth (upgradeable). Candidate
+// filtering happens in SQL so LIMIT counts only unprocessed rows
+// (a prior version of this function filtered in JS *after* the
+// LIMIT, which stranded older rows once the most-recent 200 were
+// tagged v2).
+//
+// Optional query param ?workspace_id=<uuid> scopes the batch to
+// one workspace at a time — useful for pilot operators draining
+// workspaces in a known order.
+//
 // Once every row in the 60-day window carries the current
-// `ai_summary_version`, the function becomes a no-op.
+// `ai_summary_version` and is not flagged subject_fallback, the
+// function becomes a no-op.
 // ============================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -63,6 +74,40 @@ interface LeadRow {
   name: string | null;
   company: string | null;
   owner_user_id: string | null;
+  job_title: string | null;
+}
+
+/** Map an intent_router classification code (see _shared/prompts.ts) to a
+ *  short human-readable phrase. Used by the subject-synth fallback so the
+ *  Reply/Follow-up drafting AI has at least a coarse signal about what the
+ *  inbound was for, even when the body has been purged.
+ *
+ *  Returns null for intents where surfacing the label would mislead the
+ *  drafter (e.g., "no_signal" or auto-acks the system already handles). */
+function humanizeIntent(intent: string | null | undefined): string | null {
+  if (!intent || typeof intent !== "string") return null;
+  const map: Record<string, string | null> = {
+    book_meeting: "scheduling a meeting",
+    pricing: "asking about pricing",
+    technical_sdk: "technical question about the SDK or integration",
+    security_privacy: "security or privacy question",
+    legal_procurement: "legal or procurement step",
+    partnership: "partnership opportunity",
+    support: "support request",
+    not_sure: "general inquiry",
+    // Skip-list intents — usually we don't synth at all for these, but if
+    // we do, surface the label.
+    calendar_accept: "meeting acceptance",
+    ooo_reply: "out-of-office auto-reply",
+    bounce: "bounce notification",
+    zoom_recap: "Zoom meeting recap",
+    meeting_confirmation: "meeting confirmation",
+    unsubscribe: "unsubscribe request",
+    no_signal: null,
+    unknown: null,
+  };
+  if (intent in map) return map[intent];
+  return intent.replace(/_/g, " ");
 }
 
 interface Counts {
@@ -204,15 +249,40 @@ async function fetchGmailBody(accessToken: string, messageId: string): Promise<s
 }
 
 function buildSubjectSynth(row: TimelineRow, lead: LeadRow | undefined): string {
+  // Multi-line synth: gives the Reply/Follow-up drafting AI enough signal
+  // to produce a sensible draft even when the body is permanently gone.
+  // SummaryBody renders \n line-breaks; cleanBodyText (Queue card) joins
+  // them with spaces, so the same string works in both surfaces.
   const subject = (row.subject ?? "").trim() || "(no subject)";
   const fromEmail = getFromEmail(row.metadata_json);
-  const senderHint = lead?.name?.trim() ||
-    (fromEmail ? fromEmail.split("@")[0] : "") ||
-    "the contact";
-  const companyHint = lead?.company?.trim() ||
-    (fromEmail.includes("@") ? fromEmail.split("@")[1] : "");
-  const companyPart = companyHint ? ` (${companyHint})` : "";
-  return `Reply from ${senderHint}${companyPart} — subject: ${subject}`;
+  const fromName = typeof row.metadata_json?.from_name === "string"
+    ? (row.metadata_json.from_name as string).trim()
+    : "";
+  const senderName = fromName
+    || lead?.name?.trim()
+    || (fromEmail ? fromEmail.split("@")[0] : "")
+    || "the contact";
+  const title = lead?.job_title?.trim() ?? "";
+  const company = lead?.company?.trim()
+    || (fromEmail.includes("@") ? fromEmail.split("@")[1] : "")
+    || "";
+
+  // "Manu Rajendra (VP Sales, AwesomLiving)" / "Manu Rajendra (AwesomLiving)" / "Manu Rajendra"
+  const titleAndCompany = [title, company].filter(Boolean).join(", ");
+  const senderClause = titleAndCompany
+    ? `${senderName} (${titleAndCompany})`
+    : senderName;
+
+  const intentLabel = humanizeIntent(row.intent);
+
+  const lines: string[] = [];
+  lines.push(`Inbound from ${senderClause}.`);
+  lines.push(`Subject: "${subject}".`);
+  if (intentLabel) {
+    lines.push(`Classified intent: ${intentLabel}.`);
+  }
+  lines.push("(Original message body no longer retained — summary derived from metadata.)");
+  return lines.join("\n");
 }
 
 // deno-lint-ignore no-explicit-any
@@ -272,6 +342,12 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Optional ?workspace_id=<uuid> filter — lets the operator drain one
+  // workspace at a time and watch counts per workspace. Omit to backfill
+  // all workspaces (default behaviour).
+  const url = new URL(req.url);
+  const workspaceId = url.searchParams.get("workspace_id");
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const admin = createClient(supabaseUrl, serviceKey);
@@ -289,14 +365,46 @@ Deno.serve(async (req) => {
   try {
     const cutoff = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString();
 
-    // Fetch candidates: inbound rows missing ai_summary.
-    const { data: rawRows, error: fetchErr } = await admin
+    // Candidate filter — pushed into SQL so LIMIT counts only rows that
+    // actually need work. Prior version filtered in JS after `LIMIT
+    // BATCH_SIZE * 4`, which meant once the most-recent 200 rows were
+    // tagged v2 the loop returned `fetched: 0` even though thousands of
+    // older rows still needed processing.
+    //
+    // A row is a candidate iff ANY of:
+    //   - ai_summary is null/missing                  (never summarized)
+    //   - ai_summary_version is null/missing          (pre-version-tag write)
+    //   - ai_summary_version != current v2 constant  (pre-v2 prompt)
+    //   - ai_summary_source = 'subject_fallback'     (weak synth — upgrade)
+    //
+    // NOTE on the version null clause: SQL `NULL != 'x'` is NULL (treated
+    // as false in WHERE), so .neq alone misses rows tagged with v1 prose
+    // before the version key existed. The explicit .is.null catches them.
+    //
+    // PostgREST .or() takes comma-separated filter strings; the version
+    // value contains a `/` which is URL-safe in query strings but the
+    // SDK percent-encodes the whole filter param, so we pass it raw.
+    let query = admin
       .from("lead_timeline_items")
       .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, metadata_json")
       .eq("event_type", "email_inbound")
       .gte("occurred_at", cutoff)
+      .or(
+        [
+          "metadata_json->>ai_summary.is.null",
+          "metadata_json->>ai_summary_version.is.null",
+          `metadata_json->>ai_summary_version.neq.${AI_SUMMARY_VERSION}`,
+          "metadata_json->>ai_summary_source.eq.subject_fallback",
+        ].join(","),
+      )
       .order("occurred_at", { ascending: false })
-      .limit(BATCH_SIZE * 4); // overfetch; then filter ai_summary IS NULL in app
+      .limit(BATCH_SIZE);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data: rawRows, error: fetchErr } = await query;
 
     if (fetchErr) {
       return new Response(
@@ -305,17 +413,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Pick up rows that EITHER (a) have no ai_summary at all, OR (b) have
-    // one but it was written by a pre-v2 prompt (so the pilot UI shows
-    // the same length-scaled bullet shape for old and new rows).
-    const candidates = ((rawRows ?? []) as TimelineRow[]).filter((r) => {
-      const meta = (r.metadata_json ?? {}) as Record<string, unknown>;
-      const summary = meta.ai_summary;
-      const version = meta.ai_summary_version;
-      const hasSummary = typeof summary === "string" && summary.trim().length > 0;
-      if (!hasSummary) return true;
-      return version !== AI_SUMMARY_VERSION;
-    }).slice(0, BATCH_SIZE);
+    const candidates = (rawRows ?? []) as TimelineRow[];
 
     counts.fetched = candidates.length;
 
@@ -332,7 +430,7 @@ Deno.serve(async (req) => {
     if (leadIds.length > 0) {
       const { data: leads } = await admin
         .from("leads")
-        .select("id, name, company, owner_user_id")
+        .select("id, name, company, owner_user_id, job_title")
         .in("id", leadIds);
       for (const l of (leads ?? []) as LeadRow[]) leadById.set(l.id, l);
     }
