@@ -11,6 +11,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import CallTimelineCard from "@/components/call/CallTimelineCard";
+import { MailLastSyncedChip } from "@/components/mail/MailLastSyncedChip";
+import { useMailSync } from "@/hooks/useMailSync";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { SummaryBody } from "@/components/SummaryBody";
 
@@ -1038,8 +1041,15 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   const [replyContext, setReplyContext] = useState<"reply" | "follow_up">("reply");
   const [replyTargetLead, setReplyTargetLead] = useState<TimelineMinimalLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const { syncLead, isSyncing, isConnected } = useMailSync();
 
   const groupMode = !!groupId;
+
+  const handleQuickSync = async () => {
+    if (!currentLead?.email) return;
+    await syncLead(currentLead.id, currentLead.email);
+    loadTimeline();
+  };
 
   const loadTimeline = () => {
     setIsLoading(true);
@@ -1055,6 +1065,20 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   useEffect(() => {
     loadTimeline();
   }, [leadId, groupId, showHidden]);
+
+  // Live-refresh the timeline when a new event lands for this lead.
+  // Group mode also receives updates for the current lead only — group
+  // members are loaded separately and a full re-fetch would thrash.
+  useRealtimeSubscription(
+    {
+      table: "lead_timeline_items",
+      filter: `lead_id=eq.${leadId}`,
+      enabled: !!leadId,
+    },
+    () => {
+      loadTimeline();
+    }
+  );
 
   // PR 2.4 — load all group members up front so the Reply/Follow-up dialog
   // can resolve the right lead per row (and the unsubscribed gate can use
@@ -1295,6 +1319,14 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
         </div>
 
         <div className="flex items-center gap-2">
+          {isConnected && currentLead?.email && !groupMode && (
+            <MailLastSyncedChip
+              prefix="Timeline · "
+              onRefresh={handleQuickSync}
+              isRefreshing={isSyncing}
+            />
+          )}
+
           <button
             onClick={() => setShowHidden(!showHidden)}
             className={cn(

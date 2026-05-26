@@ -38,6 +38,7 @@ const ALLOWED_TARGETS = new Set([
   "transcript-poller",
   "classify-inbound",
   "classify-outbound",
+  "intelligence-queue-drain",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)

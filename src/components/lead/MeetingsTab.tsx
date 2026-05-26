@@ -72,6 +72,9 @@ import {
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { CalendarLastSyncedChip } from "@/components/calendar/CalendarLastSyncedChip";
+import { StuckTranscriptBanner } from "@/components/meeting/StuckTranscriptBanner";
 import { UpcomingMeetingsSection } from "@/components/lead/UpcomingMeetingsSection";
 
 interface MeetingsTabProps {
@@ -313,6 +316,30 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   useEffect(() => {
     loadData();
   }, [leadId]);
+
+  // Live-refresh when a meeting pack changes — transcript fetch completion,
+  // recap regeneration, or new meeting added all show without manual reload.
+  useRealtimeSubscription(
+    {
+      table: "meeting_packs",
+      filter: `lead_id=eq.${leadId}`,
+      enabled: !!leadId,
+    },
+    () => {
+      loadData();
+    }
+  );
+  // Same for AI summaries (transcript-poller writes these on completion).
+  useRealtimeSubscription(
+    {
+      table: "meeting_ai_summaries",
+      filter: `lead_id=eq.${leadId}`,
+      enabled: !!leadId,
+    },
+    () => {
+      loadData();
+    }
+  );
 
   const handleDeleteSummary = async (summaryId: string) => {
     if (!confirm("Are you sure you want to remove this meeting summary from this lead? This cannot be undone.")) {
@@ -590,8 +617,10 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   return (
     <div className="space-y-6">
       <UpcomingMeetingsSection leadId={leadId} />
+      <StuckTranscriptBanner leadId={leadId} />
       {/* Add Meeting Summary button + form */}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <CalendarLastSyncedChip onRefresh={loadData} />
         {!showAddForm && (
           <Button variant="outline" onClick={() => setShowAddForm(true)}>
             <PlusCircle className="h-4 w-4 mr-2" />

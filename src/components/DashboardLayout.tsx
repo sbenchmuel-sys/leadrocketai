@@ -8,6 +8,8 @@ import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { CalendarReconsentModal } from "@/components/calendar/CalendarReconsentModal";
+import { MailConnectionBanner } from "@/components/MailConnectionBanner";
+import { DraftCacheInvalidator } from "@/components/DraftCacheInvalidator";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -195,11 +197,13 @@ export default function DashboardLayout() {
       {/* Main content */}
       <main className="flex-1 md:overflow-auto">
         <div className="md:p-6 p-4 pt-20 md:pt-6">
+          <MailConnectionBanner />
           <Outlet />
         </div>
       </main>
 
       <CalendarReconsentModal />
+      <DraftCacheInvalidator />
     </div>);
 
 }

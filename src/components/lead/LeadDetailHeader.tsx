@@ -14,6 +14,7 @@ import {
 } from "@/lib/dashboardUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
+import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
 import { useMemo, useEffect, useState } from "react";
 import { calculateClosingPower, getMomentum } from "@/lib/closingPowerUtils";
@@ -152,6 +153,13 @@ export default function LeadDetailHeader({
             mode="followup"
           />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
+          {/* Reconnect chip renders ONLY when a workspace mail_account has
+              needs_reconnect=true or status='error'. Rendered outside the
+              isConnected ternary because `isConnected` here comes from the
+              legacy gmail_connections check — a token can be revoked while
+              the legacy row still exists, leaving isConnected=true and
+              hiding the chip exactly when the user needs it. */}
+          <MailReconnectChip compact />
           {isConnected ? (
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (

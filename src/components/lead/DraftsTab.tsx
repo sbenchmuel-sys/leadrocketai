@@ -11,14 +11,15 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Copy, Save, Mail, Linkedin, MessageSquare, Loader2, Sparkles, Send, Edit2, CheckCircle2, ChevronDown, ChevronUp, AlertCircle, RefreshCw, Database, Phone } from "lucide-react";
-import { format, differenceInDays } from "date-fns";
+import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SendEmailButton } from "@/components/gmail/SendEmailButton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { generateDraft } from "@/lib/generateDraft";
+import { generateDraft, clearDraftCache } from "@/lib/generateDraft";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 
 // ============================================
 // Types
@@ -201,6 +202,7 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
   const [knowledgeUsed, setKnowledgeUsed] = useState(false);
   const [hasOutboundAfterMeeting, setHasOutboundAfterMeeting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
 
   // Dialog state for full composer
   const [showEmailDialog, setShowEmailDialog] = useState(false);
@@ -262,6 +264,20 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
   useEffect(() => {
     loadDrafts();
   }, [lead.id]);
+
+  // Live-refresh when the background pre-gen queue (or any other writer)
+  // creates/updates a draft for this lead — the "Draft ready" chips
+  // light up without waiting for a manual reload.
+  useRealtimeSubscription(
+    {
+      table: "drafts",
+      filter: `lead_id=eq.${lead.id}`,
+      enabled: !!lead.id,
+    },
+    () => {
+      loadDrafts();
+    }
+  );
 
   // ============================================
   // Build Context
@@ -329,12 +345,52 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         setGeneratedContent(pipelineResult.draft_text);
         setKnowledgeUsed(false);
         setGeneratedSubject(pipelineResult.suggested_subject || "");
+        setGeneratedAt(new Date());
       } else {
         toast.error("AI returned no content");
       }
     } catch (err) {
       console.error("[DraftsTab] Generation error:", err);
       toast.error("Failed to generate draft");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Forces an inline regeneration that bypasses the 5-min draft cache
+  // and the email-dialog short-circuit. Used by the always-visible
+  // Regenerate button on the generated-content card.
+  const handleRegenerate = async () => {
+    setIsGenerating(true);
+    try {
+      clearDraftCache(lead.id);
+      const motionOverride = selectedIntent === "post_meeting_recap" ? "post_meeting" as const
+        : selectedIntent === "closing_nudge" ? "closing" as const
+        : selectedIntent === "nurture_email" ? "nurture" as const
+        : null;
+
+      const intentOverride = INTENT_TO_AI_TASK[selectedIntent as ComposerIntent] || null;
+
+      const pipelineResult = await generateDraft({
+        lead_id: lead.id,
+        channel: channel,
+        instructions: composerNote.trim() || null,
+        motion_override: motionOverride,
+        override_intent: intentOverride,
+      });
+
+      if (pipelineResult.draft_text) {
+        setGeneratedContent(pipelineResult.draft_text);
+        setKnowledgeUsed(false);
+        setGeneratedSubject(pipelineResult.suggested_subject || "");
+        setGeneratedAt(new Date());
+        toast.success("Draft regenerated");
+      } else {
+        toast.error("AI returned no content");
+      }
+    } catch (err) {
+      console.error("[DraftsTab] Regenerate error:", err);
+      toast.error("Failed to regenerate draft");
     } finally {
       setIsGenerating(false);
     }
@@ -489,7 +545,7 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <CardTitle className="text-base">
                   {channel === "email" ? "📧" : channel === "linkedin" ? "🔗" : "💬"}{" "}
                   {EMAIL_INTENT_LABELS[selectedIntent as EmailIntent] ||
@@ -508,8 +564,27 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
                     No KB
                   </Badge>
                 )}
+                {generatedAt && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Generated {formatDistanceToNow(generatedAt, { addSuffix: true })}
+                  </span>
+                )}
               </div>
               <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRegenerate}
+                  disabled={isGenerating}
+                  title="Clear the 5-minute draft cache and generate fresh"
+                >
+                  {isGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  )}
+                  Regenerate
+                </Button>
                 <Button variant="outline" size="sm" onClick={copyToClipboard}>
                   <Copy className="h-3.5 w-3.5 mr-1" />
                   Copy
