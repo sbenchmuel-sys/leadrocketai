@@ -71,11 +71,17 @@ const BATCH_SIZE = 25;
 // classified — they stay v1 (see KNOWN_ISSUES.md).
 const INTENT_VERSION = "intent_router/v2";
 
-// Bumped when the ai_summary prompt structure changes. Stored alongside
+// Code-state marker for inbound ai_summary writes. Stored alongside
 // ai_summary in metadata_json so backfill jobs can identify rows that
-// need re-summarizing under a newer prompt (e.g. v1 → v2 added
-// length-scaled bullet shape for multi-point emails).
-const AI_SUMMARY_VERSION = "inbound_summary/v2";
+// need re-summarizing whenever the summary-producing code path changes
+// meaningfully. Kept in lock-step with the constant in
+// backfill-inbound-summaries — bumping there without bumping here
+// would force the backfill to re-process every freshly classified
+// inbound on its first run.
+//
+// v3 — added Outlook refetch + multi-line synth fallback in backfill.
+// v2 — initial pilot (length-scaled bullet prompt).
+const AI_SUMMARY_VERSION = "inbound_summary/v3";
 
 // Allowed values returned by ai_task.intent_router (see
 // supabase/functions/_shared/prompts.ts → PROMPTS.intent_router).

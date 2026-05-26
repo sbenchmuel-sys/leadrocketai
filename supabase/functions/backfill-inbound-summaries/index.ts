@@ -56,7 +56,16 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 const BATCH_SIZE = 50;
 const LOOKBACK_DAYS = 60;
 const INTENT_VERSION = "intent_router_v2";
-const AI_SUMMARY_VERSION = "inbound_summary/v2";
+// Version tag is a CODE-STATE marker (not a prompt-content marker).
+// Bumped whenever a change in this function would produce a different
+// summary for the same input — e.g. a new refetch tier becomes
+// available, or the synth fallback shape changes. The candidate filter
+// uses it as a one-shot re-queue trigger: rows tagged with an older
+// version are re-processed exactly once, then drain to the new tag.
+//
+// v3 — added Outlook refetch tier + multi-line synth fallback.
+// v2 — initial pilot launch (Gmail refetch + terse subject synth).
+const AI_SUMMARY_VERSION = "inbound_summary/v3";
 
 interface TimelineRow {
   id: string;
@@ -449,14 +458,27 @@ Deno.serve(async (req) => {
     // older rows still needed processing.
     //
     // A row is a candidate iff ANY of:
-    //   - ai_summary is null/missing                  (never summarized)
-    //   - ai_summary_version is null/missing          (pre-version-tag write)
-    //   - ai_summary_version != current v2 constant  (pre-v2 prompt)
-    //   - ai_summary_source = 'subject_fallback'     (weak synth — upgrade)
+    //   - ai_summary is null/missing                       (never summarized)
+    //   - ai_summary_version is null/missing               (pre-version-tag write)
+    //   - ai_summary_version != current version constant  (older code state)
     //
-    // NOTE on the version null clause: SQL `NULL != 'x'` is NULL (treated
-    // as false in WHERE), so .neq alone misses rows tagged with v1 prose
-    // before the version key existed. The explicit .is.null catches them.
+    // NOTE — we deliberately do NOT include `ai_summary_source =
+    // subject_fallback` as a separate clause. Doing so would re-queue
+    // every fallback row on every run, including rows for workspaces
+    // where fallback is the terminal state (no Gmail/Outlook connection,
+    // mailbox-deleted messages, etc.) — so the function would never
+    // drain to `fetched: 0` (Codex P1 on PR #53).
+    //
+    // The version-mismatch clause already gives us one-shot re-queue of
+    // existing fallback rows whenever this function's code changes
+    // meaningfully (a new refetch tier, a new synth shape): bump
+    // AI_SUMMARY_VERSION, every stale row gets re-processed once, then
+    // drains to the new tag. Subsequent runs find no candidates.
+    //
+    // NOTE on the version-null clause: SQL `NULL != 'x'` is NULL
+    // (treated as false in WHERE), so .neq alone misses rows tagged
+    // with v1 prose before the version key existed. The explicit
+    // .is.null catches them.
     //
     // PostgREST .or() takes comma-separated filter strings; the version
     // value contains a `/` which is URL-safe in query strings but the
@@ -471,7 +493,6 @@ Deno.serve(async (req) => {
           "metadata_json->>ai_summary.is.null",
           "metadata_json->>ai_summary_version.is.null",
           `metadata_json->>ai_summary_version.neq.${AI_SUMMARY_VERSION}`,
-          "metadata_json->>ai_summary_source.eq.subject_fallback",
         ].join(","),
       )
       .order("occurred_at", { ascending: false })
