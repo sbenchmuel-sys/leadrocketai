@@ -7,23 +7,23 @@
 // "[No preview available]" for every one of those rows.
 //
 // This function backfills `metadata_json.ai_summary` for inbound
-// timeline rows in three preference tiers:
+// timeline rows in four preference tiers:
 //
 //   (a) BODY_PRESENT: body still in interactions or snippet — run
 //       the v2 intent_router prompt and write ai_summary.
 //   (b) GMAIL_REFETCH: source='gmail', body purged — refetch from
 //       Gmail API by gmail_message_id using the lead owner's
 //       gmail_connections row, then classify.
-//   (c) SUBJECT_SYNTH: refetch unavailable or failed (Outlook,
-//       revoked token, deleted message) — write a deterministic
-//       degraded summary built from subject + sender name +
-//       company. Marked with metadata_json.ai_summary_source =
+//   (c) OUTLOOK_REFETCH: source='outlook', body purged — resolve
+//       the stored RFC822 internetMessageId via Graph $filter to
+//       a Graph message, pull the plain-text body, then classify.
+//       Token comes from the workspace-scoped `mail_accounts` row
+//       (not per-user like Gmail), refreshed via getFreshOutlookToken.
+//   (d) SUBJECT_SYNTH: refetch unavailable or failed (revoked
+//       token, deleted message, no message ID) — write a
+//       multi-line synth from subject + sender + classified
+//       intent. Marked with metadata_json.ai_summary_source =
 //       'subject_fallback' so it can be audited / re-tried.
-//
-// Outlook refetch is intentionally out of scope for this run —
-// stored ID is the RFC822 Message-Id, which requires a Graph
-// $filter resolve hop, not a single GET. Synth covers the
-// preview need in the interim.
 //
 // Auth: requires X-Internal-Secret. Idempotent — processes rows
 // where ai_summary IS NULL OR was written by a pre-v2 prompt OR
@@ -51,6 +51,7 @@ const corsHeaders = {
 };
 import { logger } from "../_shared/logger.ts";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
+import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 
 const BATCH_SIZE = 50;
 const LOOKBACK_DAYS = 60;
@@ -114,6 +115,7 @@ interface Counts {
   fetched: number;
   body_present: number;
   gmail_refetched: number;
+  outlook_refetched: number;
   subject_synth: number;
   failed: number;
   skipped: number;
@@ -248,6 +250,80 @@ async function fetchGmailBody(accessToken: string, messageId: string): Promise<s
   return body || null;
 }
 
+interface OutlookMailAccount {
+  id: string;
+  email_address: string | null;
+}
+
+/** Look up the default connected Outlook `mail_account` for a workspace.
+ *  Returns null if no account is connected for that workspace. */
+async function fetchOutlookMailAccount(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  workspaceId: string,
+): Promise<OutlookMailAccount | null> {
+  const { data } = await admin
+    .from("mail_accounts")
+    .select("id, email_address")
+    .eq("workspace_id", workspaceId)
+    .eq("provider", "outlook")
+    .eq("status", "connected")
+    .order("is_default", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data ?? null) as OutlookMailAccount | null;
+}
+
+/** Refetch the plain-text body of an Outlook message by RFC822
+ *  internetMessageId via Microsoft Graph. Returns null if the message
+ *  was not found (e.g. deleted from the user's mailbox) or the token
+ *  was rejected.
+ *
+ *  Graph's `internetMessageId` field stores RFC822 IDs WITH angle
+ *  brackets (`<abc@xyz>`). Outlook-sync persists them verbatim, so
+ *  we look them up the same way here. */
+async function fetchOutlookBody(
+  accessToken: string,
+  rfc822MessageId: string,
+): Promise<string | null> {
+  // Graph $filter requires the value single-quoted; escape any embedded
+  // single quotes per OData convention.
+  const escaped = rfc822MessageId.replace(/'/g, "''");
+  const filter = `internetMessageId eq '${escaped}'`;
+  const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${
+    encodeURIComponent(filter)
+  }&$top=1&$select=id,body,bodyPreview`;
+
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Prefer: 'outlook.body-content-type="text"',
+    },
+  });
+  if (!resp.ok) return null;
+
+  const data = await resp.json() as {
+    value?: Array<{
+      body?: { content?: string; contentType?: string };
+      bodyPreview?: string;
+    }>;
+  };
+  const msg = data.value?.[0];
+  if (!msg) return null;
+
+  // With Prefer text the body comes back as plain; fall back to HTML
+  // strip if Graph ignored the preference (some tenants still send HTML).
+  const rawBody = (msg.body?.content ?? "").trim();
+  if (rawBody) {
+    if (msg.body?.contentType === "html" || /<\w+/.test(rawBody)) {
+      return htmlToPlain(rawBody);
+    }
+    return rawBody;
+  }
+  const preview = (msg.bodyPreview ?? "").trim();
+  return preview || null;
+}
+
 function buildSubjectSynth(row: TimelineRow, lead: LeadRow | undefined): string {
   // Multi-line synth: gives the Reply/Follow-up drafting AI enough signal
   // to produce a sensible draft even when the body is permanently gone.
@@ -356,6 +432,7 @@ Deno.serve(async (req) => {
     fetched: 0,
     body_present: 0,
     gmail_refetched: 0,
+    outlook_refetched: 0,
     subject_synth: 0,
     failed: 0,
     skipped: 0,
@@ -450,8 +527,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Cache Gmail tokens per user to avoid refresh-per-row.
+    // Cache Gmail tokens per user, Outlook tokens per workspace, to
+    // avoid refresh-per-row.
     const gmailTokenByUser = new Map<string, string | null>();
+    const outlookAccountByWorkspace = new Map<string, OutlookMailAccount | null>();
+    const outlookTokenByAccount = new Map<string, string | null>();
 
     for (const row of candidates) {
       try {
@@ -462,7 +542,7 @@ Deno.serve(async (req) => {
           : "";
 
         let body: string | null = null;
-        let path: "body_present" | "gmail_refetched" | "subject_synth" = "subject_synth";
+        let path: "body_present" | "gmail_refetched" | "outlook_refetched" | "subject_synth" = "subject_synth";
 
         // (a) BODY_PRESENT
         const existingSnippet = (row.snippet_text ?? "").trim();
@@ -490,6 +570,50 @@ Deno.serve(async (req) => {
               if (refetched && refetched.trim()) {
                 body = refetched.trim();
                 path = "gmail_refetched";
+              }
+            }
+          }
+        }
+
+        // (b2) OUTLOOK_REFETCH — mirrors Gmail refetch for Outlook-source
+        // rows. Tokens live on workspace-scoped mail_accounts (one
+        // Outlook connection per workspace, not per user). The stored
+        // message ID is the RFC822 internetMessageId; we resolve it to a
+        // Graph message via $filter and pull the plain-text body.
+        if (!body) {
+          const source = getSource(row.metadata_json);
+          const messageId = getGmailMessageId(row.metadata_json); // legacy field naming
+          const workspaceId = row.workspace_id;
+          if (source === "outlook" && messageId && workspaceId) {
+            let account = outlookAccountByWorkspace.get(workspaceId);
+            if (account === undefined) {
+              account = await fetchOutlookMailAccount(admin, workspaceId);
+              outlookAccountByWorkspace.set(workspaceId, account);
+            }
+            if (account) {
+              let token = outlookTokenByAccount.get(account.id);
+              if (token === undefined) {
+                try {
+                  token = await getFreshOutlookToken(account.id, admin);
+                } catch (err) {
+                  // Expired/revoked — log once per account, fall through to
+                  // subject synth for every row on this account.
+                  const msg = err instanceof Error ? err.message : String(err);
+                  logger.warn("backfill_inbound_outlook_token_failed", {
+                    workspace_id: workspaceId,
+                    mail_account_id: account.id,
+                    error: msg,
+                  });
+                  token = null;
+                }
+                outlookTokenByAccount.set(account.id, token);
+              }
+              if (token) {
+                const refetched = await fetchOutlookBody(token, messageId);
+                if (refetched && refetched.trim()) {
+                  body = refetched.trim();
+                  path = "outlook_refetched";
+                }
               }
             }
           }
@@ -556,6 +680,7 @@ Deno.serve(async (req) => {
 
         if (path === "body_present") counts.body_present++;
         else if (path === "gmail_refetched") counts.gmail_refetched++;
+        else if (path === "outlook_refetched") counts.outlook_refetched++;
         else counts.subject_synth++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
