@@ -227,25 +227,73 @@ serve(async (req) => {
       });
     }
 
-    // 3. Resolve mail_account_id for the calendar event's owner
+    // 3. Resolve mail_account_id — prefer the organizer's connected
+    //    Outlook account in the workspace (Graph's transcript API only
+    //    works for the organizer). Fall back to the calendar event
+    //    owner's account when no organizer-matched account exists.
     stage = "resolve_mail_account";
-    const { data: accountRaw, error: accountErr } = await supabase
-      .from("mail_accounts")
-      .select("id, granted_scopes")
-      .eq("user_id", ev.user_id)
-      .eq("provider", "outlook")
-      .eq("status", "connected")
-      .maybeSingle();
-    if (accountErr) {
-      throw new Error(`mail_accounts lookup failed: ${accountErr.message}`);
+
+    // Extract organizer email from raw Graph event payload.
+    // Shape: raw_event.organizer.emailAddress.address
+    let organizerEmail: string | null = null;
+    try {
+      // deno-lint-ignore no-explicit-any
+      const re = ev.raw_event as any;
+      const addr = re?.organizer?.emailAddress?.address;
+      if (typeof addr === "string" && addr.includes("@")) {
+        organizerEmail = addr.trim().toLowerCase();
+      }
+    } catch {
+      organizerEmail = null;
     }
-    if (!accountRaw) {
-      return jsonResponse(400, {
-        ok: false,
-        error: "user has no connected Outlook account",
-      });
+
+    let mailAccount: MailAccountRow | null = null;
+    let resolutionPath: "organizer_match" | "owner_fallback" = "owner_fallback";
+
+    if (organizerEmail) {
+      const { data: orgAccts, error: orgErr } = await supabase
+        .from("mail_accounts")
+        .select("id, granted_scopes, email_address")
+        .eq("workspace_id", ev.workspace_id)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .ilike("email_address", organizerEmail)
+        .limit(1);
+      if (orgErr) {
+        throw new Error(`mail_accounts organizer lookup failed: ${orgErr.message}`);
+      }
+      if (orgAccts && orgAccts.length > 0) {
+        mailAccount = orgAccts[0] as unknown as MailAccountRow;
+        resolutionPath = "organizer_match";
+      }
     }
-    const mailAccount = accountRaw as unknown as MailAccountRow;
+
+    if (!mailAccount) {
+      const { data: accountRaw, error: accountErr } = await supabase
+        .from("mail_accounts")
+        .select("id, granted_scopes")
+        .eq("user_id", ev.user_id)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .maybeSingle();
+      if (accountErr) {
+        throw new Error(`mail_accounts lookup failed: ${accountErr.message}`);
+      }
+      if (!accountRaw) {
+        return jsonResponse(400, {
+          ok: false,
+          error: "no connected Outlook account available for this event (organizer not connected, owner has no Outlook)",
+        });
+      }
+      mailAccount = accountRaw as unknown as MailAccountRow;
+    }
+
+    console.log("[teams-transcript-fetch] resolved_account", {
+      calendarEventId,
+      mailAccountId: mailAccount.id,
+      organizerEmail,
+      resolutionPath,
+    });
 
     // Scope presence check: refusing here yields a clean unavailable
     // record. Without this, the refresh below would surface as a
