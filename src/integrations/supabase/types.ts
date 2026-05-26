@@ -1829,6 +1829,51 @@ export type Database = {
           },
         ]
       }
+      lead_intelligence_recompute_queue: {
+        Row: {
+          attempts: number
+          last_attempt_at: string | null
+          last_error: string | null
+          lead_id: string
+          queued_at: string
+          source: string
+          workspace_id: string
+        }
+        Insert: {
+          attempts?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          lead_id: string
+          queued_at?: string
+          source: string
+          workspace_id: string
+        }
+        Update: {
+          attempts?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          lead_id?: string
+          queued_at?: string
+          source?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_intelligence_recompute_queue_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: true
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_intelligence_recompute_queue_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_signals: {
         Row: {
           confidence_score: number | null
@@ -3990,6 +4035,10 @@ export type Database = {
         Args: { encrypted_token: string; encryption_key: string }
         Returns: string
       }
+      enqueue_lead_intelligence_recompute: {
+        Args: { p_lead_id: string; p_source: string; p_workspace_id: string }
+        Returns: undefined
+      }
       expire_old_messages: {
         Args: never
         Returns: {
@@ -4112,6 +4161,10 @@ export type Database = {
           p_timeline_item_id: string
         }
         Returns: undefined
+      }
+      should_recompute_for_lead: {
+        Args: { p_lead_id: string }
+        Returns: boolean
       }
     }
     Enums: {
