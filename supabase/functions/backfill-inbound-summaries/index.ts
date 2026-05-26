@@ -25,8 +25,10 @@
 // $filter resolve hop, not a single GET. Synth covers the
 // preview need in the interim.
 //
-// Auth: requires X-Internal-Secret. Idempotent — only processes
-// rows where metadata_json->>'ai_summary' IS NULL.
+// Auth: requires X-Internal-Secret. Idempotent — processes rows
+// where ai_summary IS NULL OR was written by a pre-v2 prompt.
+// Once every row in the 60-day window carries the current
+// `ai_summary_version`, the function becomes a no-op.
 // ============================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -40,8 +42,9 @@ import { logger } from "../_shared/logger.ts";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 
 const BATCH_SIZE = 50;
-const LOOKBACK_DAYS = 30;
+const LOOKBACK_DAYS = 60;
 const INTENT_VERSION = "intent_router_v2";
+const AI_SUMMARY_VERSION = "inbound_summary/v2";
 
 interface TimelineRow {
   id: string;
@@ -302,10 +305,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    const candidates = ((rawRows ?? []) as TimelineRow[]).filter(
-      (r) => !(r.metadata_json && typeof (r.metadata_json as Record<string, unknown>).ai_summary === "string"
-        && (r.metadata_json as Record<string, unknown>).ai_summary),
-    ).slice(0, BATCH_SIZE);
+    // Pick up rows that EITHER (a) have no ai_summary at all, OR (b) have
+    // one but it was written by a pre-v2 prompt (so the pilot UI shows
+    // the same length-scaled bullet shape for old and new rows).
+    const candidates = ((rawRows ?? []) as TimelineRow[]).filter((r) => {
+      const meta = (r.metadata_json ?? {}) as Record<string, unknown>;
+      const summary = meta.ai_summary;
+      const version = meta.ai_summary_version;
+      const hasSummary = typeof summary === "string" && summary.trim().length > 0;
+      if (!hasSummary) return true;
+      return version !== AI_SUMMARY_VERSION;
+    }).slice(0, BATCH_SIZE);
 
     counts.fetched = candidates.length;
 
@@ -421,6 +431,7 @@ Deno.serve(async (req) => {
         const nextMetadata = {
           ...(row.metadata_json ?? {}),
           ai_summary: aiSummary,
+          ai_summary_version: AI_SUMMARY_VERSION,
           ...(aiSummarySource === "subject_fallback" ? { ai_summary_source: "subject_fallback" } : {}),
         };
 

@@ -83,15 +83,16 @@ describe("cleanBodyText", () => {
     expect(out).toBe("Approved — go ahead.");
   });
 
-  it("clamps to 2 lines max and joins with space", () => {
+  it("clamps to 3 lines max and joins with space", () => {
     const raw = [
       "Line one.",
       "Line two.",
-      "Line three should be dropped.",
-      "And line four.",
+      "Line three.",
+      "Line four should be dropped.",
+      "And line five.",
     ].join("\n");
     const out = cleanBodyText({ snippet_text: raw });
-    expect(out).toBe("Line one. Line two.");
+    expect(out).toBe("Line one. Line two. Line three.");
   });
 
   it("joins separate content paragraphs with a single space", () => {
@@ -116,11 +117,11 @@ describe("cleanBodyText", () => {
     expect(out).toBe("");
   });
 
-  it("truncates with ellipsis when one line exceeds 220 chars", () => {
-    const long = "a".repeat(300);
+  it("truncates with ellipsis when one line exceeds 320 chars", () => {
+    const long = "a".repeat(400);
     const out = cleanBodyText({ snippet_text: long });
     expect(out.endsWith("…")).toBe(true);
-    expect(out.length).toBeLessThanOrEqual(220);
+    expect(out.length).toBeLessThanOrEqual(320);
   });
 
   it("handles CRLF line endings (Outlook MIME default)", () => {
@@ -188,8 +189,8 @@ describe("cleanBodyText", () => {
   });
 
   it("trims and clamps an over-long subject", () => {
-    const long = "Subject ".repeat(40);
+    const long = "Subject ".repeat(60);
     const out = cleanBodyText({ subject: long });
-    expect(out.length).toBeLessThanOrEqual(220);
+    expect(out.length).toBeLessThanOrEqual(320);
   });
 });

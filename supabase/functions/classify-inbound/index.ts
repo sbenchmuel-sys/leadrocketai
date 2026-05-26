@@ -71,6 +71,12 @@ const BATCH_SIZE = 25;
 // classified — they stay v1 (see KNOWN_ISSUES.md).
 const INTENT_VERSION = "intent_router/v2";
 
+// Bumped when the ai_summary prompt structure changes. Stored alongside
+// ai_summary in metadata_json so backfill jobs can identify rows that
+// need re-summarizing under a newer prompt (e.g. v1 → v2 added
+// length-scaled bullet shape for multi-point emails).
+const AI_SUMMARY_VERSION = "inbound_summary/v2";
+
 // Allowed values returned by ai_task.intent_router (see
 // supabase/functions/_shared/prompts.ts → PROMPTS.intent_router).
 // We refuse anything outside this set and log it as a parse failure
@@ -443,7 +449,11 @@ Deno.serve(async (req) => {
         const shouldWriteSummary = ai_summary !== null && !isSkipListIntent;
 
         const nextMetadata = shouldWriteSummary
-          ? { ...(row.metadata_json ?? {}), ai_summary }
+          ? {
+              ...(row.metadata_json ?? {}),
+              ai_summary,
+              ai_summary_version: AI_SUMMARY_VERSION,
+            }
           : undefined;
 
         // Single UPDATE — intent + (optional) ai_summary land together

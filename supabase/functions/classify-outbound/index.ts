@@ -25,7 +25,8 @@ const corsHeaders = {
 };
 
 const BATCH_SIZE = 25;
-const SUMMARY_VERSION = "outbound_summary/v1";
+const SUMMARY_VERSION = "outbound_summary/v2";
+const BACKFILL_LOOKBACK_DAYS = 60;
 
 interface OutboundRow {
   id: string;
@@ -38,11 +39,21 @@ interface OutboundRow {
 function buildEmailText(row: OutboundRow): string {
   const subject = (row.subject ?? "").trim();
   const snippet = (row.snippet_text ?? "").trim();
+  // Backfill fallback: when the raw body has been purged but a pre-v2
+  // ai_summary survives in metadata, feed that into the v2 prompt so
+  // the row gets re-shaped rather than skipped indefinitely. Lossy
+  // (summarizing a summary), but the v1 paraphrase is the best we
+  // have once raw body is gone — the alternative is leaving stale v1
+  // prose alongside fresh v2 bullets forever.
+  const priorSummary = typeof row.metadata_json?.ai_summary === "string"
+    ? row.metadata_json.ai_summary.trim()
+    : "";
+  const body = snippet || priorSummary;
   const lines: string[] = [];
   if (subject) lines.push(`Subject: ${subject}`);
-  if (snippet) {
+  if (body) {
     if (lines.length > 0) lines.push("");
-    lines.push(snippet);
+    lines.push(body);
   }
   return lines.join("\n");
 }
@@ -50,7 +61,22 @@ function buildEmailText(row: OutboundRow): string {
 async function summarize(emailText: string): Promise<string | null> {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!apiKey) return null;
-  const prompt = `Summarize this OUTBOUND sales email we sent to a prospect in 1-2 sentences. Capture the key ask, commitment, or offer. No preamble, no quotes — just the summary.
+  const prompt = `Summarize this OUTBOUND sales email we sent to a prospect. Capture the key ask, commitment, offer, or information we conveyed. Length scales with the email's substantive content — pick ONE shape:
+
+QUICK (1 short sentence) — for short check-ins, acks, single-line asks. Example: "Asked Manu if Tuesday 2pm still works for the demo."
+
+SUBSTANTIVE (2–3 sentences, no bullets) — for normal emails with a single ask plus context. Example: "Sent Q3 enterprise pricing for the 50-seat tier ($45k/yr) and offered a 2-week pilot. Asked for a 30-min call next week to walk through the SOC-2 evidence pack."
+
+MULTI-POINT (1 lead sentence + 2–5 bullets) — for emails with multiple distinct points, commitments, or attachments. Bullets begin with "• " (Unicode bullet + space). Example:
+  Outlined the proposed pilot scope and next steps.
+  • Attached the redlined MSA and SOC-2 Type II report
+  • Confirmed phased $25k Y1 pricing with seat-based expansion
+  • Asked for Legal's redlines by June 1 ahead of the June 3 committee meeting
+  • Offered to bring our CISO onto the next call
+
+Preserve specifics: numbers, dates, named entities, dollar amounts, product/tier names, attachments referenced. Do NOT generalize ("Followed up on pricing" is BAD).
+
+Match the source language. Omit greetings, signatures, and quoted history. Hard cap: 1000 characters. No preamble, no quotes — just the summary.
 
 ${emailText}`;
 
@@ -67,7 +93,7 @@ ${emailText}`;
     const data = await res.json() as { choices?: { message?: { content?: string } }[] };
     const content = data?.choices?.[0]?.message?.content?.trim() ?? "";
     const cleaned = content.replace(/^["']|["']$/g, "");
-    return cleaned.length > 0 ? cleaned.slice(0, 500) : null;
+    return cleaned.length > 0 ? cleaned.slice(0, 1200) : null;
   } catch {
     return null;
   }
@@ -79,6 +105,12 @@ Deno.serve(async (req) => {
   const auth = requireScheduledCaller(req, corsHeaders);
   if (auth instanceof Response) return auth;
 
+  // ?backfill=1 → also pick up rows whose ai_summary was written by the
+  // pre-v2 prompt (within 60 days), so the pilot UI doesn't keep showing
+  // stale 1–2 sentence summaries alongside the new richer ones.
+  const url = new URL(req.url);
+  const isBackfill = url.searchParams.get("backfill") === "1";
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const admin = createClient(supabaseUrl, serviceKey);
@@ -87,15 +119,28 @@ Deno.serve(async (req) => {
   let fetched = 0, summarized = 0, failed = 0, skipped = 0;
 
   try {
-    // Fetch outbound rows missing ai_summary, snippet present, oldest first
-    // (so the about-to-purge ones get summarized before purge).
-    const { data: rows, error } = await admin
+    // Fetch outbound rows. Live cron mode needs snippet_text present
+    // (it's the input to the v2 prompt for never-summarized rows).
+    // Backfill mode must NOT gate on snippet_text — pre-v2 rows whose
+    // raw body was purged still need re-shaping, using their stale v1
+    // ai_summary as the prompt input. Codex P1 on PR #52.
+    let query = admin
       .from("lead_timeline_items")
       .select("id, lead_id, subject, snippet_text, metadata_json")
       .eq("event_type", "email_outbound")
-      .not("snippet_text", "is", null)
       .order("occurred_at", { ascending: true })
       .limit(BATCH_SIZE * 4); // overfetch — many will already have summary
+
+    if (isBackfill) {
+      const cutoff = new Date(
+        Date.now() - BACKFILL_LOOKBACK_DAYS * 24 * 3600 * 1000,
+      ).toISOString();
+      query = query.gte("occurred_at", cutoff);
+    } else {
+      query = query.not("snippet_text", "is", null);
+    }
+
+    const { data: rows, error } = await query;
 
     if (error) {
       return new Response(JSON.stringify({ ok: false, error: error.message }), {
@@ -105,7 +150,11 @@ Deno.serve(async (req) => {
 
     const candidates = ((rows ?? []) as OutboundRow[]).filter(r => {
       const sum = r.metadata_json?.ai_summary;
-      return !(typeof sum === "string" && sum.trim().length > 0);
+      const version = r.metadata_json?.ai_summary_version;
+      const hasSummary = typeof sum === "string" && sum.trim().length > 0;
+      if (!hasSummary) return true;
+      // Backfill mode: re-process pre-v2 rows.
+      return isBackfill && version !== SUMMARY_VERSION;
     }).slice(0, BATCH_SIZE);
 
     fetched = candidates.length;

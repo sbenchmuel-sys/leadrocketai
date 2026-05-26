@@ -18,8 +18,8 @@
 // Pure, no React, no DB — see cleanBodyText.test.ts.
 // ============================================================
 
-const MAX_LINES = 2;
-const MAX_CHARS = 220;
+const MAX_LINES = 3;
+const MAX_CHARS = 320;
 
 const QUOTED_REPLY_HEADERS: RegExp[] = [
   // English: "On Tue, May 21, 2026 at 9:14 AM, Sam <s@x.com> wrote:" (Gmail)
@@ -85,6 +85,9 @@ function collapseWhitespace(raw: string): string {
  * Empty leading/trailing lines are dropped; intra-block blank lines
  * are kept up to the line cap so a "Hi Sam,\n\nthanks for…" preview
  * isn't collapsed into one run-on.
+ *
+ * Name is historical — MAX_LINES is now 3, was 2 before pilot-mode
+ * preview expansion.
  */
 function clampToTwoLines(raw: string): string {
   const collected: string[] = [];
