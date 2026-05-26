@@ -63,9 +63,13 @@ const INTENT_VERSION = "intent_router_v2";
 // uses it as a one-shot re-queue trigger: rows tagged with an older
 // version are re-processed exactly once, then drain to the new tag.
 //
+// v4 — fix Outlook refetch (added ConsistencyLevel: eventual header).
+//      v3 deployment had 0% Outlook refetch success because Graph
+//      silently returns empty for $filter on non-indexed properties
+//      without that header.
 // v3 — added Outlook refetch tier + multi-line synth fallback.
 // v2 — initial pilot launch (Gmail refetch + terse subject synth).
-const AI_SUMMARY_VERSION = "inbound_summary/v3";
+const AI_SUMMARY_VERSION = "inbound_summary/v4";
 
 interface TimelineRow {
   id: string;
@@ -286,14 +290,24 @@ async function fetchOutlookMailAccount(
 /** Refetch the plain-text body of an Outlook message by RFC822
  *  internetMessageId via Microsoft Graph. Returns null if the message
  *  was not found (e.g. deleted from the user's mailbox) or the token
- *  was rejected.
+ *  was rejected. Logs structured warns for each distinct failure mode
+ *  so post-hoc diagnosis from edge function logs doesn't need a code
+ *  change.
  *
  *  Graph's `internetMessageId` field stores RFC822 IDs WITH angle
  *  brackets (`<abc@xyz>`). Outlook-sync persists them verbatim, so
- *  we look them up the same way here. */
+ *  we look them up the same way here.
+ *
+ *  CRITICAL: `internetMessageId` is a non-indexed property on the
+ *  messages resource, so `$filter eq` against it requires Graph's
+ *  advanced-query mode via `ConsistencyLevel: eventual`. Without
+ *  this header Graph silently returns an empty result set — no
+ *  error, no warning, just zero hits. This was the root cause of
+ *  the 0/127 refetch rate on the first Paythings drain (PR #53). */
 async function fetchOutlookBody(
   accessToken: string,
   rfc822MessageId: string,
+  context: { row_id: string; workspace_id: string | null },
 ): Promise<string | null> {
   // Graph $filter requires the value single-quoted; escape any embedded
   // single quotes per OData convention.
@@ -303,13 +317,35 @@ async function fetchOutlookBody(
     encodeURIComponent(filter)
   }&$top=1&$select=id,body,bodyPreview`;
 
-  const resp = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Prefer: 'outlook.body-content-type="text"',
-    },
-  });
-  if (!resp.ok) return null;
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Prefer: 'outlook.body-content-type="text"',
+        // Required for $filter on non-indexed properties like
+        // internetMessageId. See the function-level comment.
+        ConsistencyLevel: "eventual",
+      },
+    });
+  } catch (err) {
+    logger.warn("backfill_inbound_outlook_fetch_network_error", {
+      ...context,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  if (!resp.ok) {
+    let bodyText = "";
+    try { bodyText = (await resp.text()).slice(0, 300); } catch { /* ignore */ }
+    logger.warn("backfill_inbound_outlook_fetch_http_error", {
+      ...context,
+      status: resp.status,
+      body_snippet: bodyText,
+    });
+    return null;
+  }
 
   const data = await resp.json() as {
     value?: Array<{
@@ -318,7 +354,15 @@ async function fetchOutlookBody(
     }>;
   };
   const msg = data.value?.[0];
-  if (!msg) return null;
+  if (!msg) {
+    logger.warn("backfill_inbound_outlook_fetch_no_match", {
+      ...context,
+      message_id_len: rfc822MessageId.length,
+      // First 80 chars only so we don't dump full sender PII into logs.
+      message_id_prefix: rfc822MessageId.slice(0, 80),
+    });
+    return null;
+  }
 
   // With Prefer text the body comes back as plain; fall back to HTML
   // strip if Graph ignored the preference (some tenants still send HTML).
@@ -330,7 +374,10 @@ async function fetchOutlookBody(
     return rawBody;
   }
   const preview = (msg.bodyPreview ?? "").trim();
-  return preview || null;
+  if (preview) return preview;
+
+  logger.warn("backfill_inbound_outlook_fetch_empty_body", { ...context });
+  return null;
 }
 
 function buildSubjectSynth(row: TimelineRow, lead: LeadRow | undefined): string {
@@ -630,7 +677,10 @@ Deno.serve(async (req) => {
                 outlookTokenByAccount.set(account.id, token);
               }
               if (token) {
-                const refetched = await fetchOutlookBody(token, messageId);
+                const refetched = await fetchOutlookBody(token, messageId, {
+                  row_id: row.id,
+                  workspace_id: workspaceId,
+                });
                 if (refetched && refetched.trim()) {
                   body = refetched.trim();
                   path = "outlook_refetched";
