@@ -3,13 +3,24 @@
 //
 // Surfaces meeting_transcripts rows that have been in 'fetching' or
 // 'pending' status for more than 24h. Without this, the rows sit
-// silently while the rest of the timeline keeps moving. Provides a
-// one-click "Retry" that re-invokes the provider-specific fetcher
-// (meet-transcript-fetch / teams-transcript-fetch) for that row.
+// silently while the rest of the timeline keeps moving.
 //
-// transcript-poller already runs every 15 min, but it backs off on
-// repeated failures — this UI gives the user an explicit recovery
-// path when the automatic retry stops trying.
+// The "Retry" CTA resets the row's poller state — clears
+// fetch_attempts (drops the backoff window) and flips status back
+// to 'pending'. The next transcript-poller tick (≤15 min) then
+// dispatches the right provider-specific fetcher with proper
+// internal auth.
+//
+// Why not call meet-transcript-fetch / teams-transcript-fetch
+// directly? They require X-Internal-Secret (privileged caller)
+// and accept {calendarEventId}, not {meeting_transcript_id} —
+// so the frontend can't invoke them safely. Going through the
+// poller keeps the auth boundary intact.
+//
+// Caveat: transcript-poller only scans meetings whose end_time
+// is within the last 24h. For transcripts on older meetings, the
+// reset will leave the row eligible but the poller window won't
+// include it. We disclose this in the toast.
 // ============================================================
 
 import { useCallback, useEffect, useState } from "react";
@@ -31,12 +42,15 @@ interface StuckTranscript {
   last_attempt_at: string | null;
   provider_error_detail: string | null;
   status_reason: string | null;
+  calendar_event_id: string;
 }
 
 const STUCK_AGE_MS = 24 * 60 * 60 * 1000;
+const POLLER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
   const [rows, setRows] = useState<StuckTranscript[]>([]);
+  const [eventEndById, setEventEndById] = useState<Map<string, string | null>>(new Map());
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const fetchStuck = useCallback(async () => {
@@ -44,11 +58,30 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
     const cutoff = new Date(Date.now() - STUCK_AGE_MS).toISOString();
     const { data } = await supabase
       .from("meeting_transcripts")
-      .select("id, provider, status, fetch_attempts, last_attempt_at, provider_error_detail, status_reason")
+      .select("id, provider, status, fetch_attempts, last_attempt_at, provider_error_detail, status_reason, calendar_event_id")
       .eq("lead_id", leadId)
       .in("status", ["fetching", "pending"])
       .lt("last_attempt_at", cutoff);
-    setRows((data ?? []) as StuckTranscript[]);
+    const stuck = (data ?? []) as StuckTranscript[];
+    setRows(stuck);
+
+    // Look up end_time for each underlying calendar event so the toast can
+    // tell the user honestly whether the poller will actually re-pick the
+    // row up (its window is 24h from end_time).
+    const eventIds = [...new Set(stuck.map(r => r.calendar_event_id).filter(Boolean))];
+    if (eventIds.length === 0) {
+      setEventEndById(new Map());
+      return;
+    }
+    const { data: events } = await supabase
+      .from("calendar_events")
+      .select("id, end_time")
+      .in("id", eventIds);
+    const map = new Map<string, string | null>();
+    for (const ev of (events ?? []) as Array<{ id: string; end_time: string | null }>) {
+      map.set(ev.id, ev.end_time);
+    }
+    setEventEndById(map);
   }, [leadId]);
 
   useEffect(() => {
@@ -66,30 +99,41 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
     }
   );
 
+  // Reset the row so transcript-poller will pick it up on its next 15-min
+  // tick. We can't call meet-transcript-fetch / teams-transcript-fetch
+  // directly — those are internal-only and expect calendarEventId.
   const handleRetry = async (row: StuckTranscript) => {
     setRetryingId(row.id);
     try {
-      const fn = row.provider === "teams" ? "teams-transcript-fetch" : "meet-transcript-fetch";
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
-      if (!token) {
-        toast.error("Not authenticated");
-        return;
+      const { error } = await supabase
+        .from("meeting_transcripts")
+        .update({
+          status: "pending",
+          fetch_attempts: 0,
+          last_attempt_at: null,
+          provider_error_detail: null,
+          status_reason: null,
+        })
+        .eq("id", row.id);
+      if (error) throw new Error(error.message);
+
+      // Honest signal to the user: the poller only scans meetings whose
+      // end_time is within the last 24h. Older meetings won't be picked
+      // up even after this reset — the reset just unblocks them if a
+      // future backfill widens the window.
+      const endTime = eventEndById.get(row.calendar_event_id) ?? null;
+      const endMs = endTime ? new Date(endTime).getTime() : null;
+      const outsidePollerWindow = endMs === null || (Date.now() - endMs) > POLLER_WINDOW_MS;
+
+      if (outsidePollerWindow) {
+        toast.warning("Retry reset — meeting is outside the 15-min poller window", {
+          description: "Row marked pending, but the meeting ended >24h ago so transcript-poller won't auto-pick it up. Contact support to backfill.",
+        });
+      } else {
+        toast.success("Retry queued", {
+          description: "transcript-poller will pick it up within 15 minutes",
+        });
       }
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const resp = await fetch(`${supabaseUrl}/functions/v1/${fn}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ meeting_transcript_id: row.id, force: true }),
-      });
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text.slice(0, 200));
-      }
-      toast.success("Retry queued — transcript fetcher restarted");
       fetchStuck();
     } catch (err) {
       toast.error("Retry failed", {
@@ -108,7 +152,8 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
         const ageHours = row.last_attempt_at
           ? Math.round((Date.now() - new Date(row.last_attempt_at).getTime()) / (60 * 60 * 1000))
           : null;
-        const providerLabel = row.provider === "teams" ? "Teams" : "Google Meet";
+        // meeting_transcripts.provider uses 'microsoft_teams' / 'google_meet'.
+        const providerLabel = row.provider === "microsoft_teams" ? "Teams" : "Google Meet";
         return (
           <div
             key={row.id}

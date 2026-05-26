@@ -153,16 +153,19 @@ export default function LeadDetailHeader({
             mode="followup"
           />
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
+          {/* Reconnect chip renders ONLY when a workspace mail_account has
+              needs_reconnect=true or status='error'. Rendered outside the
+              isConnected ternary because `isConnected` here comes from the
+              legacy gmail_connections check — a token can be revoked while
+              the legacy row still exists, leaving isConnected=true and
+              hiding the chip exactly when the user needs it. */}
+          <MailReconnectChip compact />
           {isConnected ? (
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (
-            <>
-              {/* Renders only if a workspace mail account is in error / needs_reconnect state. */}
-              <MailReconnectChip compact />
-              <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
-                <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
-              </Button>
-            </>
+            <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
+              <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
+            </Button>
           )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
