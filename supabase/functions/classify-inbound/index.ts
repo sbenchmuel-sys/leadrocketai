@@ -79,9 +79,10 @@ const INTENT_VERSION = "intent_router/v2";
 // would force the backfill to re-process every freshly classified
 // inbound on its first run.
 //
+// v4 — fix Outlook refetch in backfill (ConsistencyLevel header).
 // v3 — added Outlook refetch + multi-line synth fallback in backfill.
 // v2 — initial pilot (length-scaled bullet prompt).
-const AI_SUMMARY_VERSION = "inbound_summary/v3";
+const AI_SUMMARY_VERSION = "inbound_summary/v4";
 
 // Allowed values returned by ai_task.intent_router (see
 // supabase/functions/_shared/prompts.ts → PROMPTS.intent_router).
