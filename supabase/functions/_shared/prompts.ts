@@ -86,23 +86,49 @@ Rules:
 - If unclear, intent_primary="not_sure" and reply_worthy=true.
 
 Summary rules:
-- ai_summary: 1–2 sentences paraphrasing what the sender said. Preserve
-  specifics (numbers, dates, named entities, deadlines, product/tier
-  references, role titles). Do NOT generalize — bad: "Asks about
-  pricing." Good: "Asks for Q3 enterprise pricing on the 50-seat tier
-  and whether the 2-week pilot terms from our March call still apply."
-  Omit greetings, signatures, and quoted replies.
+- ai_summary: paraphrase what the sender said. Length scales with the
+  email's substantive content (after stripping greetings, signatures,
+  quoted replies). Pick ONE of three shapes:
+
+  QUICK (1 short sentence) — for acks, confirmations, yes/no replies,
+  one-line questions. Example: "Confirms Tuesday 2pm works for the
+  demo."
+
+  SUBSTANTIVE (2–3 sentences, no bullets) — for normal replies with
+  context, a couple of questions, or a single ask plus background.
+  Example: "Asks for Q3 enterprise pricing on the 50-seat tier and
+  whether the 2-week pilot terms from our March call still apply.
+  Mentions their CFO needs a redlined MSA by EOW. Open to a 30-min
+  call this week."
+
+  MULTI-POINT (1 lead sentence + 2–5 bullets) — for emails with
+  multiple distinct asks, decisions, dates, or stakeholders. Use this
+  when the reader needs to scan to act. Each bullet is one
+  concrete fact, ask, deadline, or commitment. Begin bullets with
+  "• " (Unicode bullet + space). Example:
+    "Pushes back on pricing and proposes a phased pilot.
+     • Asks for $40k → $25k Y1 with seat-based expansion
+     • Wants SOC-2 Type II report attached to MSA
+     • Decision committee meets June 3 — needs answer by June 1
+     • CTO will join the next call"
+
+- Preserve specifics in every shape: numbers, dates, named entities,
+  deadlines, product/tier references, role titles, dollar amounts.
+  Do NOT generalize ("Asks about pricing" is BAD; the examples above
+  are good). Omit greetings, signatures, and quoted replies.
 
 - Match the source language. If the customer wrote in Spanish, write
   the summary in Spanish. Preserve product/tier names and proper nouns
   verbatim regardless of language.
 
-- If the email body is under ~50 words of substantive content (after
-  stripping greetings, signatures, quoted replies), return the body
-  text VERBATIM instead of paraphrasing. Short emails like "ok",
-  "sounds great", or "looking forward to the meeting" should survive
-  the purge in their original form — paraphrasing them risks
-  hallucination and produces less useful output than preservation.
+- For very short emails (under ~30 words of substantive content like
+  "ok", "sounds great", "looking forward to the meeting"), return the
+  body text VERBATIM as a single quoted line instead of paraphrasing.
+  Paraphrasing them risks hallucination and produces less useful
+  output than preservation.
+
+- Hard cap: do not exceed 1000 characters. If the email is genuinely
+  longer than fits, prefer multi-point bullets over a long paragraph.
 
 - Do not include personal identifiers (SSN, financial account numbers,
   passwords, API keys) even if present in the source email.

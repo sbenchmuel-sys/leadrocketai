@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Mail, FileText, MoreVertical, Wand2, Check, Loader2 } from "lucide-react";
+import { SummaryBody, parseSummary } from "@/components/SummaryBody";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
@@ -126,11 +127,20 @@ function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound |
 
 export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: QueueCardProps) {
   const whyNow = buildWhyNowLine(lead, latestInbound);
-  const body = cleanBodyText({
-    ai_summary: latestInbound?.ai_summary ?? null,
-    snippet_text: latestInbound?.snippet_text ?? null,
-    subject: latestInbound?.subject ?? null,
-  });
+  const aiSummary = (latestInbound?.ai_summary ?? "").trim();
+  // When ai_summary contains bullets, render with SummaryBody (keeps bullet
+  // structure). Otherwise fall back to cleanBodyText prose flow.
+  const aiSummaryIsBulleted = aiSummary
+    ? parseSummary(aiSummary).isBulleted
+    : false;
+  const proseBody = aiSummaryIsBulleted
+    ? ""
+    : cleanBodyText({
+        ai_summary: latestInbound?.ai_summary ?? null,
+        snippet_text: latestInbound?.snippet_text ?? null,
+        subject: latestInbound?.subject ?? null,
+      });
+  const hasContent = aiSummaryIsBulleted || !!proseBody;
 
   const buttonLabel = queueButtonLabel({
     next_action_key: lead.next_action_key,
@@ -168,14 +178,24 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
 
         <p className="mt-0.5 text-xs text-muted-foreground">{whyNow}</p>
 
-        <p
-          className={cn(
-            "mt-1.5 text-sm",
-            body ? "text-foreground/85" : "text-muted-foreground/60 italic",
-          )}
-        >
-          {body || "[No preview available]"}
-        </p>
+        {aiSummaryIsBulleted ? (
+          <div className="mt-1.5">
+            <SummaryBody
+              text={aiSummary}
+              maxBullets={3}
+              textClassName="text-sm text-foreground/85 leading-relaxed"
+            />
+          </div>
+        ) : (
+          <p
+            className={cn(
+              "mt-1.5 text-sm",
+              hasContent ? "text-foreground/85" : "text-muted-foreground/60 italic",
+            )}
+          >
+            {proseBody || "[No preview available]"}
+          </p>
+        )}
       </Link>
 
       {/* Action row — own button hit areas, not part of the tap-through */}

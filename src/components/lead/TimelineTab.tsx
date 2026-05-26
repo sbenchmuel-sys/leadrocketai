@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import CallTimelineCard from "@/components/call/CallTimelineCard";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
+import { SummaryBody } from "@/components/SummaryBody";
 
 // PR 2.4 — minimal lead shape passed to EmailActionDialog when user clicks
 // Reply/Follow-up. Group view fetches all members up front; solo view uses
@@ -556,7 +557,7 @@ function TimelineEntry({
                   )}
                 </div>
                 {item.subject && (
-                  <p className={cn("text-sm font-medium text-foreground leading-snug truncate", item.hidden && "line-through")}>
+                  <p className={cn("text-sm font-medium text-foreground leading-snug line-clamp-2", item.hidden && "line-through")}>
                     {item.subject}
                   </p>
                 )}
@@ -570,10 +571,18 @@ function TimelineEntry({
                     )}
                   </div>
                 )}
-                {!open && item.snippet_text && (
-                  <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-                    {formatSnippet(item)}
-                  </p>
+                {!open && (aiSummary || item.snippet_text) && (
+                  aiSummary ? (
+                    <SummaryBody
+                      text={aiSummary}
+                      maxBullets={4}
+                      textClassName="text-[13px] text-muted-foreground leading-relaxed"
+                    />
+                  ) : (
+                    <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
+                      {formatSnippet(item)}
+                    </p>
+                  )
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
@@ -594,13 +603,18 @@ function TimelineEntry({
           <div className="pl-3 pb-2 space-y-2">
             {aiSummary && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
-                <p className="text-[11px] font-medium text-muted-foreground mb-0.5">AI Summary</p>
-                <p className="text-[13px] text-foreground leading-relaxed">{aiSummary}</p>
+                <p className="text-[11px] font-medium text-muted-foreground mb-1">AI Summary</p>
+                <SummaryBody
+                  text={aiSummary}
+                  textClassName="text-[13px] text-foreground leading-relaxed"
+                />
               </div>
             )}
-            <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
-              {formatSnippet(item)}
-            </p>
+            {item.snippet_text && (
+              <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                {formatSnippet(item)}
+              </p>
+            )}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {tags.map(tag => (
@@ -682,7 +696,7 @@ function ThreadEntry({
                   )}
                 </div>
                 {latest.subject && (
-                  <p className={cn("text-sm font-medium text-foreground leading-snug truncate", latest.hidden && "line-through")}>
+                  <p className={cn("text-sm font-medium text-foreground leading-snug line-clamp-2", latest.hidden && "line-through")}>
                     {latest.subject}
                   </p>
                 )}
@@ -696,10 +710,18 @@ function ThreadEntry({
                     )}
                   </div>
                 )}
-                {!open && (
-                  <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-                    {latest.snippet_text}
-                  </p>
+                {!open && (aiSummary || latest.snippet_text) && (
+                  aiSummary ? (
+                    <SummaryBody
+                      text={aiSummary}
+                      maxBullets={4}
+                      textClassName="text-[13px] text-muted-foreground leading-relaxed"
+                    />
+                  ) : (
+                    <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
+                      {latest.snippet_text}
+                    </p>
+                  )
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
@@ -720,13 +742,18 @@ function ThreadEntry({
           <div className="pl-3 pb-2 space-y-2">
             {aiSummary && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
-                <p className="text-[11px] font-medium text-muted-foreground mb-0.5">AI Summary</p>
-                <p className="text-[13px] text-foreground leading-relaxed">{aiSummary}</p>
+                <p className="text-[11px] font-medium text-muted-foreground mb-1">AI Summary</p>
+                <SummaryBody
+                  text={aiSummary}
+                  textClassName="text-[13px] text-foreground leading-relaxed"
+                />
               </div>
             )}
-            <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed line-clamp-4">
-              {latest.snippet_text}
-            </p>
+            {latest.snippet_text && (
+              <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed line-clamp-4">
+                {latest.snippet_text}
+              </p>
+            )}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {tags.map(tag => (
@@ -1214,8 +1241,17 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
 
   // Apply filter
   const filteredItems = useMemo(() => {
-    if (activeFilter === "all") return timelineItems;
-    return timelineItems.filter(i => matchesFilter(i, activeFilter));
+    const base = activeFilter === "all"
+      ? timelineItems
+      : timelineItems.filter(i => matchesFilter(i, activeFilter));
+    // Hide bare system_note rows (no subject AND no displayable snippet) —
+    // they render as a date pill with no content and look broken.
+    return base.filter(i => {
+      if (i.event_type !== "system_note") return true;
+      const hasSubject = !!(i.subject && i.subject.trim());
+      const hasSnippet = !!(i.snippet_text && formatSnippet(i).trim());
+      return hasSubject || hasSnippet;
+    });
   }, [timelineItems, activeFilter]);
 
   const entries = useMemo(() => groupIntoThreads(filteredItems), [filteredItems]);
