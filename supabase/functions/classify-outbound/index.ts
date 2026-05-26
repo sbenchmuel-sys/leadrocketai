@@ -39,11 +39,21 @@ interface OutboundRow {
 function buildEmailText(row: OutboundRow): string {
   const subject = (row.subject ?? "").trim();
   const snippet = (row.snippet_text ?? "").trim();
+  // Backfill fallback: when the raw body has been purged but a pre-v2
+  // ai_summary survives in metadata, feed that into the v2 prompt so
+  // the row gets re-shaped rather than skipped indefinitely. Lossy
+  // (summarizing a summary), but the v1 paraphrase is the best we
+  // have once raw body is gone — the alternative is leaving stale v1
+  // prose alongside fresh v2 bullets forever.
+  const priorSummary = typeof row.metadata_json?.ai_summary === "string"
+    ? row.metadata_json.ai_summary.trim()
+    : "";
+  const body = snippet || priorSummary;
   const lines: string[] = [];
   if (subject) lines.push(`Subject: ${subject}`);
-  if (snippet) {
+  if (body) {
     if (lines.length > 0) lines.push("");
-    lines.push(snippet);
+    lines.push(body);
   }
   return lines.join("\n");
 }
@@ -109,13 +119,15 @@ Deno.serve(async (req) => {
   let fetched = 0, summarized = 0, failed = 0, skipped = 0;
 
   try {
-    // Fetch outbound rows missing ai_summary, snippet present, oldest first
-    // (so the about-to-purge ones get summarized before purge).
+    // Fetch outbound rows. Live cron mode needs snippet_text present
+    // (it's the input to the v2 prompt for never-summarized rows).
+    // Backfill mode must NOT gate on snippet_text — pre-v2 rows whose
+    // raw body was purged still need re-shaping, using their stale v1
+    // ai_summary as the prompt input. Codex P1 on PR #52.
     let query = admin
       .from("lead_timeline_items")
       .select("id, lead_id, subject, snippet_text, metadata_json")
       .eq("event_type", "email_outbound")
-      .not("snippet_text", "is", null)
       .order("occurred_at", { ascending: true })
       .limit(BATCH_SIZE * 4); // overfetch — many will already have summary
 
@@ -124,6 +136,8 @@ Deno.serve(async (req) => {
         Date.now() - BACKFILL_LOOKBACK_DAYS * 24 * 3600 * 1000,
       ).toISOString();
       query = query.gte("occurred_at", cutoff);
+    } else {
+      query = query.not("snippet_text", "is", null);
     }
 
     const { data: rows, error } = await query;
