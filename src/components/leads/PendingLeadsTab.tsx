@@ -170,7 +170,7 @@ async function backfillLeadHistory(leadId: string, leadEmail: string) {
   }
   try {
     await supabase.functions.invoke("recompute-lead-intelligence", {
-      body: { leadId, force: true },
+      body: { lead_id: leadId, force: true },
     });
   } catch (e) {
     console.warn("[PendingLeads] recompute-lead-intelligence failed", e);
