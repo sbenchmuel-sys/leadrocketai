@@ -247,9 +247,8 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
       if (!recapResult.ok || !recapResult.content) {
         throw new Error(recapResult.error || "AI returned an empty recap — please try again");
       }
-      let recapData: Record<string, unknown>;
-      try { recapData = JSON.parse(extractJson(recapResult.content)); } catch (e) {
-        console.error("Failed to parse recap:", e);
+      const recapData = parseRecapJson(recapResult.content);
+      if (!recapData) {
         throw new Error("AI returned an invalid recap format — please try again");
       }
 
