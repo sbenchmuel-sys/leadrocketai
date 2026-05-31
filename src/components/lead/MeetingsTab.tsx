@@ -120,6 +120,31 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     return (fenced?.[1] ?? trimmed).trim();
   };
 
+  // Tolerant JSON parser: strips fences, and if the payload looks truncated
+  // (starts with `{` but doesn't end with `}`), trims to the last balanced `}`
+  // and retries. Returns null on unrecoverable failure.
+  const parseRecapJson = (raw: string): Record<string, unknown> | null => {
+    const stripped = extractJson(raw);
+    try {
+      return JSON.parse(stripped) as Record<string, unknown>;
+    } catch (e1) {
+      if (stripped.startsWith("{")) {
+        const lastBrace = stripped.lastIndexOf("}");
+        if (lastBrace > 0) {
+          const candidate = stripped.slice(0, lastBrace + 1);
+          try {
+            return JSON.parse(candidate) as Record<string, unknown>;
+          } catch (e2) {
+            console.error("[MeetingsTab] recap repair parse failed:", e2, candidate.slice(0, 300));
+          }
+        }
+      }
+      console.error("[MeetingsTab] recap parse failed:", e1, stripped.slice(0, 300));
+      return null;
+    }
+  };
+
+
   const handleAddMeetingSummary = async () => {
     if (!addNotes.trim()) {
       toast.error("Please enter meeting notes");
