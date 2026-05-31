@@ -2081,6 +2081,43 @@ ${customInstructionsText}
       }
     }
 
+    // Truncation guard for JSON analysis tasks: if Gemini hit max_tokens the
+    // emitted JSON is incomplete and the client's JSON.parse will fail with
+    // an opaque "invalid format" error. Retry once with a much higher cap
+    // before surfacing a clear error.
+    {
+      const finishReason = aiResult.choices?.[0]?.finish_reason;
+      if (
+        finishReason === "length" &&
+        ANALYSIS_TASKS.has(task) &&
+        !(aiRequestBody as { _truncationRetry?: boolean })._truncationRetry
+      ) {
+        console.warn(`[ai_task] [${task}] finish_reason=length — retrying with 16384 max_tokens`);
+        const retryBody = { ...aiRequestBody, max_tokens: 16384, _truncationRetry: true };
+        const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify(retryBody),
+        });
+        if (retryResponse.ok) {
+          const retryJson = await retryResponse.json();
+          const retryContent = retryJson.choices?.[0]?.message?.content || "";
+          if (retryContent) {
+            aiResult = retryJson;
+            content = retryContent;
+          }
+        }
+        const finalReason = aiResult.choices?.[0]?.finish_reason;
+        if (finalReason === "length") {
+          console.error(`[ai_task] [${task}] still truncated after retry — returning explicit error`);
+          return new Response(
+            JSON.stringify({ ok: false, error: "Recap output was truncated — please retry" }),
+            { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
+    }
+
     const preStripLength = content.length;
     content = stripLeakedReasoning(content);
 
