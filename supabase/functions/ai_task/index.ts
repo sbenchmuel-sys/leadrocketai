@@ -1006,6 +1006,16 @@ const LITE_MODEL_TASKS = ["intent_router", "analyze_outgoing_email"];
 // larger means the model is rambling and should be clipped.
 const TASK_MAX_TOKENS: Record<string, number> = {
   intent_router: 400,
+  // Analysis tasks run on gemini-2.5-pro which consumes a sizable share of
+  // max_tokens on internal reasoning. The JSON outputs here are also large
+  // (recap bullets + milestones + risks + action items + open questions +
+  // full follow-up email). Give them room so the JSON isn't truncated.
+  post_meeting_recap: 8192,
+  extract_milestones_risks: 4096,
+  extract_deal_factors: 4096,
+  recommend_next_steps: 4096,
+  lead_deep_analysis: 8192,
+  post_meeting_followup_personalized: 6144,
 };
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
