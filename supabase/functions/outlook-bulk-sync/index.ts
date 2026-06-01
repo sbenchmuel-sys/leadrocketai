@@ -52,7 +52,7 @@ serve(async (req) => {
       });
     }
 
-    const { leadIds, maxResults = 20 } = await req.json();
+    const { leadIds, maxResults = 20, workspace_id: requestedWorkspaceId } = await req.json();
     if (!Array.isArray(leadIds) || leadIds.length === 0) {
       return new Response(
         JSON.stringify({ ok: false, error: "Missing or empty leadIds array" }),
@@ -63,12 +63,15 @@ serve(async (req) => {
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Resolve workspace + connected Outlook mail_account
-    const { data: membership } = await supabase
+    let membershipQuery = supabase
       .from("workspace_members")
       .select("workspace_id")
       .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0) {
+      membershipQuery = membershipQuery.eq("workspace_id", requestedWorkspaceId);
+    }
+    const { data: membership } = await membershipQuery.maybeSingle();
 
     if (!membership) {
       return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {

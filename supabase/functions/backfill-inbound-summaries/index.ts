@@ -558,6 +558,7 @@ Deno.serve(async (req) => {
   // all workspaces (default behaviour).
   const url = new URL(req.url);
   const workspaceId = url.searchParams.get("workspace_id");
+  const forceSubjectFallback = url.searchParams.get("force_subject_fallback") === "true";
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -609,18 +610,21 @@ Deno.serve(async (req) => {
     // PostgREST .or() takes comma-separated filter strings; the version
     // value contains a `/` which is URL-safe in query strings but the
     // SDK percent-encodes the whole filter param, so we pass it raw.
+    const candidateFilters = [
+      "metadata_json->>ai_summary.is.null",
+      "metadata_json->>ai_summary_version.is.null",
+      `metadata_json->>ai_summary_version.neq.${AI_SUMMARY_VERSION}`,
+    ];
+    if (forceSubjectFallback) {
+      candidateFilters.push("metadata_json->>ai_summary_source.eq.subject_fallback");
+    }
+
     let query = admin
       .from("lead_timeline_items")
       .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, provider, metadata_json")
       .eq("event_type", "email_inbound")
       .gte("occurred_at", cutoff)
-      .or(
-        [
-          "metadata_json->>ai_summary.is.null",
-          "metadata_json->>ai_summary_version.is.null",
-          `metadata_json->>ai_summary_version.neq.${AI_SUMMARY_VERSION}`,
-        ].join(","),
-      )
+      .or(candidateFilters.join(","))
       .order("occurred_at", { ascending: false })
       .limit(BATCH_SIZE);
 

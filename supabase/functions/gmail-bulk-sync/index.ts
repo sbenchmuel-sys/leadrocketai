@@ -322,10 +322,11 @@ function deriveAction(
 async function syncLeadEmails(
   serviceSupabase: any,
   accessToken: string,
-  lead: { id: string; email: string; stage: string; strategy: string },
+  lead: { id: string; email: string; stage: string; strategy: string; workspace_id?: string | null },
   maxResults: number
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
+  const workspaceId = lead.workspace_id ?? null;
   const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim() : "";
   const errors: string[] = [];
   let synced = 0;
@@ -380,17 +381,22 @@ async function syncLeadEmails(
   // Get existing Gmail message IDs for deduplication
   const { data: existingInteractions } = await serviceSupabase
     .from("interactions")
-    .select("gmail_message_id")
+    .select("gmail_message_id, body_text")
     .eq("lead_id", leadId)
     .not("gmail_message_id", "is", null);
 
   const existingMessageIds = new Set(
     (existingInteractions || []).map((i: { gmail_message_id: string }) => i.gmail_message_id)
   );
+  const existingBodyByMessageId = new Map(
+    (existingInteractions || []).map((i: { gmail_message_id: string; body_text: string | null }) => [i.gmail_message_id, i.body_text])
+  );
 
   // Fetch and process each message
   for (const { id: gmailMessageId } of messageIds) {
-    if (existingMessageIds.has(gmailMessageId)) {
+    const existingBody = existingBodyByMessageId.get(gmailMessageId);
+    const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
+    if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) {
       continue;
     }
 
@@ -473,6 +479,7 @@ async function syncLeadEmails(
             source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: workspaceId,
             provider: "automation",
           });
       }
@@ -483,7 +490,7 @@ async function syncLeadEmails(
         const applied = await applyOOOPause({
           supabase: serviceSupabase,
           leadId,
-          workspaceId: null,
+          workspaceId,
           oooResult,
           occurredAt,
           gmailMessageId,
@@ -503,7 +510,7 @@ async function syncLeadEmails(
         await applyDeferPause({
           supabase: serviceSupabase,
           leadId,
-          workspaceId: null,
+          workspaceId,
           deferResult,
           logPrefix: "[gmail-bulk-sync]",
         });
@@ -533,6 +540,7 @@ async function syncLeadEmails(
             source: "automation",
             body_text: noteBody,
             occurred_at: new Date().toISOString(),
+            workspace_id: workspaceId,
             provider: "automation",
           });
         }
@@ -552,6 +560,7 @@ async function syncLeadEmails(
         cc_emails: ccEmailsArr,
         gmail_message_id: gmailMessageId,
         gmail_thread_id: threadId,
+        workspace_id: workspaceId,
         provider: "gmail",
         dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
       });
@@ -582,7 +591,9 @@ async function syncLeadEmails(
 
       for (const message of threadMessages) {
         const gmailMessageId = message.id;
-        if (existingMessageIds.has(gmailMessageId)) continue;
+        const existingBody = existingBodyByMessageId.get(gmailMessageId);
+        const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
+        if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) continue;
 
         const headers = message.payload?.headers || [];
         if (!messageInvolvesLead(headers, leadEmailNorm)) {
@@ -641,7 +652,7 @@ async function syncLeadEmails(
           await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId, type: "system_note", source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
-            occurred_at: new Date().toISOString(), provider: "automation",
+            occurred_at: new Date().toISOString(), workspace_id: workspaceId, provider: "automation",
           });
         }
 
@@ -651,7 +662,7 @@ async function syncLeadEmails(
           const applied = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
-            workspaceId: null,
+            workspaceId,
             oooResult: oooResultT,
             occurredAt,
             gmailMessageId,
@@ -671,7 +682,7 @@ async function syncLeadEmails(
           await applyDeferPause({
             supabase: serviceSupabase,
             leadId,
-            workspaceId: null,
+            workspaceId,
             deferResult,
             logPrefix: "[gmail-bulk-sync:thread]",
           });
@@ -698,7 +709,7 @@ async function syncLeadEmails(
             await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId, type: "system_note", source: "automation",
               body_text: noteBody,
-              occurred_at: new Date().toISOString(), provider: "automation",
+              occurred_at: new Date().toISOString(), workspace_id: workspaceId, provider: "automation",
             });
           }
         }
@@ -709,6 +720,7 @@ async function syncLeadEmails(
           subject, from_email: from, to_email: to,
           to_emails: toEmailsArr, cc_emails: ccEmailsArr,
           gmail_message_id: gmailMessageId, gmail_thread_id: threadId,
+          workspace_id: workspaceId,
           provider: "gmail",
           dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
         });
@@ -956,7 +968,7 @@ serve(async (req) => {
     // Get leads data
     const { data: leadsData, error: leadsError } = await supabase
       .from("leads")
-      .select("id, email, stage, strategy")
+      .select("id, email, stage, strategy, workspace_id")
       .in("id", leadIds);
 
     if (leadsError || !leadsData) {
