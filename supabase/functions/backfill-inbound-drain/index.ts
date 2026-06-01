@@ -120,13 +120,14 @@ Deno.serve(async (req) => {
 
     let batch: BatchResult;
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${serviceKey}`,
+      };
+      if (internalSecret) headers["X-Internal-Secret"] = internalSecret;
       const res = await fetch(targetUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${serviceKey}`,
-          "X-Internal-Secret": internalSecret,
-        },
+        headers,
         body: JSON.stringify({}),
       });
       batch = (await res.json()) as BatchResult;
