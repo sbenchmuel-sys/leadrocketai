@@ -89,6 +89,7 @@ interface TimelineRow {
   intent: string | null;
   source_table: string | null;
   source_id: string | null;
+  provider: string | null;
   metadata_json: Record<string, unknown> | null;
 }
 
