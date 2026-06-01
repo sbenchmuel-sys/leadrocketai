@@ -610,7 +610,7 @@ Deno.serve(async (req) => {
     // SDK percent-encodes the whole filter param, so we pass it raw.
     let query = admin
       .from("lead_timeline_items")
-      .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, metadata_json")
+      .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, provider, metadata_json")
       .eq("event_type", "email_inbound")
       .gte("occurred_at", cutoff)
       .or(
