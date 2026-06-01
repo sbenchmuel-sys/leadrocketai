@@ -61,3 +61,19 @@ Queued:
 
 Lovable handoff still pending:
 - ⬜ Workspace timezone settings dropdown UI. Until shipped, only Cliff's workspace can run automation (any other workspace has `timezone IS NULL` and the gate fail-closes).
+
+## Outreach (cold campaigns) — full plan in `CAMPAIGN_MANAGER_BUILD_PROMPTS.md`
+
+Rep-facing name is **"Outreach"**; underlying code keeps the `campaigns` / `campaign_steps` names. Build order A → B → D → 0 → C, with E alongside C.
+
+- 🚧 **Unit A — foundation (data + thin page + 3-step setup + saving).** Reuses the existing `campaigns` / `campaign_steps` tables and `assignCampaignToLead`. NEW in this unit:
+  - Migration `20260602000000_campaign_foundation.sql`: adds `campaigns.campaign_type` (`general`/`industry`), `campaigns.status` (`draft`/`active`/`paused`/`completed`), `campaigns.knowledge_ref`; **relaxes campaigns + campaign_steps management RLS from `is_workspace_admin` → `is_workspace_member`** (every rep builds their own; workspace isolation preserved); adds workspace `campaign_suppression_list` (do-not-contact) table with member RLS. No edge function → `config.toml` untouched. Does NOT touch `interactions`/`lead_timeline_items` or `automation_log`/`automation_logs`.
+  - Mutations in `src/lib/campaignQueries.ts`: `createCampaignWithSteps`, `updateCampaign`, `replaceCampaignSteps`, `deleteCampaign`, `fetchCampaignLeads`, `addLeadsToCampaign`, suppression CRUD. Default 9-touch plan + default `global_instructions` prompt in `src/lib/campaignDefaults.ts`.
+  - UI: thin `/app/automations` list (+ empty state, "Do-not-contact" dialog), `/app/automations/new` 3-step wizard, `/app/automations/:id` detail (script + People + Edit instructions). Nav item "Outreach".
+  - Decisions (confirmed with product): any member can manage; General/Industry maps onto `campaign_steps.variant_group` (one living campaign, base steps = `variant_group NULL`, Unit B fills per-industry variants); knowledge file captured as a `knowledge_ref` reference only — ingestion wired in Unit B.
+- ⬜ Units B / D / 0 / C / E — not started.
+
+**Carry-forward scope notes for later units (sized deliberately so estimates aren't undersized):**
+
+- **9-touch resolver extension is a MULTI-POINT change (Unit B), not just one clamp.** `_shared/campaignResolver.ts` hard-wires `4` in several places: `resolveStepNumber` clamps to `Math.max(1, Math.min(n, 4))`; step-type/framework selection branches on `step === 4` (breakup/value_add); generation hints branch on `step === 4`; and the prompt emits a literal `"Sequence: Step X of 4"`. Extending to 9 touches means revisiting all of these plus `total_steps`, `CHANNEL_STEP_CONSTRAINTS`, and `DEFAULT_STEP_CONFIG` (only steps 1–4 are defined today). DB is already fine — `campaign_steps.step_number` allows 1–10, so the 9-touch plan persists today; only generation is gated.
+- **Suppression enforcement is an explicit Unit B deliverable, gated to sending.** Unit A only stores `campaign_suppression_list` + CRUD + UI; nothing reads it before sending (safe — Unit A is draft-only, no send path). HARD REQUIREMENT: the suppression check must be wired into `automation-executor`'s send guard **before — or in the same unit as — any change that enables sending. Never after.** It must **compose with** (not replace) the existing `leads.unsubscribed` / `stop_on_unsubscribe` opt-out — both are checked.

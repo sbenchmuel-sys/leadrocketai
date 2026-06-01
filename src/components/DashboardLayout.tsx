@@ -2,7 +2,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical, ListChecks } from "lucide-react";
+import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical, ListChecks, Megaphone } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
@@ -38,6 +38,7 @@ const navItems: NavItem[] = [
 { to: "/app/queue", icon: ListChecks, label: "Queue" },
 { to: "/app/dashboard", icon: LayoutDashboard, label: "Dashboard" },
 { to: "/app/leads", icon: Users, label: "Leads" },
+{ to: "/app/automations", icon: Megaphone, label: "Outreach" },
 { to: "/app/inbox", icon: Inbox, label: "Inbox" },
 { to: "/app/knowledge", icon: BookOpen, label: "Knowledge Base" },
 { to: "/app/settings", icon: Settings, label: "Settings" }];
