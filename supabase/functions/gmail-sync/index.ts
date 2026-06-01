@@ -40,6 +40,16 @@ interface GmailMessage {
   internalDate: string;
 }
 
+interface GmailTokenConnection {
+  source: "mail_accounts" | "gmail_connections";
+  id?: string;
+  user_id: string;
+  gmail_email: string | null;
+  access_token_encrypted: string | null;
+  refresh_token_encrypted: string | null;
+  token_expires_at: string | null;
+}
+
 function decodeBase64Url(data: string): string {
   const base64 = data.replace(/-/g, "+").replace(/_/g, "/");
   try {
@@ -96,9 +106,9 @@ function getMessageBody(message: GmailMessage): string {
 // deno-lint-ignore no-explicit-any
 async function refreshTokenIfNeeded(
   supabase: any,
-  connection: { user_id: string; access_token_encrypted: string | null; refresh_token_encrypted: string | null; token_expires_at: string }
+  connection: GmailTokenConnection
 ): Promise<string> {
-  const expiresAt = new Date(connection.token_expires_at);
+  const expiresAt = new Date(connection.token_expires_at ?? 0);
   const now = new Date();
   const decryptedAccessToken = await safeDecryptToken(connection.access_token_encrypted ?? "");
   const decryptedRefreshToken = await safeDecryptToken(connection.refresh_token_encrypted ?? "");
@@ -143,10 +153,17 @@ async function refreshTokenIfNeeded(
     } catch (encryptError) {
       console.error("[gmail-sync] Token encryption failed, storing in plaintext:", encryptError);
     }
-    await supabase
-      .from("gmail_connections")
-      .update({ access_token_encrypted: encryptedNewAccessToken, token_expires_at: newExpiresAt })
-      .eq("user_id", connection.user_id);
+    if (connection.source === "mail_accounts" && connection.id) {
+      await supabase
+        .from("mail_accounts")
+        .update({ access_token: encryptedNewAccessToken, token_expires_at: newExpiresAt, needs_reconnect: false, status: "connected", error_reason: null })
+        .eq("id", connection.id);
+    } else {
+      await supabase
+        .from("gmail_connections")
+        .update({ access_token_encrypted: encryptedNewAccessToken, token_expires_at: newExpiresAt, needs_reconnect: false })
+        .eq("user_id", connection.user_id);
+    }
     return tokens.access_token;
   }
   return decryptedAccessToken;
@@ -197,21 +214,7 @@ serve(async (req) => {
     // Create service role client first - needed to access encrypted tokens
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get Gmail connection using service role (column-level security blocks token access for regular users)
-    const { data: connection, error: connError } = await serviceSupabase
-      .from("gmail_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-
-    if (connError || !connection) {
-      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
+    // Get current lead data for strategy/cadence info AND workspace-scoped mailbox routing
     const { data: leadData } = await supabase
       .from("leads")
       .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
@@ -224,6 +227,55 @@ serve(async (req) => {
     const hasFutureMeeting = leadData?.has_future_meeting || false;
     const actionDismissedAt = leadData?.action_dismissed_at || null;
     const leadMotion = leadData?.motion || "outbound_prospecting";
+
+    let connection: GmailTokenConnection | null = null;
+    if (leadData?.workspace_id) {
+      const { data: account } = await serviceSupabase
+        .from("mail_accounts")
+        .select("id, user_id, email_address, access_token, refresh_token, token_expires_at")
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "gmail")
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (account?.access_token && account?.refresh_token) {
+        connection = {
+          source: "mail_accounts",
+          id: account.id,
+          user_id: account.user_id ?? user.id,
+          gmail_email: account.email_address,
+          access_token_encrypted: account.access_token,
+          refresh_token_encrypted: account.refresh_token,
+          token_expires_at: account.token_expires_at,
+        };
+      }
+    }
+
+    if (!connection) {
+      const { data: legacyConnection } = await serviceSupabase
+        .from("gmail_connections")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (legacyConnection) {
+        connection = {
+          source: "gmail_connections",
+          user_id: legacyConnection.user_id,
+          gmail_email: legacyConnection.gmail_email,
+          access_token_encrypted: legacyConnection.access_token_encrypted,
+          refresh_token_encrypted: legacyConnection.refresh_token_encrypted,
+          token_expires_at: legacyConnection.token_expires_at,
+        };
+      }
+    }
+
+    if (!connection) {
+      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
@@ -694,10 +746,17 @@ serve(async (req) => {
       .eq("id", leadId);
 
     // Update last_sync_at
-    await serviceSupabase
-      .from("gmail_connections")
-      .update({ last_sync_at: new Date().toISOString() })
-      .eq("user_id", user.id);
+    if (connection.source === "mail_accounts" && connection.id) {
+      await serviceSupabase
+        .from("mail_accounts")
+        .update({ last_sync_at: new Date().toISOString() })
+        .eq("id", connection.id);
+    } else {
+      await serviceSupabase
+        .from("gmail_connections")
+        .update({ last_sync_at: new Date().toISOString() })
+        .eq("user_id", user.id);
+    }
 
     // Process Zoom meeting summary emails with DEDICATED SEARCH (not just lead-specific emails)
     try {
