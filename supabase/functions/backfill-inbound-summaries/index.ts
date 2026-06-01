@@ -385,6 +385,66 @@ async function fetchOutlookBody(
   return null;
 }
 
+/** Second-tier Outlook lookup: fetch by Graph's immutable message ID
+ *  (`provider_message_id`) directly via `GET /me/messages/{id}`. Works for
+ *  messages that have moved out of the default mail scope ($filter only
+ *  searches the mailbox root by default) — for example to Archive,
+ *  Deleted Items, or a sub-folder. Returns null on 404 / token reject /
+ *  empty body so the caller falls through to subject synth. */
+async function fetchOutlookBodyById(
+  accessToken: string,
+  providerMessageId: string,
+  context: { row_id: string; workspace_id: string | null },
+): Promise<string | null> {
+  // The provider_message_id is a URL-safe Graph ID; encode just in case.
+  const url = `https://graph.microsoft.com/v1.0/me/messages/${
+    encodeURIComponent(providerMessageId)
+  }?$select=id,body,bodyPreview`;
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Prefer: 'outlook.body-content-type="text"',
+      },
+    });
+  } catch (err) {
+    logger.warn("backfill_inbound_outlook_byid_network_error", {
+      ...context,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  if (!resp.ok) {
+    // 404 = message deleted from mailbox; other = token/permissions.
+    let bodyText = "";
+    try { bodyText = (await resp.text()).slice(0, 200); } catch { /* ignore */ }
+    logger.warn("backfill_inbound_outlook_byid_http_error", {
+      ...context,
+      status: resp.status,
+      body_snippet: bodyText,
+    });
+    return null;
+  }
+
+  const msg = await resp.json() as {
+    body?: { content?: string; contentType?: string };
+    bodyPreview?: string;
+  };
+  const rawBody = (msg.body?.content ?? "").trim();
+  if (rawBody) {
+    if (msg.body?.contentType === "html" || /<\w+/.test(rawBody)) {
+      return htmlToPlain(rawBody);
+    }
+    return rawBody;
+  }
+  const preview = (msg.bodyPreview ?? "").trim();
+  if (preview) return preview;
+  return null;
+}
+
 function buildSubjectSynth(row: TimelineRow, lead: LeadRow | undefined): string {
   // Multi-line synth: gives the Reply/Follow-up drafting AI enough signal
   // to produce a sensible draft even when the body is permanently gone.
