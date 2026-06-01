@@ -74,7 +74,11 @@ const INTENT_VERSION = "intent_router_v2";
 //      without that header.
 // v3 — added Outlook refetch tier + multi-line synth fallback.
 // v2 — initial pilot launch (Gmail refetch + terse subject synth).
-const AI_SUMMARY_VERSION = "inbound_summary/v5";
+// v6 — fall back to lead_timeline_items.provider when metadata_json.source
+//      is missing. Pre-cutover rows often have provider='gmail' but no
+//      metadata.source, which caused Gmail refetch to be skipped and
+//      everything to land on subject_synth. Re-queue all v5 rows once.
+const AI_SUMMARY_VERSION = "inbound_summary/v6";
 
 interface TimelineRow {
   id: string;
@@ -85,6 +89,7 @@ interface TimelineRow {
   intent: string | null;
   source_table: string | null;
   source_id: string | null;
+  provider: string | null;
   metadata_json: Record<string, unknown> | null;
 }
 
@@ -156,9 +161,13 @@ function getFromEmail(meta: Record<string, unknown> | null): string {
   return raw.replace(/^.*<([^>]+)>.*$/, "$1").replace(/[<>]/g, "").trim();
 }
 
-function getSource(meta: Record<string, unknown> | null): "gmail" | "outlook" | "unknown" {
+function getSource(
+  meta: Record<string, unknown> | null,
+  providerFallback?: string | null,
+): "gmail" | "outlook" | "unknown" {
   const s = meta?.source;
   if (s === "gmail" || s === "outlook") return s;
+  if (providerFallback === "gmail" || providerFallback === "outlook") return providerFallback;
   return "unknown";
 }
 
@@ -602,7 +611,7 @@ Deno.serve(async (req) => {
     // SDK percent-encodes the whole filter param, so we pass it raw.
     let query = admin
       .from("lead_timeline_items")
-      .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, metadata_json")
+      .select("id, lead_id, workspace_id, subject, snippet_text, intent, source_table, source_id, provider, metadata_json")
       .eq("event_type", "email_inbound")
       .gte("occurred_at", cutoff)
       .or(
@@ -694,7 +703,7 @@ Deno.serve(async (req) => {
 
         // (b) GMAIL_REFETCH
         if (!body) {
-          const source = getSource(row.metadata_json);
+          const source = getSource(row.metadata_json, row.provider);
           const messageId = getGmailMessageId(row.metadata_json);
           const ownerId = lead?.owner_user_id ?? null;
           if (source === "gmail" && messageId && ownerId) {
@@ -719,7 +728,7 @@ Deno.serve(async (req) => {
         // message ID is the RFC822 internetMessageId; we resolve it to a
         // Graph message via $filter and pull the plain-text body.
         if (!body) {
-          const source = getSource(row.metadata_json);
+          const source = getSource(row.metadata_json, row.provider);
           const messageId = getGmailMessageId(row.metadata_json); // legacy field naming
           const workspaceId = row.workspace_id;
           if (source === "outlook" && messageId && workspaceId) {
