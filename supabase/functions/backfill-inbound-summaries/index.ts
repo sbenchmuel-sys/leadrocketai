@@ -63,13 +63,18 @@ const INTENT_VERSION = "intent_router_v2";
 // uses it as a one-shot re-queue trigger: rows tagged with an older
 // version are re-processed exactly once, then drain to the new tag.
 //
+// v5 — second Outlook lookup tier: when $filter on internetMessageId
+//      returns no match, fall back to GET /me/messages/{provider_message_id}
+//      using the Graph immutable ID stored alongside the RFC822 ID.
+//      Catches messages that moved folders (Archive/Deleted) where
+//      $filter against the default scope misses them.
 // v4 — fix Outlook refetch (added ConsistencyLevel: eventual header).
 //      v3 deployment had 0% Outlook refetch success because Graph
 //      silently returns empty for $filter on non-indexed properties
 //      without that header.
 // v3 — added Outlook refetch tier + multi-line synth fallback.
 // v2 — initial pilot launch (Gmail refetch + terse subject synth).
-const AI_SUMMARY_VERSION = "inbound_summary/v4";
+const AI_SUMMARY_VERSION = "inbound_summary/v5";
 
 interface TimelineRow {
   id: string;
