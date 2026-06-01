@@ -322,10 +322,11 @@ function deriveAction(
 async function syncLeadEmails(
   serviceSupabase: any,
   accessToken: string,
-  lead: { id: string; email: string; stage: string; strategy: string },
+  lead: { id: string; email: string; stage: string; strategy: string; workspace_id?: string | null },
   maxResults: number
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
+  const workspaceId = lead.workspace_id ?? null;
   const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim() : "";
   const errors: string[] = [];
   let synced = 0;
@@ -656,7 +657,7 @@ async function syncLeadEmails(
           const applied = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
-            workspaceId: null,
+            workspaceId,
             oooResult: oooResultT,
             occurredAt,
             gmailMessageId,
@@ -676,7 +677,7 @@ async function syncLeadEmails(
           await applyDeferPause({
             supabase: serviceSupabase,
             leadId,
-            workspaceId: null,
+            workspaceId,
             deferResult,
             logPrefix: "[gmail-bulk-sync:thread]",
           });
