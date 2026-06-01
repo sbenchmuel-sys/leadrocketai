@@ -588,7 +588,9 @@ async function syncLeadEmails(
 
       for (const message of threadMessages) {
         const gmailMessageId = message.id;
-        if (existingMessageIds.has(gmailMessageId)) continue;
+        const existingBody = existingBodyByMessageId.get(gmailMessageId);
+        const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
+        if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) continue;
 
         const headers = message.payload?.headers || [];
         if (!messageInvolvesLead(headers, leadEmailNorm)) {
@@ -647,7 +649,7 @@ async function syncLeadEmails(
           await createCanonicalInteraction(serviceSupabase, {
             lead_id: leadId, type: "system_note", source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
-            occurred_at: new Date().toISOString(), provider: "automation",
+            occurred_at: new Date().toISOString(), workspace_id: workspaceId, provider: "automation",
           });
         }
 
