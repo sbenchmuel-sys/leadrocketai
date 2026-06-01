@@ -62,6 +62,22 @@ export async function projectTimelineItem(
     return;
   }
 
+  if (item.snippet_text && item.snippet_text.trim().length > 0) {
+    const { error: refillError } = await supabase
+      .from("lead_timeline_items")
+      .update({
+        snippet_text: item.snippet_text.substring(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("lead_id", item.lead_id)
+      .eq("dedupe_key", item.dedupe_key)
+      .or("snippet_text.is.null,snippet_text.eq.");
+
+    if (refillError) {
+      console.warn("[timelineProjector] Snippet refill failed:", refillError.message, { dedupe_key: item.dedupe_key });
+    }
+  }
+
   // Fire-and-forget recompute if requested
   if (options?.triggerRecompute && item.lead_id) {
     queueRecompute(supabase, item.lead_id).catch((err) => {
