@@ -489,7 +489,7 @@ async function syncLeadEmails(
         const applied = await applyOOOPause({
           supabase: serviceSupabase,
           leadId,
-          workspaceId: null,
+            workspaceId,
           oooResult,
           occurredAt,
           gmailMessageId,
@@ -704,7 +704,7 @@ async function syncLeadEmails(
             await createCanonicalInteraction(serviceSupabase, {
               lead_id: leadId, type: "system_note", source: "automation",
               body_text: noteBody,
-              occurred_at: new Date().toISOString(), provider: "automation",
+              occurred_at: new Date().toISOString(), workspace_id: workspaceId, provider: "automation",
             });
           }
         }
@@ -715,6 +715,7 @@ async function syncLeadEmails(
           subject, from_email: from, to_email: to,
           to_emails: toEmailsArr, cc_emails: ccEmailsArr,
           gmail_message_id: gmailMessageId, gmail_thread_id: threadId,
+          workspace_id: workspaceId,
           provider: "gmail",
           dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
         });
