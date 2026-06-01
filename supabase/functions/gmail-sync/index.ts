@@ -746,10 +746,17 @@ serve(async (req) => {
       .eq("id", leadId);
 
     // Update last_sync_at
-    await serviceSupabase
-      .from("gmail_connections")
-      .update({ last_sync_at: new Date().toISOString() })
-      .eq("user_id", user.id);
+    if (connection.source === "mail_accounts" && connection.id) {
+      await serviceSupabase
+        .from("mail_accounts")
+        .update({ last_sync_at: new Date().toISOString() })
+        .eq("id", connection.id);
+    } else {
+      await serviceSupabase
+        .from("gmail_connections")
+        .update({ last_sync_at: new Date().toISOString() })
+        .eq("user_id", user.id);
+    }
 
     // Process Zoom meeting summary emails with DEDICATED SEARCH (not just lead-specific emails)
     try {
