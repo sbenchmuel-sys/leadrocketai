@@ -280,12 +280,15 @@ serve(async (req) => {
     // Get existing Gmail message IDs for deduplication
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("gmail_message_id")
+      .select("gmail_message_id, body_text")
       .eq("lead_id", leadId)
       .not("gmail_message_id", "is", null);
 
     const existingMessageIds = new Set(
       (existingInteractions || []).map(i => i.gmail_message_id)
+    );
+    const existingBodyByMessageId = new Map(
+      (existingInteractions || []).map(i => [i.gmail_message_id, i.body_text])
     );
 
     let synced = 0;
@@ -294,7 +297,9 @@ serve(async (req) => {
 
     // Fetch and process each message
     for (const { id: gmailMessageId } of messageIds) {
-      if (existingMessageIds.has(gmailMessageId)) {
+      const existingBody = existingBodyByMessageId.get(gmailMessageId);
+      const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
+      if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) {
         continue;
       }
 
