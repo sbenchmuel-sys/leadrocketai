@@ -703,7 +703,7 @@ Deno.serve(async (req) => {
 
         // (b) GMAIL_REFETCH
         if (!body) {
-          const source = getSource(row.metadata_json);
+          const source = getSource(row.metadata_json, row.provider);
           const messageId = getGmailMessageId(row.metadata_json);
           const ownerId = lead?.owner_user_id ?? null;
           if (source === "gmail" && messageId && ownerId) {
@@ -728,7 +728,7 @@ Deno.serve(async (req) => {
         // message ID is the RFC822 internetMessageId; we resolve it to a
         // Graph message via $filter and pull the plain-text body.
         if (!body) {
-          const source = getSource(row.metadata_json);
+          const source = getSource(row.metadata_json, row.provider);
           const messageId = getGmailMessageId(row.metadata_json); // legacy field naming
           const workspaceId = row.workspace_id;
           if (source === "outlook" && messageId && workspaceId) {
