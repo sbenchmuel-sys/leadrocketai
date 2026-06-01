@@ -54,7 +54,11 @@ import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 
 const BATCH_SIZE = 50;
-const LOOKBACK_DAYS = 60;
+// Lookback covers the full pilot history. Pilot workspaces have inbound
+// rows going back ~12 months; 60 days left ~half the backlog stranded
+// without summaries. 730 days = 2 years gives full historical coverage
+// for restore runs without scanning the whole table.
+const LOOKBACK_DAYS = 730;
 const INTENT_VERSION = "intent_router_v2";
 // Version tag is a CODE-STATE marker (not a prompt-content marker).
 // Bumped whenever a change in this function would produce a different
