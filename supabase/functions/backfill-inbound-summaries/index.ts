@@ -754,6 +754,21 @@ Deno.serve(async (req) => {
                 if (refetched && refetched.trim()) {
                   body = refetched.trim();
                   path = "outlook_refetched";
+                } else {
+                  // Tier 2: GET by Graph immutable ID. Picks up messages
+                  // that have moved out of the default scope (Archive,
+                  // Deleted Items, sub-folders) where $filter misses them.
+                  const providerId = getProviderMessageId(row.metadata_json);
+                  if (providerId) {
+                    const byId = await fetchOutlookBodyById(token, providerId, {
+                      row_id: row.id,
+                      workspace_id: workspaceId,
+                    });
+                    if (byId && byId.trim()) {
+                      body = byId.trim();
+                      path = "outlook_refetched";
+                    }
+                  }
                 }
               }
             }
