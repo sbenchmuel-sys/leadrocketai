@@ -226,12 +226,18 @@ serve(async (req) => {
           .from("mail_accounts")
           .upsert({
             workspace_id: membership.workspace_id,
+            user_id: stateData.user_id,
             provider: "gmail",
             email_address: gmailEmail,
             display_name: userInfo.name || gmailEmail,
             external_user_id: stateData.user_id,
             status: "connected",
             is_default: true,
+            access_token: encryptedAccessToken,
+            refresh_token: encryptedRefreshToken,
+            token_expires_at: tokenExpiresAt,
+            granted_scopes: grantedScopes,
+            last_sync_at: null,
             needs_reconnect: false,
             error_reason: null,
           }, { onConflict: "workspace_id,email_address", ignoreDuplicates: false });
