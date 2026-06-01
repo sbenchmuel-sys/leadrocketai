@@ -217,12 +217,15 @@ serve(async (req) => {
     // Get existing message IDs for dedup (use internetMessageId as the stable key)
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("gmail_message_id")
+      .select("gmail_message_id, body_text")
       .eq("lead_id", leadId)
       .not("gmail_message_id", "is", null);
 
     const existingMessageIds = new Set(
       (existingInteractions || []).map(i => i.gmail_message_id)
+    );
+    const existingBodyByMessageId = new Map(
+      (existingInteractions || []).map(i => [i.gmail_message_id, i.body_text])
     );
 
     let synced = 0;
@@ -232,7 +235,9 @@ serve(async (req) => {
     for (const msg of messages) {
       // Use internetMessageId as stable dedup key (falls back to Graph id)
       const messageId = msg.internetMessageId || msg.id;
-      if (existingMessageIds.has(messageId)) continue;
+      const existingBody = existingBodyByMessageId.get(messageId);
+      const shouldRestorePurgedBody = existingMessageIds.has(messageId) && (!existingBody || existingBody.trim() === "");
+      if (existingMessageIds.has(messageId) && !shouldRestorePurgedBody) continue;
       if (msg.isDraft) continue;
 
       try {
