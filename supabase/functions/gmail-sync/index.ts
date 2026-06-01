@@ -214,21 +214,7 @@ serve(async (req) => {
     // Create service role client first - needed to access encrypted tokens
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get Gmail connection using service role (column-level security blocks token access for regular users)
-    const { data: connection, error: connError } = await serviceSupabase
-      .from("gmail_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-
-    if (connError || !connection) {
-      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get current lead data for strategy/cadence info AND owner_user_id for workspace settings
+    // Get current lead data for strategy/cadence info AND workspace-scoped mailbox routing
     const { data: leadData } = await supabase
       .from("leads")
       .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
@@ -241,6 +227,55 @@ serve(async (req) => {
     const hasFutureMeeting = leadData?.has_future_meeting || false;
     const actionDismissedAt = leadData?.action_dismissed_at || null;
     const leadMotion = leadData?.motion || "outbound_prospecting";
+
+    let connection: GmailTokenConnection | null = null;
+    if (leadData?.workspace_id) {
+      const { data: account } = await serviceSupabase
+        .from("mail_accounts")
+        .select("id, user_id, email_address, access_token, refresh_token, token_expires_at")
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "gmail")
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (account?.access_token && account?.refresh_token) {
+        connection = {
+          source: "mail_accounts",
+          id: account.id,
+          user_id: account.user_id ?? user.id,
+          gmail_email: account.email_address,
+          access_token_encrypted: account.access_token,
+          refresh_token_encrypted: account.refresh_token,
+          token_expires_at: account.token_expires_at,
+        };
+      }
+    }
+
+    if (!connection) {
+      const { data: legacyConnection } = await serviceSupabase
+        .from("gmail_connections")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (legacyConnection) {
+        connection = {
+          source: "gmail_connections",
+          user_id: legacyConnection.user_id,
+          gmail_email: legacyConnection.gmail_email,
+          access_token_encrypted: legacyConnection.access_token_encrypted,
+          refresh_token_encrypted: legacyConnection.refresh_token_encrypted,
+          token_expires_at: legacyConnection.token_expires_at,
+        };
+      }
+    }
+
+    if (!connection) {
+      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
 
