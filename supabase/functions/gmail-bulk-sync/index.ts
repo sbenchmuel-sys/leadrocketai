@@ -479,6 +479,7 @@ async function syncLeadEmails(
             source: "automation",
             body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
             occurred_at: new Date().toISOString(),
+            workspace_id: workspaceId,
             provider: "automation",
           });
       }
@@ -489,7 +490,7 @@ async function syncLeadEmails(
         const applied = await applyOOOPause({
           supabase: serviceSupabase,
           leadId,
-            workspaceId,
+          workspaceId,
           oooResult,
           occurredAt,
           gmailMessageId,
@@ -509,7 +510,7 @@ async function syncLeadEmails(
         await applyDeferPause({
           supabase: serviceSupabase,
           leadId,
-          workspaceId: null,
+          workspaceId,
           deferResult,
           logPrefix: "[gmail-bulk-sync]",
         });
@@ -539,6 +540,7 @@ async function syncLeadEmails(
             source: "automation",
             body_text: noteBody,
             occurred_at: new Date().toISOString(),
+            workspace_id: workspaceId,
             provider: "automation",
           });
         }
@@ -558,6 +560,7 @@ async function syncLeadEmails(
         cc_emails: ccEmailsArr,
         gmail_message_id: gmailMessageId,
         gmail_thread_id: threadId,
+        workspace_id: workspaceId,
         provider: "gmail",
         dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
       });
