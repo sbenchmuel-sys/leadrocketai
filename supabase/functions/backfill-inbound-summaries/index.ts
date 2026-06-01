@@ -160,9 +160,13 @@ function getFromEmail(meta: Record<string, unknown> | null): string {
   return raw.replace(/^.*<([^>]+)>.*$/, "$1").replace(/[<>]/g, "").trim();
 }
 
-function getSource(meta: Record<string, unknown> | null): "gmail" | "outlook" | "unknown" {
+function getSource(
+  meta: Record<string, unknown> | null,
+  providerFallback?: string | null,
+): "gmail" | "outlook" | "unknown" {
   const s = meta?.source;
   if (s === "gmail" || s === "outlook") return s;
+  if (providerFallback === "gmail" || providerFallback === "outlook") return providerFallback;
   return "unknown";
 }
 
