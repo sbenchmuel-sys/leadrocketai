@@ -74,7 +74,11 @@ const INTENT_VERSION = "intent_router_v2";
 //      without that header.
 // v3 — added Outlook refetch tier + multi-line synth fallback.
 // v2 — initial pilot launch (Gmail refetch + terse subject synth).
-const AI_SUMMARY_VERSION = "inbound_summary/v5";
+// v6 — fall back to lead_timeline_items.provider when metadata_json.source
+//      is missing. Pre-cutover rows often have provider='gmail' but no
+//      metadata.source, which caused Gmail refetch to be skipped and
+//      everything to land on subject_synth. Re-queue all v5 rows once.
+const AI_SUMMARY_VERSION = "inbound_summary/v6";
 
 interface TimelineRow {
   id: string;
