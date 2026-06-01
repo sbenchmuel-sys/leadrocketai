@@ -965,7 +965,7 @@ serve(async (req) => {
     // Get leads data
     const { data: leadsData, error: leadsError } = await supabase
       .from("leads")
-      .select("id, email, stage, strategy")
+      .select("id, email, stage, strategy, workspace_id")
       .in("id", leadIds);
 
     if (leadsError || !leadsData) {
