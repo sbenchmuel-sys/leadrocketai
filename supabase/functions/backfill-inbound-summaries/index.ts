@@ -167,6 +167,11 @@ function getGmailMessageId(meta: Record<string, unknown> | null): string | null 
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
+function getProviderMessageId(meta: Record<string, unknown> | null): string | null {
+  const v = meta?.provider_message_id;
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
 function htmlToPlain(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
