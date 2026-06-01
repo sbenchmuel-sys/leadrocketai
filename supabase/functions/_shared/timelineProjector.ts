@@ -34,6 +34,10 @@ export async function projectTimelineItem(
   item: TimelineItemInput,
   options?: { triggerRecompute?: boolean },
 ): Promise<void> {
+  const incomingMetadata = Object.fromEntries(
+    Object.entries(item.metadata_json ?? {}).filter(([, value]) => value !== undefined),
+  );
+
   const row = {
     workspace_id: item.workspace_id,
     lead_id: item.lead_id,
@@ -49,9 +53,42 @@ export async function projectTimelineItem(
     snippet_text: item.snippet_text ? item.snippet_text.substring(0, 500) : null,
     subject: item.subject ?? null,
     status_json: item.status_json ?? {},
-    metadata_json: item.metadata_json ?? {},
+    metadata_json: incomingMetadata,
     dedupe_key: item.dedupe_key,
   };
+
+  const { data: existing } = await supabase
+    .from("lead_timeline_items")
+    .select("id, snippet_text, metadata_json")
+    .eq("lead_id", item.lead_id)
+    .eq("dedupe_key", item.dedupe_key)
+    .maybeSingle();
+
+  if (existing?.id) {
+    const needsSnippetRefill = item.snippet_text && item.snippet_text.trim().length > 0
+      && (!existing.snippet_text || String(existing.snippet_text).trim() === "");
+    const mergedMetadata = {
+      ...((existing.metadata_json as Record<string, unknown> | null) ?? {}),
+      ...incomingMetadata,
+    };
+
+    if (needsSnippetRefill || Object.keys(incomingMetadata).length > 0) {
+      const { error: updateError } = await supabase
+        .from("lead_timeline_items")
+        .update({
+          ...(needsSnippetRefill ? { snippet_text: item.snippet_text!.substring(0, 500) } : {}),
+          metadata_json: mergedMetadata,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+
+      if (updateError) {
+        console.warn("[timelineProjector] Existing-row update failed:", updateError.message, { dedupe_key: item.dedupe_key });
+      }
+    }
+
+    return;
+  }
 
   const { error } = await supabase
     .from("lead_timeline_items")
