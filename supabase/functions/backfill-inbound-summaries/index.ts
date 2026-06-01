@@ -834,6 +834,16 @@ Deno.serve(async (req) => {
           metadata_json: nextMetadata,
           updated_at: new Date().toISOString(),
         };
+        // Restore snippet_text when we just refetched the body from the
+        // mailbox. This re-hydrates timeline rows that were emptied by
+        // the 72h purge, so the UI can show the actual email content
+        // again (capped at 8000 chars to match historical snippet size).
+        if (body && (path === "gmail_refetched" || path === "outlook_refetched")) {
+          const existing = (row.snippet_text ?? "").trim();
+          if (!existing) {
+            updatePayload.snippet_text = body.slice(0, 8000);
+          }
+        }
         // Backfill intent if it was somehow missing (defensive).
         if (!row.intent) {
           updatePayload.intent = "unknown";
