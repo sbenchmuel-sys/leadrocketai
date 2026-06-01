@@ -54,7 +54,11 @@ import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 
 const BATCH_SIZE = 50;
-const LOOKBACK_DAYS = 60;
+// Lookback covers the full pilot history. Pilot workspaces have inbound
+// rows going back ~12 months; 60 days left ~half the backlog stranded
+// without summaries. 730 days = 2 years gives full historical coverage
+// for restore runs without scanning the whole table.
+const LOOKBACK_DAYS = 730;
 const INTENT_VERSION = "intent_router_v2";
 // Version tag is a CODE-STATE marker (not a prompt-content marker).
 // Bumped whenever a change in this function would produce a different
@@ -830,6 +834,16 @@ Deno.serve(async (req) => {
           metadata_json: nextMetadata,
           updated_at: new Date().toISOString(),
         };
+        // Restore snippet_text when we just refetched the body from the
+        // mailbox. This re-hydrates timeline rows that were emptied by
+        // the 72h purge, so the UI can show the actual email content
+        // again (capped at 8000 chars to match historical snippet size).
+        if (body && (path === "gmail_refetched" || path === "outlook_refetched")) {
+          const existing = (row.snippet_text ?? "").trim();
+          if (!existing) {
+            updatePayload.snippet_text = body.slice(0, 8000);
+          }
+        }
         // Backfill intent if it was somehow missing (defensive).
         if (!row.intent) {
           updatePayload.intent = "unknown";
