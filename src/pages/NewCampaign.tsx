@@ -202,11 +202,18 @@ export default function NewCampaign() {
         })),
       });
 
+      let skipped = 0;
       if (selectedLeads.size > 0) {
-        await addLeadsToCampaign(Array.from(selectedLeads), campaignId);
+        const added = await addLeadsToCampaign(Array.from(selectedLeads), campaignId);
+        skipped = selectedLeads.size - added;
       }
 
       toast.success("Outreach saved as a draft");
+      if (skipped > 0) {
+        toast.info(
+          `${skipped} ${skipped === 1 ? "person was" : "people were"} already in another outreach and ${skipped === 1 ? "wasn't" : "weren't"} added.`,
+        );
+      }
       navigate(`/app/automations/${campaignId}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't save your outreach");

@@ -72,8 +72,17 @@ export function AddLeadsDialog({
     if (selected.size === 0) return;
     setSaving(true);
     try {
-      await addLeadsToCampaign(Array.from(selected), campaignId);
-      toast.success(`Added ${selected.size} ${selected.size === 1 ? "person" : "people"}`);
+      const added = await addLeadsToCampaign(Array.from(selected), campaignId);
+      const skipped = selected.size - added;
+      if (added === 0) {
+        toast.info("Those people are already in another outreach.");
+      } else if (skipped > 0) {
+        toast.success(
+          `Added ${added}. ${skipped} already in another outreach ${skipped === 1 ? "was" : "were"} skipped.`,
+        );
+      } else {
+        toast.success(`Added ${added} ${added === 1 ? "person" : "people"}`);
+      }
       onAdded();
       onOpenChange(false);
     } catch (err) {

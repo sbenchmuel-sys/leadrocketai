@@ -287,14 +287,19 @@ export async function fetchCampaignLeads(campaignId: string): Promise<CampaignLe
 
 /**
  * Add many leads to a campaign at once (late joiners are fine — they just
- * associate). The UPDATE is constrained to the campaign's OWN workspace so a
- * lead from another workspace can never be pulled in: the lead picker uses the
- * non-workspace-scoped getLeadsList() (owner-scoped), and a rep who belongs to
- * multiple workspaces could otherwise select a cross-workspace lead. Leads
- * outside the campaign's workspace are silently skipped (fail-closed).
+ * associate). Returns the number of leads actually added. The UPDATE is
+ * constrained two ways, both fail-closed, because the picker uses the
+ * non-workspace-scoped, no-campaign-filter getLeadsList():
+ *  1. `workspace_id` = the campaign's own workspace — a multi-workspace rep
+ *     can't pull a cross-workspace lead in.
+ *  2. `campaign_id IS NULL` — never move a lead OUT of an outreach it's already
+ *     in. Stealing a lead from an active campaign would silently halt that
+ *     campaign's sends (and, since drafts are loader-gated, drop the lead to
+ *     legacy instructions). Already-assigned leads are skipped; callers surface
+ *     the skipped count rather than reporting a silent success.
  */
-export async function addLeadsToCampaign(leadIds: string[], campaignId: string) {
-  if (leadIds.length === 0) return;
+export async function addLeadsToCampaign(leadIds: string[], campaignId: string): Promise<number> {
+  if (leadIds.length === 0) return 0;
 
   const { data: campaign, error: cErr } = await supabase
     .from("campaigns")
@@ -303,12 +308,15 @@ export async function addLeadsToCampaign(leadIds: string[], campaignId: string) 
     .single();
   if (cErr || !campaign) throw new Error(cErr?.message || "Outreach not found");
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("leads")
     .update({ campaign_id: campaignId } as any)
     .in("id", leadIds)
-    .eq("workspace_id", (campaign as { workspace_id: string }).workspace_id);
+    .eq("workspace_id", (campaign as { workspace_id: string }).workspace_id)
+    .is("campaign_id", null)
+    .select("id");
   if (error) throw new Error(error.message || "Failed to add people");
+  return (data || []).length;
 }
 
 // ── Suppression list (workspace do-not-contact) ─────────────────────
