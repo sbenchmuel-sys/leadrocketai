@@ -30,6 +30,14 @@ ALTER TABLE public.campaigns
   ADD CONSTRAINT campaigns_status_check
   CHECK (status IN ('draft', 'active', 'paused', 'completed'));
 
+-- Backfill: every campaign that already existed before this column was live,
+-- and the step loader (campaignStepLoader.ts) now only resolves ACTIVE
+-- campaigns into structured send instructions. Mark all pre-existing rows
+-- active so current send behavior is unchanged. This runs once at apply time,
+-- before any Unit-A draft exists; new outreaches insert status='draft'
+-- explicitly and stay drafts until activated (Unit C).
+UPDATE public.campaigns SET status = 'active';
+
 -- ── 2. Relax management RLS: admin → member ─────────────────────────
 -- Every rep builds their own outreaches. Workspace isolation is preserved
 -- (is_workspace_member); only the admin-only restriction is lifted.

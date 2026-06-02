@@ -126,7 +126,10 @@ export default function NewCampaign() {
     setPlan((prev) =>
       prev
         .filter((_, i) => i !== index)
-        .map((s, i) => ({ ...s, step_number: i + 1 })),
+        // Renumber, and force the new first touch to start on day 0 — the
+        // first message always goes out right away (and its delay control is
+        // disabled), so a removed first touch must not leave a stale gap.
+        .map((s, i) => ({ ...s, step_number: i + 1, delay_days: i === 0 ? 0 : s.delay_days })),
     );
   };
 
@@ -185,11 +188,13 @@ export default function NewCampaign() {
         include_meeting_cta: false,
         global_instructions: composedInstructions,
         knowledge_ref: fileName,
-        steps: plan.map((s) => ({
+        steps: plan.map((s, i) => ({
           step_number: s.step_number,
           step_type: s.step_type,
           channel: s.channel,
-          delay_days: s.delay_days,
+          // First touch always goes out right away (day 0); guard regardless
+          // of any edits made in the review step.
+          delay_days: i === 0 ? 0 : s.delay_days,
           cta_type: s.cta_type,
           custom_instructions: s.custom_instructions,
           active: s.active,
