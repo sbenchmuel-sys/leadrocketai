@@ -285,13 +285,29 @@ export async function fetchCampaignLeads(campaignId: string): Promise<CampaignLe
   return (data || []) as unknown as CampaignLead[];
 }
 
-/** Add many leads to a campaign at once (late joiners are fine — they just associate). */
+/**
+ * Add many leads to a campaign at once (late joiners are fine — they just
+ * associate). The UPDATE is constrained to the campaign's OWN workspace so a
+ * lead from another workspace can never be pulled in: the lead picker uses the
+ * non-workspace-scoped getLeadsList() (owner-scoped), and a rep who belongs to
+ * multiple workspaces could otherwise select a cross-workspace lead. Leads
+ * outside the campaign's workspace are silently skipped (fail-closed).
+ */
 export async function addLeadsToCampaign(leadIds: string[], campaignId: string) {
   if (leadIds.length === 0) return;
+
+  const { data: campaign, error: cErr } = await supabase
+    .from("campaigns")
+    .select("workspace_id")
+    .eq("id", campaignId)
+    .single();
+  if (cErr || !campaign) throw new Error(cErr?.message || "Outreach not found");
+
   const { error } = await supabase
     .from("leads")
     .update({ campaign_id: campaignId } as any)
-    .in("id", leadIds);
+    .in("id", leadIds)
+    .eq("workspace_id", (campaign as { workspace_id: string }).workspace_id);
   if (error) throw new Error(error.message || "Failed to add people");
 }
 

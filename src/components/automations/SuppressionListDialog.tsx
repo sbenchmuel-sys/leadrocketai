@@ -92,8 +92,9 @@ export function SuppressionListDialog({ open, onOpenChange }: SuppressionListDia
         <DialogHeader>
           <DialogTitle>Do-not-contact list</DialogTitle>
           <DialogDescription>
-            People and companies here are never contacted by any outreach. Add an
-            email (jane@acme.com) or a whole company domain (acme.com).
+            The people and companies your outreach should skip. Add an email
+            (jane@acme.com) or a whole company domain (acme.com). This takes
+            effect once outreach sending is switched on.
           </DialogDescription>
         </DialogHeader>
 
