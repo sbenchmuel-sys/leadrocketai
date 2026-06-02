@@ -18,6 +18,9 @@ import Dashboard from "./pages/Dashboard";
 import Queue from "./pages/Queue";
 import Inbox from "./pages/Inbox";
 import Leads from "./pages/Leads";
+import Automations from "./pages/Automations";
+import NewCampaign from "./pages/NewCampaign";
+import CampaignDetail from "./pages/CampaignDetail";
 import LeadDetail from "./pages/LeadDetail";
 import ContactDetail from "./pages/ContactDetail";
 import Knowledge from "./pages/Knowledge";
@@ -81,6 +84,9 @@ const App = () => (
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="inbox" element={<Inbox />} />
                 <Route path="leads" element={<Leads />} />
+                <Route path="automations" element={<Automations />} />
+                <Route path="automations/new" element={<NewCampaign />} />
+                <Route path="automations/:id" element={<CampaignDetail />} />
                 <Route path="leads/:id" element={<LeadDetail />} />
                 <Route path="lead/:id" element={<LeadDetail />} />
                 <Route path="contacts/:id" element={<ContactDetail />} />

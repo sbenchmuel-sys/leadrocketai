@@ -65,11 +65,23 @@ export async function loadCampaignForLead(
   // Load campaign
   const { data: campaign } = await serviceClient
     .from("campaigns")
-    .select("id, motion, default_channel, include_meeting_cta, global_instructions")
+    .select("id, motion, default_channel, include_meeting_cta, global_instructions, status")
     .eq("id", lead.campaign_id)
     .maybeSingle();
 
   if (!campaign) return null;
+
+  // Only an ACTIVE campaign may drive live sends. Draft / paused / completed
+  // outreaches must never influence production messaging — a lead can be added
+  // to a draft for membership (leads.campaign_id) without changing its send
+  // behavior; the campaign takes effect when it is activated (Unit C). Returning
+  // null here falls the executor back to the legacy action_instructions path,
+  // i.e. exactly the pre-campaign behavior. Pre-existing campaigns are
+  // backfilled to 'active' by migration 20260602000000 so nothing currently
+  // live changes. (The `status` column may be absent on older type defs — guard
+  // defensively: treat a missing value as active to avoid disabling live rows.)
+  const campaignStatus = (campaign as { status?: string | null }).status;
+  if (campaignStatus != null && campaignStatus !== "active") return null;
 
   // Load steps
   const { data: steps } = await serviceClient
