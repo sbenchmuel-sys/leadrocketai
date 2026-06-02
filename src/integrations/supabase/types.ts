@@ -598,40 +598,81 @@ export type Database = {
           },
         ]
       }
+      campaign_suppression_list: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          value: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind: string
+          value: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          value?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_suppression_list_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
+          campaign_type: string
           created_at: string
           default_channel: string
           global_instructions: string | null
           id: string
           include_meeting_cta: boolean
           is_default: boolean
+          knowledge_ref: string | null
           motion: Database["public"]["Enums"]["campaign_motion"]
           name: string
+          status: string
           updated_at: string
           workspace_id: string
         }
         Insert: {
+          campaign_type?: string
           created_at?: string
           default_channel?: string
           global_instructions?: string | null
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name: string
+          status?: string
           updated_at?: string
           workspace_id: string
         }
         Update: {
+          campaign_type?: string
           created_at?: string
           default_channel?: string
           global_instructions?: string | null
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name?: string
+          status?: string
           updated_at?: string
           workspace_id?: string
         }
