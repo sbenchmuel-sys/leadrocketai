@@ -92,10 +92,11 @@ function buildLeadContext(industry: string | null): string {
 function authoringInstructions(channel: CanonicalChannel, industry: string | null): string {
   const variantNote = industry ? ` Tailor it to the ${industry} industry.` : "";
   if (channel === "email") {
+    // Body only — the subject is generated separately via cold_email_subject so
+    // it isn't eaten by the body-task greeting repair (EMAIL_BODY_TASKS).
     return (
-      "Write a reusable cold-email TEMPLATE." +
+      "Write the BODY of a reusable cold-email TEMPLATE — no subject line." +
       variantNote +
-      " Begin your output with a single line 'Subject: <a short, specific, non-spammy subject>', then a blank line, then the email body." +
       " Use {FirstName} and {Company} placeholders for personalization — never a made-up name."
     );
   }
@@ -167,22 +168,28 @@ async function callAiTask(
   return { content: data.content.trim(), spamRisk };
 }
 
-// Split a generated email into subject + body when the model led with "Subject:".
-function parseEmail(content: string): { subject: string | null; body: string } {
-  const m = content.match(/^\s*subject:\s*(.+?)\s*(?:\n|$)/i);
-  if (m && m.index !== undefined) {
-    const subject = m[1].trim();
-    const body = content.slice(m.index + m[0].length).trim();
-    return { subject: subject || null, body: body || content };
+// Defensive: strip a stray leading "Subject: …" line if a body task emits one
+// (the subject is generated separately via cold_email_subject).
+function cleanEmailBody(content: string): string {
+  const m = content.match(/^\s*subject:\s*.+?(?:\n+|$)/i);
+  if (m) {
+    const rest = content.slice(m[0].length).trim();
+    if (rest) return rest;
   }
-  return { subject: null, body: content };
+  return content;
+}
+
+// Normalize a generated subject: first non-empty line, no quotes / "Subject:" prefix.
+function cleanSubject(content: string): string {
+  const firstLine = content.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+  return firstLine
+    .replace(/^subject:\s*/i, "")
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .trim();
 }
 
 function optionFromContent(channel: CanonicalChannel, content: string): StepContentOption {
-  if (channel === "email") {
-    const { subject, body } = parseEmail(content);
-    return { subject: subject ?? undefined, body };
-  }
+  if (channel === "email") return { body: cleanEmailBody(content) };
   if (channel === "voice") return { talking_points: content };
   if (channel === "sms") return { sms_text: content };
   return { body: content }; // whatsapp / other → rendered as a plain body block
@@ -219,6 +226,19 @@ async function generateOptionsForTouch(
     });
     if (i === 0) spamRisk = sr;
     options.push(optionFromContent(channel, content));
+  }
+
+  // Email subject — generated once via a dedicated task (body tasks return body
+  // only, and the body greeting-repair would eat an embedded "Subject:" line).
+  // Best-effort: if it fails, the rep can type a subject in the review UI.
+  if (channel === "email") {
+    try {
+      const subj = await callAiTask("cold_email_subject", base);
+      const subject = cleanSubject(subj.content);
+      if (subject) for (const o of options) o.subject = subject;
+    } catch {
+      /* subject is best-effort — leave it blank rather than failing the touch */
+    }
   }
 
   // Call touches also get a voicemail script (the no-answer leave-behind).

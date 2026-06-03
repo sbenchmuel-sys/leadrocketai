@@ -475,9 +475,10 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
 
-  // Cold outreach voice touches (Unit B Phase 2) — new keys, additive.
+  // Cold outreach voice touches + email subject (Unit B Phase 2) — new keys, additive.
   cold_call_talking_points: ["messaging", "knowledge", "industry"],
   cold_voicemail: ["messaging", "knowledge", "industry"],
+  cold_email_subject: ["messaging", "knowledge", "industry"],
 
   // Last-mile / reply — narrow core, expanded on signal below
   reply_to_thread: ["objection", "case_study", "knowledge", "messaging"],
@@ -1491,9 +1492,13 @@ serve(async (req) => {
     }
 
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
-    // Campaign authoring always searches the KB (scoped to the campaign's own
-    // document below), even for touch tasks not in KNOWLEDGE_SEARCH_TASKS.
-    if (KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) {
+    // Campaign authoring searches the KB scoped to the campaign's OWN document.
+    // If the campaign has no validated knowledge document (none uploaded, or the
+    // stored id was rejected by the resolver), do NOT search — generate from the
+    // campaign instructions alone — rather than leaking the owner's unscoped KB
+    // into campaign copy. Non-authoring tasks are unchanged.
+    const authoringWithoutDoc = campaignAuthoring && !campaignKnowledgeDocId;
+    if ((KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) && !authoringWithoutDoc) {
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));

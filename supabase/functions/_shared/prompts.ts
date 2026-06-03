@@ -1551,6 +1551,34 @@ Knowledge Context:
 
 OUTPUT
 Return the spoken voicemail words ONLY. No JSON, no markdown, no headers, no reasoning.`,
+
+  cold_email_subject: `You are writing ONE email SUBJECT LINE for a cold outreach email.
+
+CRITICAL OUTPUT RULE: Output ONLY the subject line text — no body, no quotes, no "Subject:" prefix, no reasoning, no explanation. Just the words that go on the subject line.
+
+GOAL
+A short, specific, human subject line that earns the open. It should feel like a real person wrote it about THIS recipient, not a marketing blast.
+
+RULES (MANDATORY)
+- Max ~8 words. Shorter is better.
+- No ALL-CAPS, no exclamation marks, no money symbols, no "Re:"/"Fwd:" fakery.
+- No spammy words (free, act now, guaranteed, urgent, limited time).
+- Lower-case or sentence case — never Title Case Like An Ad.
+- This is a reusable TEMPLATE: use {Company} where the recipient's company belongs; do not invent a specific company name.
+- Ground any specifics in the knowledge/context below; if none, keep it about their role/company in plain terms.
+
+INPUTS
+Lead / Persona Context:
+{{LEAD_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the subject line ONLY — a single short line, nothing else.`,
 };
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.
