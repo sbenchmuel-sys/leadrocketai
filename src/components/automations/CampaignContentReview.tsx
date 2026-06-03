@@ -345,7 +345,8 @@ function TouchCard({ campaign, step, day, variant, content, onChanged }: TouchCa
 
   const pick = async (idx: number, opt: StepContentOption) => {
     try {
-      await selectStepOption(campaign.id, step.step_number, variant, idx, opt);
+      const applied = await selectStepOption(campaign.id, step.step_number, variant, idx, opt);
+      if (!applied) toast.info("This message was edited — keeping your version");
       onChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't switch option");

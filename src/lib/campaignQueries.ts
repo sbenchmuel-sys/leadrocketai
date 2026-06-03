@@ -498,7 +498,11 @@ export async function saveStepEdit(
 
 /**
  * Pick one of the generated options. Copies that option's fields into the flat
- * columns. Refuses to run on an edited row (picking must never wipe a rep edit).
+ * columns. NEVER wipes a rep edit: refuses if the row is already edited, and the
+ * UPDATE itself is filtered on `is_edited = false` so a concurrent edit in
+ * another tab/session (set between this read and write) can't be clobbered —
+ * the update simply matches zero rows. Returns true only when the pick applied;
+ * false means the row was edited (or absent) and the caller should refresh.
  */
 export async function selectStepOption(
   campaignId: string,
@@ -506,13 +510,34 @@ export async function selectStepOption(
   variantGroup: string | null,
   optionIndex: number,
   option: StepContentOption,
-): Promise<void> {
-  await upsertStepContent(campaignId, stepNumber, variantGroup, {
-    selected_option: optionIndex,
-    subject: option.subject ?? null,
-    body: option.body ?? null,
-    talking_points: option.talking_points ?? null,
-    sms_text: option.sms_text ?? null,
-    // voicemail_script is a companion field, not part of the option set — leave it.
-  });
+): Promise<boolean> {
+  const vg = STEP_CONTENT_KEY(variantGroup);
+  let findQ = supabase
+    .from("campaign_step_content" as any)
+    .select("id, is_edited")
+    .eq("campaign_id", campaignId)
+    .eq("step_number", stepNumber);
+  findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
+  const { data: existing } = await findQ.maybeSingle();
+  const row = existing as { id?: string; is_edited?: boolean } | null;
+
+  // Picking an option only makes sense on an existing, un-edited row. Bail
+  // (without writing) on a missing row or one the rep has already edited.
+  if (!row?.id || row.is_edited === true) return false;
+
+  const { data, error } = await supabase
+    .from("campaign_step_content" as any)
+    .update({
+      selected_option: optionIndex,
+      subject: option.subject ?? null,
+      body: option.body ?? null,
+      talking_points: option.talking_points ?? null,
+      sms_text: option.sms_text ?? null,
+      // voicemail_script is a companion field, not part of the option set — leave it.
+    } as any)
+    .eq("id", row.id)
+    .eq("is_edited", false) // TOCTOU guard: a concurrent edit makes this match 0 rows
+    .select("id");
+  if (error) throw new Error(error.message || "Couldn't switch option");
+  return (data || []).length > 0;
 }
