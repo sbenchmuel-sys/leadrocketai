@@ -1,59 +1,75 @@
 // ============================================
 // STRUCTURED CAMPAIGN STEP LOADER
-// Server-side helper that loads structured campaign steps
-// from the DB and converts them into resolver-compatible format.
-// Falls back to legacy text parsing when no structured campaign exists.
+// Server-side helper that loads structured campaign steps from the DB.
+// Pure step-config conversion + the send-eligibility gate live in
+// campaignStepConfig.ts (re-exported below) so that logic is unit-testable
+// without the Supabase (esm.sh) import this file needs for its DB calls.
 // ============================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type {
-  CanonicalChannel,
-  CampaignStepConfig,
-  ResolvedInstruction,
-} from "./campaignTypes.ts";
-import {
-  CHANNEL_STEP_CONSTRAINTS,
-  CHANNEL_CTA_DEFAULTS,
-  DEFAULT_STEP_CONFIG,
-} from "./campaignTypes.ts";
 
-// ── Types ───────────────────────────────────────────────────────────
+// Pure helpers + types live in campaignStepConfig.ts (no Supabase import).
+// Re-exported so existing importers keep working unchanged.
+export type { StructuredCampaignStep, LoadedCampaign } from "./campaignStepConfig.ts";
+export {
+  structuredStepToConfig,
+  getStructuredStepConfig,
+  isCampaignSendable,
+} from "./campaignStepConfig.ts";
 
-export interface StructuredCampaignStep {
-  step_number: number;
-  step_type: string;
-  channel: string;
-  framework: string | null;
-  objective: string | null;
-  cta_type: string;
-  max_word_count: number | null;
-  hard_rules: string[];
-  generation_hints: string[];
-  custom_instructions: string | null;
-  delay_days: number;
-  active: boolean;
+import type { LoadedCampaign, StructuredCampaignStep } from "./campaignStepConfig.ts";
+import { isCampaignSendable } from "./campaignStepConfig.ts";
+
+const STEP_COLUMNS =
+  "step_number, step_type, channel, framework, objective, cta_type, max_word_count, hard_rules, generation_hints, custom_instructions, delay_days, active, variant_group";
+
+const CAMPAIGN_COLUMNS =
+  "id, motion, default_channel, include_meeting_cta, global_instructions, status";
+
+async function loadSteps(
+  client: ReturnType<typeof createClient>,
+  campaignId: string,
+): Promise<StructuredCampaignStep[]> {
+  const { data: steps } = await client
+    .from("campaign_steps")
+    .select(STEP_COLUMNS)
+    .eq("campaign_id", campaignId)
+    .order("step_number", { ascending: true });
+  return (steps || []) as StructuredCampaignStep[];
 }
 
-export interface LoadedCampaign {
-  id: string;
-  motion: string;
-  default_channel: string;
-  include_meeting_cta: boolean;
-  global_instructions: string | null;
-  steps: StructuredCampaignStep[];
+function toLoadedCampaign(
+  campaign: Record<string, unknown>,
+  steps: StructuredCampaignStep[],
+): LoadedCampaign {
+  return {
+    id: campaign.id as string,
+    motion: campaign.motion as string,
+    default_channel: campaign.default_channel as string,
+    include_meeting_cta: campaign.include_meeting_cta as boolean,
+    global_instructions: (campaign.global_instructions as string | null) ?? null,
+    steps,
+  };
 }
-
-// ── Loader ──────────────────────────────────────────────────────────
 
 /**
- * Load structured campaign + steps for a lead.
- * Returns null if the lead has no campaign_id or the campaign doesn't exist.
+ * Load structured campaign + steps for a lead (the LIVE SEND path).
+ * Returns null if the lead has no campaign_id, the campaign doesn't exist,
+ * or — critically — the campaign is not ACTIVE (see isCampaignSendable).
+ *
+ * Only an ACTIVE campaign may drive live sends. Draft / paused / completed
+ * outreaches must never influence production messaging: a lead can be added
+ * to a draft for membership (leads.campaign_id) without changing its send
+ * behavior; the campaign takes effect when it is activated (Unit C).
+ * Returning null falls the executor back to the legacy action_instructions
+ * path (pre-campaign behavior). Pre-existing campaigns were backfilled to
+ * 'active' by migration 20260602000000. A missing status (older type defs)
+ * is treated as active to fail safe.
  */
 export async function loadCampaignForLead(
   leadId: string,
   serviceClient: ReturnType<typeof createClient>,
 ): Promise<LoadedCampaign | null> {
-  // Get lead's campaign_id
   const { data: lead } = await serviceClient
     .from("leads")
     .select("campaign_id")
@@ -62,85 +78,44 @@ export async function loadCampaignForLead(
 
   if (!lead?.campaign_id) return null;
 
-  // Load campaign
   const { data: campaign } = await serviceClient
     .from("campaigns")
-    .select("id, motion, default_channel, include_meeting_cta, global_instructions, status")
+    .select(CAMPAIGN_COLUMNS)
     .eq("id", lead.campaign_id)
     .maybeSingle();
 
   if (!campaign) return null;
 
-  // Only an ACTIVE campaign may drive live sends. Draft / paused / completed
-  // outreaches must never influence production messaging — a lead can be added
-  // to a draft for membership (leads.campaign_id) without changing its send
-  // behavior; the campaign takes effect when it is activated (Unit C). Returning
-  // null here falls the executor back to the legacy action_instructions path,
-  // i.e. exactly the pre-campaign behavior. Pre-existing campaigns are
-  // backfilled to 'active' by migration 20260602000000 so nothing currently
-  // live changes. (The `status` column may be absent on older type defs — guard
-  // defensively: treat a missing value as active to avoid disabling live rows.)
-  const campaignStatus = (campaign as { status?: string | null }).status;
-  if (campaignStatus != null && campaignStatus !== "active") return null;
+  // Send-path gate: draft / paused / completed never drive live sends.
+  if (!isCampaignSendable((campaign as { status?: string | null }).status)) {
+    return null;
+  }
 
-  // Load steps
-  const { data: steps } = await serviceClient
-    .from("campaign_steps")
-    .select("step_number, step_type, channel, framework, objective, cta_type, max_word_count, hard_rules, generation_hints, custom_instructions, delay_days, active")
-    .eq("campaign_id", campaign.id)
-    .order("step_number", { ascending: true });
-
-  return {
-    id: campaign.id,
-    motion: campaign.motion,
-    default_channel: campaign.default_channel,
-    include_meeting_cta: campaign.include_meeting_cta,
-    global_instructions: campaign.global_instructions,
-    steps: (steps || []) as StructuredCampaignStep[],
-  };
+  const steps = await loadSteps(serviceClient, (campaign as { id: string }).id);
+  return toLoadedCampaign(campaign as Record<string, unknown>, steps);
 }
 
 /**
- * Convert a structured campaign step into a CampaignStepConfig
- * that the resolver can consume directly.
+ * Load a structured campaign by id for AUTHORING (status-agnostic).
+ *
+ * This is the generation/authoring entry point: a rep authors a DRAFT
+ * outreach, so the active-only gate in loadCampaignForLead is exactly wrong
+ * here. This loader intentionally ignores status. It must NEVER be used on
+ * the live send path — that path keys on the lead via loadCampaignForLead so
+ * draft / paused / completed campaigns stay inert.
  */
-export function structuredStepToConfig(
-  step: StructuredCampaignStep,
-  campaign: LoadedCampaign,
-): CampaignStepConfig {
-  const channel = (step.channel || campaign.default_channel) as CanonicalChannel;
-  const stepNum = step.step_number;
+export async function loadCampaignById(
+  campaignId: string,
+  client: ReturnType<typeof createClient>,
+): Promise<LoadedCampaign | null> {
+  const { data: campaign } = await client
+    .from("campaigns")
+    .select(CAMPAIGN_COLUMNS)
+    .eq("id", campaignId)
+    .maybeSingle();
 
-  // Use DB values, falling back to channel constraints
-  const channelConstraint = CHANNEL_STEP_CONSTRAINTS[channel]?.[stepNum];
-  const defaultConfig = DEFAULT_STEP_CONFIG[stepNum];
+  if (!campaign) return null;
 
-  return {
-    step_type: step.step_type as CampaignStepConfig["step_type"],
-    channel,
-    objective: step.objective || defaultConfig?.objective || "Get a reply",
-    framework: step.framework || defaultConfig?.framework || "neutral_observation",
-    max_words: step.max_word_count || channelConstraint?.max_words || 75,
-    max_words_with_instructions: channelConstraint?.max_words_with_instructions || 120,
-    cta_type: step.cta_type || CHANNEL_CTA_DEFAULTS[channel]?.[stepNum] || "question",
-    sequence_position: stepNum,
-    hard_rules: [
-      ...(channelConstraint?.hard_rules || []),
-      ...(step.hard_rules || []),
-    ],
-    active: step.active,
-  };
-}
-
-/**
- * Find and convert the step config for a specific step number.
- * Returns null if no matching step exists.
- */
-export function getStructuredStepConfig(
-  campaign: LoadedCampaign,
-  stepNumber: number,
-): CampaignStepConfig | null {
-  const step = campaign.steps.find(s => s.step_number === stepNumber && s.active);
-  if (!step) return null;
-  return structuredStepToConfig(step, campaign);
+  const steps = await loadSteps(client, (campaign as { id: string }).id);
+  return toLoadedCampaign(campaign as Record<string, unknown>, steps);
 }

@@ -757,6 +757,14 @@ serve(async (req) => {
         } else if (actionKey) {
           // Inbound leads stay on the warm cadence for the entire sequence (decision: switch to warm).
           // Step 4 still uses the cold breakup task — there's no inbound-specific breakup variant.
+          //
+          // CAP (Outreach Unit B → Unit C): only steps 1–4 map to AI tasks. The
+          // campaign resolver now supports up to 9 touches for STRUCTURED campaigns,
+          // but mapping send_pre_5..9 to tasks AND advancing the cadence past step 4
+          // (see NEXT_STEP / breakup branch ~L1351) is a REQUIRED Unit C deliverable —
+          // it must land in the same unit that lets a >4-step campaign be activated.
+          // Until then the live path is intentionally capped at 4; drafts never reach
+          // here (loadCampaignForLead is active-only).
           if (actionKey.startsWith("send_pre_1")) aiTask = isInboundLead ? "inbound_intro" : "pre_email_1_intro";
           else if (actionKey.startsWith("send_pre_2")) aiTask = isInboundLead ? "inbound_followup_1" : "pre_email_2_followup";
           else if (actionKey.startsWith("send_pre_3")) aiTask = isInboundLead ? "inbound_followup_2" : "pre_email_3_followup";
@@ -1375,7 +1383,21 @@ serve(async (req) => {
             });
           }
         } else if (aiTask === "pre_email_4_breakup" || aiTask === "inbound_followup_2") {
-          // Breakup or end of inbound 3-step sequence: explicitly clear sequence fields — no next step
+          // Breakup or end of inbound 3-step sequence: explicitly clear sequence fields — no next step.
+          //
+          // Unit C dependency: the NEXT_STEP map above stops at step 4. A structured
+          // campaign with more than 4 active steps therefore stops here today — the
+          // resolver supports steps 5–9 (Unit B) but executor SCHEDULING for them is
+          // Unit C (enrollment + sending). This cannot happen via Unit A/B (drafts are
+          // loader-gated and there is no activation path yet); the warn below makes the
+          // truncation loud rather than silent if a >4-step campaign is ever activated
+          // before Unit C wires the advance map.
+          const extraSteps = postSendCampaign?.steps?.filter((s) => s.active && s.step_number > 4).length ?? 0;
+          if (extraSteps > 0) {
+            console.warn(
+              `[automation-executor] Campaign ${postSendCampaign?.id} (lead ${lead.id}) has ${extraSteps} active step(s) beyond step 4, but executor scheduling for steps 5–9 is not wired yet (Unit C). Cadence stops at step 4.`,
+            );
+          }
           Object.assign(postUpdate, {
             next_action_key: null,
             next_action_label: null,

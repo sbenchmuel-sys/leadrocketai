@@ -15,8 +15,10 @@ import {
   type SequenceContext,
   type ResolvedInstruction,
 } from "./campaignTypes.ts";
-import type { LoadedCampaign } from "./campaignStepLoader.ts";
-import { getStructuredStepConfig } from "./campaignStepLoader.ts";
+// Import the pure step-config helpers directly (not via campaignStepLoader,
+// which pulls in the Supabase client) so this resolver stays unit-testable.
+import type { LoadedCampaign } from "./campaignStepConfig.ts";
+import { getStructuredStepConfig } from "./campaignStepConfig.ts";
 
 // ── Input: everything the resolver needs ────────────────────────────
 
@@ -51,12 +53,18 @@ export interface CampaignResolverInput {
 
 // ── Step number extraction ──────────────────────────────────────────
 
-function resolveStepNumber(actionKey: string | null): number {
+function resolveStepNumber(actionKey: string | null, maxStep = 4): number {
   if (!actionKey) return 1;
   const mapped = ACTION_KEY_TO_STEP[actionKey];
   if (mapped) return mapped;
+  // The regex clamp bound is GATED to structured campaigns: it stays at 4 for
+  // the legacy (non-structured) path so existing keys like send_nurture_5+ —
+  // which the open-ended nurture loop really does enqueue (automation-executor
+  // ~1338) — keep resolving to step 4 exactly as before. Only a structured
+  // campaign with >4 active steps raises maxStep (up to 9). Legacy mapped keys
+  // (send_pre_1..4 / nurture_1..4) hit ACTION_KEY_TO_STEP and never reach here.
   const match = actionKey.match(/(\d+)/);
-  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 4)) : 1;
+  return match ? Math.max(1, Math.min(parseInt(match[1], 10), maxStep)) : 1;
 }
 
 // ── Channel resolution ──────────────────────────────────────────────
@@ -187,9 +195,19 @@ function buildSequenceContext(input: CampaignResolverInput, stepNumber: number):
     ? Math.floor((Date.now() - new Date(input.last_touch_at).getTime()) / (1000 * 60 * 60 * 24))
     : null;
 
+  // total_steps reflects the real active-step count ONLY when a structured
+  // campaign has MORE than 4 steps (the Unit B 9-touch case). For the legacy
+  // path (no structured campaign) and for any structured campaign with ≤4
+  // active steps, it stays 4 — so every currently-possible live send resolves
+  // byte-identically; only genuinely-longer cadences see the true count.
+  const activeStepCount = input.structured_campaign
+    ? input.structured_campaign.steps.filter((s) => s.active).length
+    : 0;
+  const totalSteps = activeStepCount > 4 ? activeStepCount : 4;
+
   return {
     step_number: stepNumber,
-    total_steps: 4, // standard outbound sequence
+    total_steps: totalSteps,
     prior_steps_sent: input.prior_steps_sent ?? (stepNumber - 1),
     prior_channels_used: input.prior_channels_used ?? [],
     days_since_last_touch: daysSinceLastTouch,
@@ -244,7 +262,13 @@ function buildHardRules(
 // ════════════════════════════════════════════
 
 export function resolveCampaignInstruction(input: CampaignResolverInput): ResolvedInstruction {
-  const stepNumber = resolveStepNumber(input.action_key);
+  // The extended (5–9) step range is only valid for structured campaigns.
+  // For the legacy path maxStep stays 4 so non-structured keys are unchanged.
+  const activeStepCount = input.structured_campaign
+    ? input.structured_campaign.steps.filter((s) => s.active).length
+    : 0;
+  const maxStep = activeStepCount > 4 ? Math.min(9, activeStepCount) : 4;
+  const stepNumber = resolveStepNumber(input.action_key, maxStep);
   const channel = resolveChannel(input.action_key, input.channel);
   const hasSignals = (input.recent_signals?.length ?? 0) > 0;
 
