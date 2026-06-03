@@ -111,14 +111,20 @@ export interface ClientCampaignResolverInput {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-function resolveStepNumber(actionKey: string | null): number {
+function resolveStepNumber(actionKey: string | null, maxStep = 4): number {
   if (!actionKey) return 1;
   const mapped = ACTION_KEY_TO_STEP[actionKey];
   if (mapped) return mapped;
-  // Clamp widened 4 → 9 (mirrors server). Legacy keys hit the exact map
-  // above and never reach this fallback, so their output is unchanged.
+  // Clamp bound GATED (mirrors server): defaults to 4 so the legacy manual-draft
+  // path — including open-ended keys like send_nurture_5+ — is unchanged. Only a
+  // caller that knows the cadence is longer (passes total_steps > 4) widens it.
   const match = actionKey.match(/(\d+)/);
-  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 9)) : 1;
+  return match ? Math.max(1, Math.min(parseInt(match[1], 10), maxStep)) : 1;
+}
+
+/** Clamp bound for resolveStepNumber, derived from a longer cadence. */
+function maxStepFor(totalSteps?: number): number {
+  return (totalSteps ?? 0) > 4 ? Math.min(9, totalSteps as number) : 4;
 }
 
 function resolveChannel(actionKey: string | null, explicit?: CanonicalChannel): CanonicalChannel {
@@ -221,10 +227,12 @@ function resolveStepType(motion: string, step: number): StepType {
 // ════════════════════════════════════════════
 
 export function resolveStepPreview(input: ClientCampaignResolverInput): ResolvedStepPreview {
+  const maxStep = maxStepFor(input.total_steps);
+
   // ── NEW: If structured step is provided from DB, use it directly ──
   if (input.structured_step) {
     const ss = input.structured_step;
-    const step = resolveStepNumber(input.action_key);
+    const step = resolveStepNumber(input.action_key, maxStep);
     return {
       step_number: step,
       channel: ss.channel,
@@ -239,7 +247,7 @@ export function resolveStepPreview(input: ClientCampaignResolverInput): Resolved
   }
 
   // ── Legacy path: derive from conventions ──────────────────────────
-  const step = resolveStepNumber(input.action_key);
+  const step = resolveStepNumber(input.action_key, maxStep);
   const channel = resolveChannel(input.action_key, input.channel);
   const isNurture = input.motion === "nurture";
   const hasCustom = !!(input.action_instructions?.trim());

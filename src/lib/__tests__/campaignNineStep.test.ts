@@ -121,6 +121,17 @@ describe("resolveCampaignInstruction — total_steps reflects real count only wh
     expect(formatInstructionForPrompt(resolved)).toContain("Sequence: Step 6 of 9");
   });
 
+  it("structured campaign raises the clamp: send_pre_15 → step 9 (capped at active count)", () => {
+    const resolved = resolveCampaignInstruction({
+      lead_id: "L",
+      action_key: "send_pre_15",
+      motion: "outbound_prospecting",
+      structured_campaign: nineStepCampaign(),
+    });
+    expect(resolved.sequence_context.step_number).toBe(9);
+    expect(resolved.framework).toBe("breakup");
+  });
+
   it("4-step structured campaign still shows 'of 4' (no live-send change)", () => {
     const camp: LoadedCampaign = {
       id: "camp-4",

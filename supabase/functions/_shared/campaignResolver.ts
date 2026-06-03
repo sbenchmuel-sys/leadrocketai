@@ -53,16 +53,18 @@ export interface CampaignResolverInput {
 
 // ── Step number extraction ──────────────────────────────────────────
 
-function resolveStepNumber(actionKey: string | null): number {
+function resolveStepNumber(actionKey: string | null, maxStep = 4): number {
   if (!actionKey) return 1;
   const mapped = ACTION_KEY_TO_STEP[actionKey];
   if (mapped) return mapped;
-  // Clamp widened 4 → 9 for the Unit B 9-touch cadence. Legacy action keys
-  // (send_pre_1..4 / nurture_1..4) resolve via the exact ACTION_KEY_TO_STEP
-  // map above and never reach this regex fallback, so their output is
-  // unchanged; only previously-unsupported numeric keys (5–9) benefit.
+  // The regex clamp bound is GATED to structured campaigns: it stays at 4 for
+  // the legacy (non-structured) path so existing keys like send_nurture_5+ —
+  // which the open-ended nurture loop really does enqueue (automation-executor
+  // ~1338) — keep resolving to step 4 exactly as before. Only a structured
+  // campaign with >4 active steps raises maxStep (up to 9). Legacy mapped keys
+  // (send_pre_1..4 / nurture_1..4) hit ACTION_KEY_TO_STEP and never reach here.
   const match = actionKey.match(/(\d+)/);
-  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 9)) : 1;
+  return match ? Math.max(1, Math.min(parseInt(match[1], 10), maxStep)) : 1;
 }
 
 // ── Channel resolution ──────────────────────────────────────────────
@@ -260,7 +262,13 @@ function buildHardRules(
 // ════════════════════════════════════════════
 
 export function resolveCampaignInstruction(input: CampaignResolverInput): ResolvedInstruction {
-  const stepNumber = resolveStepNumber(input.action_key);
+  // The extended (5–9) step range is only valid for structured campaigns.
+  // For the legacy path maxStep stays 4 so non-structured keys are unchanged.
+  const activeStepCount = input.structured_campaign
+    ? input.structured_campaign.steps.filter((s) => s.active).length
+    : 0;
+  const maxStep = activeStepCount > 4 ? Math.min(9, activeStepCount) : 4;
+  const stepNumber = resolveStepNumber(input.action_key, maxStep);
   const channel = resolveChannel(input.action_key, input.channel);
   const hasSignals = (input.recent_signals?.length ?? 0) > 0;
 

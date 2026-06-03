@@ -250,6 +250,51 @@ describe("SERVER resolver — legacy nurture (nurture_1..4) byte-identical", () 
   }
 });
 
+// ── Legacy nurture OVERFLOW (send_nurture_5+) must still clamp to step 4 ─────
+// The open-ended nurture loop enqueues send_nurture_${count+1} with no cap
+// (automation-executor ~1338) and these leads are NOT on a structured campaign.
+// Pre-change the regex clamped them to step 4; the 4→9 widening must not change
+// that for the non-structured path (Codex P2 on PR #58).
+
+describe("legacy nurture overflow clamps to step 4 (no structured campaign)", () => {
+  for (const step of [5, 6, 7, 9]) {
+    it(`CLIENT send_nurture_${step} → step-4 block`, () => {
+      const out = buildCampaignPayloadFields({
+        action_key: `send_nurture_${step}`,
+        motion: "nurture",
+      }).campaign_instruction;
+      const expected = buildBlock({
+        channel: "email",
+        framework: CLIENT_NURTURE_FRAMEWORK[4],
+        objective: NURTURE_OBJECTIVES[4],
+        step: 4,
+        total: 4,
+        words: EMAIL_WORDS[4],
+        cta: EMAIL_CTA[4],
+        rules: EMAIL_RULES[4],
+        hints: EMAIL_HINTS[4],
+      });
+      expect(out).toBe(expected);
+    });
+
+    it(`SERVER send_nurture_${step} → step-4 block`, () => {
+      const out = serverBlock(`send_nurture_${step}`, "nurture");
+      const expected = buildBlock({
+        channel: "email",
+        framework: SERVER_NURTURE_FRAMEWORK[4],
+        objective: NURTURE_OBJECTIVES[4],
+        step: 4,
+        total: 4,
+        words: EMAIL_WORDS[4],
+        cta: EMAIL_CTA[4],
+        rules: EMAIL_RULES[4],
+        hints: EMAIL_HINTS[4],
+      });
+      expect(out).toBe(expected);
+    });
+  }
+});
+
 // ── Client/server parity on the outbound legacy path (they currently match) ──
 
 describe("client/server parity — legacy outbound", () => {
