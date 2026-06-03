@@ -1489,6 +1489,68 @@ Knowledge Context:
 
 OUTPUT
 Return the SMS text ONLY. No JSON. No markdown. No greeting. No sign-off. No reasoning. Maximum 160 characters.`,
+
+  cold_call_talking_points: `You are preparing TALKING POINTS for a sales rep about to make a cold call. This is NOT a word-for-word script — it's a short cheat sheet the rep glances at while dialing.
+
+CRITICAL OUTPUT RULE: Your response must contain ONLY the talking points. NEVER include reasoning, analysis, preamble, or explanations. Do NOT start with "INTERNAL REASONING" or any header. Output the talking points and NOTHING else.
+
+GOAL
+Give the rep 3–4 short bullets that get a real conversation started — an opener that proves they know who they're calling, the one reason this call is worth 30 seconds, a value point grounded in the knowledge file, and a soft ask (a question, not a hard pitch).
+
+KB-GROUNDING CHECK:
+- Any claim, result, or pain point must come from Knowledge Context or Sales Signals.
+- If there's no relevant KB insight, keep the value bullet about their role/company in plain terms — never invent specifics.
+
+FORMAT RULES (MANDATORY)
+- 3–4 bullets, each one short line (a phrase, not a paragraph). Under ~12 words per bullet.
+- Conversational and human — the way a person actually talks, not marketing copy.
+- Lead with the personalized opener. End with the soft ask.
+- NO long monologue, NO legal disclaimers, NO emoji.
+- This is a TEMPLATE for many prospects: use {FirstName} and {Company} where a name/company belongs, rather than inventing a specific person.
+
+INPUTS
+Lead / Persona Context:
+{{LEAD_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the bullets ONLY (one per line, each starting with "- "). No JSON, no markdown headers, no reasoning.`,
+
+  cold_voicemail: `You are writing a VOICEMAIL SCRIPT for a sales rep to leave when a cold call goes unanswered. The rep will read this aloud, so it must sound natural spoken — short, warm, and easy to say in one breath per sentence.
+
+CRITICAL OUTPUT RULE: Your response must contain ONLY the voicemail words. NEVER include reasoning, stage directions, or headers. Output what the rep says and NOTHING else.
+
+GOAL
+Leave a 10–15 second message that earns a callback or primes the follow-up email — not a full pitch. One reason to care, one clear next step (usually "I'll follow up by email" or a soft callback ask).
+
+KB-GROUNDING CHECK:
+- Any reason-to-care must come from Knowledge Context or Sales Signals. If none, keep it about their role/company in plain terms — never invent specifics.
+
+FORMAT RULES (MANDATORY)
+- 2–3 short sentences. Roughly 35–55 words total. Spoken cadence.
+- Start by saying who's calling and (in plain words) why — reference {Company} so it's clearly for them.
+- ONE point of value or curiosity, then ONE next step.
+- No reading out long URLs or email addresses; say "I'll send you a quick note" instead.
+- NO hard sell, NO urgency pressure, NO emoji, NO sign-off block.
+- This is a TEMPLATE for many prospects: use {FirstName} and {Company} placeholders rather than a specific invented name.
+
+INPUTS
+Lead / Persona Context:
+{{LEAD_CONTEXT}}
+
+Custom Instructions:
+{{CUSTOM_INSTRUCTIONS}}
+
+Knowledge Context:
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the spoken voicemail words ONLY. No JSON, no markdown, no headers, no reasoning.`,
 };
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.

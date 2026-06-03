@@ -47,6 +47,7 @@ import {
   type CampaignLead,
 } from "@/lib/campaignQueries";
 import { CampaignScript } from "@/components/automations/CampaignScript";
+import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
 import { AddLeadsDialog } from "@/components/automations/AddLeadsDialog";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -223,6 +224,11 @@ export default function CampaignDetail() {
           </CollapsibleContent>
         </Collapsible>
       </section>
+
+      {/* Full-cadence generated script (Unit B Phase 2) */}
+      {campaign.steps.length > 0 && (
+        <CampaignContentReview campaign={campaign} people={people} />
+      )}
 
       {/* People */}
       <section className="space-y-3">
