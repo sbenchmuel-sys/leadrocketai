@@ -321,7 +321,10 @@ export async function addLeadsToCampaign(leadIds: string[], campaignId: string):
 
 // ── Suppression list (workspace do-not-contact) ─────────────────────
 // Stored in campaign_suppression_list. Separate from leads.unsubscribed.
-// Enforcement (read-before-send) is wired in Unit B.
+// Enforcement (read-before-enroll / read-before-send, fail-closed) lands in
+// Unit C alongside the send path — it must COMPOSE with the existing
+// leads.unsubscribed / stop_on_unsubscribe opt-out, not replace it. Unit A/B
+// have no send path, so this list is inert until then (the UI says as much).
 
 export type SuppressionKind = "email" | "domain";
 
