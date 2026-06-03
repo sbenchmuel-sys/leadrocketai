@@ -15,8 +15,10 @@ import {
   type SequenceContext,
   type ResolvedInstruction,
 } from "./campaignTypes.ts";
-import type { LoadedCampaign } from "./campaignStepLoader.ts";
-import { getStructuredStepConfig } from "./campaignStepLoader.ts";
+// Import the pure step-config helpers directly (not via campaignStepLoader,
+// which pulls in the Supabase client) so this resolver stays unit-testable.
+import type { LoadedCampaign } from "./campaignStepConfig.ts";
+import { getStructuredStepConfig } from "./campaignStepConfig.ts";
 
 // ── Input: everything the resolver needs ────────────────────────────
 
@@ -55,8 +57,12 @@ function resolveStepNumber(actionKey: string | null): number {
   if (!actionKey) return 1;
   const mapped = ACTION_KEY_TO_STEP[actionKey];
   if (mapped) return mapped;
+  // Clamp widened 4 → 9 for the Unit B 9-touch cadence. Legacy action keys
+  // (send_pre_1..4 / nurture_1..4) resolve via the exact ACTION_KEY_TO_STEP
+  // map above and never reach this regex fallback, so their output is
+  // unchanged; only previously-unsupported numeric keys (5–9) benefit.
   const match = actionKey.match(/(\d+)/);
-  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 4)) : 1;
+  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 9)) : 1;
 }
 
 // ── Channel resolution ──────────────────────────────────────────────
@@ -187,9 +193,19 @@ function buildSequenceContext(input: CampaignResolverInput, stepNumber: number):
     ? Math.floor((Date.now() - new Date(input.last_touch_at).getTime()) / (1000 * 60 * 60 * 24))
     : null;
 
+  // total_steps reflects the real active-step count ONLY when a structured
+  // campaign has MORE than 4 steps (the Unit B 9-touch case). For the legacy
+  // path (no structured campaign) and for any structured campaign with ≤4
+  // active steps, it stays 4 — so every currently-possible live send resolves
+  // byte-identically; only genuinely-longer cadences see the true count.
+  const activeStepCount = input.structured_campaign
+    ? input.structured_campaign.steps.filter((s) => s.active).length
+    : 0;
+  const totalSteps = activeStepCount > 4 ? activeStepCount : 4;
+
   return {
     step_number: stepNumber,
-    total_steps: 4, // standard outbound sequence
+    total_steps: totalSteps,
     prior_steps_sent: input.prior_steps_sent ?? (stepNumber - 1),
     prior_channels_used: input.prior_channels_used ?? [],
     days_since_last_touch: daysSinceLastTouch,

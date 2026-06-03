@@ -92,6 +92,9 @@ export interface ClientCampaignResolverInput {
   meeting_booked?: boolean;
   include_meeting_cta?: boolean;
   calendar_link?: string | null;
+  /** NEW (Unit B): total active touches in the cadence, for "Step X of N".
+   *  Omitted (legacy manual-draft path) → defaults to 4, unchanged output. */
+  total_steps?: number;
   /** NEW: structured campaign step override from DB */
   structured_step?: {
     channel: CanonicalChannel;
@@ -112,8 +115,10 @@ function resolveStepNumber(actionKey: string | null): number {
   if (!actionKey) return 1;
   const mapped = ACTION_KEY_TO_STEP[actionKey];
   if (mapped) return mapped;
+  // Clamp widened 4 → 9 (mirrors server). Legacy keys hit the exact map
+  // above and never reach this fallback, so their output is unchanged.
   const match = actionKey.match(/(\d+)/);
-  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 4)) : 1;
+  return match ? Math.max(1, Math.min(parseInt(match[1], 10), 9)) : 1;
 }
 
 function resolveChannel(actionKey: string | null, explicit?: CanonicalChannel): CanonicalChannel {
@@ -307,13 +312,18 @@ export function buildCampaignPayloadFields(input: ClientCampaignResolverInput): 
     ? extractStepScopedInstructions(input.action_instructions ?? null, preview.step_number)
     : (input.action_instructions ?? null);
 
+  // Mirror the server total_steps rule: reflect the real count only when it
+  // exceeds 4, otherwise keep "of 4" so the legacy manual-draft path (which
+  // omits total_steps) is byte-identical.
+  const totalSteps = (input.total_steps ?? 0) > 4 ? (input.total_steps as number) : 4;
+
   // Build the same text block that formatInstructionForPrompt produces server-side
   const parts: string[] = [];
   parts.push(`=== CAMPAIGN INSTRUCTION (STRUCTURED) ===`);
   parts.push(`Channel: ${preview.channel}`);
   parts.push(`Framework: ${preview.framework}`);
   parts.push(`Objective: ${preview.objective}`);
-  parts.push(`Sequence: Step ${preview.step_number} of 4`);
+  parts.push(`Sequence: Step ${preview.step_number} of ${totalSteps}`);
   parts.push(`Max words: ${preview.max_word_count}`);
   parts.push(`CTA type: ${preview.cta_type}`);
 
