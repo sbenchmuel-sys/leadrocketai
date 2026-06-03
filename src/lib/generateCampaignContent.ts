@@ -109,6 +109,13 @@ function authoringInstructions(channel: CanonicalChannel, industry: string | nul
   return "Write a reusable template." + variantNote + " Use {FirstName} and {Company} placeholders.";
 }
 
+// Instructions for the dedicated subject task — deliberately NOT the body-only
+// authoringInstructions (which say "no subject line"). The cold_email_subject
+// prompt carries all the real rules; this just adds light industry tailoring.
+function subjectInstructions(industry: string | null): string {
+  return industry ? `Tailor the subject to the ${industry} industry.` : "";
+}
+
 interface AuthoringPayload {
   campaign_id: string;
   step_number: number;
@@ -230,10 +237,15 @@ async function generateOptionsForTouch(
 
   // Email subject — generated once via a dedicated task (body tasks return body
   // only, and the body greeting-repair would eat an embedded "Subject:" line).
+  // Use SUBJECT-specific instructions, not `base` — base.custom_instructions
+  // says "write the body, no subject line", which would fight the subject task.
   // Best-effort: if it fails, the rep can type a subject in the review UI.
   if (channel === "email") {
     try {
-      const subj = await callAiTask("cold_email_subject", base);
+      const subj = await callAiTask("cold_email_subject", {
+        ...base,
+        custom_instructions: subjectInstructions(industry),
+      });
       const subject = cleanSubject(subj.content);
       if (subject) for (const o of options) o.subject = subject;
     } catch {
@@ -357,6 +369,13 @@ export async function softenTouch(
   const { content } = await callAiTask(primaryTaskForChannel(step), { ...base, custom_instructions: softer });
   const opt = optionFromContent(channel, content);
 
+  // Soften regenerates only the PRIMARY content (email body / talking points /
+  // sms). Preserve the companion fields it didn't touch so softening a body
+  // doesn't delete the subject — or the voicemail on a call touch.
+  if (channel === "email") {
+    opt.subject = current.subject ?? (current.options_json?.[current.selected_option ?? 0]?.subject ?? undefined);
+  }
+
   // Replace the currently selected option in options_json, and the flat fields.
   const idx = current.selected_option ?? 0;
   const options = Array.isArray(current.options_json) ? [...current.options_json] : [];
@@ -365,6 +384,7 @@ export async function softenTouch(
 
   await upsertStepContent(campaign.id, step.step_number, industry, {
     ...flatFieldsFromOption(opt),
+    voicemail_script: current.voicemail_script, // unchanged by soften
     options_json: options,
     selected_option: idx,
     is_edited: false,
