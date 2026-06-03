@@ -331,6 +331,10 @@ function TouchCard({ campaign, step, day, variant, content, onChanged }: TouchCa
 
   const soften = async () => {
     if (!content) return;
+    // Soften regenerates fresh AI copy rather than rephrasing the rep's exact
+    // words, so on an edited row it would discard their wording. Same edit-lock
+    // as the option picker / Rewrite: make the replacement explicit.
+    if (edited && !confirm("This replaces your edited version with a softer AI version. Continue?")) return;
     setBusy("soften");
     try {
       await softenTouch(campaign, step, variant, content);
