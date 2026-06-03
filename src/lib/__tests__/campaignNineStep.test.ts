@@ -74,6 +74,22 @@ function nineStepCampaign(): LoadedCampaign {
 describe("getStructuredStepConfig — extended steps resolve by step_type, not intro defaults", () => {
   const camp = nineStepCampaign();
 
+  it("step 3 (followup) uses the followup tier, NOT the ordinal value_add tier", () => {
+    const cfg = getStructuredStepConfig(camp, 3)!;
+    expect(cfg.framework).toBe("hypothesis"); // followup, not ordinal-3 value_add
+    expect(cfg.max_words).toBe(60); // email tier 2
+    expect(cfg.hard_rules).toContain("One question only"); // email[2]
+    expect(cfg.hard_rules).not.toContain("Lead with one concrete insight or result"); // email[3]
+  });
+
+  it("step 4 (value_add) uses the value_add tier, NOT the ordinal breakup tier", () => {
+    const cfg = getStructuredStepConfig(camp, 4)!;
+    expect(cfg.framework).toBe("value_add"); // not ordinal-4 breakup
+    expect(cfg.max_words).toBe(60); // email tier 3
+    expect(cfg.hard_rules).toContain("Lead with one concrete insight or result"); // email[3]
+    expect(cfg.hard_rules).not.toContain("No guilt, no fake urgency"); // email[4]
+  });
+
   it("step 6 (value_add) borrows the value_add tier (email step 3)", () => {
     const cfg = getStructuredStepConfig(camp, 6)!;
     expect(cfg.framework).toBe("value_add");
@@ -102,6 +118,33 @@ describe("getStructuredStepConfig — extended steps resolve by step_type, not i
     const cfg = getStructuredStepConfig(camp2, 6)!;
     expect(cfg.framework).toBe("hypothesis");
     expect(cfg.max_words).toBe(99);
+  });
+});
+
+// ── Short (≤4) campaigns keep ORDINAL tiers — byte-identical, even with an
+//    unusual step_type ordering. Proves the length gate (not step_type) governs. ─
+
+describe("getStructuredStepConfig — ≤4-step campaigns use ordinal tiers (unchanged)", () => {
+  it("a value_add at step 2 of a 4-step campaign still resolves with the ordinal-2 tier", () => {
+    const camp: LoadedCampaign = {
+      id: "camp-4b",
+      motion: "outbound_prospecting",
+      default_channel: "email",
+      include_meeting_cta: false,
+      global_instructions: null,
+      steps: [
+        step(1, "intro", "question"),
+        step(2, "value_add", "soft_offer"), // unusual: value_add at ordinal 2
+        step(3, "value_add", "soft_offer"),
+        step(4, "breakup", "breakup_close"),
+      ],
+    };
+    const cfg = getStructuredStepConfig(camp, 2)!;
+    // Ordinal-2 (followup) defaults win — NOT the value_add tier — so existing
+    // ≤4-step campaigns are unaffected by the step_type-tier logic.
+    expect(cfg.framework).toBe("hypothesis");
+    expect(cfg.max_words).toBe(60);
+    expect(cfg.hard_rules).toContain("One question only");
   });
 });
 

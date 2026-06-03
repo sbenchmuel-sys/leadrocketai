@@ -6,9 +6,10 @@
 // back-compat; the only NEW logic here is the rule-based fallback for
 // steps beyond the literal 1–4 definitions (Unit B, 4→9 cadence).
 //
-// IMPORTANT: steps 1–4 keep their EXACT prior fallback chain so any
-// pre-existing (≤4-step) campaign resolves byte-identically. The
-// rule-based branch only ever runs for step_number > 4.
+// IMPORTANT: any campaign with ≤4 active steps keeps its EXACT prior fallback
+// chain (ordinal tiers), so every pre-existing campaign resolves byte-identically.
+// The rule-based (step_type-tier) branch only runs for campaigns LONGER than 4
+// steps — which can only be new Unit B drafts, never an existing live campaign.
 // ============================================
 
 import type {
@@ -104,9 +105,17 @@ export function isCampaignSendable(status: string | null | undefined): boolean {
  * Convert a structured campaign step into a CampaignStepConfig
  * that the resolver can consume directly.
  *
- * Steps 1–4: unchanged fallback chain (DB value → DEFAULT_STEP_CONFIG →
- * CHANNEL_STEP_CONSTRAINTS). Steps > 4: when a DB column is empty, fall
- * back by step_type via the tables above instead of intro-tier defaults.
+ * Tier selection is gated on the CAMPAIGN'S LENGTH, not the step number:
+ *   • ≤4 active steps (legacy / existing campaigns): the tier IS the ordinal
+ *     step number, so every step resolves byte-identically to the original
+ *     code — regardless of its step_type.
+ *   • >4 active steps (Unit B 9-touch cadences): the tier is chosen by
+ *     step_type for EVERY step. This matters because the default 9-touch plan
+ *     puts a `followup` at step 3 and a `value_add` at step 4 — keying off the
+ *     ordinal there would wrongly hand step 3 the value_add defaults and step 4
+ *     the breakup defaults. Long campaigns can only be new drafts (the loader
+ *     is active-only and Unit A/B expose no activation path), so existing live
+ *     campaigns are unaffected.
  */
 export function structuredStepToConfig(
   step: StructuredCampaignStep,
@@ -114,17 +123,17 @@ export function structuredStepToConfig(
 ): CampaignStepConfig {
   const channel = (step.channel || campaign.default_channel) as CanonicalChannel;
   const stepNum = step.step_number;
-  const isExtended = stepNum > 4;
 
-  // For ≤4 steps the tier IS the step number, so behavior is identical to
-  // the original code. For >4 steps borrow the tier for the step_type.
-  const tierStep = isExtended ? (STEP_TYPE_TIER[step.step_type] ?? 2) : stepNum;
+  // Long = more than 4 active steps. Gate by length, not stepNum, so steps 1–4
+  // of a long campaign also use step_type tiers (Codex P2, PR #58).
+  const isLongCampaign = campaign.steps.filter((s) => s.active).length > 4;
+  const tierStep = isLongCampaign ? (STEP_TYPE_TIER[step.step_type] ?? 2) : stepNum;
 
   const channelConstraint = CHANNEL_STEP_CONSTRAINTS[channel]?.[tierStep];
   const defaultConfig = DEFAULT_STEP_CONFIG[tierStep];
 
-  const ruleFramework = isExtended ? STEP_TYPE_FRAMEWORK[step.step_type] : undefined;
-  const ruleObjective = isExtended ? STEP_TYPE_OBJECTIVE[step.step_type] : undefined;
+  const ruleFramework = isLongCampaign ? STEP_TYPE_FRAMEWORK[step.step_type] : undefined;
+  const ruleObjective = isLongCampaign ? STEP_TYPE_OBJECTIVE[step.step_type] : undefined;
 
   return {
     step_type: step.step_type as CampaignStepConfig["step_type"],
