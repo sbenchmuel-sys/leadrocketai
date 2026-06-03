@@ -70,17 +70,27 @@ export function CampaignContentReview({ campaign, people }: Props) {
   const primaryIndustry = useMemo(() => computePrimaryIndustry(people), [people]);
 
   // Which variant the rep is viewing (null = General / fallback).
-  const [variant, setVariant] = useState<string | null>(isIndustry ? primaryIndustry : null);
+  const [variant, setVariant] = useState<string | null>(null);
   const [rows, setRows] = useState<StepContent[]>([]);
   const [loading, setLoading] = useState(true);
   const [genAll, setGenAll] = useState<GenerateAllProgress | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Whether the rep has explicitly chosen a variant. `null` is BOTH the initial
+  // "not chosen" state AND the legitimate value for "Everyone else (General)",
+  // so we track the choice separately rather than treating null as uninitialized.
+  const variantChosen = useRef(false);
 
-  // Default to the primary industry once people load (industry campaigns).
+  // Default to the primary industry once people load (industry campaigns) — but
+  // ONLY before the rep has picked, so choosing General (null) isn't overridden.
   useEffect(() => {
-    if (isIndustry && variant == null && primaryIndustry) setVariant(primaryIndustry);
-  }, [isIndustry, primaryIndustry, variant]);
+    if (!variantChosen.current && isIndustry && primaryIndustry) setVariant(primaryIndustry);
+  }, [isIndustry, primaryIndustry]);
+
+  const chooseVariant = (v: string | null) => {
+    variantChosen.current = true;
+    setVariant(v);
+  };
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -178,7 +188,7 @@ export function CampaignContentReview({ campaign, people }: Props) {
           <span className="text-xs text-muted-foreground">Showing:</span>
           <Select
             value={variant ?? GENERAL}
-            onValueChange={(v) => setVariant(v === GENERAL ? null : v)}
+            onValueChange={(v) => chooseVariant(v === GENERAL ? null : v)}
           >
             <SelectTrigger className="h-8 w-auto min-w-[10rem] text-sm">
               <SelectValue />
