@@ -48,6 +48,7 @@ import {
 } from "@/lib/campaignQueries";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
+import { CampaignCollateralSection } from "@/components/automations/CampaignCollateralSection";
 import { AddLeadsDialog } from "@/components/automations/AddLeadsDialog";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -229,6 +230,9 @@ export default function CampaignDetail() {
       {campaign.steps.length > 0 && (
         <CampaignContentReview campaign={campaign} people={people} />
       )}
+
+      {/* Collateral (Unit D) */}
+      <CampaignCollateralSection campaign={campaign} people={people} />
 
       {/* People */}
       <section className="space-y-3">

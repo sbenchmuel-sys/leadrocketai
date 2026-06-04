@@ -541,3 +541,96 @@ export async function selectStepOption(
   if (error) throw new Error(error.message || "Couldn't switch option");
   return (data || []).length > 0;
 }
+
+// ── Campaign collateral (Unit D) ────────────────────────────────────
+// AI-drafted, rep-editable one-pagers / walkthroughs stored in
+// campaign_collateral (one row per campaign × type × variant_group; NULL =
+// General). is_edited locks a draft (regenerate confirms before replacing).
+// attached_step_number is a LIGHTWEIGHT logical link ("offered with touch N"),
+// NOT a send-time attachment. Cast `as any` until Lovable regenerates types.ts.
+
+export type CollateralType = "one_pager" | "walkthrough";
+
+export interface CampaignCollateral {
+  id: string;
+  campaign_id: string;
+  collateral_type: CollateralType;
+  variant_group: string | null;
+  title: string | null;
+  body: string | null;
+  is_edited: boolean;
+  attached_step_number: number | null;
+  updated_at?: string;
+}
+
+export type CollateralWrite = Partial<
+  Pick<CampaignCollateral, "title" | "body" | "is_edited" | "attached_step_number">
+>;
+
+/** All collateral rows for a campaign (every type + variant). */
+export async function fetchCampaignCollateral(campaignId: string): Promise<CampaignCollateral[]> {
+  const { data } = await supabase
+    .from("campaign_collateral" as any)
+    .select("*")
+    .eq("campaign_id", campaignId)
+    .order("collateral_type", { ascending: true });
+  return (data || []) as unknown as CampaignCollateral[];
+}
+
+/**
+ * Insert-or-update a single (campaign × type × variant) collateral row. Manual
+ * upsert (select-then-write) because the uniqueness is a COALESCE expression
+ * index, which PostgREST's onConflict can't target.
+ */
+export async function upsertCollateral(
+  campaignId: string,
+  type: CollateralType,
+  variantGroup: string | null,
+  write: CollateralWrite,
+): Promise<void> {
+  const vg = STEP_CONTENT_KEY(variantGroup);
+  let findQ = supabase
+    .from("campaign_collateral" as any)
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .eq("collateral_type", type);
+  findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
+  const { data: existing } = await findQ.maybeSingle();
+
+  if ((existing as { id?: string } | null)?.id) {
+    const { error } = await supabase
+      .from("campaign_collateral" as any)
+      .update(write as any)
+      .eq("id", (existing as { id: string }).id);
+    if (error) throw new Error(error.message || "Failed to save collateral");
+  } else {
+    const { error } = await supabase
+      .from("campaign_collateral" as any)
+      .insert({ campaign_id: campaignId, collateral_type: type, variant_group: vg, ...write } as any);
+    if (error) throw new Error(error.message || "Failed to save collateral");
+  }
+}
+
+/** Save a rep's inline edit — locks the draft (is_edited=true). */
+export async function saveCollateralEdit(
+  campaignId: string,
+  type: CollateralType,
+  variantGroup: string | null,
+  fields: Pick<CampaignCollateral, "title" | "body">,
+): Promise<void> {
+  await upsertCollateral(campaignId, type, variantGroup, { ...fields, is_edited: true });
+}
+
+export async function deleteCollateral(id: string): Promise<void> {
+  const { error } = await supabase.from("campaign_collateral" as any).delete().eq("id", id);
+  if (error) throw new Error(error.message || "Failed to delete collateral");
+}
+
+/** Link a collateral row to a touch (or clear with null). Logical link only. */
+export async function attachCollateralToStep(id: string, stepNumber: number | null): Promise<void> {
+  const { error } = await supabase
+    .from("campaign_collateral" as any)
+    .update({ attached_step_number: stepNumber } as any)
+    .eq("id", id);
+  if (error) throw new Error(error.message || "Failed to link collateral");
+}
