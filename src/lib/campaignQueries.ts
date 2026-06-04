@@ -471,7 +471,7 @@ export async function upsertStepContent(
     const { error } = await supabase
       .from("campaign_step_content" as any)
       .update(write as any)
-      .eq("id", (existing as { id: string }).id);
+      .eq("id", (existing as unknown as { id: string }).id);
     if (error) throw new Error(error.message || "Failed to save content");
   } else {
     const { error } = await supabase
