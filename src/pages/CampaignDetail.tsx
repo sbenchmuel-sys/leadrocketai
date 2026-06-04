@@ -40,11 +40,13 @@ import { toast } from "sonner";
 import {
   fetchCampaignById,
   fetchCampaignLeads,
+  fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
   assignCampaignToLead,
   type CampaignWithSteps,
   type CampaignLead,
+  type CampaignCollateral,
 } from "@/lib/campaignQueries";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
@@ -70,10 +72,18 @@ export default function CampaignDetail() {
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [collateral, setCollateral] = useState<CampaignCollateral[]>([]);
 
   const loadPeople = useCallback(() => {
     if (!id) return;
     fetchCampaignLeads(id).then(setPeople).catch(() => {});
+  }, [id]);
+
+  // Collateral is owned here so the Collateral section and the email-review
+  // section share one source of truth (a link made in one shows in the other).
+  const loadCollateral = useCallback(() => {
+    if (!id) return;
+    fetchCampaignCollateral(id).then(setCollateral).catch(() => {});
   }, [id]);
 
   useEffect(() => {
@@ -87,7 +97,8 @@ export default function CampaignDetail() {
       .catch(() => toast.error("Couldn't load this outreach"))
       .finally(() => setLoading(false));
     loadPeople();
-  }, [id, loadPeople]);
+    loadCollateral();
+  }, [id, loadPeople, loadCollateral]);
 
   const handleSaveInstructions = async () => {
     if (!id) return;
@@ -228,11 +239,16 @@ export default function CampaignDetail() {
 
       {/* Full-cadence generated script (Unit B Phase 2) */}
       {campaign.steps.length > 0 && (
-        <CampaignContentReview campaign={campaign} people={people} />
+        <CampaignContentReview campaign={campaign} people={people} collateral={collateral} />
       )}
 
       {/* Collateral (Unit D) */}
-      <CampaignCollateralSection campaign={campaign} people={people} />
+      <CampaignCollateralSection
+        campaign={campaign}
+        people={people}
+        collateral={collateral}
+        onChanged={loadCollateral}
+      />
 
       {/* People */}
       <section className="space-y-3">

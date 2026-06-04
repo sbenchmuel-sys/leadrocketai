@@ -11,7 +11,7 @@
 // that's Unit C). The copy never says "attached" or implies the file is sent.
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +28,6 @@ import { Loader2, Wand2, RefreshCw, Trash2, Check, FileText } from "lucide-react
 import { toast } from "sonner";
 import { cumulativeDays } from "@/lib/campaignDefaults";
 import {
-  fetchCampaignCollateral,
   saveCollateralEdit,
   deleteCollateral,
   attachCollateralToStep,
@@ -52,17 +51,20 @@ const UNLINKED = "__none__";
 interface Props {
   campaign: CampaignWithSteps;
   people: CampaignLead[];
+  // Collateral rows + a refetch trigger are owned by CampaignDetail so this
+  // section and the email-review section stay in sync (a link made here shows
+  // up there immediately).
+  collateral: CampaignCollateral[];
+  onChanged: () => void;
 }
 
-export function CampaignCollateralSection({ campaign, people }: Props) {
+export function CampaignCollateralSection({ campaign, people, collateral, onChanged }: Props) {
   const isIndustry = campaign.campaign_type === "industry";
   const industries = useMemo(() => getIndustriesPresent(people), [people]);
   const primaryIndustry = useMemo(() => computePrimaryIndustry(people), [people]);
 
   const [variant, setVariant] = useState<string | null>(null);
   const variantChosen = useRef(false);
-  const [rows, setRows] = useState<CampaignCollateral[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!variantChosen.current && isIndustry && primaryIndustry) setVariant(primaryIndustry);
@@ -72,18 +74,6 @@ export function CampaignCollateralSection({ campaign, people }: Props) {
     variantChosen.current = true;
     setVariant(v);
   };
-
-  const reload = useCallback(() => {
-    setLoading(true);
-    fetchCampaignCollateral(campaign.id)
-      .then(setRows)
-      .catch(() => toast.error("Couldn't load collateral"))
-      .finally(() => setLoading(false));
-  }, [campaign.id]);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
 
   // Email touches a collateral can be linked to ("Email · Day N").
   const emailTouches = useMemo(() => {
@@ -96,7 +86,7 @@ export function CampaignCollateralSection({ campaign, people }: Props) {
 
   const variantKey = (v: string | null) => (v == null || v.trim() === "" ? "" : v);
   const rowFor = (type: CollateralType): CampaignCollateral | null =>
-    rows.find((r) => r.collateral_type === type && variantKey(r.variant_group) === variantKey(variant)) ?? null;
+    collateral.find((r) => r.collateral_type === type && variantKey(r.variant_group) === variantKey(variant)) ?? null;
 
   return (
     <section className="space-y-3">
@@ -125,30 +115,21 @@ export function CampaignCollateralSection({ campaign, people }: Props) {
         </div>
       )}
 
-      {loading ? (
-        <Card>
-          <CardContent className="flex items-center gap-3 py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Loading…</span>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {COLLATERAL_TYPES.map((t) => (
-            <CollateralCard
-              key={t.type}
-              campaign={campaign}
-              type={t.type}
-              label={t.label}
-              blurb={t.blurb}
-              variant={variant}
-              content={rowFor(t.type)}
-              emailTouches={emailTouches}
-              onChanged={reload}
-            />
-          ))}
-        </div>
-      )}
+      <div className="space-y-3">
+        {COLLATERAL_TYPES.map((t) => (
+          <CollateralCard
+            key={t.type}
+            campaign={campaign}
+            type={t.type}
+            label={t.label}
+            blurb={t.blurb}
+            variant={variant}
+            content={rowFor(t.type)}
+            emailTouches={emailTouches}
+            onChanged={onChanged}
+          />
+        ))}
+      </div>
     </section>
   );
 }
