@@ -639,6 +639,7 @@ export type Database = {
           id: string
           include_meeting_cta: boolean
           is_default: boolean
+          knowledge_document_id: string | null
           knowledge_ref: string | null
           motion: Database["public"]["Enums"]["campaign_motion"]
           name: string
@@ -654,6 +655,7 @@ export type Database = {
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_document_id?: string | null
           knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name: string
@@ -669,6 +671,7 @@ export type Database = {
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_document_id?: string | null
           knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name?: string
@@ -4171,6 +4174,7 @@ export type Database = {
         Args: {
           filter_content_types?: string[]
           filter_customer_facing?: boolean
+          filter_document_id?: string
           filter_lead_id?: string
           match_count?: number
           match_threshold?: number
