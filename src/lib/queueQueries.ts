@@ -60,7 +60,7 @@ export const QUEUE_INTENT_HIDE_SET: ReadonlySet<string> = new Set([
  */
 const QUEUE_URGENCY_PRIORITY: Record<string, number> = {
   reply_now: 1,
-  ooo_return_followup: 1, // OOO back is customer-waiting equivalent
+  ooo_return_followup: 1, // back-from-away — keep at top of Follow up
   generate_post_meeting_recap: 2,
   send_proposal: 3,
   closing_followup: 3,
@@ -82,21 +82,41 @@ function urgencyOf(key: string | null | undefined): number {
 
 // ── Chip classification ────────────────────────────────────────────
 
-export type QueueChipBucket = "replied" | "followup_due" | "ooo_back";
-
-const RESURFACED_WINDOW_MS = 24 * 60 * 60 * 1000;
+export type QueueChipBucket = "replied" | "followup_due";
 
 /**
- * Map a lead's next_action_key + action_resurfaced_at to a chip bucket.
+ * "Was away — back now": the lead was paused out-of-office and has now
+ * returned. The only signal is the `ooo_return_followup` action key
+ * written by the OOO detector (`_shared/oooPauseActions.ts applyOOOPause`).
  *
- * Documented in the PR description for operator approval. Summary:
- *  - **Replied** = customer is waiting. Just `reply_now`.
- *  - **OOO back** = `ooo_return_followup` (explicit), OR ANY action
- *    where `action_resurfaced_at` is within the last 24h (covers
- *    re-arm via fresh inbound during a snooze).
- *  - **Follow-up due** = everything else with a non-null action key.
- *    Lower-friction default per brief §4 ("better to undercount
- *    Replied than overcount it and erode trust").
+ * A lead that merely re-armed because a fresh inbound landed
+ * (`action_resurfaced_at` within 24h) is deliberately NOT treated as
+ * "was away" — that path now falls to its natural group: a genuine
+ * reply (`reply_now`) goes to "Replied", anything else to "Follow up".
+ * Conflating the two previously mislabeled real replies as OOO.
+ *
+ * Front-end relabel only: the detector and the automation send-pause are
+ * unchanged; we only reinterpret the key the detector already writes.
+ */
+export function leadWasAway(input: { next_action_key: string | null }): boolean {
+  return input.next_action_key === "ooo_return_followup";
+}
+
+/**
+ * Map a lead's next_action_key to a chip bucket.
+ *
+ *  - **Replied** = customer is waiting (`reply_now`).
+ *  - **Follow up** = everything else with a non-null action key,
+ *    INCLUDING back-from-away leads (`ooo_return_followup`). Those fold
+ *    in here with a "was away — back now" note on the card rather than a
+ *    separate OOO group. Lower-friction default per brief §4 ("better to
+ *    undercount Replied than overcount it and erode trust").
+ *
+ * Was-away is checked first so a back-from-away lead never sits under
+ * "Replied" — the rep is the one following up, not replying.
+ *
+ * `action_resurfaced_at` is retained in the input shape for caller
+ * compatibility but no longer affects bucketing (see `leadWasAway`).
  *
  * Returns `null` if the lead has no action key (defensive — shouldn't
  * happen for queue rows since they pass `needs_action = true`).
@@ -105,21 +125,15 @@ export function chipForLead(input: {
   next_action_key: string | null;
   action_resurfaced_at: string | null;
 }): QueueChipBucket | null {
-  const { next_action_key, action_resurfaced_at } = input;
+  const { next_action_key } = input;
 
-  // OOO back — explicit or recently re-armed.
-  if (next_action_key === "ooo_return_followup") return "ooo_back";
-  if (action_resurfaced_at) {
-    const resurfacedAt = new Date(action_resurfaced_at).getTime();
-    if (Number.isFinite(resurfacedAt) && Date.now() - resurfacedAt < RESURFACED_WINDOW_MS) {
-      return "ooo_back";
-    }
-  }
+  // Back-from-away → Follow up (rep follows up; note shown on card).
+  if (leadWasAway({ next_action_key })) return "followup_due";
 
   // Replied — customer is the one waiting.
   if (next_action_key === "reply_now") return "replied";
 
-  // Follow-up due — default for anything else with an action key.
+  // Follow up — default for anything else with an action key.
   if (next_action_key) return "followup_due";
 
   return null;
@@ -381,14 +395,12 @@ export async function fetchVisibleQueueLeadsCount(opts?: {
 export interface QueueChipCounts {
   replied: number;
   followup_due: number;
-  ooo_back: number;
   total: number;
 }
 
 export function countChipBuckets(leads: QueueLeadRow[]): QueueChipCounts {
   let replied = 0;
   let followup_due = 0;
-  let ooo_back = 0;
   for (const l of leads) {
     const bucket = chipForLead({
       next_action_key: l.next_action_key,
@@ -396,9 +408,8 @@ export function countChipBuckets(leads: QueueLeadRow[]): QueueChipCounts {
     });
     if (bucket === "replied") replied += 1;
     else if (bucket === "followup_due") followup_due += 1;
-    else if (bucket === "ooo_back") ooo_back += 1;
   }
-  return { replied, followup_due, ooo_back, total: leads.length };
+  return { replied, followup_due, total: leads.length };
 }
 
 // ── Sort + chip filter helpers (pure) ─────────────────────────────
@@ -430,15 +441,16 @@ export type QueueButtonLabel = "Reply" | "Follow up";
  * Brief §6: button label switches between "Reply" and "Follow up"
  * based on next_action_key. Customer-waiting → "Reply".
  *
- * Mapping mirrors `chipForLead`: anything that buckets into "replied"
- * OR "ooo_back" is customer-waiting; everything else is rep-waiting.
- * Single source of truth means button label and chip always agree.
+ * Mapping mirrors `chipForLead`: only "replied" is customer-waiting;
+ * everything else (including back-from-away leads, which bucket into
+ * "followup_due") is rep-waiting → "Follow up". Single source of truth
+ * means button label and chip always agree.
  */
 export function queueButtonLabel(input: {
   next_action_key: string | null;
   action_resurfaced_at: string | null;
 }): QueueButtonLabel {
   const bucket = chipForLead(input);
-  if (bucket === "replied" || bucket === "ooo_back") return "Reply";
+  if (bucket === "replied") return "Reply";
   return "Follow up";
 }

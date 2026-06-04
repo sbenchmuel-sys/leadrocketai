@@ -1,9 +1,10 @@
 // ============================================================
 // QueueChips — single-select reason chip strip at top of Queue.
 //
-// Three chips: Replied / Follow-up due / OOO back. Single-select
-// behavior (brief §4): click to select, click again to deselect.
-// Default: none selected, all unhidden leads visible.
+// Two chips: Replied / Follow up. Single-select behavior (brief §4):
+// click to select, click again to deselect. Default: none selected,
+// all unhidden leads visible. (Back-from-away leads fold into "Follow
+// up" with a card note — no separate OOO chip.)
 //
 // Counts are derived from the snapshot in the parent (Queue.tsx),
 // not from a separate fetch — so chip counts always match what the
@@ -21,7 +22,7 @@ import type { QueueChipBucket } from "@/lib/queueQueries";
 
 interface QueueChipsProps {
   active: QueueChipBucket | null;
-  counts: { replied: number; followup_due: number; ooo_back: number };
+  counts: { replied: number; followup_due: number };
   onSelect: (next: QueueChipBucket | null) => void;
 }
 
@@ -32,8 +33,7 @@ interface ChipDef {
 
 const CHIPS: ChipDef[] = [
   { id: "replied", label: "Replied" },
-  { id: "followup_due", label: "Follow-up due" },
-  { id: "ooo_back", label: "OOO back" },
+  { id: "followup_due", label: "Follow up" },
 ];
 
 export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
@@ -41,12 +41,7 @@ export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Queue reason filter">
       {CHIPS.map((chip) => {
         const isActive = active === chip.id;
-        const count =
-          chip.id === "replied"
-            ? counts.replied
-            : chip.id === "followup_due"
-              ? counts.followup_due
-              : counts.ooo_back;
+        const count = chip.id === "replied" ? counts.replied : counts.followup_due;
         return (
           <Button
             key={chip.id}
