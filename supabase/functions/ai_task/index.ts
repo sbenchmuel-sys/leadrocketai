@@ -214,6 +214,12 @@ const EMAIL_BODY_TASKS = new Set([
   "post_meeting_followup_email", "reply_to_thread",
 ]);
 
+// Campaign collateral tasks (Unit D). These are CAMPAIGN-LEVEL (no step_number):
+// they are the ONLY tasks allowed to enter the no-step campaign-authoring path.
+// The production sender (automation-executor) never emits these, so the live
+// send path can never reach campaign-authoring through them.
+const COLLATERAL_TASKS = new Set(["collateral_one_pager", "collateral_walkthrough"]);
+
 // Tasks that count as warm inbound and must follow the warm-meeting-CTA contract.
 const INBOUND_WARM_TASKS = new Set(["inbound_intro", "inbound_followup_1", "inbound_followup_2"]);
 
@@ -479,6 +485,10 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   cold_call_talking_points: ["messaging", "knowledge", "industry"],
   cold_voicemail: ["messaging", "knowledge", "industry"],
   cold_email_subject: ["messaging", "knowledge", "industry"],
+
+  // Campaign collateral (Unit D) — grounded in the seller's KB document.
+  collateral_one_pager: ["knowledge", "industry", "case_study", "messaging"],
+  collateral_walkthrough: ["knowledge", "industry", "case_study", "messaging"],
 
   // Last-mile / reply — narrow core, expanded on signal below
   reply_to_thread: ["objection", "case_study", "knowledge", "messaging"],
@@ -1240,13 +1250,24 @@ serve(async (req) => {
     let campaignAuthoring = false;
     let campaignKnowledgeDocId: string | null = null;
     let campaignKbOwnerId: string | null = null;
-    if (payload?.campaign_id && payload?.step_number !== undefined && payload?.step_number !== null) {
+    // Per-step authoring (Unit B): campaign_id + a real top-level step_number.
+    // This condition is UNCHANGED — non-collateral calls behave exactly as before.
+    const hasStepNumber = payload?.step_number !== undefined && payload?.step_number !== null;
+    // Campaign-level authoring (Unit D collateral): gated on the collateral_*
+    // task allowlist, NOT on a loosened campaign_id check. The live sender
+    // (automation-executor) only ever emits send tasks, never collateral tasks,
+    // so it can never enter this no-step path.
+    const isCollateralTask = COLLATERAL_TASKS.has(task);
+    if (payload?.campaign_id && (hasStepNumber || isCollateralTask)) {
       try {
         const authoringClient = createClient(supabaseUrl, supabaseServiceKey);
+        // Collateral is campaign-level → step null. Per-step path passes the
+        // numeric step_number exactly as before (byte-identical behavior).
+        const stepArg = isCollateralTask ? null : Number(payload.step_number);
         const instr = await resolveCampaignAuthoringInstruction(
           authoringClient,
           String(payload.campaign_id),
-          Number(payload.step_number),
+          stepArg,
           payload?.industry ? String(payload.industry) : null,
           user.id,
         );
@@ -1259,9 +1280,9 @@ serve(async (req) => {
           // may differ from the rep authoring now — that's fine, same workspace).
           campaignKnowledgeDocId = instr.knowledgeDocumentId;
           campaignKbOwnerId = instr.knowledgeDocOwnerId;
-          console.log(`[ai_task] [CAMPAIGN-AUTHORING] step ${payload.step_number} (variant=${instr.variantGroup ?? "General"}), doc=${campaignKnowledgeDocId ?? "none"}`);
+          console.log(`[ai_task] [CAMPAIGN-AUTHORING] ${isCollateralTask ? `collateral:${task}` : `step ${payload.step_number}`} (variant=${instr.variantGroup ?? "General"}), doc=${campaignKnowledgeDocId ?? "none"}`);
         } else {
-          console.warn(`[ai_task] [CAMPAIGN-AUTHORING] resolver returned null for campaign ${payload.campaign_id} step ${payload.step_number} (not a workspace member or step missing) — proceeding without campaign instruction`);
+          console.warn(`[ai_task] [CAMPAIGN-AUTHORING] resolver returned null for campaign ${payload.campaign_id} ${isCollateralTask ? `collateral:${task}` : `step ${payload.step_number}`} (not a workspace member or step missing) — proceeding without campaign instruction`);
         }
       } catch (err) {
         console.error("[ai_task] [CAMPAIGN-AUTHORING] resolution failed:", err);
