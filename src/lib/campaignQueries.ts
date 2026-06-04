@@ -35,6 +35,10 @@ export interface Campaign {
   campaign_type: CampaignType;
   status: CampaignStatus;
   knowledge_ref: string | null;
+  // Added in Unit B Phase 2 (migration 20260603120000): the kb_chunks.document_id
+  // of the campaign's uploaded knowledge file. Authoring-time KB retrieval is
+  // scoped to this document. Null until a file is ingested.
+  knowledge_document_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -229,7 +233,7 @@ export async function createCampaignWithSteps(input: CreateCampaignInput): Promi
 /** Update editable campaign-level fields. */
 export async function updateCampaign(
   campaignId: string,
-  patch: Partial<Pick<Campaign, "name" | "global_instructions" | "include_meeting_cta" | "knowledge_ref" | "status">>,
+  patch: Partial<Pick<Campaign, "name" | "global_instructions" | "include_meeting_cta" | "knowledge_ref" | "knowledge_document_id" | "status">>,
 ) {
   const { error } = await supabase
     .from("campaigns")
@@ -381,4 +385,159 @@ export async function removeSuppressionEntry(id: string) {
     .delete()
     .eq("id", id);
   if (error) throw new Error(error.message || "Failed to remove entry");
+}
+
+// ── Generated per-touch content (Unit B Phase 2) ────────────────────
+// Stored in campaign_step_content, one row per (campaign × step × variant_group;
+// NULL variant_group = General / fallback). The flat channel fields mirror the
+// currently-selected option; options_json holds the "couple of options" the rep
+// can pick between. is_edited locks a touch — only an explicit per-touch Rewrite
+// regenerates it. Cast `as any` because the table isn't in the generated
+// types.ts until Lovable applies the migration (mirrors the suppression list).
+
+export interface StepContentOption {
+  subject?: string;
+  body?: string;
+  talking_points?: string;
+  voicemail_script?: string;
+  sms_text?: string;
+}
+
+export interface StepContent {
+  id: string;
+  campaign_id: string;
+  step_number: number;
+  variant_group: string | null;
+  subject: string | null;
+  body: string | null;
+  talking_points: string | null;
+  voicemail_script: string | null;
+  sms_text: string | null;
+  options_json: StepContentOption[] | null;
+  selected_option: number | null;
+  is_edited: boolean;
+  updated_at?: string;
+}
+
+const STEP_CONTENT_KEY = (variantGroup: string | null) =>
+  variantGroup == null || variantGroup.trim() === "" ? null : variantGroup;
+
+/** All generated content rows for a campaign (every variant). */
+export async function fetchStepContent(campaignId: string): Promise<StepContent[]> {
+  const { data } = await supabase
+    .from("campaign_step_content" as any)
+    .select("*")
+    .eq("campaign_id", campaignId)
+    .order("step_number", { ascending: true });
+  return (data || []) as unknown as StepContent[];
+}
+
+/** Fields a write may set on a content row. */
+export type StepContentWrite = Partial<
+  Pick<
+    StepContent,
+    | "subject"
+    | "body"
+    | "talking_points"
+    | "voicemail_script"
+    | "sms_text"
+    | "options_json"
+    | "selected_option"
+    | "is_edited"
+  >
+>;
+
+/**
+ * Insert-or-update a single (campaign × step × variant) content row. Manual
+ * upsert (select-then-write) because the uniqueness is a COALESCE expression
+ * index, which PostgREST's onConflict can't target.
+ */
+export async function upsertStepContent(
+  campaignId: string,
+  stepNumber: number,
+  variantGroup: string | null,
+  write: StepContentWrite,
+): Promise<void> {
+  const vg = STEP_CONTENT_KEY(variantGroup);
+  let findQ = supabase
+    .from("campaign_step_content" as any)
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .eq("step_number", stepNumber);
+  findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
+  const { data: existing } = await findQ.maybeSingle();
+
+  if ((existing as { id?: string } | null)?.id) {
+    const { error } = await supabase
+      .from("campaign_step_content" as any)
+      .update(write as any)
+      .eq("id", (existing as { id: string }).id);
+    if (error) throw new Error(error.message || "Failed to save content");
+  } else {
+    const { error } = await supabase
+      .from("campaign_step_content" as any)
+      .insert({
+        campaign_id: campaignId,
+        step_number: stepNumber,
+        variant_group: vg,
+        ...write,
+      } as any);
+    if (error) throw new Error(error.message || "Failed to save content");
+  }
+}
+
+/** Save a rep's inline edit — locks the touch (is_edited=true). */
+export async function saveStepEdit(
+  campaignId: string,
+  stepNumber: number,
+  variantGroup: string | null,
+  fields: Pick<StepContent, "subject" | "body" | "talking_points" | "voicemail_script" | "sms_text">,
+): Promise<void> {
+  await upsertStepContent(campaignId, stepNumber, variantGroup, { ...fields, is_edited: true });
+}
+
+/**
+ * Pick one of the generated options. Copies that option's fields into the flat
+ * columns. NEVER wipes a rep edit: refuses if the row is already edited, and the
+ * UPDATE itself is filtered on `is_edited = false` so a concurrent edit in
+ * another tab/session (set between this read and write) can't be clobbered —
+ * the update simply matches zero rows. Returns true only when the pick applied;
+ * false means the row was edited (or absent) and the caller should refresh.
+ */
+export async function selectStepOption(
+  campaignId: string,
+  stepNumber: number,
+  variantGroup: string | null,
+  optionIndex: number,
+  option: StepContentOption,
+): Promise<boolean> {
+  const vg = STEP_CONTENT_KEY(variantGroup);
+  let findQ = supabase
+    .from("campaign_step_content" as any)
+    .select("id, is_edited")
+    .eq("campaign_id", campaignId)
+    .eq("step_number", stepNumber);
+  findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
+  const { data: existing } = await findQ.maybeSingle();
+  const row = existing as { id?: string; is_edited?: boolean } | null;
+
+  // Picking an option only makes sense on an existing, un-edited row. Bail
+  // (without writing) on a missing row or one the rep has already edited.
+  if (!row?.id || row.is_edited === true) return false;
+
+  const { data, error } = await supabase
+    .from("campaign_step_content" as any)
+    .update({
+      selected_option: optionIndex,
+      subject: option.subject ?? null,
+      body: option.body ?? null,
+      talking_points: option.talking_points ?? null,
+      sms_text: option.sms_text ?? null,
+      // voicemail_script is a companion field, not part of the option set — leave it.
+    } as any)
+    .eq("id", row.id)
+    .eq("is_edited", false) // TOCTOU guard: a concurrent edit makes this match 0 rows
+    .select("id");
+  if (error) throw new Error(error.message || "Couldn't switch option");
+  return (data || []).length > 0;
 }

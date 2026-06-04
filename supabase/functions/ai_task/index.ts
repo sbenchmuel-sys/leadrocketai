@@ -4,6 +4,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 // Import from shared modules
 import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT, EXTRACT_STYLE_FEATURES_PROMPT } from "../_shared/prompts.ts";
 import { validateDraft, kindFromTask } from "../_shared/draftValidator.ts";
+import { resolveCampaignAuthoringInstruction } from "../_shared/aiCampaignResolver.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
@@ -474,6 +475,11 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   followup_sequence_4: ["messaging", "knowledge"],
   linkedin_followup: ["messaging", "knowledge"],
 
+  // Cold outreach voice touches + email subject (Unit B Phase 2) — new keys, additive.
+  cold_call_talking_points: ["messaging", "knowledge", "industry"],
+  cold_voicemail: ["messaging", "knowledge", "industry"],
+  cold_email_subject: ["messaging", "knowledge", "industry"],
+
   // Last-mile / reply — narrow core, expanded on signal below
   reply_to_thread: ["objection", "case_study", "knowledge", "messaging"],
   answer_questions: ["knowledge", "objection", "case_study", "messaging"],
@@ -807,7 +813,7 @@ async function generateQueryEmbedding(text: string, apiKey: string): Promise<num
 }
 
 async function getSemanticKnowledgeChunks(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, contentTypes?: string[], avoidChunkIds?: string[]
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, contentTypes?: string[], avoidChunkIds?: string[], filterDocumentId?: string
 ): Promise<{ grouped: KBChunksGrouped; chunkIds: string[] } | null> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) { console.log("[ai_task] No OPENAI_API_KEY — falling back to text search"); return null; }
@@ -819,6 +825,7 @@ async function getSemanticKnowledgeChunks(
     const { data: matches, error } = await supabaseAdmin.rpc("match_knowledge_chunks_v2", {
       query_embedding: JSON.stringify(queryEmbedding), p_owner_user_id: userId, match_threshold: 0.4,
       match_count: fetchCount, filter_customer_facing: true, filter_lead_id: leadId || null, filter_content_types: contentTypes || null,
+      filter_document_id: filterDocumentId || null,
     });
     if (error) { console.error("[ai_task] Semantic search failed:", error); return null; }
     if (!matches || matches.length === 0) { console.log("[ai_task] No semantic matches found"); return null; }
@@ -856,12 +863,13 @@ async function getSemanticKnowledgeChunks(
 }
 
 async function getTextBasedKnowledgeChunks(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, avoidChunkIds?: string[]
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, avoidChunkIds?: string[], filterDocumentId?: string
 ): Promise<{ grouped: KBChunksGrouped; chunkIds: string[] } | null> {
   try {
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     let query = supabaseAdmin.from("kb_chunks").select("id, title, content, source, content_type, priority")
       .eq("owner_user_id", userId).eq("allowed_customer_facing", true).eq("processing_status", "completed").limit(12);
+    if (filterDocumentId) query = query.eq("document_id", filterDocumentId);
     if (leadId) query = query.or(`lead_id.eq.${leadId},lead_id.is.null`);
     const keyTerms = queryText.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(term => term.length > 4).slice(0, 5);
     if (keyTerms.length > 0) query = query.or(keyTerms.map(term => `content.ilike.%${term}%`).join(','));
@@ -915,10 +923,13 @@ function formatKBContext(grouped: KBChunksGrouped, charLimit: number): string {
 }
 
 async function getKnowledgeContext(
-  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string, decision?: ClassifiedDecision, stagePolicy?: ResolvedPolicy
+  queryText: string, supabaseUrl: string, supabaseServiceKey: string, userId: string, leadId?: string, task?: string, latestInbound?: string, decision?: ClassifiedDecision, stagePolicy?: ResolvedPolicy, filterDocumentId?: string
 ): Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> {
-  // Use dynamic expansion for reply_to_thread based on inbound signals + decision context + stage policy
-  const contentTypes = task ? getExpandedKBTypes(task, latestInbound, decision, stagePolicy) : undefined;
+  // Use dynamic expansion for reply_to_thread based on inbound signals + decision context + stage policy.
+  // Coerce an empty type list to undefined (no content_type filter) — a task not
+  // in TASK_KB_CONFIG yields [], and passing [] to the RPC's ANY() matches nothing.
+  const rawContentTypes = task ? getExpandedKBTypes(task, latestInbound, decision, stagePolicy) : undefined;
+  const contentTypes = rawContentTypes && rawContentTypes.length > 0 ? rawContentTypes : undefined;
   const charLimit = task ? getKbCharLimit(task) : KB_CHAR_LIMIT_OUTBOUND;
   if (contentTypes && contentTypes.length > 0) console.log(`[ai_task] Task "${task}" → KB types: [${contentTypes.join(", ")}], limit: ${charLimit} chars`);
 
@@ -945,10 +956,10 @@ async function getKnowledgeContext(
     } catch (err) { console.error("[ai_task] Failed to load recent KB chunk IDs:", err); }
   }
 
-  let result = await getSemanticKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes, avoidChunkIds);
+  let result = await getSemanticKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, contentTypes, avoidChunkIds, filterDocumentId);
   if (!result) {
     console.log("[ai_task] Falling back to text-based KB search");
-    result = await getTextBasedKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, avoidChunkIds);
+    result = await getTextBasedKnowledgeChunks(queryText, supabaseUrl, supabaseServiceKey, userId, leadId, avoidChunkIds, filterDocumentId);
   }
   if (!result || Object.keys(result.grouped).length === 0) return { formatted: "", grouped: {}, chunkIds: [] };
   return { formatted: formatKBContext(result.grouped, charLimit), grouped: result.grouped, chunkIds: result.chunkIds };
@@ -1217,6 +1228,46 @@ serve(async (req) => {
       console.log(`[ai_task] Injected cadence_days for ${mode} mode: ${JSON.stringify(cadenceDays)}`);
     }
     
+    // ── CAMPAIGN AUTHORING BRANCH (Unit B Phase 2 — additive, gated) ──────────
+    // When the client requests generation for a specific campaign touch (payload
+    // carries campaign_id + step_number, optionally industry), build the
+    // structured campaign_instruction server-side so the rep's campaign-level +
+    // per-step instructions actually drive the copy, and scope KB retrieval to
+    // the campaign's own uploaded knowledge document. Workspace isolation is
+    // enforced INSIDE resolveCampaignAuthoringInstruction (membership-gated,
+    // fail-closed). This runs ONLY for campaign authoring — non-campaign drafting
+    // and the per-lead live send path (loadCampaignForLead) are untouched.
+    let campaignAuthoring = false;
+    let campaignKnowledgeDocId: string | null = null;
+    let campaignKbOwnerId: string | null = null;
+    if (payload?.campaign_id && payload?.step_number !== undefined && payload?.step_number !== null) {
+      try {
+        const authoringClient = createClient(supabaseUrl, supabaseServiceKey);
+        const instr = await resolveCampaignAuthoringInstruction(
+          authoringClient,
+          String(payload.campaign_id),
+          Number(payload.step_number),
+          payload?.industry ? String(payload.industry) : null,
+          user.id,
+        );
+        if (instr) {
+          enhancedPayload.campaign_instruction = instr.promptBlock;
+          campaignAuthoring = true;
+          // The resolver returns the document id and its owner ONLY after
+          // verifying the owner is a member of the campaign's workspace, so
+          // these are safe to use for owner-scoped KB retrieval (the doc owner
+          // may differ from the rep authoring now — that's fine, same workspace).
+          campaignKnowledgeDocId = instr.knowledgeDocumentId;
+          campaignKbOwnerId = instr.knowledgeDocOwnerId;
+          console.log(`[ai_task] [CAMPAIGN-AUTHORING] step ${payload.step_number} (variant=${instr.variantGroup ?? "General"}), doc=${campaignKnowledgeDocId ?? "none"}`);
+        } else {
+          console.warn(`[ai_task] [CAMPAIGN-AUTHORING] resolver returned null for campaign ${payload.campaign_id} step ${payload.step_number} (not a workspace member or step missing) — proceeding without campaign instruction`);
+        }
+      } catch (err) {
+        console.error("[ai_task] [CAMPAIGN-AUTHORING] resolution failed:", err);
+      }
+    }
+
     const motion = String(enhancedPayload.motion || "");
     const isFirstTouch = enhancedPayload.first_touch === true;
     const isOutboundFirstTouch = motion === "outbound_prospecting" && isFirstTouch;
@@ -1441,17 +1492,27 @@ serve(async (req) => {
     }
 
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
-    if (KNOWLEDGE_SEARCH_TASKS.includes(task)) {
+    // Campaign authoring searches the KB scoped to the campaign's OWN document.
+    // If the campaign has no validated knowledge document (none uploaded, or the
+    // stored id was rejected by the resolver), do NOT search — generate from the
+    // campaign instructions alone — rather than leaking the owner's unscoped KB
+    // into campaign copy. Non-authoring tasks are unchanged.
+    const authoringWithoutDoc = campaignAuthoring && !campaignKnowledgeDocId;
+    if ((KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) && !authoringWithoutDoc) {
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
       if (payload?.lead_context) queryParts.push(String(payload.lead_context).slice(0, 500));
       if (payload?.meeting_summary) queryParts.push(String(payload.meeting_summary).slice(0, 500));
+      if (campaignAuthoring && payload?.offer_summary) queryParts.push(String(payload.offer_summary).slice(0, 800));
       const searchQuery = queryParts.join("\n").slice(0, 2000);
       if (searchQuery.length > 50) {
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy);
+        // For authoring, scope the KB to the campaign's uploaded document and use
+        // that document's owner so retrieval works for any workspace member.
+        const kbOwnerId = campaignAuthoring && campaignKbOwnerId ? campaignKbOwnerId : resolvedUserId;
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}${campaignAuthoring ? `, campaign_doc: ${campaignKnowledgeDocId ?? "none"}` : ""}`);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, kbOwnerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, campaignKnowledgeDocId || undefined);
       }
     }
 
@@ -1527,6 +1588,7 @@ serve(async (req) => {
       "post_meeting_followup_email", "post_meeting_followup_personalized",
       "nurture_email_single", "nurture_sequence",
       "sms_message", "whatsapp_message", "whatsapp_reply",
+      "cold_call_talking_points", "cold_voicemail",
     ]);
 
     interface StyleProfileData {
