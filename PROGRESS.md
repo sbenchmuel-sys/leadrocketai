@@ -16,7 +16,12 @@ Build sequence (spec: GitHub issue #3):
 - ✅ PR #4 — detection hook (`detect-lead-candidates` edge fn, `_shared/leadCandidateDetection.ts`, cron migration).
 - ✅ PR #5 — AI scoring (`score-lead-candidate` edge fn, 10-min cron, Lovable AI gateway w/ Gemini Flash Lite). Advisory only in V1 — never auto-dismisses.
 - ✅ PR #6 — Lookback seed (`lookback-seed-candidates` edge fn, hourly cron). Adds `lookback_seed_completed_at` column to `gmail_connections` + `mail_accounts`; adds `lookback_seed_window_days` (default 30) to `workspaces`. Existing accounts are backfilled as already-seeded so only future connects trigger a scan.
-- ⬜ PR #7–10 — UI + bulk actions + digest + settings (Lovable).
+- ✅ PR #7 — Pending tab UI + per-row Approve/Dismiss/Merge (`src/components/leads/PendingLeadsTab.tsx`, wired into `src/pages/Leads.tsx`).
+- ✅ PR #8 — Bulk actions + dismiss-list management (multi-select in `PendingLeadsTab`, `DismissedListsDialog` / `ListEditor`).
+- ✅ PR #10 — Settings UI (`src/components/settings/LeadDetectionCard.tsx`: lookback window + dismiss-list editor).
+- ⬜ PR #9 — Daily digest email (opt-in, default off). **Only remaining V1 item.** Not built: no digest edge fn, no opt-in setting. Lowest-value piece by design; deferred. If built, register the cron in BOTH places (`cron-dispatcher` `ALLOWED_TARGETS` + a pg_cron job mirrored in a codify migration).
+
+V1 is functionally complete and live except the opt-in digest. GitHub issue #3 rescoped to track only PR #9.
 
 `detect-lead-candidates` was added to `cron-dispatcher`'s `ALLOWED_TARGETS`. Its cron job is in `20260430000000_add_detect_lead_candidates_cron.sql`.
 
