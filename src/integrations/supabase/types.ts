@@ -530,6 +530,53 @@ export type Database = {
         }
         Relationships: []
       }
+      campaign_collateral: {
+        Row: {
+          attached_step_number: number | null
+          body: string | null
+          campaign_id: string
+          collateral_type: string
+          created_at: string
+          id: string
+          is_edited: boolean
+          title: string | null
+          updated_at: string
+          variant_group: string | null
+        }
+        Insert: {
+          attached_step_number?: number | null
+          body?: string | null
+          campaign_id: string
+          collateral_type: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          title?: string | null
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Update: {
+          attached_step_number?: number | null
+          body?: string | null
+          campaign_id?: string
+          collateral_type?: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          title?: string | null
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_collateral_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaign_step_content: {
         Row: {
           body: string | null

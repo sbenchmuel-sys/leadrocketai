@@ -597,11 +597,11 @@ export async function upsertCollateral(
   findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
   const { data: existing } = await findQ.maybeSingle();
 
-  if ((existing as { id?: string } | null)?.id) {
+  if ((existing as unknown as { id?: string } | null)?.id) {
     const { error } = await supabase
       .from("campaign_collateral" as any)
       .update(write as any)
-      .eq("id", (existing as { id: string }).id);
+      .eq("id", (existing as unknown as { id: string }).id);
     if (error) throw new Error(error.message || "Failed to save collateral");
   } else {
     const { error } = await supabase
