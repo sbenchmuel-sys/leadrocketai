@@ -38,6 +38,19 @@ function buildAudience(industry: string | null): string {
     : "Audience: prospects across industries (general).";
 }
 
+// A substantive, retrieval-oriented hint so the ai_task KB query is always long
+// enough to run AND semantically aimed at the seller's knowledge document — even
+// when global_instructions is empty/short. Without this, a General one-pager's
+// query can fall under the 50-char threshold and silently skip the KB doc that
+// collateral is supposed to be grounded in.
+function kbHint(industry: string | null): string {
+  return (
+    "Seller overview: key value propositions, product capabilities, proof points, and concrete benefits" +
+    (industry ? ` relevant to the ${industry} industry` : "") +
+    "."
+  );
+}
+
 function collateralInstructions(type: CollateralType, industry: string | null): string {
   const what = type === "one_pager" ? "a one-page overview" : "a technical walkthrough";
   const tailor = industry ? ` Tailor it to the ${industry} industry.` : "";
@@ -82,12 +95,19 @@ export async function generateCollateral(
   type: CollateralType,
   variant: string | null,
 ): Promise<void> {
+  // offer_summary always carries a substantive, KB-aimed query (campaign
+  // instructions when present, plus a retrieval hint) so the doc-scoped KB
+  // search actually runs and grounds the draft in the seller's materials.
+  const offerSummary = [campaign.global_instructions?.trim(), kbHint(variant)]
+    .filter(Boolean)
+    .join("\n");
+
   const content = await callAiTask(taskForType(type), {
     campaign_id: campaign.id,
     industry: variant || undefined,
     motion: campaign.motion,
     lead_context: buildAudience(variant),
-    offer_summary: campaign.global_instructions || "",
+    offer_summary: offerSummary,
     custom_instructions: collateralInstructions(type, variant),
   });
 
