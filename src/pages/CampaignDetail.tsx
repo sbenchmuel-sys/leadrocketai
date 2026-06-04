@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -73,6 +73,10 @@ export default function CampaignDetail() {
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [collateral, setCollateral] = useState<CampaignCollateral[]>([]);
+  // The campaign currently shown — guards against a stale collateral fetch from a
+  // previously-viewed campaign resolving after navigation and writing wrong-
+  // campaign rows into state (children filter by type/variant, not campaign_id).
+  const shownCampaignId = useRef<string | undefined>(undefined);
 
   const loadPeople = useCallback(() => {
     if (!id) return;
@@ -83,11 +87,19 @@ export default function CampaignDetail() {
   // section share one source of truth (a link made in one shows in the other).
   const loadCollateral = useCallback(() => {
     if (!id) return;
-    fetchCampaignCollateral(id).then(setCollateral).catch(() => {});
+    fetchCampaignCollateral(id)
+      .then((rows) => {
+        if (shownCampaignId.current === id) setCollateral(rows);
+      })
+      .catch(() => {});
   }, [id]);
 
   useEffect(() => {
     if (!id) return;
+    // Mark the active campaign and drop the previous one's collateral immediately
+    // so nothing from another campaign lingers while the new fetch is in flight.
+    shownCampaignId.current = id;
+    setCollateral([]);
     setLoading(true);
     fetchCampaignById(id)
       .then((c) => {
