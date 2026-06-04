@@ -530,6 +530,65 @@ export type Database = {
         }
         Relationships: []
       }
+      campaign_step_content: {
+        Row: {
+          body: string | null
+          campaign_id: string
+          created_at: string
+          id: string
+          is_edited: boolean
+          options_json: Json | null
+          selected_option: number | null
+          sms_text: string | null
+          step_number: number
+          subject: string | null
+          talking_points: string | null
+          updated_at: string
+          variant_group: string | null
+          voicemail_script: string | null
+        }
+        Insert: {
+          body?: string | null
+          campaign_id: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          options_json?: Json | null
+          selected_option?: number | null
+          sms_text?: string | null
+          step_number: number
+          subject?: string | null
+          talking_points?: string | null
+          updated_at?: string
+          variant_group?: string | null
+          voicemail_script?: string | null
+        }
+        Update: {
+          body?: string | null
+          campaign_id?: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          options_json?: Json | null
+          selected_option?: number | null
+          sms_text?: string | null
+          step_number?: number
+          subject?: string | null
+          talking_points?: string | null
+          updated_at?: string
+          variant_group?: string | null
+          voicemail_script?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_step_content_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaign_steps: {
         Row: {
           active: boolean
