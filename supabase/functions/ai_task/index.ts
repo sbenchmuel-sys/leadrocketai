@@ -269,7 +269,7 @@ function stripLeakedReasoningForTask(text: string, task: string): string {
   }
 
   if (task === "cold_email_subject") {
-    const subject = (visibleLines.at(-1) || "")
+    const subject = (visibleLines[visibleLines.length - 1] || "")
       .replace(/^subject(?:\s+line)?\s*:\s*/i, "")
       .replace(/^['"“”]+|['"“”]+$/g, "")
       .trim();
@@ -2313,7 +2313,7 @@ Do not invent real prospect or rep names.
     }
 
     const preStripLength = content.length;
-    content = stripLeakedReasoning(content);
+    content = stripLeakedReasoningForTask(content, task);
 
     // If the stripper had to remove a leaked reasoning block AND the result
     // is too thin to be a real email, retry once with the cheaper/faster model
@@ -2338,7 +2338,7 @@ Do not invent real prospect or rep names.
       if (retryResp.ok) {
         const retryJson = await retryResp.json();
         const retryContent = retryJson.choices?.[0]?.message?.content || "";
-        const cleaned = stripLeakedReasoning(retryContent);
+        const cleaned = stripLeakedReasoningForTask(retryContent, task);
         if (cleaned && cleaned.length >= 40) {
           content = cleaned;
         }
@@ -2372,7 +2372,7 @@ STRICT REWRITE REQUIRED:
         });
         if (retryResp.ok) {
           const retryJson = await retryResp.json();
-          const retryContent = stripLeakedReasoning(retryJson.choices?.[0]?.message?.content || "");
+          const retryContent = stripLeakedReasoningForTask(retryJson.choices?.[0]?.message?.content || "", task);
           if (retryContent && !getInboundWarmIntroViolation(retryContent, enhancedPayload as Record<string, unknown>)) {
             content = retryContent;
           }
