@@ -2211,8 +2211,9 @@ Do not invent real prospect or rep names.
       console.error(`[ai_task] Raw response keys: ${JSON.stringify(Object.keys(aiResult))}`);
 
       // Retry once with a different model
-      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite...");
-      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite" };
+      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite (boosted max_tokens)...");
+      const boostedMax = Math.max(Number((aiRequestBody as { max_tokens?: number }).max_tokens) || 2048, 8192);
+      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite", max_tokens: boostedMax };
       const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
