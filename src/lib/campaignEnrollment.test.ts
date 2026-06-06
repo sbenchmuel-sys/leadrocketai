@@ -1,0 +1,175 @@
+import { describe, expect, it } from "vitest";
+import {
+  nextBusinessDay,
+  addBusinessDays,
+  cumulativeBusinessOffsets,
+  emailOffsets,
+  computeStaggeredStarts,
+  computeCapacityPlan,
+  summarizeChannelSkips,
+  buildTouchSchedule,
+  canReceiveChannel,
+  type CadenceStep,
+  type LeadContactInfo,
+} from "./campaignEnrollment";
+
+// A representative cadence: 3 emails + a call + a text (matches the default plan shape).
+const STEPS: CadenceStep[] = [
+  { step_number: 1, channel: "email", delay_days: 0 },
+  { step_number: 2, channel: "email", delay_days: 3 },
+  { step_number: 3, channel: "voice", delay_days: 2 },
+  { step_number: 4, channel: "email", delay_days: 3 },
+  { step_number: 5, channel: "sms", delay_days: 2 },
+];
+
+describe("business-day helpers", () => {
+  it("nextBusinessDay snaps weekends forward to Monday", () => {
+    const sat = new Date("2026-06-06T12:00:00Z"); // Saturday
+    const sun = new Date("2026-06-07T12:00:00Z"); // Sunday
+    const mon = new Date("2026-06-08T12:00:00Z"); // Monday
+    expect(nextBusinessDay(sat).getUTCDate()).toBe(8);
+    expect(nextBusinessDay(sun).getUTCDate()).toBe(8);
+    expect(nextBusinessDay(mon).getUTCDate()).toBe(8);
+  });
+
+  it("addBusinessDays skips weekends — Fri + 1 = Mon", () => {
+    const fri = new Date("2026-06-05T12:00:00Z"); // Friday
+    const result = addBusinessDays(fri, 1);
+    expect(result.getUTCDay()).toBe(1); // Monday
+    expect(result.getUTCDate()).toBe(8);
+  });
+
+  it("addBusinessDays(d, 0) returns the same business day", () => {
+    const wed = new Date("2026-06-03T12:00:00Z");
+    expect(addBusinessDays(wed, 0).getUTCDate()).toBe(3);
+  });
+});
+
+describe("cadence offsets", () => {
+  it("cumulative offsets sum the gaps, touch 1 at 0", () => {
+    expect(cumulativeBusinessOffsets(STEPS)).toEqual([0, 3, 5, 8, 10]);
+  });
+
+  it("emailOffsets keeps only the email touches", () => {
+    // email touches are steps 1,2,4 → offsets 0,3,8
+    expect(emailOffsets(STEPS)).toEqual([0, 3, 8]);
+  });
+});
+
+describe("computeStaggeredStarts", () => {
+  it("never exceeds the daily cap on any email-touch day", () => {
+    const offsets = [0, 3, 8]; // 3 email touches
+    const cap = 5;
+    const leadCount = 50;
+    const starts = computeStaggeredStarts(leadCount, offsets, cap);
+    expect(starts).toHaveLength(leadCount);
+
+    // Reconstruct the per-day email load and assert it's within cap.
+    const load: Record<number, number> = {};
+    for (const s of starts) for (const o of offsets) load[s + o] = (load[s + o] ?? 0) + 1;
+    for (const day of Object.keys(load)) {
+      expect(load[Number(day)]).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it("assigns every lead a start day", () => {
+    const starts = computeStaggeredStarts(37, [0, 2, 5], 6);
+    expect(starts).toHaveLength(37);
+    expect(starts.every((s) => Number.isInteger(s) && s >= 0)).toBe(true);
+  });
+
+  it("starts everyone on day 0 when there are no email touches", () => {
+    const starts = computeStaggeredStarts(20, [], 40);
+    expect(starts).toEqual(new Array(20).fill(0));
+  });
+
+  it("dribbles starts when the list is larger than the cap", () => {
+    // 1 email touch, cap 10 → 10 start day 0, next 10 day 1, ...
+    const starts = computeStaggeredStarts(25, [0], 10);
+    expect(starts.filter((s) => s === 0)).toHaveLength(10);
+    expect(starts.filter((s) => s === 1)).toHaveLength(10);
+    expect(starts.filter((s) => s === 2)).toHaveLength(5);
+  });
+});
+
+describe("computeCapacityPlan", () => {
+  it("matches the brief's example (300 × 3 @ 40 → ~13/day, ~23 days)", () => {
+    const plan = computeCapacityPlan({ leadCount: 300, emailTouchesPerLead: 3, dailyCap: 40 });
+    expect(plan.startsPerDay).toBe(13); // floor(40/3)
+    expect(plan.daysToStartEveryone).toBe(24); // ceil(300/13) = 24
+    expect(plan.summary).toContain("about 13 begin per day");
+    expect(plan.overCapacity).toBe(true); // 24 > 20 → warn
+    expect(plan.warning).toBeTruthy();
+  });
+
+  it("does not warn for a comfortably-sized list", () => {
+    const plan = computeCapacityPlan({ leadCount: 40, emailTouchesPerLead: 3, dailyCap: 40 });
+    expect(plan.overCapacity).toBe(false);
+    expect(plan.warning).toBeNull();
+  });
+
+  it("flags over-capacity when the cap can't fit one lead's emails", () => {
+    const plan = computeCapacityPlan({ leadCount: 10, emailTouchesPerLead: 5, dailyCap: 3 });
+    expect(plan.overCapacity).toBe(true);
+  });
+
+  it("no auto-emails → everyone begins at once", () => {
+    const plan = computeCapacityPlan({ leadCount: 100, emailTouchesPerLead: 0, dailyCap: 40 });
+    expect(plan.daysToStartEveryone).toBe(1);
+    expect(plan.startsPerDay).toBe(100);
+    expect(plan.warning).toBeNull();
+  });
+});
+
+describe("summarizeChannelSkips", () => {
+  const leads: LeadContactInfo[] = [
+    { id: "a", email: "a@x.com", phone: "+1", linkedin_url: "u", whatsapp_number: null },
+    { id: "b", email: "b@x.com", phone: null, linkedin_url: null, whatsapp_number: null },
+    { id: "c", email: "c@x.com", phone: null, linkedin_url: "u", whatsapp_number: null },
+  ];
+
+  it("counts leads that can't receive each manual channel", () => {
+    const summary = summarizeChannelSkips(leads, STEPS); // uses voice + sms
+    expect(summary.byChannel.voice).toBe(2); // b and c have no phone
+    expect(summary.byChannel.sms).toBe(2);
+    expect(summary.lines.some((l) => l.includes("2 of 3") && l.includes("call"))).toBe(true);
+  });
+
+  it("never reports email as a skip channel", () => {
+    const summary = summarizeChannelSkips(leads, [{ step_number: 1, channel: "email", delay_days: 0 }]);
+    expect(summary.byChannel.email).toBeUndefined();
+    expect(summary.lines).toHaveLength(0);
+  });
+
+  it("canReceiveChannel honors whatsapp fallback to phone", () => {
+    const lead: LeadContactInfo = { id: "d", email: "d@x.com", phone: "+1", linkedin_url: null, whatsapp_number: null };
+    expect(canReceiveChannel(lead, "whatsapp")).toBe(true); // falls back to phone
+    expect(canReceiveChannel(lead, "linkedin")).toBe(false);
+  });
+});
+
+describe("buildTouchSchedule", () => {
+  // Start on a Wednesday so we can see weekend skipping in the later touches.
+  const start = new Date("2026-06-03T09:00:00Z"); // Wed
+
+  it("spaces touches by business-day gaps, touch 1 on the start day", () => {
+    const schedule = buildTouchSchedule(start, STEPS);
+    expect(schedule).toHaveLength(5);
+    expect(new Date(schedule[0].eligible_at).getUTCDate()).toBe(3); // Wed (touch 1)
+    // Each subsequent eligible_at must be a business day and strictly later.
+    for (let i = 1; i < schedule.length; i++) {
+      const d = new Date(schedule[i].eligible_at);
+      expect(d.getUTCDay()).not.toBe(0);
+      expect(d.getUTCDay()).not.toBe(6);
+      expect(d.getTime()).toBeGreaterThan(new Date(schedule[i - 1].eligible_at).getTime());
+    }
+  });
+
+  it("sets max_age_at on manual touches and leaves email touches null", () => {
+    const schedule = buildTouchSchedule(start, STEPS);
+    const email = schedule.filter((t) => t.channel === "email");
+    const manual = schedule.filter((t) => t.channel !== "email");
+    expect(email.every((t) => t.max_age_at === null)).toBe(true);
+    expect(manual.every((t) => t.max_age_at !== null)).toBe(true);
+  });
+});

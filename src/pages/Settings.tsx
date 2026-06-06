@@ -23,7 +23,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CallSettingsCard } from "@/components/settings/CallSettingsCard";
 import { LeadDetectionCard } from "@/components/settings/LeadDetectionCard";
 import { AppearanceCard } from "@/components/settings/AppearanceCard";
-import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles, Inbox, Palette } from "lucide-react";
+import { ColdOutreachSafetyCard } from "@/components/settings/ColdOutreachSafetyCard";
+import { Building2, Clock, User, Mail, Video, MessageSquare, Plug, Zap, Info, Phone, Users, Sparkles, Inbox, Palette, Send } from "lucide-react";
 
 export default function Settings() {
   const { workspaceId } = useWorkspace();
@@ -49,6 +50,21 @@ export default function Settings() {
           <AccordionContent className="space-y-6">
             <WorkspaceTimezoneCard />
             <WorkspaceMembersCard />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="outreach-safety" className="border rounded-lg px-4">
+          <AccordionTrigger className="hover:no-underline">
+            <div className="flex items-center gap-3">
+              <Send className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-semibold">Cold Outreach Safety</div>
+                <div className="text-sm text-muted-foreground font-normal">Mailing address and automatic-send control for cold campaigns</div>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <ColdOutreachSafetyCard />
           </AccordionContent>
         </AccordionItem>
 
