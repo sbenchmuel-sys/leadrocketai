@@ -2339,12 +2339,15 @@ STRICT REWRITE REQUIRED:
       const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
       const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
-      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+      const allowTemplatePlaceholders = campaignAuthoring === true;
+      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck, allow_template_placeholders: allowTemplatePlaceholders };
 
       // Deterministic placeholder substitution before validation. Models occasionally
       // leak [Rep's first name] / [Your Name] / [Meeting Link] etc despite the prompt;
       // resolve from rep_context/lead_context rather than failing the whole draft.
-      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+      content = allowTemplatePlaceholders
+        ? normalizeCampaignTemplatePlaceholders(content)
+        : substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
 
       let validation = validateDraft(content, validationCtx);
       if (!validation.ok) {
@@ -2355,10 +2358,10 @@ STRICT REPAIR REQUIRED. The previous draft failed validation:
 ${validation.errors.map((e) => `- ${e}`).join("\n")}
 
 Output a complete email body that:
-- Starts with "Hi {FirstName}," using the prospect's first name from Lead Context
+- Starts with ${allowTemplatePlaceholders ? '"Hi {FirstName}," exactly' : '"Hi {FirstName}," using the prospect\'s first name from Lead Context'}
 - Has at least one real body sentence with substance
-- Ends with a sign-off line ("Best,") then the rep's first name on the next line
-- Contains NO placeholders like [Name], [Meeting Link], {First Name}
+- Ends with a sign-off line ("Best,") then ${allowTemplatePlaceholders ? '"{RepFirstName}" on the next line' : "the rep's first name on the next line"}
+- Contains NO unresolved placeholders like [Name], [Meeting Link], {First Name}; ${allowTemplatePlaceholders ? 'only {FirstName}, {Company}, and {RepFirstName} are allowed' : 'use real values instead'}
 - Contains NO reasoning, planning, word-count notes, or compliance check text
 ${validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup"
   ? "- Acknowledges they reached out (warm) and includes a meeting CTA. NEVER use cold discovery questions like 'biggest challenge'."
@@ -2388,7 +2391,9 @@ Output ONLY the final email body.`;
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
             }
-            repaired = substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+            repaired = allowTemplatePlaceholders
+              ? normalizeCampaignTemplatePlaceholders(repaired)
+              : substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
             const reValidation = validateDraft(repaired, validationCtx);
             if (reValidation.ok) {
               content = repaired;
