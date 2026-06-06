@@ -360,8 +360,10 @@ serve(async (req) => {
     let skipped = 0;
     const errors: string[] = [];
     const sentLeads: { leadId: string; leadName: string; subject: string }[] = [];
-    // Owners that actually sent this run — drives the post-run volume tripwire.
-    const sentOwnerIds = new Set<string>();
+    // What actually sent this run — drives the post-run volume tripwire.
+    const sentOwnerIds = new Set<string>();                       // mailboxes
+    const sentWorkspaceIds = new Set<string>();                   // workspaces (by lead)
+    const ownerSentWorkspaces = new Map<string, Set<string>>();   // owner → workspaces it sent into
 
     for (const lead of eligibleLeads) {
       // Enforce MAX_SENDS_PER_RUN cap
@@ -1473,6 +1475,11 @@ serve(async (req) => {
         // Increment daily send counter for this owner
         dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
         sentOwnerIds.add(lead.owner_user_id);
+        if (freshLead.workspace_id) {
+          sentWorkspaceIds.add(freshLead.workspace_id);
+          if (!ownerSentWorkspaces.has(lead.owner_user_id)) ownerSentWorkspaces.set(lead.owner_user_id, new Set());
+          ownerSentWorkspaces.get(lead.owner_user_id)!.add(freshLead.workspace_id);
+        }
 
         // ── INTER-SEND STAGGER ──────────────────────────────
         // Delay 30–90 seconds between sends to avoid mailbox
@@ -1514,41 +1521,27 @@ serve(async (req) => {
         const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
         const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 50;
         const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-
-        // One pass over every send in the trailing 15-min window, each
-        // attributed to its lead's ACTUAL workspace (leads.workspace_id) via
-        // the automation_log.lead_id FK — NOT a fuzzy owner→workspace guess.
-        // A sender can belong to more than one workspace, so picking a "first
-        // membership" could count/emit the signal against the wrong one.
-        // This single query also replaces the previous per-owner count loop.
-        const { data: windowSends } = await supabase
-          .from("automation_log")
-          .select("owner_user_id, leads!inner(workspace_id)")
-          .eq("status", "sent")
-          .gte("created_at", windowStart);
-
-        const ownerCounts = new Map<string, number>();      // per mailbox
-        const workspaceCounts = new Map<string, number>();  // per lead workspace
-        const ownerWorkspaces = new Map<string, Set<string>>(); // for unambiguous mailbox metadata
-        for (const row of (windowSends ?? []) as { owner_user_id: string | null; leads: { workspace_id: string | null } | null }[]) {
-          const ownerId = row.owner_user_id;
-          const ws = row.leads?.workspace_id ?? null;
-          if (ownerId) {
-            ownerCounts.set(ownerId, (ownerCounts.get(ownerId) ?? 0) + 1);
-            if (ws) {
-              if (!ownerWorkspaces.has(ownerId)) ownerWorkspaces.set(ownerId, new Set());
-              ownerWorkspaces.get(ownerId)!.add(ws);
-            }
-          }
-          if (ws) workspaceCounts.set(ws, (workspaceCounts.get(ws) ?? 0) + 1);
-        }
-
         const alerts: Record<string, unknown>[] = [];
-        // Mailbox scope: only mailboxes that actually sent this run.
+
+        // Counts are computed DB-SIDE (count: 'exact', head: true) so they are
+        // accurate regardless of volume — fetching rows would be capped at the
+        // PostgREST page limit (~1,000) and could UNDERCOUNT during the exact
+        // high-volume blast this tripwire exists to catch. We only check the
+        // mailboxes / workspaces that actually sent in THIS run, so a workspace
+        // that stays over threshold doesn't re-fire on every unrelated run in
+        // the same window.
+
+        // Mailbox scope: exact per-owner count over the window.
         for (const ownerId of sentOwnerIds) {
-          const c = ownerCounts.get(ownerId) ?? 0;
+          const { count } = await supabase
+            .from("automation_log")
+            .select("id", { count: "exact", head: true })
+            .eq("owner_user_id", ownerId)
+            .eq("status", "sent")
+            .gte("created_at", windowStart);
+          const c = count ?? 0;
           if (c > threshold) {
-            const wsSet = ownerWorkspaces.get(ownerId);
+            const wsSet = ownerSentWorkspaces.get(ownerId);
             alerts.push({
               job_name: "volume_alert",
               request_id: crypto.randomUUID(),
@@ -1559,7 +1552,7 @@ serve(async (req) => {
               metadata: {
                 scope: "mailbox",
                 owner_user_id: ownerId,
-                // Assert a workspace only when this mailbox's window sends all
+                // Assert a workspace only when this mailbox's sends this run all
                 // belong to exactly one — otherwise it is genuinely ambiguous.
                 workspace_id: wsSet && wsSet.size === 1 ? [...wsSet][0] : null,
                 sends_in_window: c,
@@ -1569,7 +1562,19 @@ serve(async (req) => {
             });
           }
         }
-        for (const [ws, c] of workspaceCounts) {
+
+        // Workspace scope: exact count over the window attributed to the lead's
+        // ACTUAL workspace (leads.workspace_id via the automation_log.lead_id
+        // FK), not a fuzzy owner→workspace guess. Only workspaces touched this
+        // run are checked.
+        for (const ws of sentWorkspaceIds) {
+          const { count } = await supabase
+            .from("automation_log")
+            .select("id, leads!inner(workspace_id)", { count: "exact", head: true })
+            .eq("status", "sent")
+            .gte("created_at", windowStart)
+            .eq("leads.workspace_id", ws);
+          const c = count ?? 0;
           if (c > threshold) {
             alerts.push({
               job_name: "volume_alert",
