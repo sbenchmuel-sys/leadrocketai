@@ -1508,8 +1508,11 @@ serve(async (req) => {
     // (VOLUME_ALERT_THRESHOLD, default 50).
     try {
       if (sentOwnerIds.size > 0) {
-        const thresholdEnv = Deno.env.get("VOLUME_ALERT_THRESHOLD");
-        const threshold = thresholdEnv ? parseInt(thresholdEnv, 10) : 50;
+        // Fall back to the default if the env var is missing OR malformed:
+        // a non-numeric value would parse to NaN, making every `c > threshold`
+        // false and silently disabling this safety tripwire.
+        const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
+        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 50;
         const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
         const owners = [...sentOwnerIds];
 
