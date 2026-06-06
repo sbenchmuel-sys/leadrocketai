@@ -323,13 +323,17 @@ serve(async (req) => {
       });
     }
 
-    if (!eligibleLeads || eligibleLeads.length === 0) {
-      return new Response(JSON.stringify({ ok: true, processed: 0, message: "No eligible leads" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // NOTE: do NOT early-return when there are no legacy leads. Cold-outreach
+    // automatic touches must still run in the cold pass below — cold leads carry no
+    // automation_mode, so the candidate query above legitimately finds nothing in
+    // the common cold-only case. Falling through (legacy loop iterates an empty
+    // list) lets the cold pass execute before the final response.
+    const legacyLeads = eligibleLeads || [];
+    if (legacyLeads.length === 0) {
+      console.log("[automation-executor] No eligible legacy leads — proceeding to cold pass");
+    } else {
+      console.log(`[automation-executor] Found ${legacyLeads.length} eligible leads`);
     }
-
-    console.log(`[automation-executor] Found ${eligibleLeads.length} eligible leads`);
 
     // --- STRATEGY 6: Rep Profile/Signature Preloading (per-owner cache) ---
     type RepContext = {
@@ -369,7 +373,7 @@ serve(async (req) => {
     const errors: string[] = [];
     const sentLeads: { leadId: string; leadName: string; subject: string }[] = [];
 
-    for (const lead of eligibleLeads) {
+    for (const lead of legacyLeads) {
       // Enforce MAX_SENDS_PER_RUN cap
       if (processed >= maxSendsPerRun) {
         console.log(`[automation-executor] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping`);
@@ -1487,6 +1491,12 @@ serve(async (req) => {
         .limit(50);
 
       for (const touch of (coldDue || [])) {
+        // Honor the SAME per-run send cap as the legacy loop — cold sends count
+        // toward MAX_SENDS_PER_RUN so one tick can't blow past the throttle.
+        if (processed >= maxSendsPerRun) {
+          console.log(`[automation-executor:cold] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping cold pass`);
+          break;
+        }
         try {
           // Re-check the touch FRESH (the batch snapshot can go stale within this
           // run: sending an earlier step re-anchors the next step's eligible_at to
