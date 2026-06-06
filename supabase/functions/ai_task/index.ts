@@ -1134,6 +1134,7 @@ const TASK_MAX_TOKENS: Record<string, number> = {
   // Voice tasks: short outputs, but gemini-2.5-flash consumes a large share
   // of max_tokens on internal reasoning. 2048 frequently produces empty
   // content (finish_reason=length before any visible tokens). Bump to 4096.
+  cold_call_talking_points: 4096,
   cold_voicemail: 4096,
   warm_voicemail: 4096,
   voicemail_script: 4096,
