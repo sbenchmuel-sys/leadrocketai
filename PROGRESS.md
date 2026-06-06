@@ -54,18 +54,16 @@ PRs:
 
 ## Email-send safety hardening
 
-After the 5am ET incident on 2026-04-30 (multiple safeguards failed independently), three patches landed and two more are queued.
+After the 5am ET incident on 2026-04-30 (multiple safeguards failed independently), the full safety floor (a.k.a. **Outreach Unit 0** — see `CAMPAIGN_MANAGER_BUILD_PROMPTS.md`) is now shipped.
 
 Shipped:
 - ✅ Consent gate in `syncEngine` + `automation-executor` eligible-leads queries — won't schedule or send for leads without explicit `automation_mode`.
 - ✅ Workspace timezone fix — `workspaces.timezone` column + Intl-based `checkSendWindow` + fail-closed when timezone is null. Cliff backfilled to `America/New_York`. Migration: `20260430200000_workspace_timezone.sql`.
-
-Queued:
-- ⬜ New-lead 24h cooldown — single check at top of `automation-executor`'s per-lead loop: if `now() - lead.created_at < 24h`, skip + push `eligible_at` forward. Catches CSV imports, candidate approvals, and any future ghost-queue regression.
-- ⬜ Volume tripwire — log a `volume_alert` row in `cron_run_log` when a workspace exceeds N sends per 15-min window. Doesn't block sends, just gives a queryable signal.
-
-Lovable handoff still pending:
-- ⬜ Workspace timezone settings dropdown UI. Until shipped, only Cliff's workspace can run automation (any other workspace has `timezone IS NULL` and the gate fail-closes).
+- ✅ Workspace timezone settings UI — `WorkspaceTimezoneCard` (curated IANA dropdown, admin-gated, browser-TZ detection, fail-closed "automation paused" alert), rendered under Settings → Workspace & Team. Reads/writes the same `workspaces.timezone` column `checkSendWindow` gates on. Until a workspace sets this, the send-window gate fail-closes and that workspace cannot auto-send.
+- ✅ New-lead 24h cooldown (Unit 0) — top of `automation-executor`'s per-lead loop: for a lead with `campaign_id` set, if `now() - created_at < 24h`, defer (push `eligible_at` to `created_at + 24h`, snapped into the send window via `computeNextEligibleAt`) + log a `skipped` `automation_log` row. Catches cold-list imports dumping brand-new addresses into a campaign (the 2026-04-30 failure mode).
+  - **SCOPED to campaign leads BY DESIGN — this is documented intent, not a gap.** Non-campaign auto-sends (reactive / nurture) are NOT cooldown-gated; they rely on the shipped **consent gate** (`automation_mode IS NOT NULL`) as their safety floor instead. Do not widen the cooldown to all leads "to be safe" — that would needlessly delay legitimate first auto-replies to freshly-created consented inbound leads, and the consent gate already covers them.
+  - Auto-send only: the per-lead loop is consent-gated and is never the manual rep-approved send path, so the cooldown can never delay a manual send nor touch a lead that isn't in automation.
+- ✅ Volume tripwire (Unit 0) — after each `automation-executor` run, logs a `volume_alert` row to `cron_run_log` when sends in a trailing 15-min window exceed a threshold (env `VOLUME_ALERT_THRESHOLD`, default 50). Emits **both** per-mailbox and per-workspace alerts (a blast spread across several mailboxes in one workspace would slip under a per-mailbox-only check). Non-blocking signal only; fully wrapped so it can never throw and abort a send run.
 
 ## Outreach (cold campaigns) — full plan in `CAMPAIGN_MANAGER_BUILD_PROMPTS.md`
 
