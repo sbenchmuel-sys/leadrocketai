@@ -2804,6 +2804,15 @@ Output ONLY the final email body.`;
       } catch (logErr) { console.error("[ai_task] Diversity log failed:", logErr); }
     }
 
+    if (campaignAuthoring) {
+      content = normalizeCampaignTemplatePlaceholders(content);
+    } else {
+      const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
+      const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+    }
+
     const responsePayload: Record<string, unknown> = { ok: true, content };
     if (qualityScore) responsePayload.quality_score = qualityScore;
     if (regenerated || regenerated_outbound) responsePayload.regenerated = true;
