@@ -1984,6 +1984,14 @@ ${customInstructionsText}
     if (structuredCampaignBlock) {
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
+    const campaignTemplateContract = campaignAuthoring
+      ? `=== CAMPAIGN TEMPLATE OUTPUT CONTRACT ===
+This is authoring-time reusable campaign copy, not a one-off email to a specific lead.
+Use exactly these merge tokens where personalization belongs: {FirstName}, {Company}, {RepFirstName}.
+Do not use bracketed placeholders like [Name] or spaced brace placeholders like {First Name}.
+Do not invent real prospect or rep names.
+=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===`
+      : "";
 
     // Build offer recommendation block for last-mile tasks
     let offerBlock = "";
@@ -2059,6 +2067,7 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
+    if (campaignTemplateContract) promptParts.push(campaignTemplateContract);
     if (objectiveBlock) promptParts.push(objectiveBlock);          // Objective FIRST (controls everything)
     if (stagePolicyBlock) promptParts.push(stagePolicyBlock);      // Stage policy context
     if (decisionBlock) promptParts.push(decisionBlock);            // Decision context
