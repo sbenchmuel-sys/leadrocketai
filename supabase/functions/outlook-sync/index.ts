@@ -308,6 +308,14 @@ serve(async (req) => {
             workspace_id: leadData?.workspace_id ?? null,
             provider: "automation",
           });
+
+          // Cold outreach (Unit C): mark the lead's active enrollment(s) bounced +
+          // stopped so the scheduler's bounce-rate circuit breaker can act. Reuses
+          // THIS detection (no new bounce list). No-op for non-enrolled leads.
+          await serviceSupabase.from("campaign_enrollment")
+            .update({ bounced_at: new Date().toISOString(), status: "stopped" })
+            .eq("lead_id", leadId)
+            .in("status", ["scheduled", "active"]);
         }
 
         // OOO detection

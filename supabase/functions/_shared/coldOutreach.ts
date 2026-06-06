@@ -97,7 +97,11 @@ export async function coldSendFloor(
   if (error || !lead) return { ok: false, reason: "lead lookup failed" };
   if (lead.unsubscribed) return { ok: false, reason: "lead unsubscribed" };
   const email = (lead.email || "").trim().toLowerCase();
-  if (!email || !email.includes("@")) return { ok: false, reason: "no email" };
+  // Backstop email validation (enrollment already rejects invalid; never send to one).
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email || email.length > 254 || email.includes("..") || !EMAIL_RE.test(email)) {
+    return { ok: false, reason: "invalid email" };
+  }
 
   const domain = email.split("@")[1] || "";
   // Parameter-safe (no interpolation into the filter string): fetch any rows whose

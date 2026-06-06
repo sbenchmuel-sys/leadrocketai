@@ -171,6 +171,52 @@ Deno.serve(async (req) => {
     counters.queued++;
   }
 
+  // ── Bounce-rate circuit breaker (Unit C, PR 4) ──────────────────────────────
+  // Beyond the per-lead bounce stop (detectBounce → enrollment.bounced_at), track
+  // each ACTIVE outreach's aggregate bounce rate; if too many addresses bounce,
+  // auto-PAUSE the whole outreach (protects the rep's mailbox/domain reputation)
+  // and log a volume_alert to cron_run_log (reusing the Unit 0 tripwire channel).
+  // No new bounce list — counts come from the enrollment rows the sync handler
+  // already stamps. Fully wrapped so it can never abort the run.
+  try {
+    const threshold = parseFloat(Deno.env.get("BOUNCE_RATE_THRESHOLD") ?? "0.08"); // 8%
+    const minVolume = parseInt(Deno.env.get("BOUNCE_MIN_VOLUME") ?? "20", 10);     // avoid early noise
+    const { data: activeCampaigns } = await supabase
+      .from("campaigns").select("id, name, workspace_id").eq("status", "active").limit(200);
+
+    for (const c of (activeCampaigns || [])) {
+      // Denominator: enrolled leads that have had ≥1 touch completed. Numerator: bounced.
+      const [{ count: started }, { count: bounced }] = await Promise.all([
+        supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+          .eq("campaign_id", c.id).gte("current_step_number", 1),
+        supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+          .eq("campaign_id", c.id).not("bounced_at", "is", null),
+      ]);
+      const denom = started ?? 0;
+      const numer = bounced ?? 0;
+      if (denom < minVolume) continue;
+      const rate = numer / denom;
+      if (rate < threshold) continue;
+
+      // Pause (guard on status='active' so we don't fight a concurrent change).
+      const { data: paused } = await supabase.from("campaigns")
+        .update({ status: "paused" }).eq("id", c.id).eq("status", "active").select("id");
+      if ((paused || []).length === 0) continue; // someone else already changed it
+      const pct = Math.round(rate * 100);
+      await supabase.from("cron_run_log").insert({
+        job_name: "campaign-touch-scheduler",
+        dispatcher_target: "bounce_circuit_breaker",
+        request_id: crypto.randomUUID(),
+        started_at: new Date().toISOString(),
+        status: "volume_alert",
+        error_message: `Outreach ${c.id} (${c.name}) auto-paused: bounce rate ${pct}% (${numer}/${denom}) >= ${Math.round(threshold * 100)}%`,
+      }).then(({ error }) => { if (error) console.warn("[campaign-touch-scheduler] alert log failed:", error.message); });
+      console.warn(`[campaign-touch-scheduler] bounce breaker paused campaign ${c.id}: ${pct}% (${numer}/${denom})`);
+    }
+  } catch (breakerErr) {
+    console.error("[campaign-touch-scheduler] bounce breaker error:", breakerErr);
+  }
+
   console.log(`[campaign-touch-scheduler]`, JSON.stringify(counters));
   return new Response(JSON.stringify({ ok: true, ...counters }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },

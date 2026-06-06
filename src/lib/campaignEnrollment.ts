@@ -28,6 +28,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
+import { isValidEmail } from "@/lib/emailValidation";
 
 // A touch's auto-skip horizon for MANUAL touches when the campaign has no later
 // touch to bound it (a stuck manual touch must never stall the cadence forever).
@@ -424,7 +425,7 @@ async function gatherEnrollmentContext(
   const skips: EnrollmentSkips = { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0 };
   const enrollable: EnrollCandidateLead[] = [];
   for (const lead of leads) {
-    if (!lead.email || !lead.email.includes("@")) { skips.missingEmail++; continue; }
+    if (!isValidEmail(lead.email)) { skips.missingEmail++; continue; } // missing OR malformed — never schedule
     if (lead.unsubscribed) { skips.unsubscribed++; continue; }
     if (isSuppressed(lead.email)) { skips.suppressed++; continue; }
     if (alreadyEnrolledIds.has(lead.id)) { skips.alreadyEnrolled++; continue; }

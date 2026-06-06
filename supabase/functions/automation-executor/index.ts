@@ -26,6 +26,7 @@ import {
   buildUnsubscribeUrl,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
+import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -1516,7 +1517,7 @@ serve(async (req) => {
           if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) continue;
 
           const { data: lead } = await supabase.from("leads")
-            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status")
+            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, city, state, country")
             .eq("id", touch.lead_id).maybeSingle();
           if (!lead || lead.unsubscribed || !lead.email) continue;
           if (!["active", "new"].includes(lead.status)) continue;
@@ -1531,9 +1532,17 @@ serve(async (req) => {
           if (lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000) continue;
 
           const exec = await loadExecutionSettings(lead.owner_user_id, supabase);
+          // Recipient-timezone sending (Unit C, PR 4): when the workspace opts into
+          // timezone_mode:"lead", land the email in the PROSPECT's local morning by
+          // running the send-window + next-eligible math in the lead's timezone
+          // (derived from city/state/country, falling back to the workspace tz).
+          // Otherwise behavior is unchanged (workspace tz).
+          const execForLead = exec.time_rules?.timezone_mode === "lead" && exec.timezone
+            ? { ...exec, timezone: resolveLeadTimezone(lead, exec.timezone) }
+            : exec;
 
           // Reuse the SAME guardrail engine as the legacy path.
-          if (!checkSendWindow(exec).allowed) continue;                                   // send window / business hours
+          if (!checkSendWindow(execForLead).allowed) continue;                            // send window / business hours (recipient tz)
           if (!checkMinGap(lead.last_outbound_at, exec.guardrails.min_gap_hours_between_emails).allowed) continue;
           if (!(await checkPerLeadCaps(lead.id, exec.guardrails, supabase)).allowed) continue;
 
@@ -1604,7 +1613,7 @@ serve(async (req) => {
           await supabase.from("automation_log").update({
             status: "sent", gmail_message_id: sendRes.messageId ?? null, completed_at: new Date().toISOString(),
           }).eq("id", claim.id);
-          await advanceColdEnrollment(supabase, exec, touch, "sent", { automationLogId: claim.id });
+          await advanceColdEnrollment(supabase, execForLead, touch, "sent", { automationLogId: claim.id });
           dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
           processed++;
           sentLeads.push({ leadId: lead.id, leadName: lead.name, subject: content.subject });
