@@ -83,10 +83,11 @@ Deno.serve(async (req) => {
     return json({ ok: true });
   }
 
-  // Remaining actions act on a touch that's still live (queued). Re-fetch the
-  // status fresh to make double-clicks idempotent (no double-send / double-advance).
-  const { data: fresh } = await admin.from("campaign_touch").select("status").eq("id", touch.id).maybeSingle();
-  if (!fresh || fresh.status !== "queued") return json({ ok: true, alreadyHandled: true });
+  // The remaining actions ADVANCE the cadence — only valid on an ACTIVE outreach.
+  // A paused/stopped outreach must never be advanced or sent manually (Pause must
+  // mean stop). Paused campaigns are also filtered out of the Outreach list, so a
+  // rep normally won't even see these; this is the server-side backstop.
+  if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
 
   const { data: lead } = await admin
     .from("leads")
@@ -97,14 +98,30 @@ Deno.serve(async (req) => {
 
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
 
-  // ── mark_skipped: skip + advance ──
+  // Atomically CLAIM the queued touch: flip queued → <status> in ONE update guarded
+  // on status='queued'. The DB guarantees only one concurrent request wins, so a
+  // double-click / retry / two open tabs can never double-send or double-advance —
+  // the loser matches 0 rows and bails. This is the race fix.
+  const claimTouch = async (claimStatus: string): Promise<boolean> => {
+    const { data } = await admin
+      .from("campaign_touch")
+      .update({ status: claimStatus })
+      .eq("id", touch.id)
+      .eq("status", "queued")
+      .select("id");
+    return (data || []).length > 0;
+  };
+
+  // ── mark_skipped: claim + advance ──
   if (action === "mark_skipped") {
+    if (!(await claimTouch("skipped"))) return json({ ok: true, alreadyHandled: true });
     await advanceColdEnrollment(admin, exec, touch, "skipped");
     return json({ ok: true });
   }
 
-  // ── mark_sent: rep sent via their own app (manual channels) — advance only ──
+  // ── mark_sent: rep sent via their own app (manual channels) — claim + advance ──
   if (action === "mark_sent") {
+    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true });
   }
@@ -112,11 +129,10 @@ Deno.serve(async (req) => {
   // ── send_review_email: send the rep-approved email through the one sender ──
   if (action === "send_review_email") {
     if (touch.channel !== "email") return json({ ok: false, error: "Not an email touch" }, 400);
-    if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
     if (lead.unsubscribed || !lead.email) return json({ ok: false, error: "Lead can't be emailed" }, 400);
 
-    // Content: prefer the rep's edited subject/body; otherwise resolve the
-    // generated copy for this step + the lead's industry.
+    // Resolve content + sender + secret BEFORE claiming, so a validation failure
+    // never leaves the touch claimed.
     let subject = (payload.subject || "").trim();
     let body = (payload.body || "").trim();
     if (!subject || !body) {
@@ -141,6 +157,11 @@ Deno.serve(async (req) => {
 
     const unsubSecret = getUnsubscribeSecret();
     if (!unsubSecret) return json({ ok: false, error: "Unsubscribe is not configured" }, 500);
+
+    // CLAIM atomically right before sending — only the winner proceeds, so two
+    // concurrent send_review_email requests can never deliver duplicate cold emails.
+    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
+
     const token = await signUnsubscribeToken(
       { lid: lead.id, wid: lead.workspace_id, cid: camp.id, iat: Math.floor(Date.now() / 1000) }, unsubSecret);
     const unsubscribeUrl = buildUnsubscribeUrl(supabaseUrl, token);
@@ -155,7 +176,11 @@ Deno.serve(async (req) => {
       mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
       subject, body, unsubscribeUrl,
     });
-    if (!sendRes.ok) return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+    if (!sendRes.ok) {
+      // Send failed — release the claim so the rep can retry from the Queue.
+      await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
+      return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+    }
 
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true, messageId: sendRes.messageId ?? null });

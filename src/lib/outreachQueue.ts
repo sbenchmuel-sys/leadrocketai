@@ -74,7 +74,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
 
   const [{ data: leads }, { data: campaigns }, { data: content }] = await Promise.all([
     supabase.from("leads").select("id, name, company, email, phone, linkedin_url, whatsapp_number, industry").in("id", leadIds),
-    supabase.from("campaigns").select("id, name").in("id", campaignIds),
+    supabase.from("campaigns").select("id, name, status").in("id", campaignIds),
     supabase.from("campaign_step_content" as any).select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script").in("campaign_id", campaignIds),
   ]);
 
@@ -95,7 +95,12 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     );
   };
 
-  return rows.map((t): OutreachTouch => {
+  // Exclude touches whose campaign is paused/stopped — the Pause control means
+  // "stop every touch", so a paused outreach must not surface cards (and the action
+  // endpoint also refuses to advance them).
+  const activeRows = rows.filter((t) => campaignMap.get(t.campaign_id)?.status === "active");
+
+  return activeRows.map((t): OutreachTouch => {
     const lead = leadMap.get(t.lead_id) || {};
     const first = String(lead.name || "").split(" ")[0] || "there";
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);
