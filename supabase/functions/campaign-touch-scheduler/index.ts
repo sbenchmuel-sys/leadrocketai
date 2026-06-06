@@ -72,12 +72,13 @@ Deno.serve(async (req) => {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+  // NOTE: do NOT early-return when no touches are due. The bounce-rate circuit
+  // breaker at the end must run on EVERY tick — bounces commonly arrive between
+  // sends (all remaining touches scheduled for future days), and an over-threshold
+  // campaign must still be auto-paused then. With no due touches the bulk loads
+  // below run against empty id lists (harmless) and the processing loop is a no-op,
+  // so flow falls through to the breaker.
   const touches = dueTouches || [];
-  if (touches.length === 0) {
-    return new Response(JSON.stringify({ ok: true, ...counters }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
 
   // 2) Bulk-load the related rows into maps.
   const enrollmentIds = [...new Set(touches.map((t) => t.enrollment_id))];

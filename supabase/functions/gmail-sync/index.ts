@@ -475,13 +475,17 @@ serve(async (req) => {
             provider: "automation",
           });
 
-          // Cold outreach (Unit C): mark the lead's active enrollment(s) bounced +
+          // Cold outreach (Unit C): mark the lead's STARTED enrollment(s) bounced +
           // stopped so the scheduler's bounce-rate circuit breaker can act. Reuses
           // THIS detection (no new bounce list). No-op for non-enrolled leads.
+          // Constrained to current_step_number >= 1 (i.e. ≥1 touch actually sent) so
+          // the numerator matches the breaker's denominator — a not-yet-started
+          // (scheduled, step 0) enrollment bouncing on an unrelated email must not
+          // count toward a campaign's bounce rate.
           await serviceSupabase.from("campaign_enrollment")
             .update({ bounced_at: new Date().toISOString(), status: "stopped" })
             .eq("lead_id", leadId)
-            .in("status", ["scheduled", "active"]);
+            .gte("current_step_number", 1);
         }
 
         // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated
