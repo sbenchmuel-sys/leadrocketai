@@ -124,6 +124,16 @@ function substitutePlaceholders(
   return out;
 }
 
+function normalizeCampaignTemplatePlaceholders(text: string): string {
+  return text
+    .replace(/\[(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\]/gi, "{FirstName}")
+    .replace(/\{(?:First\s+Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\}/gi, "{FirstName}")
+    .replace(/\[(?:Company|Company\s*Name|Unknown\s*Company)\]/gi, "{Company}")
+    .replace(/\{(?:Company\s+Name|Unknown\s*Company)\}/gi, "{Company}")
+    .replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, "{RepFirstName}")
+    .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}");
+}
+
 function stripSelfChecksAndDuplicateBodies(text: string): string {
   const lines = text.split("\n");
   const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
@@ -1974,6 +1984,14 @@ ${customInstructionsText}
     if (structuredCampaignBlock) {
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
+    const campaignTemplateContract = campaignAuthoring
+      ? `=== CAMPAIGN TEMPLATE OUTPUT CONTRACT ===
+This is authoring-time reusable campaign copy, not a one-off email to a specific lead.
+Use exactly these merge tokens where personalization belongs: {FirstName}, {Company}, {RepFirstName}.
+Do not use bracketed placeholders like [Name] or spaced brace placeholders like {First Name}.
+Do not invent real prospect or rep names.
+=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===`
+      : "";
 
     // Build offer recommendation block for last-mile tasks
     let offerBlock = "";
@@ -2049,6 +2067,7 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
+    if (campaignTemplateContract) promptParts.push(campaignTemplateContract);
     if (objectiveBlock) promptParts.push(objectiveBlock);          // Objective FIRST (controls everything)
     if (stagePolicyBlock) promptParts.push(stagePolicyBlock);      // Stage policy context
     if (decisionBlock) promptParts.push(decisionBlock);            // Decision context
@@ -2329,12 +2348,15 @@ STRICT REWRITE REQUIRED:
       const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
       const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
-      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+      const allowTemplatePlaceholders = campaignAuthoring === true;
+      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck, allow_template_placeholders: allowTemplatePlaceholders };
 
       // Deterministic placeholder substitution before validation. Models occasionally
       // leak [Rep's first name] / [Your Name] / [Meeting Link] etc despite the prompt;
       // resolve from rep_context/lead_context rather than failing the whole draft.
-      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+      content = allowTemplatePlaceholders
+        ? normalizeCampaignTemplatePlaceholders(content)
+        : substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
 
       let validation = validateDraft(content, validationCtx);
       if (!validation.ok) {
@@ -2345,10 +2367,10 @@ STRICT REPAIR REQUIRED. The previous draft failed validation:
 ${validation.errors.map((e) => `- ${e}`).join("\n")}
 
 Output a complete email body that:
-- Starts with "Hi {FirstName}," using the prospect's first name from Lead Context
+- Starts with ${allowTemplatePlaceholders ? '"Hi {FirstName}," exactly' : '"Hi {FirstName}," using the prospect\'s first name from Lead Context'}
 - Has at least one real body sentence with substance
-- Ends with a sign-off line ("Best,") then the rep's first name on the next line
-- Contains NO placeholders like [Name], [Meeting Link], {First Name}
+- Ends with a sign-off line ("Best,") then ${allowTemplatePlaceholders ? '"{RepFirstName}" on the next line' : "the rep's first name on the next line"}
+- Contains NO unresolved placeholders like [Name], [Meeting Link], {First Name}; ${allowTemplatePlaceholders ? 'only {FirstName}, {Company}, and {RepFirstName} are allowed' : 'use real values instead'}
 - Contains NO reasoning, planning, word-count notes, or compliance check text
 ${validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup"
   ? "- Acknowledges they reached out (warm) and includes a meeting CTA. NEVER use cold discovery questions like 'biggest challenge'."
@@ -2378,7 +2400,9 @@ Output ONLY the final email body.`;
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
             }
-            repaired = substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+            repaired = allowTemplatePlaceholders
+              ? normalizeCampaignTemplatePlaceholders(repaired)
+              : substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
             const reValidation = validateDraft(repaired, validationCtx);
             if (reValidation.ok) {
               content = repaired;

@@ -20,6 +20,7 @@ export interface ValidationContext {
   kind: DraftKind;
   lead_first_name?: string | null;
   meeting_link?: string | null;   // when present, inbound emails MUST include it
+  allow_template_placeholders?: boolean; // authoring-time reusable campaign templates only
 }
 
 export interface ValidationResult {
@@ -81,6 +82,9 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
   const errors: string[] = [];
   const codes: string[] = [];
   const text = (body || "").trim();
+  const placeholderScanText = ctx.allow_template_placeholders
+    ? text.replace(/\{(?:FirstName|Company|RepFirstName)\}/gi, "TemplateValue")
+    : text;
   const length = text.length;
 
   // 1. Empty / too short
@@ -101,7 +105,7 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
 
   // 3. Placeholders
   for (const re of PLACEHOLDER_PATTERNS) {
-    if (re.test(text)) {
+    if (re.test(placeholderScanText)) {
       errors.push(`Unresolved placeholder: ${re.source}`);
       codes.push("placeholder");
       break;
