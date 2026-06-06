@@ -1514,58 +1514,41 @@ serve(async (req) => {
         const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
         const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 50;
         const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-        const owners = [...sentOwnerIds];
 
-        // Per-mailbox send counts over the trailing 15-min window.
-        const ownerCounts = new Map<string, number>();
-        for (const ownerId of owners) {
-          const { count } = await supabase
-            .from("automation_log")
-            .select("id", { count: "exact", head: true })
-            .eq("owner_user_id", ownerId)
-            .eq("status", "sent")
-            .gte("created_at", windowStart);
-          ownerCounts.set(ownerId, count ?? 0);
-        }
+        // One pass over every send in the trailing 15-min window, each
+        // attributed to its lead's ACTUAL workspace (leads.workspace_id) via
+        // the automation_log.lead_id FK — NOT a fuzzy owner→workspace guess.
+        // A sender can belong to more than one workspace, so picking a "first
+        // membership" could count/emit the signal against the wrong one.
+        // This single query also replaces the previous per-owner count loop.
+        const { data: windowSends } = await supabase
+          .from("automation_log")
+          .select("owner_user_id, leads!inner(workspace_id)")
+          .eq("status", "sent")
+          .gte("created_at", windowStart);
 
-        // Map each owner that sent this run → its workspace (first
-        // membership, mirrors loadExecutionSettings' .limit(1) convention).
-        const ownerWorkspace = new Map<string, string>();
-        const { data: memberships } = await supabase
-          .from("workspace_members")
-          .select("user_id, workspace_id")
-          .in("user_id", owners);
-        for (const m of (memberships ?? []) as { user_id: string; workspace_id: string }[]) {
-          if (!ownerWorkspace.has(m.user_id)) ownerWorkspace.set(m.user_id, m.workspace_id);
-        }
-
-        // Per-workspace counts: for each workspace that had a sender this
-        // run, count ALL sends in the window across EVERY mailbox in that
-        // workspace — NOT just the owners active this invocation. A blast
-        // spread across many mailboxes (only one of which sends in any
-        // given run) must still trip the workspace threshold; summing only
-        // this run's owners would leave that exact case blind.
-        const touchedWorkspaceIds = [...new Set(ownerWorkspace.values())];
-        const workspaceCounts = new Map<string, number>();
-        for (const ws of touchedWorkspaceIds) {
-          const { data: wsMembers } = await supabase
-            .from("workspace_members")
-            .select("user_id")
-            .eq("workspace_id", ws);
-          const memberIds = (wsMembers ?? []).map((m: { user_id: string }) => m.user_id);
-          if (memberIds.length === 0) continue;
-          const { count } = await supabase
-            .from("automation_log")
-            .select("id", { count: "exact", head: true })
-            .in("owner_user_id", memberIds)
-            .eq("status", "sent")
-            .gte("created_at", windowStart);
-          workspaceCounts.set(ws, count ?? 0);
+        const ownerCounts = new Map<string, number>();      // per mailbox
+        const workspaceCounts = new Map<string, number>();  // per lead workspace
+        const ownerWorkspaces = new Map<string, Set<string>>(); // for unambiguous mailbox metadata
+        for (const row of (windowSends ?? []) as { owner_user_id: string | null; leads: { workspace_id: string | null } | null }[]) {
+          const ownerId = row.owner_user_id;
+          const ws = row.leads?.workspace_id ?? null;
+          if (ownerId) {
+            ownerCounts.set(ownerId, (ownerCounts.get(ownerId) ?? 0) + 1);
+            if (ws) {
+              if (!ownerWorkspaces.has(ownerId)) ownerWorkspaces.set(ownerId, new Set());
+              ownerWorkspaces.get(ownerId)!.add(ws);
+            }
+          }
+          if (ws) workspaceCounts.set(ws, (workspaceCounts.get(ws) ?? 0) + 1);
         }
 
         const alerts: Record<string, unknown>[] = [];
-        for (const [ownerId, c] of ownerCounts) {
+        // Mailbox scope: only mailboxes that actually sent this run.
+        for (const ownerId of sentOwnerIds) {
+          const c = ownerCounts.get(ownerId) ?? 0;
           if (c > threshold) {
+            const wsSet = ownerWorkspaces.get(ownerId);
             alerts.push({
               job_name: "volume_alert",
               request_id: crypto.randomUUID(),
@@ -1576,7 +1559,9 @@ serve(async (req) => {
               metadata: {
                 scope: "mailbox",
                 owner_user_id: ownerId,
-                workspace_id: ownerWorkspace.get(ownerId) ?? null,
+                // Assert a workspace only when this mailbox's window sends all
+                // belong to exactly one — otherwise it is genuinely ambiguous.
+                workspace_id: wsSet && wsSet.size === 1 ? [...wsSet][0] : null,
                 sends_in_window: c,
                 threshold,
                 window_minutes: 15,
