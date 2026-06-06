@@ -1081,6 +1081,13 @@ const TASK_MAX_TOKENS: Record<string, number> = {
   recommend_next_steps: 4096,
   lead_deep_analysis: 8192,
   post_meeting_followup_personalized: 6144,
+  // Voice tasks: short outputs, but gemini-2.5-flash consumes a large share
+  // of max_tokens on internal reasoning. 2048 frequently produces empty
+  // content (finish_reason=length before any visible tokens). Bump to 4096.
+  cold_voicemail: 4096,
+  warm_voicemail: 4096,
+  voicemail_script: 4096,
+  call_opener: 4096,
 };
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
