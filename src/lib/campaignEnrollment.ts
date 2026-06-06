@@ -536,6 +536,9 @@ export async function enrollLeadsInCampaign(
   // by a concurrent enrollment between our read and write is excluded.
   const toStampIds = enrollable.filter((l) => l.campaign_id == null).map((l) => l.id);
   const stampedLeads: EnrollCandidateLead[] = [...members];
+  // IDs whose campaign_id THIS call set (excludes pre-existing members). Only these
+  // may be cleared on rollback — clearing members would evict them from the outreach.
+  const newlyStampedIds: string[] = [];
   if (toStampIds.length > 0) {
     const { data: stampedRows, error: stampErr } = await supabase
       .from("leads")
@@ -547,6 +550,7 @@ export async function enrollLeadsInCampaign(
     if (stampErr) throw new Error(stampErr.message || "Failed to enroll people");
     const stampedIds = new Set(((stampedRows || []) as any[]).map((r) => r.id));
     skips.alreadyEnrolled += toStampIds.length - stampedIds.size; // claimed concurrently
+    newlyStampedIds.push(...stampedIds);
     stampedLeads.push(...enrollable.filter((l) => stampedIds.has(l.id)));
   }
   if (stampedLeads.length === 0) {
@@ -570,8 +574,11 @@ export async function enrollLeadsInCampaign(
     .insert(enrollmentRows as any)
     .select("id, lead_id, started_at");
   if (enrErr) {
-    // Roll back the campaign_id stamp so a failed enroll doesn't strand leads.
-    await supabase.from("leads").update({ campaign_id: null } as any).in("id", stampedLeads.map((l) => l.id));
+    // Roll back ONLY the campaign_id values this call stamped — never members that
+    // were already in the outreach before this call.
+    if (newlyStampedIds.length > 0) {
+      await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
+    }
     throw new Error(enrErr.message || "Failed to create enrollments");
   }
 
@@ -596,7 +603,21 @@ export async function enrollLeadsInCampaign(
     const { error: touchErr } = await supabase
       .from("campaign_touch" as any)
       .insert(touchRows as any);
-    if (touchErr) throw new Error(touchErr.message || "Failed to schedule touches");
+    if (touchErr) {
+      // Atomicity: a touch-insert failure would otherwise strand leads as enrolled
+      // with NO cadence (and a later retry skips them as already-enrolled). Roll the
+      // enrollment back to its pre-call state: delete the enrollment rows we just
+      // created and clear ONLY the campaign_id values this call stamped (members keep
+      // theirs). Any partial touch rows cascade-delete with their enrollment.
+      const enrIds = ((insertedEnrollments || []) as any[]).map((e) => e.id);
+      if (enrIds.length > 0) {
+        await supabase.from("campaign_enrollment" as any).delete().in("id", enrIds);
+      }
+      if (newlyStampedIds.length > 0) {
+        await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
+      }
+      throw new Error(touchErr.message || "Failed to schedule touches");
+    }
   }
 
   return { enrolled: stampedLeads.length, skips, channelSkips, capacity };
