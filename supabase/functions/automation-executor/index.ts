@@ -248,7 +248,7 @@ serve(async (req) => {
     // BulkAutomationDialog / AutomationPreviewCard which sets automation_mode.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode")
+      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode, campaign_id, created_at")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .not("automation_mode", "is", null) // ← explicit consent required
@@ -360,12 +360,62 @@ serve(async (req) => {
     let skipped = 0;
     const errors: string[] = [];
     const sentLeads: { leadId: string; leadName: string; subject: string }[] = [];
+    // What actually sent this run — drives the post-run volume tripwire.
+    const sentOwnerIds = new Set<string>();                       // mailboxes
+    const sentWorkspaceIds = new Set<string>();                   // workspaces (by lead)
+    const ownerSentWorkspaces = new Map<string, Set<string>>();   // owner → workspaces it sent into
 
     for (const lead of eligibleLeads) {
       // Enforce MAX_SENDS_PER_RUN cap
       if (processed >= maxSendsPerRun) {
         console.log(`[automation-executor] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping`);
         break;
+      }
+
+      // ── NEW-LEAD 24h COOLDOWN (campaign leads only) ─────────────
+      // Cold-campaign safety floor (Unit 0): a lead enrolled in a
+      // campaign must age 24h from creation before any auto-send, so a
+      // bulk cold-list import can't blast brand-new addresses the moment
+      // they land (the 2026-04-30 failure mode).
+      //
+      // SCOPED to campaign leads BY DESIGN: non-campaign auto-sends
+      // (reactive / nurture) are governed by the consent gate, NOT this
+      // cooldown — see PROGRESS.md. Do not "fix" the scope by widening it.
+      //
+      // AUTO-SEND ONLY: this loop is consent-gated (the candidate query
+      // requires automation_mode IS NOT NULL) and is never the path for a
+      // manual rep-approved send, so this can never delay a manual send
+      // nor a lead that isn't in automation.
+      //
+      // Side-effect-clean skip: push eligible_at forward (snapped into the
+      // send window) + log a skipped row + continue. No other lead state
+      // is touched.
+      if (lead.campaign_id && lead.created_at) {
+        const createdAtMs = new Date(lead.created_at).getTime();
+        const cooldownMs = 24 * 60 * 60 * 1000;
+        if (Date.now() - createdAtMs < cooldownMs) {
+          const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase);
+          const remainingDays = Math.max(0, (createdAtMs + cooldownMs - Date.now()) / 86_400_000);
+          const nextEligible = computeNextEligibleAt(
+            remainingDays,
+            lead.id,
+            lead.next_action_key || "cooldown",
+            execSettings,
+          );
+          await supabase.from("leads").update({ eligible_at: nextEligible.toISOString() }).eq("id", lead.id);
+          await supabase.from("automation_log").insert({
+            lead_id: lead.id,
+            owner_user_id: lead.owner_user_id,
+            action_key: lead.next_action_key,
+            status: "skipped",
+            error_message: "New-lead 24h cooldown (campaign lead) — deferred",
+            created_at: new Date().toISOString(),
+            completed_at: new Date().toISOString(),
+          });
+          console.log(`[automation-executor] Lead ${lead.id}: campaign new-lead 24h cooldown — deferring to ${nextEligible.toISOString()}`);
+          skipped++;
+          continue;
+        }
       }
 
       // Enforce daily send cap per mailbox/owner
@@ -1424,6 +1474,12 @@ serve(async (req) => {
         processed++;
         // Increment daily send counter for this owner
         dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
+        sentOwnerIds.add(lead.owner_user_id);
+        if (freshLead.workspace_id) {
+          sentWorkspaceIds.add(freshLead.workspace_id);
+          if (!ownerSentWorkspaces.has(lead.owner_user_id)) ownerSentWorkspaces.set(lead.owner_user_id, new Set());
+          ownerSentWorkspaces.get(lead.owner_user_id)!.add(freshLead.workspace_id);
+        }
 
         // ── INTER-SEND STAGGER ──────────────────────────────
         // Delay 30–90 seconds between sends to avoid mailbox
@@ -1445,6 +1501,107 @@ serve(async (req) => {
         }).eq("id", lead.id);
         errors.push(`Lead ${lead.id}: ${leadErr instanceof Error ? leadErr.message : "Unknown error"}`);
       }
+    }
+
+    // ── VOLUME TRIPWIRE (Unit 0) ────────────────────────────────
+    // Non-blocking signal: if a mailbox OR its workspace exceeds the
+    // threshold of sends in a trailing 15-minute window, log a
+    // volume_alert row to cron_run_log. It NEVER blocks a send and is
+    // fully wrapped so it can never throw and abort the run.
+    //
+    // BOTH scopes are emitted on purpose: a per-mailbox check alone would
+    // miss a blast spread across several mailboxes in one workspace, so we
+    // also aggregate per workspace. Threshold is env-configurable
+    // (VOLUME_ALERT_THRESHOLD, default 50).
+    try {
+      if (sentOwnerIds.size > 0) {
+        // Fall back to the default if the env var is missing OR malformed:
+        // a non-numeric value would parse to NaN, making every `c > threshold`
+        // false and silently disabling this safety tripwire.
+        const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
+        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 50;
+        const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const alerts: Record<string, unknown>[] = [];
+
+        // Counts are computed DB-SIDE (count: 'exact', head: true) so they are
+        // accurate regardless of volume — fetching rows would be capped at the
+        // PostgREST page limit (~1,000) and could UNDERCOUNT during the exact
+        // high-volume blast this tripwire exists to catch. We only check the
+        // mailboxes / workspaces that actually sent in THIS run, so a workspace
+        // that stays over threshold doesn't re-fire on every unrelated run in
+        // the same window.
+
+        // Mailbox scope: exact per-owner count over the window.
+        for (const ownerId of sentOwnerIds) {
+          const { count } = await supabase
+            .from("automation_log")
+            .select("id", { count: "exact", head: true })
+            .eq("owner_user_id", ownerId)
+            .eq("status", "sent")
+            .gte("created_at", windowStart);
+          const c = count ?? 0;
+          if (c > threshold) {
+            const wsSet = ownerSentWorkspaces.get(ownerId);
+            alerts.push({
+              job_name: "volume_alert",
+              request_id: crypto.randomUUID(),
+              status: "ok",
+              status_code: 200,
+              completed_at: new Date().toISOString(),
+              duration_ms: 0,
+              metadata: {
+                scope: "mailbox",
+                owner_user_id: ownerId,
+                // Assert a workspace only when this mailbox's sends this run all
+                // belong to exactly one — otherwise it is genuinely ambiguous.
+                workspace_id: wsSet && wsSet.size === 1 ? [...wsSet][0] : null,
+                sends_in_window: c,
+                threshold,
+                window_minutes: 15,
+              },
+            });
+          }
+        }
+
+        // Workspace scope: exact count over the window attributed to the lead's
+        // ACTUAL workspace (leads.workspace_id via the automation_log.lead_id
+        // FK), not a fuzzy owner→workspace guess. Only workspaces touched this
+        // run are checked.
+        for (const ws of sentWorkspaceIds) {
+          const { count } = await supabase
+            .from("automation_log")
+            .select("id, leads!inner(workspace_id)", { count: "exact", head: true })
+            .eq("status", "sent")
+            .gte("created_at", windowStart)
+            .eq("leads.workspace_id", ws);
+          const c = count ?? 0;
+          if (c > threshold) {
+            alerts.push({
+              job_name: "volume_alert",
+              request_id: crypto.randomUUID(),
+              status: "ok",
+              status_code: 200,
+              completed_at: new Date().toISOString(),
+              duration_ms: 0,
+              metadata: {
+                scope: "workspace",
+                workspace_id: ws,
+                sends_in_window: c,
+                threshold,
+                window_minutes: 15,
+              },
+            });
+          }
+        }
+
+        if (alerts.length > 0) {
+          await supabase.from("cron_run_log").insert(alerts);
+          console.warn(`[automation-executor] Volume tripwire: ${alerts.length} volume_alert row(s) logged (threshold ${threshold}/15min).`);
+        }
+      }
+    } catch (tripErr) {
+      // Signal only — must never abort a send run.
+      console.error("[automation-executor] Volume tripwire failed (non-fatal):", tripErr);
     }
 
     return new Response(JSON.stringify({
