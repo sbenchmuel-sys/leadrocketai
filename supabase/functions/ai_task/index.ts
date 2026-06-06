@@ -233,6 +233,56 @@ function stripLeakedReasoning(text: string): string {
   return text.trim();
 }
 
+function stripLeakedReasoningForTask(text: string, task: string): string {
+  const cleaned = stripLeakedReasoning(text);
+  if (cleaned) return cleaned;
+
+  // stripLeakedReasoning is intentionally email-centric: after a reasoning
+  // header it searches for a real greeting to recover the final email body.
+  // Campaign authoring also asks for non-email artifacts (call bullets,
+  // voicemail scripts, subject lines). If those leak a reasoning header, there
+  // is no greeting to find, so salvage the final visible artifact instead of
+  // turning a valid model response into an empty 502.
+  const raw = (text || "").trim();
+  if (!raw || !/(INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Final\s+Output|OUTPUT)/i.test(raw)) {
+    return cleaned;
+  }
+
+  const markerRe = /(?:^|\n)\s*(?:FINAL\s+OUTPUT|FINAL\s+ANSWER|OUTPUT|SUBJECT\s+LINE|TALKING\s+POINTS|VOICEMAIL(?:\s+SCRIPT)?|SMS|MESSAGE)\s*:?\s*\n?/gi;
+  let start = -1;
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(raw)) !== null) start = match.index + match[0].length;
+  const tail = (start >= 0 ? raw.slice(start) : raw)
+    .replace(/```(?:text|markdown)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const lines = tail.split("\n").map((line) => line.trim()).filter(Boolean);
+  const visibleLines = lines.filter((line) =>
+    !/^(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Check|Notes?)\b/i.test(line) &&
+    !/^(?:Here(?:'s| is)|I'?ll|I will|The final|Final answer)\b/i.test(line)
+  );
+
+  if (task === "cold_call_talking_points") {
+    const bullets = visibleLines.filter((line) => /^[-*•]\s+/.test(line));
+    if (bullets.length > 0) return bullets.slice(-4).join("\n");
+  }
+
+  if (task === "cold_email_subject") {
+    const subject = (visibleLines.at(-1) || "")
+      .replace(/^subject(?:\s+line)?\s*:\s*/i, "")
+      .replace(/^['"“”]+|['"“”]+$/g, "")
+      .trim();
+    return subject.length <= 120 ? subject : subject.slice(0, 120).trim();
+  }
+
+  if (["cold_voicemail", "warm_voicemail", "voicemail_script", "call_opener", "sms_message"].includes(task)) {
+    return visibleLines.slice(-4).join("\n").replace(/^(?:voicemail(?:\s+script)?|message|sms)\s*:\s*/i, "").trim();
+  }
+
+  return visibleLines.join("\n").trim();
+}
+
 // ============================================
 // MESSAGE DIVERSITY CONTROL
 // ============================================
