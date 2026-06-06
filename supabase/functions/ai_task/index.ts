@@ -133,7 +133,8 @@ function normalizeCampaignTemplatePlaceholders(text: string): string {
     .replace(/\{(?:Company\s+Name|Unknown\s*Company)\}/gi, "{Company}")
     .replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, "{RepFirstName}")
     .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}")
-    .replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team");
+    .replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team")
+    .replace(/\[(?:common|specific|relevant|insert|industry|persona|prospect|lead|customer|company|role)[^\]]{0,80}\]/gi, "a relevant priority");
 }
 
 function stripSelfChecksAndDuplicateBodies(text: string): string {
