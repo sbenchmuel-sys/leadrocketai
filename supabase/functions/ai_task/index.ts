@@ -124,6 +124,16 @@ function substitutePlaceholders(
   return out;
 }
 
+function normalizeCampaignTemplatePlaceholders(text: string): string {
+  return text
+    .replace(/\[(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\]/gi, "{FirstName}")
+    .replace(/\{(?:First\s+Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\}/gi, "{FirstName}")
+    .replace(/\[(?:Company|Company\s*Name|Unknown\s*Company)\]/gi, "{Company}")
+    .replace(/\{(?:Company\s+Name|Unknown\s*Company)\}/gi, "{Company}")
+    .replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, "{RepFirstName}")
+    .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}");
+}
+
 function stripSelfChecksAndDuplicateBodies(text: string): string {
   const lines = text.split("\n");
   const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
