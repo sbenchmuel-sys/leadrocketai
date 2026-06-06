@@ -90,6 +90,40 @@ function getLeadFirstNameFromContext(leadContext?: string): string | null {
   return candidate;
 }
 
+function getRepFirstNameFromContext(repContext?: string): string | null {
+  if (!repContext) return null;
+  const raw = repContext.match(/Sender Name:\s*(.+)/i)?.[1]?.trim();
+  if (!raw) return null;
+  const candidate = raw
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .match(/[\p{L}][\p{L}'’.-]{1,}/u)?.[0]
+    ?.replace(/[.,;:!?]+$/u, "");
+  if (!candidate || /^(?:unknown|none|null|n\/a|sales|rep)$/i.test(candidate)) return null;
+  return candidate;
+}
+
+function substitutePlaceholders(
+  text: string,
+  leadFirst: string | null,
+  repFirst: string | null,
+  meetingLink: string | null,
+): string {
+  let out = text;
+  if (leadFirst) {
+    out = out.replace(/\[(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\]/gi, leadFirst);
+    out = out.replace(/\{(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name)\}/gi, leadFirst);
+  }
+  if (repFirst) {
+    out = out.replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, repFirst);
+    out = out.replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name)\}/gi, repFirst);
+  }
+  if (meetingLink) {
+    out = out.replace(/\[(?:Meeting\s*Link|Calendar\s*Link|Booking\s*Link)\]/gi, meetingLink);
+  }
+  return out;
+}
+
 function stripSelfChecksAndDuplicateBodies(text: string): string {
   const lines = text.split("\n");
   const markerIdx = lines.findIndex((line) => selfCheckLineRe.test(line.trim()));
@@ -2293,8 +2327,14 @@ STRICT REWRITE REQUIRED:
     // If validation fails, attempt one strict-repair regeneration.
     if (EMAIL_BODY_TASKS.has(task)) {
       const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
       const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+
+      // Deterministic placeholder substitution before validation. Models occasionally
+      // leak [Rep's first name] / [Your Name] / [Meeting Link] etc despite the prompt;
+      // resolve from rep_context/lead_context rather than failing the whole draft.
+      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
 
       let validation = validateDraft(content, validationCtx);
       if (!validation.ok) {
@@ -2338,6 +2378,7 @@ Output ONLY the final email body.`;
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
             }
+            repaired = substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
             const reValidation = validateDraft(repaired, validationCtx);
             if (reValidation.ok) {
               content = repaired;
