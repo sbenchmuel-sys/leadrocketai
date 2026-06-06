@@ -121,6 +121,7 @@ function substitutePlaceholders(
   if (meetingLink) {
     out = out.replace(/\[(?:Meeting\s*Link|Calendar\s*Link|Booking\s*Link)\]/gi, meetingLink);
   }
+  out = out.replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team");
   return out;
 }
 
@@ -131,7 +132,9 @@ function normalizeCampaignTemplatePlaceholders(text: string): string {
     .replace(/\[(?:Company|Company\s*Name|Unknown\s*Company)\]/gi, "{Company}")
     .replace(/\{(?:Company\s+Name|Unknown\s*Company)\}/gi, "{Company}")
     .replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, "{RepFirstName}")
-    .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}");
+    .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}")
+    .replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team")
+    .replace(/\[(?:common|specific|relevant|insert|industry|persona|prospect|lead|customer|company|role)[^\]]{0,80}\]/gi, "a relevant priority");
 }
 
 function stripSelfChecksAndDuplicateBodies(text: string): string {
@@ -231,6 +234,56 @@ function stripLeakedReasoning(text: string): string {
   }
 
   return text.trim();
+}
+
+function stripLeakedReasoningForTask(text: string, task: string): string {
+  const cleaned = stripLeakedReasoning(text);
+  if (cleaned) return cleaned;
+
+  // stripLeakedReasoning is intentionally email-centric: after a reasoning
+  // header it searches for a real greeting to recover the final email body.
+  // Campaign authoring also asks for non-email artifacts (call bullets,
+  // voicemail scripts, subject lines). If those leak a reasoning header, there
+  // is no greeting to find, so salvage the final visible artifact instead of
+  // turning a valid model response into an empty 502.
+  const raw = (text || "").trim();
+  if (!raw || !/(INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Final\s+Output|OUTPUT)/i.test(raw)) {
+    return cleaned;
+  }
+
+  const markerRe = /(?:^|\n)\s*(?:FINAL\s+OUTPUT|FINAL\s+ANSWER|OUTPUT|SUBJECT\s+LINE|TALKING\s+POINTS|VOICEMAIL(?:\s+SCRIPT)?|SMS|MESSAGE)\s*:?\s*\n?/gi;
+  let start = -1;
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(raw)) !== null) start = match.index + match[0].length;
+  const tail = (start >= 0 ? raw.slice(start) : raw)
+    .replace(/```(?:text|markdown)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const lines = tail.split("\n").map((line) => line.trim()).filter(Boolean);
+  const visibleLines = lines.filter((line) =>
+    !/^(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Check|Notes?)\b/i.test(line) &&
+    !/^(?:Here(?:'s| is)|I'?ll|I will|The final|Final answer)\b/i.test(line)
+  );
+
+  if (task === "cold_call_talking_points") {
+    const bullets = visibleLines.filter((line) => /^[-*•]\s+/.test(line));
+    if (bullets.length > 0) return bullets.slice(-4).join("\n");
+  }
+
+  if (task === "cold_email_subject") {
+    const subject = (visibleLines[visibleLines.length - 1] || "")
+      .replace(/^subject(?:\s+line)?\s*:\s*/i, "")
+      .replace(/^['"“”]+|['"“”]+$/g, "")
+      .trim();
+    return subject.length <= 120 ? subject : subject.slice(0, 120).trim();
+  }
+
+  if (["cold_voicemail", "warm_voicemail", "voicemail_script", "call_opener", "sms_message"].includes(task)) {
+    return visibleLines.slice(-4).join("\n").replace(/^(?:voicemail(?:\s+script)?|message|sms)\s*:\s*/i, "").trim();
+  }
+
+  return visibleLines.join("\n").trim();
 }
 
 // ============================================
@@ -1084,6 +1137,7 @@ const TASK_MAX_TOKENS: Record<string, number> = {
   // Voice tasks: short outputs, but gemini-2.5-flash consumes a large share
   // of max_tokens on internal reasoning. 2048 frequently produces empty
   // content (finish_reason=length before any visible tokens). Bump to 4096.
+  cold_call_talking_points: 4096,
   cold_voicemail: 4096,
   warm_voicemail: 4096,
   voicemail_script: 4096,
@@ -2263,7 +2317,7 @@ Do not invent real prospect or rep names.
     }
 
     const preStripLength = content.length;
-    content = stripLeakedReasoning(content);
+    content = stripLeakedReasoningForTask(content, task);
 
     // If the stripper had to remove a leaked reasoning block AND the result
     // is too thin to be a real email, retry once with the cheaper/faster model
@@ -2288,7 +2342,7 @@ Do not invent real prospect or rep names.
       if (retryResp.ok) {
         const retryJson = await retryResp.json();
         const retryContent = retryJson.choices?.[0]?.message?.content || "";
-        const cleaned = stripLeakedReasoning(retryContent);
+        const cleaned = stripLeakedReasoningForTask(retryContent, task);
         if (cleaned && cleaned.length >= 40) {
           content = cleaned;
         }
@@ -2322,7 +2376,7 @@ STRICT REWRITE REQUIRED:
         });
         if (retryResp.ok) {
           const retryJson = await retryResp.json();
-          const retryContent = stripLeakedReasoning(retryJson.choices?.[0]?.message?.content || "");
+          const retryContent = stripLeakedReasoningForTask(retryJson.choices?.[0]?.message?.content || "", task);
           if (retryContent && !getInboundWarmIntroViolation(retryContent, enhancedPayload as Record<string, unknown>)) {
             content = retryContent;
           }
@@ -2403,7 +2457,7 @@ Output ONLY the final email body.`;
           });
           if (repairResp.ok) {
             const repairJson = await repairResp.json();
-            let repaired = stripLeakedReasoning(repairJson.choices?.[0]?.message?.content || "");
+            let repaired = stripLeakedReasoningForTask(repairJson.choices?.[0]?.message?.content || "", task);
             // Re-apply greeting safety net to repaired
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
@@ -2495,7 +2549,7 @@ Output ONLY the final email body.`;
             if (regenResponse.ok) {
               const regenResult = await regenResponse.json();
               let regenContent = regenResult.choices?.[0]?.message?.content || "";
-              regenContent = stripLeakedReasoning(regenContent);
+              regenContent = stripLeakedReasoningForTask(regenContent, task);
               if (regenContent) {
                 // Re-evaluate regenerated content
                 const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
@@ -2654,7 +2708,7 @@ Output ONLY the final email body.`;
               if (regenResponse.ok) {
                 const regenResult = await regenResponse.json();
                 let regenContent = regenResult.choices?.[0]?.message?.content || "";
-                regenContent = stripLeakedReasoning(regenContent);
+                regenContent = stripLeakedReasoningForTask(regenContent, task);
                 if (regenContent) {
                   regenerated_outbound = true;
                   selectedFramework = "neutral_observation" as any;
@@ -2703,6 +2757,15 @@ Output ONLY the final email body.`;
                     } catch (logErr) { console.error("[ai_task] Diversity log failed:", logErr); }
                   }
 
+                  if (campaignAuthoring) {
+                    regenContent = normalizeCampaignTemplatePlaceholders(regenContent);
+                  } else {
+                    const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+                    const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
+                    const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+                    regenContent = substitutePlaceholders(regenContent, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+                  }
+
                   const responsePayload: Record<string, unknown> = {
                     ok: true, content: regenContent,
                     quality_score: qualityScore, regenerated: true, framework_used: selectedFramework,
@@ -2749,6 +2812,15 @@ Output ONLY the final email body.`;
           }
         }
       } catch (logErr) { console.error("[ai_task] Diversity log failed:", logErr); }
+    }
+
+    if (campaignAuthoring) {
+      content = normalizeCampaignTemplatePlaceholders(content);
+    } else {
+      const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
+      const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
     }
 
     const responsePayload: Record<string, unknown> = { ok: true, content };
