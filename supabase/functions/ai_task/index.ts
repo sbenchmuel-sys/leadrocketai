@@ -1081,6 +1081,13 @@ const TASK_MAX_TOKENS: Record<string, number> = {
   recommend_next_steps: 4096,
   lead_deep_analysis: 8192,
   post_meeting_followup_personalized: 6144,
+  // Voice tasks: short outputs, but gemini-2.5-flash consumes a large share
+  // of max_tokens on internal reasoning. 2048 frequently produces empty
+  // content (finish_reason=length before any visible tokens). Bump to 4096.
+  cold_voicemail: 4096,
+  warm_voicemail: 4096,
+  voicemail_script: 4096,
+  call_opener: 4096,
 };
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
@@ -2204,8 +2211,9 @@ Do not invent real prospect or rep names.
       console.error(`[ai_task] Raw response keys: ${JSON.stringify(Object.keys(aiResult))}`);
 
       // Retry once with a different model
-      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite...");
-      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite" };
+      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite (boosted max_tokens)...");
+      const boostedMax = Math.max(Number((aiRequestBody as { max_tokens?: number }).max_tokens) || 2048, 8192);
+      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite", max_tokens: boostedMax };
       const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
