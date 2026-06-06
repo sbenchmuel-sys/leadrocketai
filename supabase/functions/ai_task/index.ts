@@ -2378,6 +2378,7 @@ Output ONLY the final email body.`;
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
             }
+            repaired = substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
             const reValidation = validateDraft(repaired, validationCtx);
             if (reValidation.ok) {
               content = repaired;
