@@ -1525,8 +1525,8 @@ serve(async (req) => {
           ownerCounts.set(ownerId, count ?? 0);
         }
 
-        // Map each owner → its workspace (first membership, mirrors
-        // loadExecutionSettings' .limit(1) convention).
+        // Map each owner that sent this run → its workspace (first
+        // membership, mirrors loadExecutionSettings' .limit(1) convention).
         const ownerWorkspace = new Map<string, string>();
         const { data: memberships } = await supabase
           .from("workspace_members")
@@ -1536,11 +1536,28 @@ serve(async (req) => {
           if (!ownerWorkspace.has(m.user_id)) ownerWorkspace.set(m.user_id, m.workspace_id);
         }
 
-        // Aggregate the per-mailbox counts up to the workspace level.
+        // Per-workspace counts: for each workspace that had a sender this
+        // run, count ALL sends in the window across EVERY mailbox in that
+        // workspace — NOT just the owners active this invocation. A blast
+        // spread across many mailboxes (only one of which sends in any
+        // given run) must still trip the workspace threshold; summing only
+        // this run's owners would leave that exact case blind.
+        const touchedWorkspaceIds = [...new Set(ownerWorkspace.values())];
         const workspaceCounts = new Map<string, number>();
-        for (const [ownerId, c] of ownerCounts) {
-          const ws = ownerWorkspace.get(ownerId);
-          if (ws) workspaceCounts.set(ws, (workspaceCounts.get(ws) ?? 0) + c);
+        for (const ws of touchedWorkspaceIds) {
+          const { data: wsMembers } = await supabase
+            .from("workspace_members")
+            .select("user_id")
+            .eq("workspace_id", ws);
+          const memberIds = (wsMembers ?? []).map((m: { user_id: string }) => m.user_id);
+          if (memberIds.length === 0) continue;
+          const { count } = await supabase
+            .from("automation_log")
+            .select("id", { count: "exact", head: true })
+            .in("owner_user_id", memberIds)
+            .eq("status", "sent")
+            .gte("created_at", windowStart);
+          workspaceCounts.set(ws, count ?? 0);
         }
 
         const alerts: Record<string, unknown>[] = [];
