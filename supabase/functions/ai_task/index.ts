@@ -2327,8 +2327,14 @@ STRICT REWRITE REQUIRED:
     // If validation fails, attempt one strict-repair regeneration.
     if (EMAIL_BODY_TASKS.has(task)) {
       const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
       const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+
+      // Deterministic placeholder substitution before validation. Models occasionally
+      // leak [Rep's first name] / [Your Name] / [Meeting Link] etc despite the prompt;
+      // resolve from rep_context/lead_context rather than failing the whole draft.
+      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
 
       let validation = validateDraft(content, validationCtx);
       if (!validation.ok) {
