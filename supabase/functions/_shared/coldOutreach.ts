@@ -120,16 +120,17 @@ export async function coldSendFloor(
 // ── The single cold-email sender ──────────────────────────────────────────────
 
 export interface SendColdEmailArgs {
+  supabase: ServiceClient;
   supabaseUrl: string;
   serviceKey: string;
   internalSecret: string;
   lead: { id: string; email: string; owner_user_id: string };
+  workspaceId: string;
   mailProvider: "gmail" | "outlook";
   mailAccountId?: string | null;
   subject: string;
   body: string;
   unsubscribeUrl: string;
-  postalAddress: string;
 }
 
 export interface SendColdEmailResult {
@@ -141,12 +142,35 @@ export interface SendColdEmailResult {
 
 /**
  * Send ONE cold email through the existing provider path with the CAN-SPAM footer
- * appended and (Gmail) the List-Unsubscribe header. Throws if postalAddress is
- * blank — the caller MUST have verified it (a cold email with no physical address
- * is a CAN-SPAM violation). Returns { ok } based on the provider's JSON result.
+ * appended and (Gmail) the List-Unsubscribe header.
+ *
+ * The FAIL-CLOSED FLOOR lives HERE, inside the single sender, so it is
+ * structurally impossible for ANY caller — the executor's automatic path,
+ * PR 3's review-mode "Send" / manual "Sent it", or any future path — to email a
+ * suppressed or unsubscribed lead, or to send a cold email with no physical
+ * postal address:
+ *   1. coldSendFloor (suppression list + leads.unsubscribed), and
+ *   2. the company postal address, read from the workspace HERE (not trusted from
+ *      the caller) and required non-blank (CAN-SPAM).
+ * Callers should keep their own pre-checks too (defense in depth), but this is the
+ * last line that cannot be bypassed. Returns { ok:false, reason } instead of
+ * sending when the floor blocks.
  */
 export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendColdEmailResult> {
-  const footer = buildColdEmailFooter({ unsubscribeUrl: args.unsubscribeUrl, postalAddress: args.postalAddress });
+  // (1) opt-out / suppression — fail closed.
+  const floor = await coldSendFloor(args.supabase, args.lead.id, args.workspaceId);
+  if (!floor.ok) return { ok: false, reason: floor.reason || "blocked by send floor" };
+
+  // (2) CAN-SPAM postal address — read from the workspace, required non-blank.
+  const { data: ws } = await args.supabase
+    .from("workspaces")
+    .select("cold_outreach_postal_address")
+    .eq("id", args.workspaceId)
+    .maybeSingle();
+  const postalAddress = (ws?.cold_outreach_postal_address || "").trim();
+  if (!postalAddress) return { ok: false, reason: "no company postal address (CAN-SPAM)" };
+
+  const footer = buildColdEmailFooter({ unsubscribeUrl: args.unsubscribeUrl, postalAddress });
   const bodyWithFooter = args.body + footer.footerText;
 
   const headers = {

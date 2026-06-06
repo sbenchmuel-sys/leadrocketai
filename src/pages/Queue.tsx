@@ -25,7 +25,7 @@
 // would show after click. Single source of truth is the snapshot.
 // ============================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   getQueueState,
@@ -47,11 +47,13 @@ import {
   type LeadActionSnapshotFull,
 } from "@/lib/supabaseQueries";
 import { useQueueSnapshot } from "@/hooks/useQueueSnapshot";
-import { QueueChips } from "@/components/queue/QueueChips";
+import { QueueChips, type QueueTab } from "@/components/queue/QueueChips";
 import { ShowAllToggle } from "@/components/queue/ShowAllToggle";
 import { NewItemsBanner } from "@/components/queue/NewItemsBanner";
 import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
 import { QueueCard } from "@/components/queue/QueueCard";
+import { OutreachCard } from "@/components/queue/OutreachCard";
+import { fetchOutreachQueue, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 
 const PAGE_SIZE = 25; // mirrors LeadTable.tsx — brief §5 ("reuse pagination")
@@ -59,10 +61,23 @@ const MOBILE_BREAKPOINT_PX = 640;
 const UNDO_DURATION_MS_DESKTOP = 5_000;
 const UNDO_DURATION_MS_MOBILE = 7_000;
 
+// Map between the persisted reactive bucket (queueStateCache) and the visible
+// tab. "Follow up" absorbs both followup_due and ooo_back (Unit E OOO fold).
+function chipToTab(c: QueueChipBucket | null): QueueTab | null {
+  if (c === "replied") return "replied";
+  if (c === "followup_due" || c === "ooo_back") return "followup";
+  return null;
+}
+function tabToChip(t: QueueTab | null): QueueChipBucket | null {
+  if (t === "replied") return "replied";
+  if (t === "followup") return "followup_due";
+  return null; // "outreach" / null are not reactive buckets
+}
+
 export default function Queue() {
   // ── Persistent cache (chip + page) ─────────────────────────────
   const initial = getQueueState();
-  const [chip, setChipLocal] = useState<QueueChipBucket | null>(initial.chip);
+  const [tab, setTab] = useState<QueueTab | null>(chipToTab(initial.chip));
   const [pageIndex, setPageIndexLocal] = useState<number>(initial.pageIndex);
 
   // Ephemeral — show-all does NOT persist (brief §9).
@@ -77,7 +92,24 @@ export default function Queue() {
     refresh,
     removeLead,
     restoreLead,
-  } = useQueueSnapshot({ chip, showAll });
+  } = useQueueSnapshot({ chip: tabToChip(tab), showAll });
+
+  // ── Outreach (cold campaign touches) — separate data source for the tab ──
+  const [outreachTouches, setOutreachTouches] = useState<OutreachTouch[]>([]);
+  const [outreachLoading, setOutreachLoading] = useState(true);
+  const loadOutreach = useCallback(async () => {
+    setOutreachLoading(true);
+    try {
+      setOutreachTouches(await fetchOutreachQueue());
+    } catch {
+      /* non-fatal — the reactive lists still render */
+    } finally {
+      setOutreachLoading(false);
+    }
+  }, []);
+  useEffect(() => { void loadOutreach(); }, [loadOutreach]);
+  const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
+  const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
 
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
@@ -87,24 +119,40 @@ export default function Queue() {
   // The snapshot itself never reorders (brief §8). The view layer is
   // a pure function of (snapshot, chip, page) — chip filtering and
   // pagination are pure transformations applied per render.
-  const chipFiltered = useMemo(() => applyChipFilter(snapshot, chip), [snapshot, chip]);
+  // Reactive list for the Replied / Follow up tabs. "Follow up" unions the
+  // followup_due and ooo_back buckets (Unit E OOO fold); null shows everything.
+  const reactiveList = useMemo(() => {
+    if (tab === "replied") return applyChipFilter(snapshot, "replied");
+    if (tab === "followup") {
+      return [...applyChipFilter(snapshot, "followup_due"), ...applyChipFilter(snapshot, "ooo_back")];
+    }
+    return snapshot; // null = all reactive (outreach tab uses its own source)
+  }, [snapshot, tab]);
 
-  const totalCount = chipFiltered.length;
+  const totalCount = reactiveList.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const safePage = Math.min(pageIndex, totalPages - 1);
   const pageLeads = useMemo(
-    () => chipFiltered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
-    [chipFiltered, safePage],
+    () => reactiveList.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
+    [reactiveList, safePage],
   );
 
   // Chip counts always come off the snapshot (post-intent-hide), so
   // toggling chips never lies about availability.
   const chipCounts = useMemo(() => countChipBuckets(snapshot), [snapshot]);
+  const tabCounts = useMemo(
+    () => ({
+      replied: chipCounts.replied,
+      followup: chipCounts.followup_due + chipCounts.ooo_back,
+      outreach: outreachTouches.length,
+    }),
+    [chipCounts, outreachTouches.length],
+  );
 
-  // ── Persist chip / page changes ────────────────────────────────
+  // ── Persist tab / page changes ─────────────────────────────────
   useEffect(() => {
-    setQueueChip(chip);
-  }, [chip]);
+    setQueueChip(tabToChip(tab));
+  }, [tab]);
   useEffect(() => {
     setQueuePageIndex(pageIndex);
   }, [pageIndex]);
@@ -114,7 +162,7 @@ export default function Queue() {
   // happening.
   useEffect(() => {
     setPageIndexLocal(0);
-  }, [chip, showAll]);
+  }, [tab, showAll]);
 
   // ── Fetch latest inbound rows for the visible page only ────────
   useEffect(() => {
@@ -237,9 +285,28 @@ export default function Queue() {
         </div>
       </div>
 
-      {/* Chip strip */}
-      <QueueChips active={chip} counts={chipCounts} onSelect={setChipLocal} />
+      {/* Tab strip (Replied / Follow up / Outreach) */}
+      <QueueChips active={tab} counts={tabCounts} onSelect={setTab} />
 
+      {tab === "outreach" ? (
+        /* ── Outreach tab: cold campaign touches (separate source) ── */
+        outreachLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
+            ))}
+          </div>
+        ) : outreachTouches.length === 0 ? (
+          <QueueEmptyState variant="no_matches" />
+        ) : (
+          <div className="space-y-2">
+            {outreachTouches.map((t) => (
+              <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
+            ))}
+          </div>
+        )
+      ) : (
+        <>
       {/* Show-all toggle (intent-hidden header) */}
       <ShowAllToggle hiddenCount={hiddenCount} showAll={showAll} onToggle={() => setShowAll((s) => !s)} />
 
@@ -319,6 +386,8 @@ export default function Queue() {
             </Button>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

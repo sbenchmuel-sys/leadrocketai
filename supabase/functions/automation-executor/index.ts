@@ -1587,10 +1587,11 @@ serve(async (req) => {
           if (claimErr || !claim) continue; // 23505 → already claimed by a concurrent run; no double-send
 
           const sendRes = await sendColdEmailTouch({
-            supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
+            supabase, supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
             lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
+            workspaceId: lead.workspace_id,
             mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
-            subject: content.subject, body: content.body, unsubscribeUrl, postalAddress: postal,
+            subject: content.subject, body: content.body, unsubscribeUrl,
           });
 
           if (!sendRes.ok) {

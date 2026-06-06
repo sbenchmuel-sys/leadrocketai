@@ -1,52 +1,43 @@
 // ============================================================
-// QueueChips — single-select reason chip strip at top of Queue.
+// QueueChips — visible tab toggle at the top of the Queue (Unit E).
 //
-// Three chips: Replied / Follow-up due / OOO back. Single-select
-// behavior (brief §4): click to select, click again to deselect.
-// Default: none selected, all unhidden leads visible.
+// Three tabs: Replied / Follow up / Outreach. Single-select: click to
+// select, click again to deselect (deselected = the full reactive list).
+//   • Replied + Follow up are the REACTIVE lists (the default view).
+//     "Follow up" now also absorbs out-of-office leads when they're next
+//     due (the dedicated "OOO" tab was removed — UI grouping only; the
+//     OOO detection + send-pause logic is unchanged).
+//   • Outreach is the cold-campaign touch list, kept separate so cold
+//     volume never floods the reactive lists.
 //
-// Counts are derived from the snapshot in the parent (Queue.tsx),
-// not from a separate fetch — so chip counts always match what the
-// rep would see after clicking. No drift.
-//
-// Mobile (brief §11): wraps to multi-row when narrow. The buttons
-// themselves are touch-sized (h-8) and tap targets meet the 44×44
-// guideline because they include text padding on either side.
+// Visible on every screen size (wraps to multi-row when narrow); never
+// swipe-only. Counts come from the parent snapshot so they never drift.
 // ============================================================
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { QueueChipBucket } from "@/lib/queueQueries";
+
+export type QueueTab = "replied" | "followup" | "outreach";
 
 interface QueueChipsProps {
-  active: QueueChipBucket | null;
-  counts: { replied: number; followup_due: number; ooo_back: number };
-  onSelect: (next: QueueChipBucket | null) => void;
+  active: QueueTab | null;
+  counts: { replied: number; followup: number; outreach: number };
+  onSelect: (next: QueueTab | null) => void;
 }
 
-interface ChipDef {
-  id: QueueChipBucket;
-  label: string;
-}
-
-const CHIPS: ChipDef[] = [
+const CHIPS: { id: QueueTab; label: string }[] = [
   { id: "replied", label: "Replied" },
-  { id: "followup_due", label: "Follow-up due" },
-  { id: "ooo_back", label: "OOO back" },
+  { id: "followup", label: "Follow up" },
+  { id: "outreach", label: "Outreach" },
 ];
 
 export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Queue reason filter">
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Queue list tabs">
       {CHIPS.map((chip) => {
         const isActive = active === chip.id;
-        const count =
-          chip.id === "replied"
-            ? counts.replied
-            : chip.id === "followup_due"
-              ? counts.followup_due
-              : counts.ooo_back;
+        const count = counts[chip.id];
         return (
           <Button
             key={chip.id}
@@ -54,7 +45,6 @@ export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
             variant={isActive ? "default" : "outline"}
             size="sm"
             aria-pressed={isActive}
-            // Single-select toggle: click active chip → deselect.
             onClick={() => onSelect(isActive ? null : chip.id)}
             className={cn(
               "h-8 rounded-full px-3 text-xs font-medium",

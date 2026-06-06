@@ -45,7 +45,9 @@ import {
   assignCampaignToLead,
   type CampaignWithSteps,
   type CampaignLead,
+  type SendMode,
 } from "@/lib/campaignQueries";
+import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
 import { AddLeadsDialog } from "@/components/automations/AddLeadsDialog";
@@ -69,6 +71,8 @@ export default function CampaignDetail() {
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmAuto, setConfirmAuto] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const loadPeople = useCallback(() => {
     if (!id) return;
@@ -118,6 +122,44 @@ export default function CampaignDetail() {
       setPeople((prev) => prev.filter((p) => p.id !== leadId));
     } catch {
       toast.error("Couldn't remove that person");
+    }
+  };
+
+  // ── Sending controls (Unit C) ──
+  const applySendMode = async (mode: SendMode) => {
+    if (!id || !campaign) return;
+    try {
+      await updateCampaign(id, { send_mode: mode });
+      setCampaign({ ...campaign, send_mode: mode });
+      toast.success(mode === "automatic" ? "Emails will send automatically" : "You'll approve each email");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't update sending");
+    }
+  };
+  const handleSelectMode = (mode: SendMode) => {
+    if (mode === "automatic" && campaign?.send_mode !== "automatic") {
+      setConfirmAuto(true); // one honest confirm before turning auto-send on
+      return;
+    }
+    if (mode !== campaign?.send_mode) void applySendMode(mode);
+  };
+  const handleTogglePause = async () => {
+    if (!id || !campaign) return;
+    setStatusBusy(true);
+    try {
+      if (campaign.status === "paused") {
+        await resumeCampaign(id);
+        setCampaign({ ...campaign, status: "active" });
+        toast.success("Outreach resumed");
+      } else {
+        await pauseCampaign(id);
+        setCampaign({ ...campaign, status: "paused" });
+        toast.success("Outreach paused — all sending stopped");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't change status");
+    } finally {
+      setStatusBusy(false);
     }
   };
 
@@ -180,6 +222,77 @@ export default function CampaignDetail() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Sending controls */}
+      <Card>
+        <CardContent className="space-y-3 pt-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Sending</p>
+            <div className="mt-2 inline-flex rounded-md border border-border p-0.5">
+              <Button
+                size="sm"
+                variant={campaign.send_mode !== "automatic" ? "default" : "ghost"}
+                className="h-7 text-xs"
+                onClick={() => handleSelectMode("review")}
+              >
+                I approve each email
+              </Button>
+              <Button
+                size="sm"
+                variant={campaign.send_mode === "automatic" ? "default" : "ghost"}
+                className="h-7 text-xs"
+                onClick={() => handleSelectMode("automatic")}
+              >
+                Send automatically
+              </Button>
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {campaign.send_mode === "automatic"
+                ? "Emails send on schedule with all the usual safety checks. Calls and texts are always yours to do."
+                : "Each email waits in your Outreach list for you to send. Calls and texts are yours to do."}
+            </p>
+          </div>
+          <div className="flex items-center justify-between border-t border-border pt-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {campaign.status === "paused" ? "Paused" : "Running"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Pausing stops every touch for everyone in this outreach.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant={campaign.status === "paused" ? "default" : "outline"}
+              className="h-8 text-xs"
+              disabled={statusBusy}
+              onClick={handleTogglePause}
+            >
+              {statusBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              {campaign.status === "paused" ? "Resume" : "Pause"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={confirmAuto} onOpenChange={setConfirmAuto}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send these emails automatically?</AlertDialogTitle>
+            <AlertDialogDescription>
+              DrivePilot will send each email on schedule — you won't approve them one by one.
+              All the usual safety checks still apply, and calls and texts stay yours to do.
+              You can switch back anytime.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep approving</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setConfirmAuto(false); void applySendMode("automatic"); }}>
+              Send automatically
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* The script */}
       <section className="space-y-3">
