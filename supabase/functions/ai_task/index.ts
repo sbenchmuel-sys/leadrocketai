@@ -2453,7 +2453,7 @@ Output ONLY the final email body.`;
           });
           if (repairResp.ok) {
             const repairJson = await repairResp.json();
-            let repaired = stripLeakedReasoning(repairJson.choices?.[0]?.message?.content || "");
+            let repaired = stripLeakedReasoningForTask(repairJson.choices?.[0]?.message?.content || "", task);
             // Re-apply greeting safety net to repaired
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
@@ -2545,7 +2545,7 @@ Output ONLY the final email body.`;
             if (regenResponse.ok) {
               const regenResult = await regenResponse.json();
               let regenContent = regenResult.choices?.[0]?.message?.content || "";
-              regenContent = stripLeakedReasoning(regenContent);
+              regenContent = stripLeakedReasoningForTask(regenContent, task);
               if (regenContent) {
                 // Re-evaluate regenerated content
                 const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
@@ -2704,7 +2704,7 @@ Output ONLY the final email body.`;
               if (regenResponse.ok) {
                 const regenResult = await regenResponse.json();
                 let regenContent = regenResult.choices?.[0]?.message?.content || "";
-                regenContent = stripLeakedReasoning(regenContent);
+                regenContent = stripLeakedReasoningForTask(regenContent, task);
                 if (regenContent) {
                   regenerated_outbound = true;
                   selectedFramework = "neutral_observation" as any;
