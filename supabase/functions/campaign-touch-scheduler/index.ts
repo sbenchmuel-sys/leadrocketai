@@ -206,8 +206,16 @@ Deno.serve(async (req) => {
   // No new bounce list — counts come from the enrollment rows the sync handler
   // already stamps. Fully wrapped so it can never abort the run.
   try {
-    const threshold = parseFloat(Deno.env.get("BOUNCE_RATE_THRESHOLD") ?? "0.08"); // 8%
-    const minVolume = parseInt(Deno.env.get("BOUNCE_MIN_VOLUME") ?? "20", 10);     // avoid early noise
+    // Validate env overrides before they gate a DESTRUCTIVE action (auto-pause). A
+    // malformed BOUNCE_RATE_THRESHOLD → NaN → `rate < threshold` is always false →
+    // EVERY campaign at min-volume gets auto-paused (fail-open to pausing). A malformed
+    // BOUNCE_MIN_VOLUME similarly removes the early-noise guard. Fall back to the safe
+    // defaults (and clamp the threshold to a sane (0,1]) on any non-finite/out-of-range
+    // value rather than trusting the parse.
+    const thresholdRaw = parseFloat(Deno.env.get("BOUNCE_RATE_THRESHOLD") ?? "");
+    const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 1 ? thresholdRaw : 0.08; // 8%
+    const minVolumeRaw = parseInt(Deno.env.get("BOUNCE_MIN_VOLUME") ?? "", 10);
+    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeRaw > 0 ? minVolumeRaw : 20; // avoid early noise
     // Page through ALL active campaigns (ordered + stable), not just one capped,
     // unordered subset — otherwise, with more than a page of active outreaches, an
     // over-threshold campaign outside the subset could be evaluated on no tick.
