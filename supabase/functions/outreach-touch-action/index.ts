@@ -101,6 +101,21 @@ Deno.serve(async (req) => {
   // actionable). Enrollment RLS already prevents this, but fail closed here too.
   if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
 
+  // OWNERSHIP (beyond workspace membership): the review-send path sends FROM the lead
+  // owner's connected mailbox and every action advances the OWNER's cadence, so a
+  // non-owner member must not act on another rep's cold touch — that would let them
+  // send mail as a colleague and drive their sequence. Require the caller to be the
+  // lead owner OR a workspace admin (mirrors the leads table's own owner-or-admin
+  // RLS). Internal/service callers (isPrivileged) skip this — they run the
+  // scheduler/executor as service_role and are already trusted.
+  if (!auth.isPrivileged && lead.owner_user_id !== auth.userId) {
+    const { data: isAdmin } = await admin.rpc("is_workspace_admin", {
+      _workspace_id: camp.workspace_id,
+      _user_id: auth.userId!,
+    });
+    if (!isAdmin) return json({ ok: false, error: "Only the lead owner can act on this outreach." }, 403);
+  }
+
   // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
   // the scheduler's reply bridge only runs while touches are 'scheduled'. So
   // re-check reply state here before sending/advancing: if the enrollment is
