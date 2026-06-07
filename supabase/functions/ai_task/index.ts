@@ -50,8 +50,8 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+[\p{L}\p{N}][^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
-const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+(?:[\p{L}\p{N}]|\{FirstName\})[^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
+const selfCheckLineRe = /^(?:[-*•]\s*)?(?:\*\*)?\s*(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
   const trimmed = line.trim();
@@ -62,7 +62,21 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi\s+(?:[\p{L}\p{N}]|\{FirstName\})|Hey\s+(?:[\p{L}\p{N}]|\{FirstName\})|Hello\s+(?:[\p{L}\p{N}]|\{FirstName\})|Dear\s+(?:[\p{L}\p{N}]|\{FirstName\})|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+
+function stripValidationNoiseLines(text: string): string {
+  return (text || "")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (selfCheckLineRe.test(trimmed)) return false;
+      return !/^(?:[-*•]\s*)?(?:\*\*)?\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Notes?)\b/i.test(trimmed);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
   const text = (content || "").trim();
