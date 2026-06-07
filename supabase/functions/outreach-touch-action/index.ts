@@ -224,14 +224,16 @@ Deno.serve(async (req) => {
       body = body || content.body;
     }
 
-    // Sender: prefer the LEAD OWNER's own connected mailbox. Selecting purely by
-    // workspace + is_default can pick a COWORKER's account in a multi-mailbox
-    // workspace, and the provider path would then send this rep's cold email from the
-    // colleague's mailbox/identity (Outlook sends with the selected account's token).
-    // Fall back ONLY to a SHARED mailbox (user_id IS NULL) — never another rep's
-    // attributed account. If the owner has no mailbox and there's no shared one, refuse
-    // rather than impersonate a coworker. Never fall back to legacy gmail_connections.
-    let { data: mailAcct } = await admin
+    // Sender: require the LEAD OWNER's OWN connected mailbox (user_id = owner). The
+    // cold model is owner-centric end to end — gmail-send sends from the owner's
+    // gmail_connections and the per-mailbox daily cap is counted per owner — so the
+    // sending mailbox MUST be the owner's. Selecting by workspace+is_default (or a
+    // shared/coworker row) would send a rep's cold email from someone else's identity,
+    // and a shared row can't even route correctly (Gmail requires the selected account
+    // to match the owner's Gmail). If the owner has no own connected mailbox, refuse —
+    // never impersonate, never fall back to legacy gmail_connections. Mirrors the
+    // automatic executor path.
+    const { data: mailAcct } = await admin
       .from("mail_accounts")
       .select("id, provider")
       .eq("workspace_id", lead.workspace_id)
@@ -240,17 +242,6 @@ Deno.serve(async (req) => {
       .order("is_default", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (!mailAcct) {
-      ({ data: mailAcct } = await admin
-        .from("mail_accounts")
-        .select("id, provider")
-        .eq("workspace_id", lead.workspace_id)
-        .eq("status", "connected")
-        .is("user_id", null)
-        .order("is_default", { ascending: false })
-        .limit(1)
-        .maybeSingle());
-    }
     if (!mailAcct) return json({ ok: false, error: "No connected mailbox to send from for this lead's owner" }, 400);
 
     const unsubSecret = getUnsubscribeSecret();
