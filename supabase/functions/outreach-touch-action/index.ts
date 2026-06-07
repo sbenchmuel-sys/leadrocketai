@@ -147,6 +147,12 @@ Deno.serve(async (req) => {
 
   // ── mark_sent: rep sent via their own app (manual channels) — claim + advance ──
   if (action === "mark_sent") {
+    // Manual channels ONLY. An email touch must go through send_review_email (which
+    // actually delivers) — a buggy/malicious client must not be able to advance an
+    // email touch as 'sent' without an email ever going out.
+    if (touch.channel === "email") {
+      return json({ ok: false, error: "Email touches must be sent, not marked sent." }, 400);
+    }
     if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true });

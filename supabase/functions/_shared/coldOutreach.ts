@@ -198,6 +198,23 @@ export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendC
       }),
     });
   } else {
+    // gmail-send resolves credentials from the owner's gmail_connections (it is
+    // gmail_connections-based by ownerUserId, like the legacy executor — it does
+    // NOT accept a mail_account_id). So verify the selected mail_accounts row
+    // matches the owner's connected Gmail; never send from an unexpected mailbox.
+    // Fail closed if Gmail isn't connected or the selected account diverges.
+    const { data: gconn } = await args.supabase
+      .from("gmail_connections").select("gmail_email").eq("user_id", args.lead.owner_user_id).maybeSingle();
+    if (!gconn?.gmail_email) {
+      return { ok: false, reason: "sender's Gmail is not connected", needsReconnect: true };
+    }
+    if (args.mailAccountId) {
+      const { data: macct } = await args.supabase
+        .from("mail_accounts").select("email_address").eq("id", args.mailAccountId).maybeSingle();
+      if (macct?.email_address && String(macct.email_address).toLowerCase() !== String(gconn.gmail_email).toLowerCase()) {
+        return { ok: false, reason: "selected mailbox does not match the connected Gmail account" };
+      }
+    }
     resp = await fetch(`${args.supabaseUrl}/functions/v1/gmail-send`, {
       method: "POST",
       headers,
