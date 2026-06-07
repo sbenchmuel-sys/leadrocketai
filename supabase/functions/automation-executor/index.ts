@@ -1532,7 +1532,7 @@ serve(async (req) => {
           if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) continue;
 
           const { data: lead } = await supabase.from("leads")
-            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status")
+            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting")
             .eq("id", touch.lead_id).maybeSingle();
           if (!lead || lead.unsubscribed || !lead.email) continue;
           if (!["active", "new"].includes(lead.status)) continue;
@@ -1547,6 +1547,12 @@ serve(async (req) => {
           if (lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000) continue;
 
           const exec = await loadExecutionSettings(lead.owner_user_id, supabase);
+
+          // Meeting-stop: the legacy path runs checkStopConditions (which pauses on a
+          // booked meeting) before every send; the cold guardrail block reused only
+          // window/gap/caps, so without this a cold-enrolled lead with a future meeting
+          // would still get auto-blasted. Honor pause_when_meeting_scheduled here too.
+          if (exec.stop_pause_rules.pause_when_meeting_scheduled && lead.has_future_meeting) continue;
 
           // Reuse the SAME guardrail engine as the legacy path.
           if (!checkSendWindow(exec).allowed) continue;                                   // send window / business hours
@@ -1564,11 +1570,20 @@ serve(async (req) => {
             continue;
           }
 
-          // Sender-mismatch guard: require a connected mail_accounts row; never
-          // fall back to legacy gmail_connections (the wrong-address failure mode).
-          const { data: mailAcct } = await supabase.from("mail_accounts")
+          // Sender: prefer the LEAD OWNER's own connected mailbox; fall back to the
+          // workspace default only when the owner has none (shared/single-mailbox
+          // setups where user_id is null). Selecting purely by is_default could send a
+          // rep's cold email from a COWORKER's mailbox in a multi-mailbox workspace.
+          // Never fall back to legacy gmail_connections (the wrong-address failure mode).
+          let { data: mailAcct } = await supabase.from("mail_accounts")
             .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
+            .eq("user_id", lead.owner_user_id)
             .order("is_default", { ascending: false }).limit(1).maybeSingle();
+          if (!mailAcct) {
+            ({ data: mailAcct } = await supabase.from("mail_accounts")
+              .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
+              .order("is_default", { ascending: false }).limit(1).maybeSingle());
+          }
           if (!mailAcct) continue;
 
           const firstName = (lead.name || "").split(" ")[0] || "there";
