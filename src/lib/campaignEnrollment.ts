@@ -394,10 +394,14 @@ async function gatherEnrollmentContext(
     .eq("workspace_id", workspaceId);
   const leads = (leadRows || []) as unknown as EnrollCandidateLead[];
 
-  const { data: supRows } = await supabase
+  const { data: supRows, error: supErr } = await supabase
     .from("campaign_suppression_list" as any)
     .select("kind, value")
     .eq("workspace_id", workspaceId);
+  // Fail CLOSED: this is the do-not-contact gate. If the lookup errors (bad RLS,
+  // missing grant, transient failure) we must NOT proceed treating the list as
+  // empty — that would enroll suppressed leads. Throw instead.
+  if (supErr) throw new Error("Couldn't verify the do-not-contact list — enrollment blocked for safety.");
   const suppressedEmails = new Set<string>();
   const suppressedDomains = new Set<string>();
   for (const r of (supRows || []) as any[]) {

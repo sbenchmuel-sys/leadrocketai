@@ -32,9 +32,9 @@ import {
 } from "@/lib/campaignDefaults";
 import {
   createCampaignWithSteps,
-  addLeadsToCampaign,
   type CampaignType,
 } from "@/lib/campaignQueries";
+import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { getLeadsList, type LeadListItem } from "@/lib/supabaseQueries";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -204,8 +204,11 @@ export default function NewCampaign() {
 
       let skipped = 0;
       if (selectedLeads.size > 0) {
-        const added = await addLeadsToCampaign(Array.from(selectedLeads), campaignId);
-        skipped = selectedLeads.size - added;
+        // Route creation-time recipients through the SAME enrollment path as the
+        // add-people dialog, so they get campaign_enrollment + campaign_touch rows
+        // (the scheduler/queue source of truth) — not just a campaign_id stamp.
+        const result = await enrollLeadsInCampaign(campaignId, Array.from(selectedLeads));
+        skipped = selectedLeads.size - result.enrolled;
       }
 
       toast.success("Outreach saved as a draft");
