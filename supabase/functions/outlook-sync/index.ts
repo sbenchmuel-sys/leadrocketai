@@ -184,13 +184,18 @@ serve(async (req) => {
     // from/to/cc/bcc and is the supported way to query participants.
     // Note: $search cannot be combined with $filter or $orderby. We sort + date-filter
     // client-side below (already done in the loop).
-    // A single quoted free-text term: Microsoft Graph $search matches it across the
-    // indexed message properties (from/to/cc/subject AND body), so this catches both
-    // the direct rep↔lead conversation AND DSN/bounce notifications that only mention
-    // the failed address in the delivery-report body. Graph requires the $search
-    // value to be a quoted string — this is that single valid quoted expression. The
-    // direct-conversation filter + body correlation in the loop gate what's processed.
-    const searchKql = `"${leadEmailNorm}"`;
+    // KQL property restrictions joined by OR, as one quoted $search value:
+    //   participants:<email> — covers from/to/cc/bcc, so it catches the direct
+    //     rep↔lead conversation INCLUDING rep→lead messages where the lead is only a
+    //     recipient. An UNQUALIFIED message $search targets only from/subject/body, so
+    //     a bare term would silently drop those outbound messages (the lead address
+    //     never appears in from/subject/body of a rep→lead email).
+    //   body:<email> — catches DSN/bounce notifications that mention the failed
+    //     address only in the delivery-report body (the DSN's own participants are
+    //     postmaster→rep, so participants: alone would miss it).
+    // The direct-conversation filter + body correlation in the loop gate what's
+    // actually processed; this just widens the candidate set.
+    const searchKql = `"participants:${leadEmailNorm} OR body:${leadEmailNorm}"`;
     const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
