@@ -91,10 +91,31 @@ Deno.serve(async (req) => {
 
   const { data: lead } = await admin
     .from("leads")
-    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed")
+    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
     .eq("id", touch.lead_id)
     .maybeSingle();
   if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
+
+  // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
+  // the scheduler's reply bridge only runs while touches are 'scheduled'. So
+  // re-check reply state here before sending/advancing: if the enrollment is
+  // already 'replied', or a fresh inbound landed after the lead started, pull the
+  // lead out of the cold cadence instead of sending/advancing. The reply is
+  // handled in the normal Queue (Follow up) via the existing pause-on-inbound path.
+  const { data: enr } = await admin
+    .from("campaign_enrollment")
+    .select("id, status, started_at")
+    .eq("id", touch.enrollment_id)
+    .maybeSingle();
+  const replied =
+    enr?.status === "replied" ||
+    (!!lead.last_inbound_at && !!enr?.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at));
+  if (replied) {
+    if (enr && enr.status !== "replied") {
+      await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
+    }
+    return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
+  }
 
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
 
