@@ -1600,6 +1600,22 @@ serve(async (req) => {
 
           // Per-touch CLAIM — the single double-send guard.
           const actionKey = `cold_touch_${touch.id}`;
+
+          // LIFETIME double-send guard. action_key embeds the globally-unique touch.id,
+          // but automation_log_claim_unique is (lead_id, action_key, claim_date) — so
+          // the claim only blocks a re-send on the SAME day. If a send SUCCEEDED but the
+          // subsequent advanceColdEnrollment failed (transient error), the touch stays
+          // 'scheduled' and a NEXT-DAY run would claim again (new claim_date) and
+          // re-send the same email. Guard against that: if this touch already has a
+          // 'sent' claim on ANY date, the email is already out — do NOT re-send; just
+          // re-run the idempotent advance to recover the stalled cadence.
+          const { data: priorSent } = await supabase.from("automation_log")
+            .select("id").eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "sent")
+            .limit(1).maybeSingle();
+          if (priorSent) {
+            await advanceColdEnrollment(supabase, exec, touch, "sent", { automationLogId: priorSent.id });
+            continue;
+          }
           // Column set matches the legacy claim exactly (no workspace_id — that
           // column is not written to automation_log in the legacy path either).
           const claimRow: Record<string, unknown> = {
