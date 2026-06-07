@@ -127,6 +127,14 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
   }
 
+  // The enrollment must still be LIVE. If it was stopped (e.g. unsubscribe/bounce
+  // marked the enrollment stopped but left a queued touch behind) or completed,
+  // clear the stranded card and refuse — never send/advance a dead enrollment.
+  if (enr && !["scheduled", "active"].includes(enr.status)) {
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
+  }
+
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
 
   // Atomically CLAIM the queued touch: flip queued → <status> in ONE update guarded
@@ -206,15 +214,24 @@ Deno.serve(async (req) => {
     // The one sender — structural fail-closed floor (suppression + unsubscribed +
     // postal) runs INSIDE this call, so a review send can never reach an opted-out
     // or suppressed lead even though it skips the automatic pacing/cap guardrails.
-    const sendRes = await sendColdEmailTouch({
-      supabase: admin, supabaseUrl, serviceKey, internalSecret: Deno.env.get("INTERNAL_API_SECRET") ?? "",
-      lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
-      workspaceId: lead.workspace_id,
-      mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
-      subject, body, unsubscribeUrl,
-    });
+    let sendRes;
+    try {
+      sendRes = await sendColdEmailTouch({
+        supabase: admin, supabaseUrl, serviceKey, internalSecret: Deno.env.get("INTERNAL_API_SECRET") ?? "",
+        lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
+        workspaceId: lead.workspace_id,
+        mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
+        subject, body, unsubscribeUrl,
+      });
+    } catch (err) {
+      // A THROWN error (e.g. transient network failure invoking the provider) must
+      // also release the claim — otherwise the touch is stuck 'sent' with no email
+      // delivered and no way to retry. Return it to the Queue.
+      await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
+      return json({ ok: false, error: err instanceof Error ? err.message : "Send failed" }, 502);
+    }
     if (!sendRes.ok) {
-      // Send failed — release the claim so the rep can retry from the Queue.
+      // Send returned a failure — release the claim so the rep can retry from the Queue.
       await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
       return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
     }
