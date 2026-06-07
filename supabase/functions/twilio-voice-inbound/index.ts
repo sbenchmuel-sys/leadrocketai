@@ -65,24 +65,27 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Resolve caller ID from workspace call_settings, fallback to hard-coded Twilio number
-      const FALLBACK_CALLER_ID = "+14504004322";
-      let callerId = FALLBACK_CALLER_ID;
+      // Resolve caller ID strictly from the user's workspace call_settings.
+      // Fail safe: if no number is configured, we must NOT dial from any other
+      // number — placing a call with a wrong caller ID is worse than not calling.
+      let callerId: string | null = null;
+      let resolvedWorkspaceId: string | null = null;
+      // Extract user ID from client identity (format: "client:user_<uuid>")
+      const callerUserIdMatch = callerIdentity.match(/^client:user_(.+)$/);
+      const callerUserId = callerUserIdMatch ? callerUserIdMatch[1] : null;
 
       try {
-        // Extract user ID from client identity (format: "client:user_<uuid>")
-        const userIdMatch = callerIdentity.match(/^client:user_(.+)$/);
-        if (userIdMatch) {
-          const userId = userIdMatch[1];
+        if (callerUserId) {
           // Find user's workspace
           const { data: membership } = await supabase
             .from("workspace_members")
             .select("workspace_id")
-            .eq("user_id", userId)
+            .eq("user_id", callerUserId)
             .limit(1)
             .maybeSingle();
 
           if (membership?.workspace_id) {
+            resolvedWorkspaceId = membership.workspace_id;
             const { data: callSettings } = await supabase
               .from("call_settings")
               .select("default_twilio_number")
@@ -96,7 +99,19 @@ Deno.serve(async (req) => {
         }
       } catch (lookupErr) {
         logger.warn("caller_id_lookup_failed", { error: String(lookupErr) });
-        // Continue with fallback
+        // Leave callerId unresolved → fail safe below.
+      }
+
+      // Fail safe: no configured caller ID → speak a message and hang up. Never dial.
+      if (!callerId) {
+        logger.warn("browser_call_no_caller_id", {
+          userId: callerUserId,
+          workspaceId: resolvedWorkspaceId,
+        });
+        return new Response(
+          `<Response><Say voice="Polly.Joanna">No calling number is set up for your account. Please set one in settings, then try again.</Say><Hangup/></Response>`,
+          { status: 200, headers: { "Content-Type": "text/xml" } },
+        );
       }
 
       // Build callback URLs for status tracking & recording
