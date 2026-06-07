@@ -596,10 +596,14 @@ export async function enrollLeadsInCampaign(
   // doesn't pile new follow-ups onto business days already at the daily cap.
   const anchor = opts?.anchor ?? new Date();
   const offsets = emailOffsets(steps);
+  // Seed from the mailbox's WHOLE scheduled/queued email-touch load, not just this
+  // campaign — the daily cap is per-mailbox and spans every outreach, so other
+  // campaigns' booked email days must count too. RLS scopes this to the rep's
+  // workspace (a safe, slightly conservative proxy for per-mailbox); the executor
+  // enforces the precise per-owner daily cap at send time regardless.
   const { data: existingEmailTouches } = await supabase
     .from("campaign_touch" as any)
     .select("eligible_at")
-    .eq("campaign_id", campaignId)
     .eq("channel", "email")
     .in("status", ["scheduled", "queued"])
     .not("eligible_at", "is", null);
@@ -669,4 +673,28 @@ export async function enrollLeadsInCampaign(
   }
 
   return { enrolled: stampedLeads.length, skips, channelSkips, capacity };
+}
+
+/**
+ * Remove a lead from a campaign — the proper counterpart to enrollment now that
+ * campaign_enrollment / campaign_touch are the scheduler's source of truth.
+ * Deletes the enrollment row (campaign_touch cascades via FK) so the scheduler and
+ * executor immediately stop processing the lead, THEN clears leads.campaign_id.
+ * Just clearing campaign_id (the old removal path) would leave the schedule rows
+ * behind and the cold cadence would keep running.
+ */
+export async function unenrollLeadFromCampaign(campaignId: string, leadId: string): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("campaign_enrollment" as any)
+    .delete()
+    .eq("campaign_id", campaignId)
+    .eq("lead_id", leadId);
+  if (delErr) throw new Error(delErr.message || "Couldn't stop the schedule");
+
+  const { error: updErr } = await supabase
+    .from("leads")
+    .update({ campaign_id: null } as any)
+    .eq("id", leadId)
+    .eq("campaign_id", campaignId); // only clear if the lead is still in THIS campaign
+  if (updErr) throw new Error(updErr.message || "Couldn't remove the person");
 }
