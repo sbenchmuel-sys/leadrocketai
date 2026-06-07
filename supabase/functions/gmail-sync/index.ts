@@ -373,8 +373,27 @@ serve(async (req) => {
           continue;
         }
         
+        // Bounce/DSN messages come FROM postmaster/mailer-daemon TO the rep, so the
+        // lead's address is only in the body — they'd be dropped by the direct-
+        // conversation filters below before isBounce runs, and the bounce-stop +
+        // bounced_at stamp (which the circuit breaker depends on) would never fire.
+        // Detect likely bounces up front and let them THROUGH both filters; the
+        // isBounce block further down still does the actual detection + handling.
+        const earlyFromLower = (getHeader(headers, "From") || "").toLowerCase();
+        const earlySubjectLower = (getHeader(headers, "Subject") || "").toLowerCase();
+        const isLikelyBounce =
+          earlyFromLower.includes("postmaster") ||
+          earlyFromLower.includes("mailer-daemon") ||
+          earlyFromLower.includes("mail delivery") ||
+          earlySubjectLower.includes("delivery status notification") ||
+          earlySubjectLower.includes("undeliverable") ||
+          earlySubjectLower.includes("mail delivery failed") ||
+          earlySubjectLower.includes("returned mail") ||
+          earlySubjectLower.includes("failure notice") ||
+          earlySubjectLower.includes("delivery failure");
+
         // Safety check: never attach a message to a lead unless the headers actually include the lead email
-        if (!messageInvolvesLead(headers, leadEmailNorm)) {
+        if (!messageInvolvesLead(headers, leadEmailNorm) && !isLikelyBounce) {
           console.warn(
             `[gmail-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
           );
@@ -400,7 +419,7 @@ serve(async (req) => {
 
         // Only allow: (lead → rep) or (rep → lead). Skip everything else.
         const isDirectConversation = (isFromLead_check && isToRep_check) || (isFromRep_check && isToLead_check);
-        if (!isDirectConversation) {
+        if (!isDirectConversation && !isLikelyBounce) {
           console.log(
             `[gmail-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
           );

@@ -252,7 +252,24 @@ serve(async (req) => {
         const isToRep = toEmails.includes(repEmail);
         const isDirectConversation = (isFromLead && isToRep) || (isFromRep && isToLead);
 
-        if (!isDirectConversation) {
+        // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
+        // they'd be dropped here before isBounce runs — and the bounce-stop +
+        // bounced_at stamp (the circuit breaker's signal) would never fire. Let
+        // likely bounces through; the isBounce block below still does the handling.
+        const _fromL = fromEmail;
+        const _subjL = (msg.subject || "").toLowerCase();
+        const isLikelyBounce =
+          _fromL.includes("postmaster") ||
+          _fromL.includes("mailer-daemon") ||
+          _fromL.includes("mail delivery") ||
+          _subjL.includes("delivery status notification") ||
+          _subjL.includes("undeliverable") ||
+          _subjL.includes("mail delivery failed") ||
+          _subjL.includes("returned mail") ||
+          _subjL.includes("failure notice") ||
+          _subjL.includes("delivery failure");
+
+        if (!isDirectConversation && !isLikelyBounce) {
           console.log(`[outlook-sync] Skipping 3rd-party message ${msg.id} (from: "${fromEmail}", to: "${toEmails.join(",")}")`);
           continue;
         }
