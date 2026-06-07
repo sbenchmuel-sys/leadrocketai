@@ -91,12 +91,25 @@ ALTER TABLE public.campaign_enrollment ENABLE ROW LEVEL SECURITY;
 -- RLS mirrors campaign_step_content: members of the parent campaign's
 -- workspace manage; service_role full access (the scheduler runs as
 -- service role).
+-- Scoped to the leads table's OWN RLS (own leads, or an admin), not just campaign
+-- workspace membership. The leads table is owner-scoped — a non-admin rep can only
+-- see/act on leads they own — so enrollment/touch rows (which 1:1 reference a lead)
+-- must be too, on EVERY verb. Applying ownership only in WITH CHECK would leave a
+-- gap: SELECT/UPDATE/DELETE (governed by USING) would still expose a colleague's
+-- enrollments. The scheduler/executor run as service_role (separate policy) and are
+-- unaffected; campaign-wide pause/stop keys on campaigns.status, not these rows.
 CREATE POLICY "Members can view campaign enrollment"
   ON public.campaign_enrollment FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_enrollment.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_enrollment.lead_id
+          AND l.workspace_id = c.workspace_id
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+      )
   ));
 
 CREATE POLICY "Members can manage campaign enrollment"
@@ -105,10 +118,16 @@ CREATE POLICY "Members can manage campaign enrollment"
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_enrollment.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_enrollment.lead_id
+          AND l.workspace_id = c.workspace_id
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+      )
   ))
-  -- WITH CHECK also proves the LEAD belongs to the campaign's workspace, so a
-  -- member can't tie a cross-workspace lead UUID to their campaign via a direct
-  -- client insert (membership alone is insufficient).
+  -- WITH CHECK additionally proves the LEAD belongs to the campaign's workspace and
+  -- is owned by the caller (or caller is admin), so a member can't tie a
+  -- cross-workspace or colleague-owned lead UUID to their campaign on insert/update.
   WITH CHECK (EXISTS (
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_enrollment.campaign_id
@@ -173,12 +192,21 @@ CREATE TRIGGER update_campaign_touch_updated_at
 
 ALTER TABLE public.campaign_touch ENABLE ROW LEVEL SECURITY;
 
+-- Owner-or-admin scoped on EVERY verb (mirrors campaign_enrollment + the leads
+-- table's own RLS). USING governs SELECT/UPDATE/DELETE; ownership only in WITH CHECK
+-- would let a non-admin read/delete a colleague's touches.
 CREATE POLICY "Members can view campaign touch"
   ON public.campaign_touch FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_touch.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_touch.lead_id
+          AND l.workspace_id = c.workspace_id
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+      )
   ));
 
 CREATE POLICY "Members can manage campaign touch"
@@ -187,6 +215,12 @@ CREATE POLICY "Members can manage campaign touch"
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_touch.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_touch.lead_id
+          AND l.workspace_id = c.workspace_id
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+      )
   ))
   -- WITH CHECK also proves the LEAD belongs to the campaign's workspace (mirrors
   -- campaign_enrollment), so a cross-workspace lead can't be tied in via a direct
