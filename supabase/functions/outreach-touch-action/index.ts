@@ -114,6 +114,11 @@ Deno.serve(async (req) => {
     if (enr && enr.status !== "replied") {
       await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
     }
+    // Clear the surfaced card: mark the queued touch skipped so it leaves the
+    // Outreach list (the fetch filters on status='queued'). Otherwise the card
+    // would reappear forever and every action would hit this same 409. The reply
+    // itself is handled in the normal Queue (Follow up).
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
     return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
   }
 
