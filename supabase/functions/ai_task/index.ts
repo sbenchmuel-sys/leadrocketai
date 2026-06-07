@@ -50,7 +50,7 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+(?:[\p{L}\p{N}]|\{FirstName\})[^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])[^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
 const selfCheckLineRe = /^(?:[-*•]\s*)?(?:\*\*)?\s*(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
