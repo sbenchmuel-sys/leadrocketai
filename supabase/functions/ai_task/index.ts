@@ -50,8 +50,8 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+[\p{L}\p{N}][^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
-const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])[^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
+const selfCheckLineRe = /^(?:[-*•]\s*)?(?:\*\*)?\s*(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
   const trimmed = line.trim();
@@ -62,7 +62,21 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hey\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hello\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Dear\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+
+function stripValidationNoiseLines(text: string): string {
+  return (text || "")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (selfCheckLineRe.test(trimmed)) return false;
+      return !/^(?:[-*•]\s*)?(?:\*\*)?\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Notes?)\b/i.test(trimmed);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
   const text = (content || "").trim();
@@ -197,7 +211,7 @@ function stripLeakedReasoning(text: string): string {
       }
 
       if (lastGreetingLineIdx >= 0) {
-        const result = lines.slice(lastGreetingLineIdx).join("\n").trim();
+          const result = stripValidationNoiseLines(lines.slice(lastGreetingLineIdx).join("\n"));
         // Sanity-check: real email has greeting + body + sign-off, ≥40 chars
         // and contains either a sentence-ending punctuation or a sign-off line.
         if (result.length >= 40 && /[.!?]/.test(result)) {
@@ -209,7 +223,7 @@ function stripLeakedReasoning(text: string): string {
       const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thank you)\s+[^\n]*)/i;
       const fwd = afterHeader.match(fwdGreetingRe);
       if (fwd && fwd.index !== undefined) {
-        const result = afterHeader.substring(fwd.index).trim();
+        const result = stripValidationNoiseLines(afterHeader.substring(fwd.index));
         if (result.length >= 40 && /[.!?]/.test(result)) return result;
       }
 
@@ -233,7 +247,7 @@ function stripLeakedReasoning(text: string): string {
     }
   }
 
-  return text.trim();
+  return stripValidationNoiseLines(text);
 }
 
 function stripLeakedReasoningForTask(text: string, task: string): string {
@@ -2479,12 +2493,12 @@ Output ONLY the final email body.`;
         }
       }
 
-      // Last-resort deterministic patch for greeting issues before refusing.
-      if (!validation.ok && leadFirstFromCtx &&
+      // Last-resort deterministic patch for template/live greeting issues before refusing.
+      if (!validation.ok && (leadFirstFromCtx || allowTemplatePlaceholders) &&
           (validation.codes.includes("greeting_unaddressed") || validation.codes.includes("missing_greeting"))) {
         const lines = content.split("\n");
         const firstIdx = lines.findIndex((l) => l.trim().length > 0);
-        const greetingLine = `Hi ${leadFirstFromCtx},`;
+        const greetingLine = allowTemplatePlaceholders ? "Hi {FirstName}," : `Hi ${leadFirstFromCtx},`;
         if (firstIdx >= 0 && /^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)\b/i.test(lines[firstIdx].trim())) {
           lines[firstIdx] = greetingLine;
         } else {
@@ -2496,6 +2510,19 @@ Output ONLY the final email body.`;
           content = patched;
           validation = patchedValidation;
           console.log(`[ai_task] [${task}] Greeting auto-patched`);
+        }
+      }
+
+      // Campaign template authoring is not a send path. If the only remaining
+      // issue is a missing sign-off, append the allowed rep token instead of
+      // failing the whole content generation run.
+      if (!validation.ok && allowTemplatePlaceholders && validation.codes.includes("missing_signoff")) {
+        const patched = `${content.replace(/\s+$/u, "")}\n\nBest,\n{RepFirstName}`;
+        const patchedValidation = validateDraft(patched, validationCtx);
+        if (patchedValidation.ok) {
+          content = patched;
+          validation = patchedValidation;
+          console.log(`[ai_task] [${task}] Template sign-off auto-patched`);
         }
       }
 
