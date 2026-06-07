@@ -72,12 +72,13 @@ Deno.serve(async (req) => {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  // NOTE: do NOT early-return when no touches are due. The bounce-rate circuit
-  // breaker at the end must run on EVERY tick — bounces commonly arrive between
-  // sends (all remaining touches scheduled for future days), and an over-threshold
-  // campaign must still be auto-paused then. With no due touches the bulk loads
-  // below run against empty id lists (harmless) and the processing loop is a no-op,
-  // so flow falls through to the breaker.
+  // NOTE: do NOT early-return when no scheduled touches are due. BOTH later passes
+  // must run on every tick: (a) the stale-queued cleanup — an ignored manual touch
+  // already in status='queued' wouldn't match the scheduled query, and an early
+  // return would stall the cadence forever; and (b) the bounce-rate circuit breaker
+  // — bounces arrive between sends (remaining touches scheduled for future days),
+  // so an over-threshold campaign must still auto-pause. With no due touches the
+  // bulk loads run on empty id lists (harmless) and the processing loop is a no-op.
   const touches = dueTouches || [];
 
   // 2) Bulk-load the related rows into maps.
@@ -170,6 +171,31 @@ Deno.serve(async (req) => {
     await supabase.from("campaign_touch").update({ status: "queued" }).eq("id", t.id);
     if (enr.status === "scheduled") await supabase.from("campaign_enrollment").update({ status: "active" }).eq("id", t.enrollment_id);
     counters.queued++;
+  }
+
+  // 3b) Auto-skip STALE QUEUED manual touches. Once surfaced (status='queued') a
+  // manual touch no longer matches the 'scheduled' due-query above, so its max_age_at
+  // must be enforced HERE — otherwise an ignored call/SMS/WhatsApp/LinkedIn card
+  // would block the cadence forever (current_step_number never advances). Only
+  // manual touches carry max_age_at; review emails (max_age_at NULL) wait for the rep.
+  const { data: staleQueued } = await supabase
+    .from("campaign_touch")
+    .select("id, enrollment_id, campaign_id, lead_id, step_number")
+    .eq("status", "queued")
+    .not("max_age_at", "is", null)
+    .lt("max_age_at", nowIso)
+    .limit(BATCH);
+  for (const t of (staleQueued || [])) {
+    const { data: enr } = await supabase.from("campaign_enrollment")
+      .select("current_step_number, status").eq("id", t.enrollment_id).maybeSingle();
+    if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
+    if (t.step_number !== (enr.current_step_number ?? 0) + 1) continue; // only the live touch
+    const { data: ld } = await supabase.from("leads").select("owner_user_id").eq("id", t.lead_id).maybeSingle();
+    if (!ld) continue;
+    const exec = await getExec(ld.owner_user_id);
+    await advanceColdEnrollment(supabase, exec, t, "auto_skipped");
+    counters.auto_skipped++;
+    console.log(`[campaign-touch-scheduler] auto-skipped STALE queued touch ${t.id} (past max-age)`);
   }
 
   // ── Bounce-rate circuit breaker (Unit C, PR 4) ──────────────────────────────

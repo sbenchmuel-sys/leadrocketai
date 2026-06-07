@@ -83,28 +83,90 @@ Deno.serve(async (req) => {
     return json({ ok: true });
   }
 
-  // Remaining actions act on a touch that's still live (queued). Re-fetch the
-  // status fresh to make double-clicks idempotent (no double-send / double-advance).
-  const { data: fresh } = await admin.from("campaign_touch").select("status").eq("id", touch.id).maybeSingle();
-  if (!fresh || fresh.status !== "queued") return json({ ok: true, alreadyHandled: true });
+  // The remaining actions ADVANCE the cadence — only valid on an ACTIVE outreach.
+  // A paused/stopped outreach must never be advanced or sent manually (Pause must
+  // mean stop). Paused campaigns are also filtered out of the Outreach list, so a
+  // rep normally won't even see these; this is the server-side backstop.
+  if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
 
   const { data: lead } = await admin
     .from("leads")
-    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed")
+    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
     .eq("id", touch.lead_id)
     .maybeSingle();
   if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
+  // Defense in depth: membership was checked against the CAMPAIGN's workspace, so
+  // confirm the lead lives in that same workspace before acting on it with the
+  // service-role client (a touch row tying a cross-workspace lead must not be
+  // actionable). Enrollment RLS already prevents this, but fail closed here too.
+  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
+
+  // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
+  // the scheduler's reply bridge only runs while touches are 'scheduled'. So
+  // re-check reply state here before sending/advancing: if the enrollment is
+  // already 'replied', or a fresh inbound landed after the lead started, pull the
+  // lead out of the cold cadence instead of sending/advancing. The reply is
+  // handled in the normal Queue (Follow up) via the existing pause-on-inbound path.
+  const { data: enr } = await admin
+    .from("campaign_enrollment")
+    .select("id, status, started_at")
+    .eq("id", touch.enrollment_id)
+    .maybeSingle();
+  const replied =
+    enr?.status === "replied" ||
+    (!!lead.last_inbound_at && !!enr?.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at));
+  if (replied) {
+    if (enr && enr.status !== "replied") {
+      await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
+    }
+    // Clear the surfaced card: mark the queued touch skipped so it leaves the
+    // Outreach list (the fetch filters on status='queued'). Otherwise the card
+    // would reappear forever and every action would hit this same 409. The reply
+    // itself is handled in the normal Queue (Follow up).
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
+  }
+
+  // The enrollment must still be LIVE. If it was stopped (e.g. unsubscribe/bounce
+  // marked the enrollment stopped but left a queued touch behind) or completed,
+  // clear the stranded card and refuse — never send/advance a dead enrollment.
+  if (enr && !["scheduled", "active"].includes(enr.status)) {
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
+  }
 
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
 
-  // ── mark_skipped: skip + advance ──
+  // Atomically CLAIM the queued touch: flip queued → <status> in ONE update guarded
+  // on status='queued'. The DB guarantees only one concurrent request wins, so a
+  // double-click / retry / two open tabs can never double-send or double-advance —
+  // the loser matches 0 rows and bails. This is the race fix.
+  const claimTouch = async (claimStatus: string): Promise<boolean> => {
+    const { data } = await admin
+      .from("campaign_touch")
+      .update({ status: claimStatus })
+      .eq("id", touch.id)
+      .eq("status", "queued")
+      .select("id");
+    return (data || []).length > 0;
+  };
+
+  // ── mark_skipped: claim + advance ──
   if (action === "mark_skipped") {
+    if (!(await claimTouch("skipped"))) return json({ ok: true, alreadyHandled: true });
     await advanceColdEnrollment(admin, exec, touch, "skipped");
     return json({ ok: true });
   }
 
-  // ── mark_sent: rep sent via their own app (manual channels) — advance only ──
+  // ── mark_sent: rep sent via their own app (manual channels) — claim + advance ──
   if (action === "mark_sent") {
+    // Manual channels ONLY. An email touch must go through send_review_email (which
+    // actually delivers) — a buggy/malicious client must not be able to advance an
+    // email touch as 'sent' without an email ever going out.
+    if (touch.channel === "email") {
+      return json({ ok: false, error: "Email touches must be sent, not marked sent." }, 400);
+    }
+    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true });
   }
@@ -112,11 +174,10 @@ Deno.serve(async (req) => {
   // ── send_review_email: send the rep-approved email through the one sender ──
   if (action === "send_review_email") {
     if (touch.channel !== "email") return json({ ok: false, error: "Not an email touch" }, 400);
-    if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
     if (lead.unsubscribed || !lead.email) return json({ ok: false, error: "Lead can't be emailed" }, 400);
 
-    // Content: prefer the rep's edited subject/body; otherwise resolve the
-    // generated copy for this step + the lead's industry.
+    // Resolve content + sender + secret BEFORE claiming, so a validation failure
+    // never leaves the touch claimed.
     let subject = (payload.subject || "").trim();
     let body = (payload.body || "").trim();
     if (!subject || !body) {
@@ -141,6 +202,11 @@ Deno.serve(async (req) => {
 
     const unsubSecret = getUnsubscribeSecret();
     if (!unsubSecret) return json({ ok: false, error: "Unsubscribe is not configured" }, 500);
+
+    // CLAIM atomically right before sending — only the winner proceeds, so two
+    // concurrent send_review_email requests can never deliver duplicate cold emails.
+    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
+
     const token = await signUnsubscribeToken(
       { lid: lead.id, wid: lead.workspace_id, cid: camp.id, iat: Math.floor(Date.now() / 1000) }, unsubSecret);
     const unsubscribeUrl = buildUnsubscribeUrl(supabaseUrl, token);
@@ -148,14 +214,27 @@ Deno.serve(async (req) => {
     // The one sender — structural fail-closed floor (suppression + unsubscribed +
     // postal) runs INSIDE this call, so a review send can never reach an opted-out
     // or suppressed lead even though it skips the automatic pacing/cap guardrails.
-    const sendRes = await sendColdEmailTouch({
-      supabase: admin, supabaseUrl, serviceKey, internalSecret: Deno.env.get("INTERNAL_API_SECRET") ?? "",
-      lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
-      workspaceId: lead.workspace_id,
-      mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
-      subject, body, unsubscribeUrl,
-    });
-    if (!sendRes.ok) return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+    let sendRes;
+    try {
+      sendRes = await sendColdEmailTouch({
+        supabase: admin, supabaseUrl, serviceKey, internalSecret: Deno.env.get("INTERNAL_API_SECRET") ?? "",
+        lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
+        workspaceId: lead.workspace_id,
+        mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
+        subject, body, unsubscribeUrl,
+      });
+    } catch (err) {
+      // A THROWN error (e.g. transient network failure invoking the provider) must
+      // also release the claim — otherwise the touch is stuck 'sent' with no email
+      // delivered and no way to retry. Return it to the Queue.
+      await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
+      return json({ ok: false, error: err instanceof Error ? err.message : "Send failed" }, 502);
+    }
+    if (!sendRes.ok) {
+      // Send returned a failure — release the claim so the rep can retry from the Queue.
+      await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
+      return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+    }
 
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true, messageId: sendRes.messageId ?? null });

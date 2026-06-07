@@ -145,6 +145,10 @@ export default function CampaignDetail() {
   };
   const handleTogglePause = async () => {
     if (!id || !campaign) return;
+    // Only toggle between active↔paused. Draft/completed must NOT be flippable here
+    // — otherwise Pause-then-Resume would activate a draft (bypassing launch checks)
+    // or resurrect a completed outreach.
+    if (campaign.status !== "active" && campaign.status !== "paused") return;
     setStatusBusy(true);
     try {
       if (campaign.status === "paused") {
@@ -252,6 +256,9 @@ export default function CampaignDetail() {
                 : "Each email waits in your Outreach list for you to send. Calls and texts are yours to do."}
             </p>
           </div>
+          {/* Pause/Resume only applies to a live (active or paused) outreach —
+              hidden for drafts (not launched) and completed (finished). */}
+          {(campaign.status === "active" || campaign.status === "paused") && (
           <div className="flex items-center justify-between border-t border-border pt-3">
             <div>
               <p className="text-sm font-medium text-foreground">
@@ -272,6 +279,7 @@ export default function CampaignDetail() {
               {campaign.status === "paused" ? "Resume" : "Pause"}
             </Button>
           </div>
+          )}
         </CardContent>
       </Card>
 
