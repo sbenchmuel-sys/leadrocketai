@@ -78,6 +78,25 @@ export interface FloorResult {
   reason?: string;
 }
 
+// Mirrors src/lib/emailValidation.ts isValidEmail — the validator import + enrollment
+// use to admit a lead. Deno can't import the frontend module, so this is the
+// established frontend/_shared duplication; KEEP IN SYNC. The floor is the LAST guard
+// before an automatic or review cold send, so it must be no weaker than the gate that
+// let the address in — otherwise invalid data edited in afterward (person@-example.com,
+// person@example-.com, an over-long local part) would slip past every check and send.
+const COLD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isSendableColdEmail(raw: string): boolean {
+  const e = (raw || "").trim();
+  if (!e || e.length > 254) return false;
+  if (!COLD_EMAIL_RE.test(e)) return false;
+  if (e.includes("..")) return false; // consecutive dots
+  const [local, domain] = e.split("@");
+  if (!local || local.length > 64) return false;
+  if (!domain || domain.startsWith("-") || domain.endsWith("-")) return false;
+  if (domain.startsWith(".") || domain.endsWith(".")) return false;
+  return true;
+}
+
 /**
  * The mandatory floor: never send to an opted-out or suppressed lead. Re-reads
  * leads.unsubscribed fresh (detectBounce sets it on a bounce, so this also closes
@@ -97,9 +116,9 @@ export async function coldSendFloor(
   if (error || !lead) return { ok: false, reason: "lead lookup failed" };
   if (lead.unsubscribed) return { ok: false, reason: "lead unsubscribed" };
   const email = (lead.email || "").trim().toLowerCase();
-  // Backstop email validation (enrollment already rejects invalid; never send to one).
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!email || email.length > 254 || email.includes("..") || !EMAIL_RE.test(email)) {
+  // Backstop email validation — mirrors the import/enrollment validator (isValidEmail)
+  // so this last-resort floor is no weaker than the gate that admitted the lead.
+  if (!isSendableColdEmail(email)) {
     return { ok: false, reason: "invalid email" };
   }
 

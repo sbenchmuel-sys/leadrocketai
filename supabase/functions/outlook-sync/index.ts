@@ -49,6 +49,7 @@ interface GraphMessage {
   from: { emailAddress: { address: string; name: string } };
   toRecipients: Array<{ emailAddress: { address: string; name: string } }>;
   ccRecipients?: Array<{ emailAddress: { address: string; name: string } }>;
+  bccRecipients?: Array<{ emailAddress: { address: string; name: string } }>;
   receivedDateTime: string;
   sentDateTime: string;
   internetMessageId: string;
@@ -196,7 +197,7 @@ serve(async (req) => {
     // The direct-conversation filter + body correlation in the loop gate what's
     // actually processed; this just widens the candidate set.
     const searchKql = `"participants:${leadEmailNorm} OR body:${leadEmailNorm}"`;
-    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
+    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
       headers: {
@@ -255,12 +256,19 @@ serve(async (req) => {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
         const ccEmails = (msg.ccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
+        const bccEmails = (msg.bccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
+        // Any recipient field counts as "addressed to": the widened participants:
+        // search now surfaces messages where the lead (or rep) is only Cc'd or Bcc'd,
+        // so the direct-conversation gate must check To + Cc + Bcc — otherwise those
+        // hits are found and then dropped as 3rd-party, silently losing real rep↔lead
+        // mail (e.g. a rep→lead where the lead was Cc'd).
+        const recipientEmails = [...toEmails, ...ccEmails, ...bccEmails];
 
         // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
         const isFromLead = fromEmail === leadEmailNorm;
         const isFromRep = fromEmail === repEmail;
-        const isToLead = toEmails.includes(leadEmailNorm);
-        const isToRep = toEmails.includes(repEmail);
+        const isToLead = recipientEmails.includes(leadEmailNorm);
+        const isToRep = recipientEmails.includes(repEmail);
         const isDirectConversation = (isFromLead && isToRep) || (isFromRep && isToLead);
 
         // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
