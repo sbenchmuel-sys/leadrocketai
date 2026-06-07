@@ -106,10 +106,18 @@ CREATE POLICY "Members can manage campaign enrollment"
     WHERE c.id = campaign_enrollment.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
   ))
+  -- WITH CHECK also proves the LEAD belongs to the campaign's workspace, so a
+  -- member can't tie a cross-workspace lead UUID to their campaign via a direct
+  -- client insert (membership alone is insufficient).
   WITH CHECK (EXISTS (
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_enrollment.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_enrollment.lead_id
+          AND l.workspace_id = c.workspace_id
+      )
   ));
 
 CREATE POLICY "Service role full access on campaign_enrollment"
@@ -177,10 +185,18 @@ CREATE POLICY "Members can manage campaign touch"
     WHERE c.id = campaign_touch.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
   ))
+  -- WITH CHECK also proves the LEAD belongs to the campaign's workspace (mirrors
+  -- campaign_enrollment), so a cross-workspace lead can't be tied in via a direct
+  -- client insert.
   WITH CHECK (EXISTS (
     SELECT 1 FROM public.campaigns c
     WHERE c.id = campaign_touch.campaign_id
       AND public.is_workspace_member(c.workspace_id, auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.leads l
+        WHERE l.id = campaign_touch.lead_id
+          AND l.workspace_id = c.workspace_id
+      )
   ));
 
 CREATE POLICY "Service role full access on campaign_touch"

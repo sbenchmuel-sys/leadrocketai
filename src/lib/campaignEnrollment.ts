@@ -430,10 +430,13 @@ async function gatherEnrollmentContext(
     if (alreadyEnrolledIds.has(lead.id)) { skips.alreadyEnrolled++; continue; }
     // In a DIFFERENT campaign → never steal it (would silently halt that outreach).
     const inOtherCampaign = lead.campaign_id != null && lead.campaign_id !== campaignId;
-    // Running a legacy reactive/nurture sequence (and not a member of THIS campaign)
-    // → don't double-schedule.
-    const activeLegacy =
-      lead.campaign_id == null && lead.automation_mode != null && lead.needs_action === true;
+    // Has CONSENTED automation (and isn't a member of THIS campaign) → don't
+    // double-schedule. The executor's consent gate is `automation_mode IS NOT NULL`
+    // (needs_action may be false between due actions), so gate on automation_mode
+    // alone — enrolling a consented-but-idle lead would create cold touches while
+    // the legacy executor can still resume against it. The rep must clear that
+    // lead's automation first.
+    const activeLegacy = lead.campaign_id == null && lead.automation_mode != null;
     if (inOtherCampaign || activeLegacy) { skips.alreadyEnrolled++; continue; }
     // Enrollable: unassigned (will be stamped) OR already a member of this campaign.
     enrollable.push(lead);
