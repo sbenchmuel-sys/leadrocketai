@@ -174,7 +174,22 @@ Deno.serve(async (req) => {
   // ── send_review_email: send the rep-approved email through the one sender ──
   if (action === "send_review_email") {
     if (touch.channel !== "email") return json({ ok: false, error: "Not an email touch" }, 400);
-    if (lead.unsubscribed || !lead.email) return json({ ok: false, error: "Lead can't be emailed" }, 400);
+    if (lead.unsubscribed || !lead.email) {
+      // The lead opted out (or lost a valid address) AFTER this review card was
+      // queued. The send floor would block it anyway — but returning 400 here without
+      // touching the touch leaves the card stranded 'queued', so it reappears in the
+      // Outreach tab forever and every "Send" re-hits this 400. Clear the card (and
+      // stop the now-dead enrollment when unsubscribed) so the lead leaves the cadence,
+      // mirroring the replied / inactive-enrollment backstops above.
+      await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+      if (lead.unsubscribed && enr && ["scheduled", "active"].includes(enr.status)) {
+        await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+      }
+      return json(
+        { ok: false, error: "This lead can't be emailed (opted out) — removed from outreach.", optedOut: true },
+        409,
+      );
+    }
 
     // Resolve content + sender + secret BEFORE claiming, so a validation failure
     // never leaves the touch claimed.
