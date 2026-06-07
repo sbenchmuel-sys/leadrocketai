@@ -75,6 +75,32 @@ Deno.serve(async (req) => {
     if (!member.ok) return json({ ok: false, error: member.error || "Forbidden" }, member.status || 403);
   }
 
+  // Load the lead and enforce workspace-match + OWNERSHIP before ANY action — incl.
+  // set_call_outcome. The membership check above only proves the caller is in the
+  // campaign's workspace; the review-send path sends FROM the lead owner's mailbox and
+  // every advancing action drives the OWNER's cadence, and even set_call_outcome
+  // mutates touch state that shapes later drafts — so a non-owner member must be kept
+  // out of all of them. Require the lead owner OR a workspace admin (mirrors the leads
+  // table's own owner-or-admin RLS). Internal/service callers (isPrivileged) are
+  // trusted — they run the scheduler/executor as service_role.
+  const { data: lead } = await admin
+    .from("leads")
+    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
+    .eq("id", touch.lead_id)
+    .maybeSingle();
+  if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
+  // Confirm the lead lives in the CAMPAIGN's workspace before acting on it with the
+  // service-role client (a touch row tying a cross-workspace lead must not be
+  // actionable). Enrollment RLS already prevents this, but fail closed here too.
+  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
+  if (!auth.isPrivileged && lead.owner_user_id !== auth.userId) {
+    const { data: isAdmin } = await admin.rpc("is_workspace_admin", {
+      _workspace_id: camp.workspace_id,
+      _user_id: auth.userId!,
+    });
+    if (!isAdmin) return json({ ok: false, error: "Only the lead owner can act on this outreach." }, 403);
+  }
+
   // ── set_call_outcome: record the outcome only (no advance) ──
   if (action === "set_call_outcome") {
     const outcome = payload.outcome;
@@ -88,18 +114,6 @@ Deno.serve(async (req) => {
   // mean stop). Paused campaigns are also filtered out of the Outreach list, so a
   // rep normally won't even see these; this is the server-side backstop.
   if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
-
-  const { data: lead } = await admin
-    .from("leads")
-    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
-    .eq("id", touch.lead_id)
-    .maybeSingle();
-  if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
-  // Defense in depth: membership was checked against the CAMPAIGN's workspace, so
-  // confirm the lead lives in that same workspace before acting on it with the
-  // service-role client (a touch row tying a cross-workspace lead must not be
-  // actionable). Enrollment RLS already prevents this, but fail closed here too.
-  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
 
   // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
   // the scheduler's reply bridge only runs while touches are 'scheduled'. So
@@ -133,6 +147,19 @@ Deno.serve(async (req) => {
   if (enr && !["scheduled", "active"].includes(enr.status)) {
     await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
     return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
+  }
+
+  // OPT-OUT BACKSTOP (ALL actions): an unsubscribe is a FULL stop — not just for
+  // email. A lead can opt out after ANY touch (email or manual) is already queued, so
+  // this guard must run before every action branch, not only the email sender. Without
+  // it, mark_sent on a manual touch would still advance an opted-out lead's cadence.
+  // Clear the card and stop the enrollment, mirroring the replied / inactive backstops.
+  if (lead.unsubscribed) {
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    if (enr && ["scheduled", "active"].includes(enr.status)) {
+      await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+    }
+    return json({ ok: false, error: "This lead opted out — removed from outreach.", optedOut: true }, 409);
   }
 
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
@@ -174,7 +201,16 @@ Deno.serve(async (req) => {
   // ── send_review_email: send the rep-approved email through the one sender ──
   if (action === "send_review_email") {
     if (touch.channel !== "email") return json({ ok: false, error: "Not an email touch" }, 400);
-    if (lead.unsubscribed || !lead.email) return json({ ok: false, error: "Lead can't be emailed" }, 400);
+    // (Unsubscribe is already handled by the opt-out backstop above — by here the lead
+    // has NOT opted out.) A lead can still LOSE a valid email address while keeping the
+    // rest of the cadence reachable via manual channels (call/SMS/WhatsApp/LinkedIn). So
+    // don't just skip-and-stall this email card: ADVANCE the cadence past it (claim +
+    // advanceColdEnrollment, exactly like mark_skipped) so the next touch gets scheduled.
+    if (!lead.email) {
+      if (!(await claimTouch("skipped"))) return json({ ok: true, alreadyHandled: true });
+      await advanceColdEnrollment(admin, exec, touch, "skipped");
+      return json({ ok: false, error: "This lead has no email address — skipped to the next step.", skipped: true }, 409);
+    }
 
     // Resolve content + sender + secret BEFORE claiming, so a validation failure
     // never leaves the touch claimed.
@@ -188,17 +224,25 @@ Deno.serve(async (req) => {
       body = body || content.body;
     }
 
-    // Sender (same sender-mismatch guard as the executor: require a connected
-    // mail_accounts row; never fall back).
+    // Sender: require the LEAD OWNER's OWN connected mailbox (user_id = owner). The
+    // cold model is owner-centric end to end — gmail-send sends from the owner's
+    // gmail_connections and the per-mailbox daily cap is counted per owner — so the
+    // sending mailbox MUST be the owner's. Selecting by workspace+is_default (or a
+    // shared/coworker row) would send a rep's cold email from someone else's identity,
+    // and a shared row can't even route correctly (Gmail requires the selected account
+    // to match the owner's Gmail). If the owner has no own connected mailbox, refuse —
+    // never impersonate, never fall back to legacy gmail_connections. Mirrors the
+    // automatic executor path.
     const { data: mailAcct } = await admin
       .from("mail_accounts")
       .select("id, provider")
       .eq("workspace_id", lead.workspace_id)
       .eq("status", "connected")
+      .eq("user_id", lead.owner_user_id)
       .order("is_default", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (!mailAcct) return json({ ok: false, error: "No connected mailbox to send from" }, 400);
+    if (!mailAcct) return json({ ok: false, error: "No connected mailbox to send from for this lead's owner" }, 400);
 
     const unsubSecret = getUnsubscribeSecret();
     if (!unsubSecret) return json({ ok: false, error: "Unsubscribe is not configured" }, 500);

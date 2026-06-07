@@ -307,7 +307,7 @@ export async function advanceColdEnrollment(
   // Arm the next touch, or complete the enrollment.
   const { data: next } = await supabase
     .from("campaign_touch")
-    .select("id, step_number")
+    .select("id, step_number, eligible_at, max_age_at")
     .eq("enrollment_id", touch.enrollment_id)
     .eq("step_number", touch.step_number + 1)
     .maybeSingle();
@@ -329,9 +329,21 @@ export async function advanceColdEnrollment(
   // computeNextEligibleAt snaps to the workspace send window + business hours +
   // jitter (recipient-timezone refinement lands in PR 4).
   const nextEligible = computeNextEligibleAt(gap, touch.lead_id, `cold_touch_${next.id}`, execSettings);
+  const update: Record<string, unknown> = { eligible_at: nextEligible.toISOString() };
+  // Re-anchor the next touch's auto-skip deadline to the NEW eligibility, preserving
+  // its original window. max_age_at was stamped at enrollment relative to the ORIGINAL
+  // eligible_at; if a prior touch completed late, that old deadline can already be in
+  // the past, so the scheduler would see max_age_at < now the instant the re-anchored
+  // touch becomes due and auto-skip the (manual) step WITHOUT ever surfacing the card
+  // to the rep. Shift the deadline by the same eligible→max-age delta. Email touches
+  // (max_age_at null) keep null.
+  if (next.max_age_at && next.eligible_at) {
+    const windowMs = new Date(next.max_age_at).getTime() - new Date(next.eligible_at).getTime();
+    if (windowMs > 0) update.max_age_at = new Date(nextEligible.getTime() + windowMs).toISOString();
+  }
   await supabase
     .from("campaign_touch")
-    .update({ eligible_at: nextEligible.toISOString() })
+    .update(update)
     .eq("id", next.id);
 }
 
