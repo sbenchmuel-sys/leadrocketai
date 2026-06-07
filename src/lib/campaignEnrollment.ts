@@ -156,6 +156,19 @@ export function computeStaggeredStarts(
   const distinctOffsets = [...offsetCounts.entries()]; // [offset, touchesOnThatDay]
   const maxOffset = Math.max(...emailTouchOffsets);
 
+  // INFEASIBLE-CADENCE guard. If a single offset carries more email touches than the
+  // cap (e.g. two day-0 email steps with cap 1), even ONE lead overflows that day —
+  // no staggering can ever honor the cap, because the violation is per-lead, not
+  // volume. `room` would stay 0 forever and the old fallback dumped EVERY lead onto
+  // one day, multiplying the unavoidable overflow. Instead spread one lead per
+  // business day: still over cap per day (unavoidable), but never stacked. The rep is
+  // warned separately — computeCapacityPlan flags overCapacity when the cap can't fit
+  // one lead's emails.
+  const feasiblePerLead = Math.min(...distinctOffsets.map(([, cnt]) => Math.floor(cap / cnt)));
+  if (feasiblePerLead === 0) {
+    return Array.from({ length: leadCount }, (_, i) => i);
+  }
+
   // Seed with already-booked load (existing scheduled email touches) so new starts
   // are placed AROUND days that are already at/near the cap.
   const load: Record<number, number> = { ...(initialLoad || {}) }; // business-day index → booked email touches
@@ -186,8 +199,10 @@ export function computeStaggeredStarts(
     assigned += room;
     day++;
   }
-  // Fallback (should not happen): park any unassigned at the last considered day.
-  while (starts.length < leadCount) starts.push(day);
+  // Fallback (should not happen now the infeasible case returns early and every
+  // feasible cadence fits >=1 lead/day past the seeded load): if anything is still
+  // unplaced, spread one PER day rather than stacking them on a single day.
+  while (starts.length < leadCount) starts.push(day++);
   return starts;
 }
 

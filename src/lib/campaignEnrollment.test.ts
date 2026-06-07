@@ -125,6 +125,15 @@ describe("computeStaggeredStarts", () => {
     expect(starts.filter((s) => s === 1)).toHaveLength(1);
   });
 
+  it("spreads one lead per day when a single lead's touches exceed the cap (infeasible cadence)", () => {
+    // Two day-0 email steps with cap 1 → even ONE lead overflows day 0; the cap is
+    // structurally unsatisfiable. The schedule must NOT pile every lead onto one day
+    // (the old fallback) — one lead per business day is the least-bad spread.
+    const starts = computeStaggeredStarts(3, [0, 0], 1);
+    expect(starts).toEqual([0, 1, 2]);
+    expect(new Set(starts).size).toBe(starts.length); // overflow never stacked
+  });
+
   it("searches past seeded full days instead of overflowing one (running outreach)", () => {
     // cap 1, days 0–5 already full from existing touches; 1 new lead, 1 email touch.
     // The new start must land on day 6 (first day with room), not overflow a full day.
