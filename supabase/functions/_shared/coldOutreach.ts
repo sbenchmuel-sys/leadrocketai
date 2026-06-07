@@ -120,7 +120,7 @@ export async function coldSendFloor(
 // ── The single cold-email sender ──────────────────────────────────────────────
 
 export interface SendColdEmailArgs {
-  supabase: ServiceClient;
+  supabase: ServiceClient; // service-role client (floor checks + Gmail sender-mailbox check)
   supabaseUrl: string;
   serviceKey: string;
   internalSecret: string;
@@ -202,7 +202,8 @@ export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendC
     // gmail_connections-based by ownerUserId, like the legacy executor — it does
     // NOT accept a mail_account_id). So verify the selected mail_accounts row
     // matches the owner's connected Gmail; never send from an unexpected mailbox.
-    // Fail closed if Gmail isn't connected or the selected account diverges.
+    // Fail closed if the owner has no Gmail connection (gmail-send would error
+    // "disconnected" anyway) or the selected account diverges from it.
     const { data: gconn } = await args.supabase
       .from("gmail_connections").select("gmail_email").eq("user_id", args.lead.owner_user_id).maybeSingle();
     if (!gconn?.gmail_email) {
