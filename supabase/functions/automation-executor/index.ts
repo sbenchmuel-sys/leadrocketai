@@ -1570,11 +1570,11 @@ serve(async (req) => {
             continue;
           }
 
-          // Sender: prefer the LEAD OWNER's own connected mailbox; fall back to the
-          // workspace default only when the owner has none (shared/single-mailbox
-          // setups where user_id is null). Selecting purely by is_default could send a
-          // rep's cold email from a COWORKER's mailbox in a multi-mailbox workspace.
-          // Never fall back to legacy gmail_connections (the wrong-address failure mode).
+          // Sender: prefer the LEAD OWNER's own connected mailbox; fall back ONLY to a
+          // SHARED mailbox (user_id IS NULL) when the owner has none — never another
+          // rep's attributed account, which would send this lead's cold email from a
+          // COWORKER's mailbox/identity in a multi-mailbox workspace. If neither
+          // exists, skip (don't impersonate). Never fall back to legacy gmail_connections.
           let { data: mailAcct } = await supabase.from("mail_accounts")
             .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
             .eq("user_id", lead.owner_user_id)
@@ -1582,6 +1582,7 @@ serve(async (req) => {
           if (!mailAcct) {
             ({ data: mailAcct } = await supabase.from("mail_accounts")
               .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
+              .is("user_id", null)
               .order("is_default", { ascending: false }).limit(1).maybeSingle());
           }
           if (!mailAcct) continue;
