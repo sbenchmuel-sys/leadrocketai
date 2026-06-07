@@ -1477,8 +1477,14 @@ serve(async (req) => {
     // REVIEW-mode and manual touches are NOT handled here — the scheduler surfaces
     // those as Queue cards (this branch only fires when the campaign is automatic
     // AND the workspace gate + timezone + postal address are all set).
+    //
+    // SCOPING: cold AUTOMATIC sends are a cron/internal background concern. Only a
+    // PRIVILEGED caller (X-Internal-Secret / service-role, i.e. the cron dispatch)
+    // runs this pass. User-JWT entry points (automation-check, NurturePreviewCard)
+    // must NOT trigger cold sends — the cold query is service-role + unscoped, so
+    // letting a user call it would send across other owners/workspaces.
     // ════════════════════════════════════════════════════════════════════════
-    try {
+    if (privileged) try {
       const internalSecret = Deno.env.get("INTERNAL_API_SECRET") ?? "";
       const unsubSecret = getUnsubscribeSecret();
       const { data: coldDue } = await supabase
@@ -1597,7 +1603,7 @@ serve(async (req) => {
           if (claimErr || !claim) continue; // 23505 → already claimed by a concurrent run; no double-send
 
           const sendRes = await sendColdEmailTouch({
-            supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
+            supabase, supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
             lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
             mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
             subject: content.subject, body: content.body, unsubscribeUrl, postalAddress: postal,

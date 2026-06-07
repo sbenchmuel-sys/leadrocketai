@@ -120,6 +120,7 @@ export async function coldSendFloor(
 // ── The single cold-email sender ──────────────────────────────────────────────
 
 export interface SendColdEmailArgs {
+  supabase: ServiceClient; // service-role client (used for the Gmail sender-mailbox check)
   supabaseUrl: string;
   serviceKey: string;
   internalSecret: string;

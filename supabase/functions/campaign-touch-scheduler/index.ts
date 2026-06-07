@@ -72,12 +72,13 @@ Deno.serve(async (req) => {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+  // NOTE: do NOT early-return when no scheduled touches are due. The stale-queued
+  // cleanup pass below must still run — if the only blocked work is an ignored
+  // manual touch already in status='queued', the scheduled query is empty and an
+  // early return would leave that touch (and the whole cadence) stalled forever.
+  // With no due touches the bulk loads run on empty id lists (harmless) and the
+  // processing loop is a no-op, so flow reaches the stale-queued cleanup.
   const touches = dueTouches || [];
-  if (touches.length === 0) {
-    return new Response(JSON.stringify({ ok: true, ...counters }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
 
   // 2) Bulk-load the related rows into maps.
   const enrollmentIds = [...new Set(touches.map((t) => t.enrollment_id))];
