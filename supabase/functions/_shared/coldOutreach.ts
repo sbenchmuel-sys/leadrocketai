@@ -92,8 +92,17 @@ function isSendableColdEmail(raw: string): boolean {
   if (e.includes("..")) return false; // consecutive dots
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
-  if (!domain || domain.startsWith("-") || domain.endsWith("-")) return false;
-  if (domain.startsWith(".") || domain.endsWith(".")) return false;
+  if (!domain) return false;
+  // Every DNS label must be non-empty, <=63 chars, and not start/end with a hyphen.
+  // Checking only the WHOLE domain's first/last char misses an invalid intermediate
+  // label like foo-.example.com or bar.-example.com. (Empty labels — leading/trailing
+  // dot or "..", already caught above — are also rejected here.)
+  const labels = domain.split(".");
+  if (labels.length < 2) return false;
+  for (const label of labels) {
+    if (!label || label.length > 63) return false;
+    if (label.startsWith("-") || label.endsWith("-")) return false;
+  }
   return true;
 }
 

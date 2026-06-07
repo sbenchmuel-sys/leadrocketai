@@ -22,8 +22,15 @@ export function isValidEmail(email: string | null | undefined): boolean {
   if (e.includes("..")) return false;               // consecutive dots
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
-  if (domain.startsWith("-") || domain.endsWith("-")) return false;
-  if (domain.startsWith(".") || domain.endsWith(".")) return false;
+  if (!domain) return false;
+  // Validate EVERY DNS label, not just the whole domain's first/last char — otherwise
+  // an invalid intermediate label (foo-.example.com, bar.-example.com) slips through.
+  const labels = domain.split(".");
+  if (labels.length < 2) return false;
+  for (const label of labels) {
+    if (!label || label.length > 63) return false;
+    if (label.startsWith("-") || label.endsWith("-")) return false;
+  }
   return true;
 }
 
