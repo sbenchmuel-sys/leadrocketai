@@ -208,14 +208,19 @@ Deno.serve(async (req) => {
   try {
     // Validate env overrides before they gate a DESTRUCTIVE action (auto-pause). A
     // malformed BOUNCE_RATE_THRESHOLD → NaN → `rate < threshold` is always false →
-    // EVERY campaign at min-volume gets auto-paused (fail-open to pausing). A malformed
-    // BOUNCE_MIN_VOLUME similarly removes the early-noise guard. Fall back to the safe
-    // defaults (and clamp the threshold to a sane (0,1]) on any non-finite/out-of-range
-    // value rather than trusting the parse.
-    const thresholdRaw = parseFloat(Deno.env.get("BOUNCE_RATE_THRESHOLD") ?? "");
+    // EVERY campaign at min-volume gets auto-paused; a malformed BOUNCE_MIN_VOLUME
+    // removes the early-noise guard. Use Number() (NOT parseFloat/parseInt, which
+    // silently accept a numeric prefix — "1oops" → 1, "0.01oops" → 0.01) so any value
+    // that isn't FULLY numeric falls back to the safe default, and clamp the threshold
+    // to a sane (0,1].
+    const numEnv = (key: string): number => {
+      const raw = Deno.env.get(key);
+      return raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+    };
+    const thresholdRaw = numEnv("BOUNCE_RATE_THRESHOLD");
     const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 1 ? thresholdRaw : 0.08; // 8%
-    const minVolumeRaw = parseInt(Deno.env.get("BOUNCE_MIN_VOLUME") ?? "", 10);
-    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeRaw > 0 ? minVolumeRaw : 20; // avoid early noise
+    const minVolumeRaw = numEnv("BOUNCE_MIN_VOLUME");
+    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeRaw > 0 ? Math.floor(minVolumeRaw) : 20; // avoid early noise
     // Page through ALL active campaigns (ordered + stable), not just one capped,
     // unordered subset — otherwise, with more than a page of active outreaches, an
     // over-threshold campaign outside the subset could be evaluated on no tick.
