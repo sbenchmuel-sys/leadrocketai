@@ -76,12 +76,17 @@ export function addBusinessDays(date: Date, n: number): Date {
  * to 0. Used to seed the start planner with already-scheduled touch load.
  */
 export function businessDayOffset(anchor: Date, date: Date): number {
-  const start = nextBusinessDay(anchor);
-  if (date <= start) return 0;
+  // Compare by CALENDAR DAY, not timestamp — otherwise a touch later in the day
+  // than the anchor (e.g. anchor 9am, touch 2pm same day) would compare "greater"
+  // and be bucketed to the next business day instead of offset 0.
+  const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const start = startOfDay(nextBusinessDay(anchor));
+  const target = startOfDay(date);
+  if (target <= start) return 0;
   let offset = 0;
   let cur = start;
-  while (cur < date && offset < 1000) {
-    cur = addBusinessDays(cur, 1);
+  while (cur < target && offset < 1000) {
+    cur = startOfDay(addBusinessDays(cur, 1));
     offset++;
   }
   return offset;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   nextBusinessDay,
   addBusinessDays,
+  businessDayOffset,
   cumulativeBusinessOffsets,
   emailOffsets,
   computeStaggeredStarts,
@@ -42,6 +43,24 @@ describe("business-day helpers", () => {
   it("addBusinessDays(d, 0) returns the same business day", () => {
     const wed = new Date("2026-06-03T12:00:00Z");
     expect(addBusinessDays(wed, 0).getUTCDate()).toBe(3);
+  });
+});
+
+describe("businessDayOffset", () => {
+  it("buckets a same-day-but-later touch as offset 0 (date-only compare)", () => {
+    const anchor = new Date("2026-06-03T09:00:00Z"); // Wed 9am
+    const laterSameDay = new Date("2026-06-03T17:00:00Z"); // Wed 5pm
+    expect(businessDayOffset(anchor, laterSameDay)).toBe(0);
+  });
+  it("counts business days and skips the weekend", () => {
+    const fri = new Date("2026-06-05T09:00:00Z");
+    const mon = new Date("2026-06-08T15:00:00Z"); // next business day, later time
+    expect(businessDayOffset(fri, mon)).toBe(1);
+  });
+  it("maps past dates to 0", () => {
+    const anchor = new Date("2026-06-10T09:00:00Z");
+    const past = new Date("2026-06-01T09:00:00Z");
+    expect(businessDayOffset(anchor, past)).toBe(0);
   });
 });
 
