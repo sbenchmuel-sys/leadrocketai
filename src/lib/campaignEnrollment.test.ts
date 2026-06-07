@@ -134,6 +134,15 @@ describe("computeStaggeredStarts", () => {
     expect(new Set(starts).size).toBe(starts.length); // overflow never stacked
   });
 
+  it("respects seeded-full days even for an infeasible cadence", () => {
+    // [0,0] cap 1 is infeasible; days 0 and 1 are already full from existing touches.
+    // New leads must skip the seeded-full days, not pile onto day 0 (which the
+    // load-ignoring early return used to do).
+    const seeded = { 0: 1, 1: 1 };
+    const starts = computeStaggeredStarts(2, [0, 0], 1, seeded);
+    expect(starts).toEqual([2, 3]);
+  });
+
   it("searches past seeded full days instead of overflowing one (running outreach)", () => {
     // cap 1, days 0–5 already full from existing touches; 1 new lead, 1 email touch.
     // The new start must land on day 6 (first day with room), not overflow a full day.
