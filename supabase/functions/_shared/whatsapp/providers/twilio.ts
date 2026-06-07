@@ -99,10 +99,20 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
     const formData = new URLSearchParams();
     formData.set("From", this.fromWhatsApp);
     formData.set("To", toWhatsApp);
-    formData.set("Body", params.body);
 
-    if (params.mediaUrl) {
-      formData.set("MediaUrl", params.mediaUrl);
+    if (params.contentSid) {
+      // Template send — required to START a conversation outside the 24-hour
+      // window. Twilio uses ContentSid (+ optional ContentVariables) instead of Body.
+      formData.set("ContentSid", params.contentSid);
+      if (params.contentVariables && Object.keys(params.contentVariables).length > 0) {
+        formData.set("ContentVariables", JSON.stringify(params.contentVariables));
+      }
+    } else {
+      // Free-form body — valid for replies inside the 24-hour window.
+      formData.set("Body", params.body ?? "");
+      if (params.mediaUrl) {
+        formData.set("MediaUrl", params.mediaUrl);
+      }
     }
 
     const res = await fetch(
