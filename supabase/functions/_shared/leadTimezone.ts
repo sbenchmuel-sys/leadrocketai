@@ -105,10 +105,14 @@ export function resolveLeadTimezone(
   const country = norm(lead.country);
   const stateRaw = norm(lead.state);
 
-  // US: prefer state.
-  if (isUS(country) || (!country && US_STATE_TZ[stateRaw.toUpperCase()])) {
-    const code = stateRaw.length === 2 ? stateRaw.toUpperCase() : US_STATE_NAMES[stateRaw];
-    if (code && US_STATE_TZ[code]) return US_STATE_TZ[code];
+  // US: prefer state. Resolve the 2-letter code FIRST (accepting either "CA" or the
+  // full name "California"), then use it both to infer US-from-state when country is
+  // blank — a common CSV shape (state filled, country empty) — and to pick the zone.
+  // The old guard only checked US_STATE_TZ[stateRaw.toUpperCase()], so a full state
+  // name with no country ("California") missed and fell through to the workspace zone.
+  const usStateCode = stateRaw.length === 2 ? stateRaw.toUpperCase() : US_STATE_NAMES[stateRaw];
+  if (isUS(country) || (!country && usStateCode && US_STATE_TZ[usStateCode])) {
+    if (usStateCode && US_STATE_TZ[usStateCode]) return US_STATE_TZ[usStateCode];
     if (isUS(country)) return "America/New_York";
   }
 
