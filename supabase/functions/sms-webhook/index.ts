@@ -97,16 +97,65 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  // ── Match to lead by phone number ─────────────────
+  // ── Match to lead by phone number (workspace-safe) ─────────────────
   const fromDigits = digits(from);
   const toDigits = digits(to);
+  const leadColumns = "id, workspace_id, owner_user_id, name, company, stage";
+  const senderOrFilter =
+    `phone.eq.${from},phone.eq.+${fromDigits},phone.ilike.%${fromDigits.slice(-10)}`;
 
-  // Try to find a lead whose phone matches the sender
-  const { data: leads } = await supabase
+  // Step 1: resolve which workspace(s) OWN the receiving number (params.To).
+  // A workspace owns it if workspaces.default_sms_number OR
+  // call_settings.default_twilio_number matches on digits only. We narrow with an
+  // ilike on the last 10 digits, then confirm with exact digits equality (same
+  // semantics as the legacy disambiguation below).
+  const toLast10 = toDigits.slice(-10);
+  const ownerWorkspaceIds = new Set<string>();
+
+  const { data: wsNumberRows } = await supabase
+    .from("workspaces")
+    .select("id, default_sms_number")
+    .ilike("default_sms_number", `%${toLast10}`);
+  for (const w of wsNumberRows ?? []) {
+    if (w.default_sms_number && digits(w.default_sms_number) === toDigits) {
+      ownerWorkspaceIds.add(w.id);
+    }
+  }
+
+  const { data: csNumberRows } = await supabase
+    .from("call_settings")
+    .select("workspace_id, default_twilio_number")
+    .ilike("default_twilio_number", `%${toLast10}`);
+  for (const c of csNumberRows ?? []) {
+    if (c.default_twilio_number && digits(c.default_twilio_number) === toDigits) {
+      ownerWorkspaceIds.add(c.workspace_id);
+    }
+  }
+
+  // Fail closed: only attach when EXACTLY one workspace owns the receiving number.
+  // Zero or multiple owners → drop the message without touching any lead, so an
+  // inbound text can never be mis-filed across workspaces.
+  const scoped = ownerWorkspaceIds.size === 1;
+  if (!scoped) {
+    console.warn(
+      `[sms-webhook] sms_inbound_dropped_unscoped to=${to} candidateWorkspaces=${ownerWorkspaceIds.size}`,
+    );
+    // Return 200 so Twilio does not retry.
+    return new Response("<Response></Response>", {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "text/xml" },
+    });
+  }
+
+  // Exactly one owner: restrict the sender lookup to that workspace (unchanged flow).
+  const ownerWorkspaceId = [...ownerWorkspaceIds][0];
+  const res = await supabase
     .from("leads")
-    .select("id, workspace_id, owner_user_id, name, company, stage")
-    .or(`phone.eq.${from},phone.eq.+${fromDigits},phone.ilike.%${fromDigits.slice(-10)}`)
+    .select(leadColumns)
+    .eq("workspace_id", ownerWorkspaceId)
+    .or(senderOrFilter)
     .limit(5);
+  const leads = res.data;
 
   if (!leads || leads.length === 0) {
     console.warn(`[sms-webhook] No lead found for phone=${from} (${fromDigits})`);
@@ -117,9 +166,12 @@ Deno.serve(async (req) => {
     });
   }
 
-  // If multiple matches, prefer leads whose workspace has this Twilio number
+  // Pick the lead. When scoped to a single owning workspace, every candidate is
+  // already inside it, so take the first — never select a lead outside it. In the
+  // fallback path, preserve the legacy disambiguation: prefer a lead whose
+  // workspace owns the To number.
   let matchedLead = leads[0];
-  if (leads.length > 1) {
+  if (!scoped && leads.length > 1) {
     for (const lead of leads) {
       const { data: ws } = await supabase
         .from("workspaces")
