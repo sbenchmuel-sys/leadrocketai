@@ -288,7 +288,16 @@ serve(async (req) => {
     const syncStartDate = new Date(leadCreatedAt);
     syncStartDate.setDate(syncStartDate.getDate() - 30);
     const afterDateStr = `${syncStartDate.getFullYear()}/${String(syncStartDate.getMonth() + 1).padStart(2, '0')}/${String(syncStartDate.getDate()).padStart(2, '0')}`;
-    const query = `(from:"${leadEmailNorm}" OR to:"${leadEmailNorm}") after:${afterDateStr}`;
+    // Also surface DSN/bounce notifications ABOUT this lead. They come from
+    // postmaster/mailer-daemon and mention the failed address only in the body, so
+    // they'd never match a from:/to: search. A full-text term for the lead's email
+    // + a bounce signal finds them and (because the body must contain the lead's
+    // address) attributes them to the right lead. The direct-conversation filter
+    // still gates any non-bounce 3rd-party message this broader query returns.
+    const query =
+      `((from:"${leadEmailNorm}" OR to:"${leadEmailNorm}")` +
+      ` OR ("${leadEmailNorm}" (from:mailer-daemon OR from:postmaster OR subject:undeliverable OR subject:"delivery status" OR subject:"failure notice")))` +
+      ` after:${afterDateStr}`;
     
     // Server-side date cutoff for additional safety (Gmail after: can be unreliable)
     const syncStartMs = syncStartDate.getTime();
@@ -473,6 +482,16 @@ serve(async (req) => {
         );
 
         if (isBounce) {
+          // Attribute a bounce to THIS lead only if it's actually named in it —
+          // in the headers (direct) or the DSN body (the failed recipient). The
+          // broadened search can return DSNs, so this prevents mis-attributing a
+          // bounce for a different recipient to this lead.
+          const aboutThisLead =
+            messageInvolvesLead(headers, leadEmailNorm) || bodyText.toLowerCase().includes(leadEmailNorm);
+          if (!aboutThisLead) {
+            console.log(`[gmail-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
+            continue;
+          }
           console.log(`[gmail-sync] Lead ${leadId}: Bounce detected (subject: "${subject}", from: "${from}") — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true,

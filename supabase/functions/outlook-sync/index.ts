@@ -184,7 +184,11 @@ serve(async (req) => {
     // from/to/cc/bcc and is the supported way to query participants.
     // Note: $search cannot be combined with $filter or $orderby. We sort + date-filter
     // client-side below (already done in the loop).
-    const searchKql = `"participants:${leadEmailNorm}"`;
+    // participants: matches from/to/cc/bcc; the bare quoted term also matches the
+    // body, so DSN/bounce notifications that only mention the failed address in the
+    // delivery report are surfaced too. The direct-conversation filter + body
+    // correlation in the loop gate what's actually processed.
+    const searchKql = `participants:${leadEmailNorm} OR "${leadEmailNorm}"`;
     const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
@@ -309,6 +313,14 @@ serve(async (req) => {
         );
 
         if (isBounce) {
+          // Attribute a bounce to THIS lead only if it's actually named in it —
+          // a direct message, or the DSN body contains the failed address. The
+          // broadened search can return DSNs; this prevents mis-attribution.
+          const aboutThisLead = isDirectConversation || bodyText.toLowerCase().includes(leadEmailNorm);
+          if (!aboutThisLead) {
+            console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
+            continue;
+          }
           console.log(`[outlook-sync] Lead ${leadId}: Bounce detected — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true, needs_action: false, eligible_at: null,
