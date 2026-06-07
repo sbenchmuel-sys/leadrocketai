@@ -71,6 +71,15 @@ const COUNTRY_TZ: Record<string, string> = {
   "new zealand": "Pacific/Auckland", brazil: "America/Sao_Paulo", mexico: "America/Mexico_City",
   canada: "America/Toronto", "united states": "America/New_York", usa: "America/New_York",
   us: "America/New_York",
+  // ISO-3166 alpha-2 codes (imports/CRMs often store the code, not the full name).
+  ie: "Europe/Dublin", fr: "Europe/Paris", de: "Europe/Berlin", es: "Europe/Madrid",
+  it: "Europe/Rome", nl: "Europe/Amsterdam", be: "Europe/Brussels", ch: "Europe/Zurich",
+  at: "Europe/Vienna", se: "Europe/Stockholm", no: "Europe/Oslo", dk: "Europe/Copenhagen",
+  fi: "Europe/Helsinki", pl: "Europe/Warsaw", pt: "Europe/Lisbon", gr: "Europe/Athens",
+  tr: "Europe/Istanbul", il: "Asia/Jerusalem", ae: "Asia/Dubai", in: "Asia/Kolkata",
+  pk: "Asia/Karachi", sg: "Asia/Singapore", hk: "Asia/Hong_Kong", cn: "Asia/Shanghai",
+  jp: "Asia/Tokyo", kr: "Asia/Seoul", au: "Australia/Sydney", nz: "Pacific/Auckland",
+  br: "America/Sao_Paulo", mx: "America/Mexico_City",
 };
 
 function norm(s: string | null | undefined): string {

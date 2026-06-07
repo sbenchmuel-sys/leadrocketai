@@ -208,37 +208,47 @@ Deno.serve(async (req) => {
   try {
     const threshold = parseFloat(Deno.env.get("BOUNCE_RATE_THRESHOLD") ?? "0.08"); // 8%
     const minVolume = parseInt(Deno.env.get("BOUNCE_MIN_VOLUME") ?? "20", 10);     // avoid early noise
-    const { data: activeCampaigns } = await supabase
-      .from("campaigns").select("id, name, workspace_id").eq("status", "active").limit(200);
+    // Page through ALL active campaigns (ordered + stable), not just one capped,
+    // unordered subset — otherwise, with more than a page of active outreaches, an
+    // over-threshold campaign outside the subset could be evaluated on no tick.
+    const PAGE = 200;
+    for (let pageFrom = 0; ; pageFrom += PAGE) {
+      const { data: activeCampaigns } = await supabase
+        .from("campaigns").select("id, name, workspace_id").eq("status", "active")
+        .order("id", { ascending: true }).range(pageFrom, pageFrom + PAGE - 1);
+      if (!activeCampaigns || activeCampaigns.length === 0) break;
 
-    for (const c of (activeCampaigns || [])) {
-      // Denominator: enrolled leads that have had ≥1 touch completed. Numerator: bounced.
-      const [{ count: started }, { count: bounced }] = await Promise.all([
-        supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
-          .eq("campaign_id", c.id).gte("current_step_number", 1),
-        supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
-          .eq("campaign_id", c.id).not("bounced_at", "is", null),
-      ]);
-      const denom = started ?? 0;
-      const numer = bounced ?? 0;
-      if (denom < minVolume) continue;
-      const rate = numer / denom;
-      if (rate < threshold) continue;
+      for (const c of activeCampaigns) {
+        // Denominator: enrolled leads that have had ≥1 touch completed. Numerator: bounced.
+        const [{ count: started }, { count: bounced }] = await Promise.all([
+          supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+            .eq("campaign_id", c.id).gte("current_step_number", 1),
+          supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+            .eq("campaign_id", c.id).not("bounced_at", "is", null),
+        ]);
+        const denom = started ?? 0;
+        const numer = bounced ?? 0;
+        if (denom < minVolume) continue;
+        const rate = numer / denom;
+        if (rate < threshold) continue;
 
-      // Pause (guard on status='active' so we don't fight a concurrent change).
-      const { data: paused } = await supabase.from("campaigns")
-        .update({ status: "paused" }).eq("id", c.id).eq("status", "active").select("id");
-      if ((paused || []).length === 0) continue; // someone else already changed it
-      const pct = Math.round(rate * 100);
-      await supabase.from("cron_run_log").insert({
-        job_name: "campaign-touch-scheduler",
-        dispatcher_target: "bounce_circuit_breaker",
-        request_id: crypto.randomUUID(),
-        started_at: new Date().toISOString(),
-        status: "volume_alert",
-        error_message: `Outreach ${c.id} (${c.name}) auto-paused: bounce rate ${pct}% (${numer}/${denom}) >= ${Math.round(threshold * 100)}%`,
-      }).then(({ error }) => { if (error) console.warn("[campaign-touch-scheduler] alert log failed:", error.message); });
-      console.warn(`[campaign-touch-scheduler] bounce breaker paused campaign ${c.id}: ${pct}% (${numer}/${denom})`);
+        // Pause (guard on status='active' so we don't fight a concurrent change).
+        const { data: paused } = await supabase.from("campaigns")
+          .update({ status: "paused" }).eq("id", c.id).eq("status", "active").select("id");
+        if ((paused || []).length === 0) continue; // someone else already changed it
+        const pct = Math.round(rate * 100);
+        await supabase.from("cron_run_log").insert({
+          job_name: "campaign-touch-scheduler",
+          dispatcher_target: "bounce_circuit_breaker",
+          request_id: crypto.randomUUID(),
+          started_at: new Date().toISOString(),
+          status: "volume_alert",
+          error_message: `Outreach ${c.id} (${c.name}) auto-paused: bounce rate ${pct}% (${numer}/${denom}) >= ${Math.round(threshold * 100)}%`,
+        }).then(({ error }) => { if (error) console.warn("[campaign-touch-scheduler] alert log failed:", error.message); });
+        console.warn(`[campaign-touch-scheduler] bounce breaker paused campaign ${c.id}: ${pct}% (${numer}/${denom})`);
+      }
+
+      if (activeCampaigns.length < PAGE) break;
     }
   } catch (breakerErr) {
     console.error("[campaign-touch-scheduler] bounce breaker error:", breakerErr);
