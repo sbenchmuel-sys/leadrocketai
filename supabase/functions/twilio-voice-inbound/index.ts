@@ -158,19 +158,22 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Validate Twilio signature (only for non-browser inbound calls)
+    // Validate Twilio signature (only for non-browser inbound calls — fail-closed).
+    // Use public SUPABASE_URL for signature validation (same fix as sms-webhook).
+    // Reject if the auth token is missing, the signature is missing, or it is invalid.
     const signature = req.headers.get("X-Twilio-Signature");
-    if (twilioAuthToken && signature) {
-      // Use public SUPABASE_URL for signature validation (same fix as sms-webhook)
-      const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
-      const isValid = await validateTwilioSignature(twilioAuthToken, signature, publicUrl, params);
-      if (!isValid) {
-        logger.warn("inbound_signature_invalid");
-        return new Response("<Response><Say>Unauthorized</Say></Response>", {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "text/xml" },
-        });
-      }
+    const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
+    const isValid = twilioAuthToken && signature
+      ? await validateTwilioSignature(twilioAuthToken, signature, publicUrl, params)
+      : false;
+    if (!isValid) {
+      logger.warn("inbound_signature_rejected", {
+        reason: !twilioAuthToken ? "no_auth_token" : !signature ? "no_signature" : "invalid_signature",
+      });
+      return new Response("<Response><Say>Unauthorized</Say></Response>", {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      });
     }
 
     // ---------------------------------------------------------------

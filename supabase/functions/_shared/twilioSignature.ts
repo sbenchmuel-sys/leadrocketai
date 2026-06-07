@@ -53,29 +53,3 @@ function timingSafeEqual(a: string, b: string): boolean {
   }
   return mismatch === 0;
 }
-
-/**
- * Extract and validate Twilio signature from a request.
- * Returns the parsed form params if valid, or null if invalid.
- */
-export async function validateTwilioRequest(
-  req: Request,
-  authToken: string,
-): Promise<Record<string, string> | null> {
-  const signature = req.headers.get("X-Twilio-Signature");
-  if (!signature) return null;
-
-  // Clone request to read body twice if needed
-  const formData = await req.formData();
-  const params: Record<string, string> = {};
-  formData.forEach((value, key) => {
-    params[key] = value.toString();
-  });
-
-  // Reconstruct the URL Twilio sees (use the request URL)
-  // In production, TWILIO_WEBHOOK_BASE_URL should be set to match what Twilio sends
-  const url = req.url;
-
-  const isValid = await validateTwilioSignature(authToken, signature, url, params);
-  return isValid ? params : null;
-}

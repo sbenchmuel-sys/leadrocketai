@@ -31,11 +31,12 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Fail-closed: without an auth token we cannot verify the signature, so reject.
   const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
   if (!twilioAuthToken) {
-    console.error("[sms-webhook] TWILIO_AUTH_TOKEN not configured");
+    console.error("[sms-webhook] TWILIO_AUTH_TOKEN not configured — rejecting");
     return new Response("<Response></Response>", {
-      status: 500,
+      status: 403,
       headers: { ...corsHeaders, "Content-Type": "text/xml" },
     });
   }
@@ -58,9 +59,9 @@ Deno.serve(async (req) => {
     params,
   );
   if (!isValid) {
-    console.warn("[sms-webhook] Invalid Twilio signature — rejecting");
+    console.warn("[sms-webhook] Missing or invalid Twilio signature — rejecting");
     return new Response("<Response></Response>", {
-      status: 401,
+      status: 403,
       headers: { ...corsHeaders, "Content-Type": "text/xml" },
     });
   }

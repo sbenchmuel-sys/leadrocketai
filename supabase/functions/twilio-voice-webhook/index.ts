@@ -35,34 +35,25 @@ Deno.serve(async (req) => {
       params[key] = value.toString();
     });
 
-    // ---- Validate Twilio signature ----
+    // ---- Validate Twilio signature (fail-closed) ----
+    // Use public SUPABASE_URL — Twilio computes signatures against the public
+    // webhook URL, not the internal container URL that req.url returns.
+    // Reject if the auth token is missing, the signature is missing, or it is invalid.
     const signature = req.headers.get("X-Twilio-Signature");
-    if (twilioAuthToken && signature) {
-      // Use public SUPABASE_URL — Twilio computes signatures against the public
-      // webhook URL, not the internal container URL that req.url returns.
-      const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
-      const isValid = await validateTwilioSignature(
-        twilioAuthToken,
-        signature,
-        publicUrl,
-        params,
-      );
-      if (!isValid) {
-        logger.warn("twilio_signature_invalid", { callSid: params.CallSid });
-        return new Response(EMPTY_TWIML, {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "text/xml" },
-        });
-      }
-    } else if (twilioAuthToken) {
-      // Signature header missing but auth token is set — reject
-      logger.warn("twilio_signature_missing", { callSid: params.CallSid });
+    const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-webhook`;
+    const isValid = twilioAuthToken && signature
+      ? await validateTwilioSignature(twilioAuthToken, signature, publicUrl, params)
+      : false;
+    if (!isValid) {
+      logger.warn("twilio_signature_rejected", {
+        callSid: params.CallSid,
+        reason: !twilioAuthToken ? "no_auth_token" : !signature ? "no_signature" : "invalid_signature",
+      });
       return new Response(EMPTY_TWIML, {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "text/xml" },
       });
     }
-    // If no auth token configured, allow (development mode)
 
     // ---- Route by event type ----
     const isRecordingEvent = !!params.RecordingSid;
