@@ -85,6 +85,8 @@ export interface FloorResult {
 // let the address in — otherwise invalid data edited in afterward (person@-example.com,
 // person@example-.com, an over-long local part) would slip past every check and send.
 const COLD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// RFC 1123 DNS label: alphanumeric ends, only alphanumerics + hyphen between.
+const COLD_DNS_LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i;
 function isSendableColdEmail(raw: string): boolean {
   const e = (raw || "").trim();
   if (!e || e.length > 254) return false;
@@ -93,15 +95,14 @@ function isSendableColdEmail(raw: string): boolean {
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
   if (!domain) return false;
-  // Every DNS label must be non-empty, <=63 chars, and not start/end with a hyphen.
-  // Checking only the WHOLE domain's first/last char misses an invalid intermediate
-  // label like foo-.example.com or bar.-example.com. (Empty labels — leading/trailing
-  // dot or "..", already caught above — are also rejected here.)
+  // Validate EVERY domain label against DNS hostname syntax. Checking only the WHOLE
+  // domain's first/last char misses an invalid intermediate label (foo-.example.com),
+  // and the loose regex above admits non-DNS chars (exa_mple.com, foo!.com) — both
+  // would pass the fail-closed floor. The label regex also rejects empty labels.
   const labels = domain.split(".");
   if (labels.length < 2) return false;
   for (const label of labels) {
-    if (!label || label.length > 63) return false;
-    if (label.startsWith("-") || label.endsWith("-")) return false;
+    if (label.length > 63 || !COLD_DNS_LABEL_RE.test(label)) return false;
   }
   return true;
 }

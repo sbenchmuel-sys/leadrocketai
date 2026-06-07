@@ -13,6 +13,10 @@
 
 // One @, non-empty local + domain, a dot in the domain, no whitespace.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// A single DNS hostname label (RFC 1123): starts and ends alphanumeric, only
+// alphanumerics + hyphen between. Rejects non-DNS chars the loose EMAIL_RE lets
+// through in the domain (exa_mple.com, foo!.com) and leading/trailing hyphens.
+const DNS_LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i;
 
 /** True if the address is syntactically sendable. */
 export function isValidEmail(email: string | null | undefined): boolean {
@@ -23,13 +27,13 @@ export function isValidEmail(email: string | null | undefined): boolean {
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
   if (!domain) return false;
-  // Validate EVERY DNS label, not just the whole domain's first/last char — otherwise
-  // an invalid intermediate label (foo-.example.com, bar.-example.com) slips through.
+  // Validate EVERY domain label against DNS hostname syntax — not just the whole
+  // domain's first/last char — so invalid intermediate labels (foo-.example.com) and
+  // non-DNS characters the loose EMAIL_RE admits (exa_mple.com, foo!.com) are rejected.
   const labels = domain.split(".");
   if (labels.length < 2) return false;
   for (const label of labels) {
-    if (!label || label.length > 63) return false;
-    if (label.startsWith("-") || label.endsWith("-")) return false;
+    if (label.length > 63 || !DNS_LABEL_RE.test(label)) return false;
   }
   return true;
 }
