@@ -17,6 +17,8 @@ export interface AsrResult {
   confidence?: number;
   segments: AsrSegment[];
   fullText: string;
+  /** Number of ~55s chunks the audio was split into (1 for short single-shot calls). */
+  chunkCount?: number;
 }
 
 export interface AsrOptions {
@@ -26,6 +28,8 @@ export interface AsrOptions {
   diarization: boolean;
   timestamps: boolean;
   channelCount?: number;
+  /** Absolute epoch-ms deadline; chunked transcription aborts (throws) if exceeded. */
+  deadlineMs?: number;
 }
 
 export interface AsrProvider {
@@ -161,12 +165,20 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
   }
 
   async transcribe(audioBase64: string, options: AsrOptions): Promise<AsrResult> {
-    // Decode base64 to get the raw WAV buffer for chunking
+    // Back-compat entry point: decode base64 to a raw WAV buffer, then delegate.
     const binaryString = atob(audioBase64);
     const rawBuffer = new ArrayBuffer(binaryString.length);
     const rawView = new Uint8Array(rawBuffer);
     for (let i = 0; i < binaryString.length; i++) rawView[i] = binaryString.charCodeAt(i);
+    return this.transcribeBuffer(rawBuffer, options);
+  }
 
+  /**
+   * Preferred entry point. Transcribes directly from a raw WAV ArrayBuffer so the
+   * caller never has to hold a full-file base64 copy in memory — only each ~55s
+   * chunk is base64-encoded per Google request, keeping peak memory bounded.
+   */
+  async transcribeBuffer(rawBuffer: ArrayBuffer, options: AsrOptions): Promise<AsrResult> {
     const wavInfo = parseWavHeader(rawBuffer);
     const bytesPerSec = wavInfo.sampleRate * wavInfo.channels * (wavInfo.bitsPerSample / 8);
     const totalDurationSec = wavInfo.dataSize / bytesPerSec;
@@ -181,18 +193,23 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
 
     if (totalDurationSec <= 59) {
       // Short enough for a single synchronous recognize call
-      return this.recognizeSync(audioBase64, primaryLanguage, options, 0);
+      const result = await this.recognizeSync(arrayBufferToBase64(rawBuffer), primaryLanguage, options, 0);
+      return { ...result, chunkCount: 1 };
     }
 
     // Chunk the audio and transcribe each chunk
-    logger.info("audio_chunking", { totalDurationSec, chunkDuration: CHUNK_DURATION_SEC, chunks: Math.ceil(totalDurationSec / CHUNK_DURATION_SEC) });
+    const numChunks = Math.ceil(totalDurationSec / CHUNK_DURATION_SEC);
+    logger.info("audio_chunking", { totalDurationSec, chunkDuration: CHUNK_DURATION_SEC, chunks: numChunks });
 
     const allSegments: AsrSegment[] = [];
     const confidences: (number | undefined)[] = [];
     let detectedLang = primaryLanguage;
 
-    const numChunks = Math.ceil(totalDurationSec / CHUNK_DURATION_SEC);
     for (let i = 0; i < numChunks; i++) {
+      // Abort cleanly (caller marks the transcript failed) if we run out of wall-clock budget.
+      if (options.deadlineMs && Date.now() >= options.deadlineMs) {
+        throw new Error(`Transcription deadline exceeded after ${i}/${numChunks} chunks`);
+      }
       const startSec = i * CHUNK_DURATION_SEC;
       const pcmStart = Math.floor(startSec * bytesPerSec);
       const pcmLength = Math.min(
@@ -216,6 +233,7 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
       confidence: averageConfidence(confidences),
       segments: allSegments.sort((a, b) => a.startMs - b.startMs),
       fullText: allSegments.map((s) => s.text).join(" ").trim(),
+      chunkCount: numChunks,
     };
   }
 
