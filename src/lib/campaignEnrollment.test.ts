@@ -134,6 +134,19 @@ describe("computeStaggeredStarts", () => {
     expect(new Set(starts).size).toBe(starts.length); // overflow never stacked
   });
 
+  it("never stacks different leads when the infeasible offset is not day 0 ([0,1,1])", () => {
+    // offsets [0,1,1] cap 1 → each lead puts 2 emails on its OWN day+1 (unavoidable),
+    // but no OTHER lead's touch may land on that same day. Booking each placed lead
+    // into the load and skipping full days achieves that.
+    const starts = computeStaggeredStarts(3, [0, 1, 1], 1);
+    const owners: Record<number, Set<number>> = {};
+    starts.forEach((s, lead) => {
+      for (const o of [0, 1, 1]) (owners[s + o] ??= new Set()).add(lead);
+    });
+    // No day mixes touches from more than one lead.
+    for (const day of Object.keys(owners)) expect(owners[Number(day)].size).toBe(1);
+  });
+
   it("respects seeded-full days even for an infeasible cadence", () => {
     // [0,0] cap 1 is infeasible; days 0 and 1 are already full from existing touches.
     // New leads must skip the seeded-full days, not pile onto day 0 (which the

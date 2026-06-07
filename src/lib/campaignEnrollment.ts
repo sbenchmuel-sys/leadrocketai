@@ -179,19 +179,24 @@ export function computeStaggeredStarts(
   const seededMax = Object.keys(load).reduce((m, k) => Math.max(m, Number(k)), 0);
   const maxDays = leadCount + maxOffset + leadCount * emailTouchOffsets.length + seededMax;
 
-  // Infeasible cadence: spread ONE lead per business day so the unavoidable per-lead
-  // overflow is never stacked — but STILL skip days whose seeded load already fills the
-  // cap at any of the lead's offsets, so a new infeasible cadence doesn't pile onto
-  // days the mailbox has already committed (initialLoad). Past a generous skip bound we
-  // stop skipping to guarantee termination against a pathological seed.
+  // Infeasible cadence: a single offset carries more email touches than the cap, so
+  // even ONE lead overflows that day — the cap can never be honored (per-lead, not
+  // volume). Place leads with a forward cursor that BOOKS each placed lead's own
+  // touches into `load` and skips any day already full at one of the offsets. This (a)
+  // respects the seeded load (initialLoad) and (b) — unlike a blind one-per-day spread
+  // — never stacks a DIFFERENT lead's touches onto a day another lead already loaded,
+  // even when the duplicate offset isn't day 0 (e.g. [0,1,1]). The lead's own
+  // unavoidable double remains, but nothing else piles on. Guaranteed to terminate:
+  // the overflowing offset (cnt > cap) makes day `d` full right after a placement, so
+  // the cursor always advances. The rep is warned separately (computeCapacityPlan).
   if (feasiblePerLead === 0) {
     const out: number[] = [];
     let d = 0;
-    const skipBound = seededMax + maxOffset + leadCount + 1;
     while (out.length < leadCount) {
-      const seededFull = d <= skipBound && distinctOffsets.some(([o]) => (load[d + o] ?? 0) >= cap);
-      if (!seededFull) out.push(d);
-      d++;
+      const dayFull = distinctOffsets.some(([o]) => (load[d + o] ?? 0) >= cap);
+      if (dayFull) { d++; continue; }
+      out.push(d);
+      for (const [o, cnt] of distinctOffsets) load[d + o] = (load[d + o] ?? 0) + cnt;
     }
     return out;
   }
