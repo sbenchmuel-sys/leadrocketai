@@ -135,6 +135,19 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
   }
 
+  // OPT-OUT BACKSTOP (ALL actions): an unsubscribe is a FULL stop — not just for
+  // email. A lead can opt out after ANY touch (email or manual) is already queued, so
+  // this guard must run before every action branch, not only the email sender. Without
+  // it, mark_sent on a manual touch would still advance an opted-out lead's cadence.
+  // Clear the card and stop the enrollment, mirroring the replied / inactive backstops.
+  if (lead.unsubscribed) {
+    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    if (enr && ["scheduled", "active"].includes(enr.status)) {
+      await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+    }
+    return json({ ok: false, error: "This lead opted out — removed from outreach.", optedOut: true }, 409);
+  }
+
   const exec = await loadExecutionSettings(lead.owner_user_id, admin);
 
   // Atomically CLAIM the queued touch: flip queued → <status> in ONE update guarded
@@ -174,21 +187,15 @@ Deno.serve(async (req) => {
   // ── send_review_email: send the rep-approved email through the one sender ──
   if (action === "send_review_email") {
     if (touch.channel !== "email") return json({ ok: false, error: "Not an email touch" }, 400);
-    if (lead.unsubscribed || !lead.email) {
-      // The lead opted out (or lost a valid address) AFTER this review card was
-      // queued. The send floor would block it anyway — but returning 400 here without
-      // touching the touch leaves the card stranded 'queued', so it reappears in the
-      // Outreach tab forever and every "Send" re-hits this 400. Clear the card (and
-      // stop the now-dead enrollment when unsubscribed) so the lead leaves the cadence,
-      // mirroring the replied / inactive-enrollment backstops above.
-      await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
-      if (lead.unsubscribed && enr && ["scheduled", "active"].includes(enr.status)) {
-        await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
-      }
-      return json(
-        { ok: false, error: "This lead can't be emailed (opted out) — removed from outreach.", optedOut: true },
-        409,
-      );
+    // (Unsubscribe is already handled by the opt-out backstop above — by here the lead
+    // has NOT opted out.) A lead can still LOSE a valid email address while keeping the
+    // rest of the cadence reachable via manual channels (call/SMS/WhatsApp/LinkedIn). So
+    // don't just skip-and-stall this email card: ADVANCE the cadence past it (claim +
+    // advanceColdEnrollment, exactly like mark_skipped) so the next touch gets scheduled.
+    if (!lead.email) {
+      if (!(await claimTouch("skipped"))) return json({ ok: true, alreadyHandled: true });
+      await advanceColdEnrollment(admin, exec, touch, "skipped");
+      return json({ ok: false, error: "This lead has no email address — skipped to the next step.", skipped: true }, 409);
     }
 
     // Resolve content + sender + secret BEFORE claiming, so a validation failure
