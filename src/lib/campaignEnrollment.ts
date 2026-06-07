@@ -379,7 +379,12 @@ export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): Plann
     let maxAge: Date | null = null;
     if (isManual) {
       const nextGap = i + 1 < steps.length ? steps[i + 1].delay_days : DEFAULT_MAX_AGE_BUSINESS_DAYS;
-      const horizon = Math.max(1, Math.min(nextGap || DEFAULT_MAX_AGE_BUSINESS_DAYS, DEFAULT_MAX_AGE_BUSINESS_DAYS));
+      // Clamp to [1, DEFAULT]. Do NOT use `nextGap || DEFAULT`: a rep can legitimately
+      // set the FOLLOWING step's wait to 0 (same-day follow-up), and `0 || DEFAULT`
+      // would balloon that into a 5-business-day stall before auto-skip. The no-next-
+      // step case already substitutes DEFAULT above, so the only remaining 0 is a real
+      // same-day gap → Math.max(1, …) gives the intended 1-day horizon.
+      const horizon = Math.max(1, Math.min(nextGap, DEFAULT_MAX_AGE_BUSINESS_DAYS));
       maxAge = addBusinessDays(eligible, horizon);
     }
     touches.push({

@@ -248,4 +248,20 @@ describe("buildTouchSchedule", () => {
     expect(email.every((t) => t.max_age_at === null)).toBe(true);
     expect(manual.every((t) => t.max_age_at !== null)).toBe(true);
   });
+
+  it("a 0-day gap after a manual touch gives a 1-day max-age, not a 5-day stall", () => {
+    // Manual call (step 1) immediately followed by a same-day step (delay_days 0).
+    // The manual touch's auto-skip horizon must be 1 business day, not balloon to the
+    // 5-day default (the old `nextGap || DEFAULT` bug treated 0 as missing).
+    const steps: CadenceStep[] = [
+      { step_number: 1, channel: "voice", delay_days: 0 },
+      { step_number: 2, channel: "email", delay_days: 0 },
+    ];
+    const wed = new Date("2026-06-03T09:00:00Z"); // Wed (no weekend skip)
+    const schedule = buildTouchSchedule(wed, steps);
+    const call = schedule[0];
+    // eligible Wed the 3rd; +1 business day = Thu the 4th.
+    expect(new Date(call.eligible_at).getUTCDate()).toBe(3);
+    expect(new Date(call.max_age_at as string).getUTCDate()).toBe(4);
+  });
 });
