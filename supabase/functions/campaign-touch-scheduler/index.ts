@@ -211,12 +211,23 @@ Deno.serve(async (req) => {
     // Page through ALL active campaigns (ordered + stable), not just one capped,
     // unordered subset — otherwise, with more than a page of active outreaches, an
     // over-threshold campaign outside the subset could be evaluated on no tick.
+    //
+    // KEYSET (id-cursor) pagination, NOT offset .range(): this loop PAUSES campaigns
+    // as it goes, which removes them from the status='active' filter. An offset
+    // window (.range(200,399)) would then shift — every campaign paused on an earlier
+    // page slides a later, still-active campaign backward past the window boundary,
+    // so it is skipped entirely. Advancing a cursor by last-seen id is immune: paused
+    // rows simply fall out behind the cursor and the next page resumes from id > last.
     const PAGE = 200;
-    for (let pageFrom = 0; ; pageFrom += PAGE) {
+    // Minimum uuid sentinel — id is a uuid column, so the cursor must be a valid
+    // uuid (an empty string would fail the uuid cast in the gt filter).
+    let lastId = "00000000-0000-0000-0000-000000000000";
+    for (;;) {
       const { data: activeCampaigns } = await supabase
         .from("campaigns").select("id, name, workspace_id").eq("status", "active")
-        .order("id", { ascending: true }).range(pageFrom, pageFrom + PAGE - 1);
+        .gt("id", lastId).order("id", { ascending: true }).limit(PAGE);
       if (!activeCampaigns || activeCampaigns.length === 0) break;
+      lastId = activeCampaigns[activeCampaigns.length - 1].id;
 
       for (const c of activeCampaigns) {
         // Denominator: enrolled leads that have had ≥1 touch completed. Numerator: bounced.
