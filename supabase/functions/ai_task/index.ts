@@ -62,7 +62,7 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi\s+(?:[\p{L}\p{N}]|\{FirstName\})|Hey\s+(?:[\p{L}\p{N}]|\{FirstName\})|Hello\s+(?:[\p{L}\p{N}]|\{FirstName\})|Dear\s+(?:[\p{L}\p{N}]|\{FirstName\})|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hey\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hello\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Dear\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
 
 function stripValidationNoiseLines(text: string): string {
   return (text || "")
@@ -174,7 +174,6 @@ function stripSelfChecksAndDuplicateBodies(text: string): string {
  */
 function stripLeakedReasoning(text: string): string {
   if (!text) return text;
-  text = normalizeCampaignTemplatePlaceholders(text);
   text = stripSelfChecksAndDuplicateBodies(text);
 
   // Reasoning header markers (case-insensitive). May appear with optional
