@@ -97,6 +97,17 @@ describe("computeStaggeredStarts", () => {
     const starts = computeStaggeredStarts(2, [0], 2, { 0: 2 });
     expect(starts).toEqual([1, 1]);
   });
+
+  it("searches past seeded full days instead of overflowing one (running outreach)", () => {
+    // cap 1, days 0–5 already full from existing touches; 1 new lead, 1 email touch.
+    // The new start must land on day 6 (first day with room), not overflow a full day.
+    const seeded = { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 };
+    const starts = computeStaggeredStarts(1, [0], 1, seeded);
+    expect(starts).toEqual([6]);
+    const load: Record<number, number> = { ...seeded };
+    load[starts[0]] = (load[starts[0]] ?? 0) + 1;
+    expect(load[starts[0]]).toBeLessThanOrEqual(1); // never over cap
+  });
 });
 
 describe("computeCapacityPlan", () => {

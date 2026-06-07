@@ -148,8 +148,14 @@ export function computeStaggeredStarts(
   const starts: number[] = [];
   let assigned = 0;
   let day = 0;
-  // Generous upper bound on iterations: even at 1 start/day this terminates.
-  const maxDays = leadCount + emailTouchOffsets[emailTouchOffsets.length - 1] + leadCount * emailTouchOffsets.length;
+  // Generous upper bound on iterations: even at 1 start/day this terminates. It
+  // MUST extend past the seeded load's furthest day — otherwise, when existing
+  // touches already fill the cap through several future days, the loop could
+  // exhaust its iterations and the fallback would park new starts on a day still
+  // at capacity (the exact running-outreach case this seeding protects).
+  const seededMax = Object.keys(load).reduce((m, k) => Math.max(m, Number(k)), 0);
+  const maxDays =
+    leadCount + emailTouchOffsets[emailTouchOffsets.length - 1] + leadCount * emailTouchOffsets.length + seededMax;
 
   while (assigned < leadCount && day <= maxDays) {
     // How many leads can START today? A start books +1 on day+offset for every
