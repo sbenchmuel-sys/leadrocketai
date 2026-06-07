@@ -2493,12 +2493,12 @@ Output ONLY the final email body.`;
         }
       }
 
-      // Last-resort deterministic patch for greeting issues before refusing.
-      if (!validation.ok && leadFirstFromCtx &&
+      // Last-resort deterministic patch for template/live greeting issues before refusing.
+      if (!validation.ok && (leadFirstFromCtx || allowTemplatePlaceholders) &&
           (validation.codes.includes("greeting_unaddressed") || validation.codes.includes("missing_greeting"))) {
         const lines = content.split("\n");
         const firstIdx = lines.findIndex((l) => l.trim().length > 0);
-        const greetingLine = `Hi ${leadFirstFromCtx},`;
+        const greetingLine = allowTemplatePlaceholders ? "Hi {FirstName}," : `Hi ${leadFirstFromCtx},`;
         if (firstIdx >= 0 && /^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)\b/i.test(lines[firstIdx].trim())) {
           lines[firstIdx] = greetingLine;
         } else {
@@ -2510,6 +2510,19 @@ Output ONLY the final email body.`;
           content = patched;
           validation = patchedValidation;
           console.log(`[ai_task] [${task}] Greeting auto-patched`);
+        }
+      }
+
+      // Campaign template authoring is not a send path. If the only remaining
+      // issue is a missing sign-off, append the allowed rep token instead of
+      // failing the whole content generation run.
+      if (!validation.ok && allowTemplatePlaceholders && validation.codes.includes("missing_signoff")) {
+        const patched = `${content.replace(/\s+$/u, "")}\n\nBest,\n{RepFirstName}`;
+        const patchedValidation = validateDraft(patched, validationCtx);
+        if (patchedValidation.ok) {
+          content = patched;
+          validation = patchedValidation;
+          console.log(`[ai_task] [${task}] Template sign-off auto-patched`);
         }
       }
 
