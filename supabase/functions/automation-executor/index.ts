@@ -1570,21 +1570,19 @@ serve(async (req) => {
             continue;
           }
 
-          // Sender: prefer the LEAD OWNER's own connected mailbox; fall back ONLY to a
-          // SHARED mailbox (user_id IS NULL) when the owner has none — never another
-          // rep's attributed account, which would send this lead's cold email from a
-          // COWORKER's mailbox/identity in a multi-mailbox workspace. If neither
-          // exists, skip (don't impersonate). Never fall back to legacy gmail_connections.
-          let { data: mailAcct } = await supabase.from("mail_accounts")
+          // Sender: require the LEAD OWNER's OWN connected mailbox (user_id = owner).
+          // The whole cold model is owner-centric — the daily cap is counted per
+          // owner_user_id and gmail-send sends from the owner's gmail_connections — so
+          // the sending mailbox MUST be the owner's. Selecting by workspace+is_default
+          // (or a shared/coworker row) would either send from someone else's identity
+          // or leak the per-mailbox cap across owners (a shared Outlook mailbox would
+          // get each owner's full cap; a shared Gmail row just fails the owner-Gmail
+          // match check). If the owner has no own connected mailbox, skip — never
+          // impersonate or fall back to legacy gmail_connections (wrong-address mode).
+          const { data: mailAcct } = await supabase.from("mail_accounts")
             .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
             .eq("user_id", lead.owner_user_id)
             .order("is_default", { ascending: false }).limit(1).maybeSingle();
-          if (!mailAcct) {
-            ({ data: mailAcct } = await supabase.from("mail_accounts")
-              .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
-              .is("user_id", null)
-              .order("is_default", { ascending: false }).limit(1).maybeSingle());
-          }
           if (!mailAcct) continue;
 
           const firstName = (lead.name || "").split(" ")[0] || "there";
