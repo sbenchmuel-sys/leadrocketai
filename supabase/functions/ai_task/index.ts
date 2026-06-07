@@ -174,6 +174,7 @@ function stripSelfChecksAndDuplicateBodies(text: string): string {
  */
 function stripLeakedReasoning(text: string): string {
   if (!text) return text;
+  text = normalizeCampaignTemplatePlaceholders(text);
   text = stripSelfChecksAndDuplicateBodies(text);
 
   // Reasoning header markers (case-insensitive). May appear with optional
@@ -211,7 +212,7 @@ function stripLeakedReasoning(text: string): string {
       }
 
       if (lastGreetingLineIdx >= 0) {
-        const result = lines.slice(lastGreetingLineIdx).join("\n").trim();
+          const result = stripValidationNoiseLines(lines.slice(lastGreetingLineIdx).join("\n"));
         // Sanity-check: real email has greeting + body + sign-off, ≥40 chars
         // and contains either a sentence-ending punctuation or a sign-off line.
         if (result.length >= 40 && /[.!?]/.test(result)) {
@@ -223,7 +224,7 @@ function stripLeakedReasoning(text: string): string {
       const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thank you)\s+[^\n]*)/i;
       const fwd = afterHeader.match(fwdGreetingRe);
       if (fwd && fwd.index !== undefined) {
-        const result = afterHeader.substring(fwd.index).trim();
+        const result = stripValidationNoiseLines(afterHeader.substring(fwd.index));
         if (result.length >= 40 && /[.!?]/.test(result)) return result;
       }
 
@@ -247,7 +248,7 @@ function stripLeakedReasoning(text: string): string {
     }
   }
 
-  return text.trim();
+  return stripValidationNoiseLines(text);
 }
 
 function stripLeakedReasoningForTask(text: string, task: string): string {
