@@ -42,6 +42,12 @@ export interface OutreachTouch {
 
 // Keep the surfaced list workable; excess waits for the next render.
 export const OUTREACH_SURFACE_CAP = 50;
+// Over-fetch headroom: campaign_touch is owner-scoped by RLS (PR 1), so normally only
+// the rep's own touches come back. But to stay correct even if touch rows are broader
+// than the owner-scoped leads (e.g. an admin, or before that RLS lands), we fetch a
+// buffer and apply OUTREACH_SURFACE_CAP only AFTER dropping RLS-hidden leads — so a
+// page full of coworkers' touches can't crowd out the rep's own due work.
+const OUTREACH_FETCH_LIMIT = OUTREACH_SURFACE_CAP * 6;
 
 function interpolateName(s: string | null, first: string): string | null {
   if (!s) return s;
@@ -79,19 +85,28 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     .in("campaign_id", activeIds)
     .lte("eligible_at", nowIso)
     .order("eligible_at", { ascending: true })
-    .limit(OUTREACH_SURFACE_CAP);
-  const rows = (touches || []) as any[];
+    .limit(OUTREACH_FETCH_LIMIT);
+  const fetched = (touches || []) as any[];
+  if (fetched.length === 0) return [];
+
+  // Resolve leads for EVERY fetched touch first (RLS returns only the rep's own /
+  // admin-visible leads), THEN drop touches whose lead is hidden and only AFTER that
+  // apply the surface cap — so coworkers' (hidden) touches at the front of the
+  // oldest-due page can't push the rep's own due work past the cap and out of view.
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("id, name, company, email, phone, linkedin_url, whatsapp_number, industry")
+    .in("id", [...new Set(fetched.map((t) => t.lead_id))]);
+  const leadMap = new Map((leads || []).map((l: any) => [l.id, l]));
+
+  const rows = fetched.filter((t) => leadMap.has(t.lead_id)).slice(0, OUTREACH_SURFACE_CAP);
   if (rows.length === 0) return [];
 
-  const leadIds = [...new Set(rows.map((t) => t.lead_id))];
   const campaignIds = [...new Set(rows.map((t) => t.campaign_id))];
-
-  const [{ data: leads }, { data: content }] = await Promise.all([
-    supabase.from("leads").select("id, name, company, email, phone, linkedin_url, whatsapp_number, industry").in("id", leadIds),
-    supabase.from("campaign_step_content" as any).select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script").in("campaign_id", campaignIds),
-  ]);
-
-  const leadMap = new Map((leads || []).map((l: any) => [l.id, l]));
+  const { data: content } = await supabase
+    .from("campaign_step_content" as any)
+    .select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script")
+    .in("campaign_id", campaignIds);
   // content keyed by `${campaign}|${step}|${variant ?? ""}`
   const contentMap = new Map<string, any>();
   for (const c of (content || []) as any[]) {
@@ -107,17 +122,11 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     );
   };
 
-  // Touches are already constrained to active campaigns by the query above (paused
-  // outreaches never surface cards; the action endpoint also refuses to advance them).
-  //
-  // Drop touches whose LEAD row didn't come back: leads are RLS-scoped to the owner
-  // (or a workspace admin), so a coworker's lead is invisible to this user even though
-  // their campaign_touch row may be readable. Surfacing such a touch would render a
-  // blank "—" card with no contact handles that the action endpoint would 403 anyway
-  // (it enforces the same owner-or-admin gate). Only show cards the rep can actually act on.
-  return rows
-    .filter((t) => leadMap.has(t.lead_id))
-    .map((t): OutreachTouch => {
+  // `rows` is already (a) constrained to active campaigns, (b) filtered to leads this
+  // rep can actually see — RLS-hidden coworker leads were dropped above before the cap
+  // so they can't render blank "—" cards or crowd out the rep's own due work — and
+  // (c) capped. Every row here has a visible lead.
+  return rows.map((t): OutreachTouch => {
     const lead = leadMap.get(t.lead_id) || {};
     const first = String(lead.name || "").split(" ")[0] || "there";
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);
