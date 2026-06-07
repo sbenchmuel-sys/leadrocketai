@@ -117,6 +117,9 @@ CREATE POLICY "Members can manage campaign enrollment"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_enrollment.lead_id
           AND l.workspace_id = c.workspace_id
+          -- Aligned with the leads table's own RLS (own leads, or an admin): a rep
+          -- can only enroll leads they could otherwise act on — not a colleague's.
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
       )
   ));
 
@@ -196,6 +199,8 @@ CREATE POLICY "Members can manage campaign touch"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_touch.lead_id
           AND l.workspace_id = c.workspace_id
+          -- Aligned with the leads table's own RLS (own leads, or an admin).
+          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
       )
   ));
 

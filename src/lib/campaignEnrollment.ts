@@ -147,6 +147,15 @@ export function computeStaggeredStarts(
   if (emailTouchOffsets.length === 0) return new Array(leadCount).fill(0);
 
   const cap = Math.max(1, Math.floor(dailyCap)); // guard: cap < 1 would never start
+  // Collapse DUPLICATE offsets into per-offset counts. A rep can set a later email's
+  // wait to 0 days, landing two email touches on the SAME relative day — so a lead
+  // can add more than one touch to a single day. Both the headroom check and the
+  // booking must use that multiplicity, or a day could be pushed over the cap.
+  const offsetCounts = new Map<number, number>();
+  for (const o of emailTouchOffsets) offsetCounts.set(o, (offsetCounts.get(o) ?? 0) + 1);
+  const distinctOffsets = [...offsetCounts.entries()]; // [offset, touchesOnThatDay]
+  const maxOffset = Math.max(...emailTouchOffsets);
+
   // Seed with already-booked load (existing scheduled email touches) so new starts
   // are placed AROUND days that are already at/near the cap.
   const load: Record<number, number> = { ...(initialLoad || {}) }; // business-day index → booked email touches
@@ -159,20 +168,20 @@ export function computeStaggeredStarts(
   // exhaust its iterations and the fallback would park new starts on a day still
   // at capacity (the exact running-outreach case this seeding protects).
   const seededMax = Object.keys(load).reduce((m, k) => Math.max(m, Number(k)), 0);
-  const maxDays =
-    leadCount + emailTouchOffsets[emailTouchOffsets.length - 1] + leadCount * emailTouchOffsets.length + seededMax;
+  const maxDays = leadCount + maxOffset + leadCount * emailTouchOffsets.length + seededMax;
 
   while (assigned < leadCount && day <= maxDays) {
-    // How many leads can START today? A start books +1 on day+offset for every
-    // email offset, so room is the tightest headroom across all those days.
+    // How many leads can START today? Each lead adds `cnt` touches to day+offset, so
+    // the per-day headroom in LEADS is floor((cap - load) / cnt); room is the tightest
+    // such headroom across all distinct offsets.
     let room = leadCount - assigned;
-    for (const o of emailTouchOffsets) {
-      room = Math.min(room, cap - (load[day + o] ?? 0));
+    for (const [o, cnt] of distinctOffsets) {
+      room = Math.min(room, Math.floor((cap - (load[day + o] ?? 0)) / cnt));
     }
     room = Math.max(0, room);
     for (let i = 0; i < room; i++) {
       starts.push(day);
-      for (const o of emailTouchOffsets) load[day + o] = (load[day + o] ?? 0) + 1;
+      for (const [o, cnt] of distinctOffsets) load[day + o] = (load[day + o] ?? 0) + cnt;
     }
     assigned += room;
     day++;

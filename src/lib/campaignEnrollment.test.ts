@@ -117,6 +117,14 @@ describe("computeStaggeredStarts", () => {
     expect(starts).toEqual([1, 1]);
   });
 
+  it("respects the cap when an offset repeats (two emails land on the same day)", () => {
+    // offsets [0, 0] = two email touches on the start day; cap 4 → each lead adds 2,
+    // so at most 2 leads/day. The naive (per-offset +1) check would have allowed 4.
+    const starts = computeStaggeredStarts(3, [0, 0], 4);
+    expect(starts.filter((s) => s === 0)).toHaveLength(2);
+    expect(starts.filter((s) => s === 1)).toHaveLength(1);
+  });
+
   it("searches past seeded full days instead of overflowing one (running outreach)", () => {
     // cap 1, days 0–5 already full from existing touches; 1 new lead, 1 email touch.
     // The new start must land on day 6 (first day with room), not overflow a full day.
