@@ -59,10 +59,24 @@ function interpolateName(s: string | null, first: string): string | null {
  */
 export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
   const nowIso = new Date().toISOString();
+
+  // Resolve ACTIVE campaigns FIRST (RLS scopes this to the rep's workspace), then
+  // constrain the touch query to them BEFORE applying OUTREACH_SURFACE_CAP — so a
+  // paused campaign's stale queued rows can't consume the page and hide active,
+  // currently-due work that sits beyond the cap.
+  const { data: activeCamps } = await supabase
+    .from("campaigns")
+    .select("id, name")
+    .eq("status", "active");
+  const campaignMap = new Map(((activeCamps || []) as any[]).map((c) => [c.id, c]));
+  const activeIds = [...campaignMap.keys()];
+  if (activeIds.length === 0) return [];
+
   const { data: touches } = await supabase
     .from("campaign_touch" as any)
     .select("id, campaign_id, lead_id, step_number, channel, eligible_at")
     .eq("status", "queued")
+    .in("campaign_id", activeIds)
     .lte("eligible_at", nowIso)
     .order("eligible_at", { ascending: true })
     .limit(OUTREACH_SURFACE_CAP);
@@ -72,14 +86,12 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
   const leadIds = [...new Set(rows.map((t) => t.lead_id))];
   const campaignIds = [...new Set(rows.map((t) => t.campaign_id))];
 
-  const [{ data: leads }, { data: campaigns }, { data: content }] = await Promise.all([
+  const [{ data: leads }, { data: content }] = await Promise.all([
     supabase.from("leads").select("id, name, company, email, phone, linkedin_url, whatsapp_number, industry").in("id", leadIds),
-    supabase.from("campaigns").select("id, name, status").in("id", campaignIds),
     supabase.from("campaign_step_content" as any).select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script").in("campaign_id", campaignIds),
   ]);
 
   const leadMap = new Map((leads || []).map((l: any) => [l.id, l]));
-  const campaignMap = new Map((campaigns || []).map((c: any) => [c.id, c]));
   // content keyed by `${campaign}|${step}|${variant ?? ""}`
   const contentMap = new Map<string, any>();
   for (const c of (content || []) as any[]) {
@@ -95,12 +107,9 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     );
   };
 
-  // Exclude touches whose campaign is paused/stopped — the Pause control means
-  // "stop every touch", so a paused outreach must not surface cards (and the action
-  // endpoint also refuses to advance them).
-  const activeRows = rows.filter((t) => campaignMap.get(t.campaign_id)?.status === "active");
-
-  return activeRows.map((t): OutreachTouch => {
+  // Touches are already constrained to active campaigns by the query above (paused
+  // outreaches never surface cards; the action endpoint also refuses to advance them).
+  return rows.map((t): OutreachTouch => {
     const lead = leadMap.get(t.lead_id) || {};
     const first = String(lead.name || "").split(" ")[0] || "there";
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);
