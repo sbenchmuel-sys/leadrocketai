@@ -82,6 +82,20 @@ CREATE INDEX IF NOT EXISTS campaign_enrollment_lead_idx
 CREATE INDEX IF NOT EXISTS campaign_enrollment_status_idx
   ON public.campaign_enrollment (status);
 
+-- At most ONE LIVE enrollment per lead, across ALL campaigns. The UNIQUE
+-- (campaign_id, lead_id) above only blocks re-enrolling the SAME lead in the SAME
+-- campaign; it does NOT stop a direct client insert from putting a lead on two
+-- different campaigns' cadences at once (the app-layer enrollLeadsInCampaign filters
+-- leads.campaign_id IS NULL, but RLS WITH CHECK can't see that without a racy
+-- subquery). This partial unique index enforces single-active-cadence at the DB
+-- level, race-free: a lead may carry historical terminal rows (completed / stopped /
+-- replied) and be freshly re-enrolled, but never have two simultaneously-sending
+-- enrollments. 'replied' is terminal here — the reply bridge has already pulled the
+-- lead out of its cadence, so it no longer occupies the lead.
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_enrollment_one_live_per_lead
+  ON public.campaign_enrollment (lead_id)
+  WHERE status IN ('scheduled', 'active', 'paused');
+
 CREATE TRIGGER update_campaign_enrollment_updated_at
   BEFORE UPDATE ON public.campaign_enrollment
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -108,7 +122,7 @@ CREATE POLICY "Members can view campaign enrollment"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_enrollment.lead_id
           AND l.workspace_id = c.workspace_id
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ));
 
@@ -122,7 +136,7 @@ CREATE POLICY "Members can manage campaign enrollment"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_enrollment.lead_id
           AND l.workspace_id = c.workspace_id
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ))
   -- WITH CHECK additionally proves the LEAD belongs to the campaign's workspace and
@@ -138,7 +152,7 @@ CREATE POLICY "Members can manage campaign enrollment"
           AND l.workspace_id = c.workspace_id
           -- Aligned with the leads table's own RLS (own leads, or an admin): a rep
           -- can only enroll leads they could otherwise act on — not a colleague's.
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ));
 
@@ -205,7 +219,7 @@ CREATE POLICY "Members can view campaign touch"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_touch.lead_id
           AND l.workspace_id = c.workspace_id
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ));
 
@@ -219,7 +233,7 @@ CREATE POLICY "Members can manage campaign touch"
         SELECT 1 FROM public.leads l
         WHERE l.id = campaign_touch.lead_id
           AND l.workspace_id = c.workspace_id
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ))
   -- WITH CHECK also proves the LEAD belongs to the campaign's workspace (mirrors
@@ -234,7 +248,7 @@ CREATE POLICY "Members can manage campaign touch"
         WHERE l.id = campaign_touch.lead_id
           AND l.workspace_id = c.workspace_id
           -- Aligned with the leads table's own RLS (own leads, or an admin).
-          AND (l.owner_user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'))
+          AND (l.owner_user_id = auth.uid() OR public.is_workspace_admin(l.workspace_id, auth.uid()))
       )
   ));
 
