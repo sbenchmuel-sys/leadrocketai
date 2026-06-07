@@ -540,6 +540,16 @@ serve(async (req) => {
               .eq("id", originTouch.enrollment_id)
               .gte("current_step_number", 1);
           }
+
+          // The bounce is fully handled (lead stopped + system_note written + cold
+          // enrollment stamped). DO NOT fall through to the normal interaction insert:
+          // a DSN is from postmaster/mailer-daemon, so isFromLead is false and the
+          // direction logic would store it as email_outbound — corrupting
+          // last_outbound_at / outbound counts and (for the broadened body-correlated
+          // DSNs that aren't a direct rep↔lead message) recording a non-conversation
+          // system message as a real sent email. Skip to the next message.
+          existingMessageIds.add(gmailMessageId);
+          continue;
         }
 
         // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated
