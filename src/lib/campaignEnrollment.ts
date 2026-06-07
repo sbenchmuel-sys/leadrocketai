@@ -70,6 +70,23 @@ export function addBusinessDays(date: Date, n: number): Date {
   return d;
 }
 
+/**
+ * Business-day index of `date` relative to `anchor`, in the SAME space as
+ * computeStaggeredStarts (0 = the anchor's business day). Past/overdue dates map
+ * to 0. Used to seed the start planner with already-scheduled touch load.
+ */
+export function businessDayOffset(anchor: Date, date: Date): number {
+  const start = nextBusinessDay(anchor);
+  if (date <= start) return 0;
+  let offset = 0;
+  let cur = start;
+  while (cur < date && offset < 1000) {
+    cur = addBusinessDays(cur, 1);
+    offset++;
+  }
+  return offset;
+}
+
 // ── Cadence shape ────────────────────────────────────────────────────────────
 
 export interface CadenceStep {
@@ -117,13 +134,17 @@ export function computeStaggeredStarts(
   leadCount: number,
   emailTouchOffsets: number[],
   dailyCap: number,
+  initialLoad?: Record<number, number>,
 ): number[] {
   if (leadCount <= 0) return [];
   // No email touches → nothing consumes the cap; everyone can start on day 0.
+  // (initialLoad is about email-day pressure, irrelevant when this cadence has none.)
   if (emailTouchOffsets.length === 0) return new Array(leadCount).fill(0);
 
   const cap = Math.max(1, Math.floor(dailyCap)); // guard: cap < 1 would never start
-  const load: Record<number, number> = {}; // business-day index → booked email touches
+  // Seed with already-booked load (existing scheduled email touches) so new starts
+  // are placed AROUND days that are already at/near the cap.
+  const load: Record<number, number> = { ...(initialLoad || {}) }; // business-day index → booked email touches
   const starts: number[] = [];
   let assigned = 0;
   let day = 0;
@@ -564,10 +585,24 @@ export async function enrollLeadsInCampaign(
     return { enrolled: 0, skips, channelSkips, capacity };
   }
 
-  // Staggered start day per lead, then enrollment + touch rows.
-  const offsets = emailOffsets(steps);
-  const starts = computeStaggeredStarts(stampedLeads.length, offsets, dailyCap);
+  // Staggered start day per lead. Seed the planner with the EXISTING scheduled/
+  // queued email-touch load for this campaign so adding people to a RUNNING outreach
+  // doesn't pile new follow-ups onto business days already at the daily cap.
   const anchor = opts?.anchor ?? new Date();
+  const offsets = emailOffsets(steps);
+  const { data: existingEmailTouches } = await supabase
+    .from("campaign_touch" as any)
+    .select("eligible_at")
+    .eq("campaign_id", campaignId)
+    .eq("channel", "email")
+    .in("status", ["scheduled", "queued"])
+    .not("eligible_at", "is", null);
+  const initialLoad: Record<number, number> = {};
+  for (const et of (existingEmailTouches || []) as any[]) {
+    const off = businessDayOffset(anchor, new Date(et.eligible_at));
+    initialLoad[off] = (initialLoad[off] ?? 0) + 1;
+  }
+  const starts = computeStaggeredStarts(stampedLeads.length, offsets, dailyCap, initialLoad);
 
   const enrollmentRows = stampedLeads.map((lead, i) => ({
     campaign_id: campaignId,

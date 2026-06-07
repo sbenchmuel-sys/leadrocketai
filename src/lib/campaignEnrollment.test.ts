@@ -90,6 +90,13 @@ describe("computeStaggeredStarts", () => {
     expect(starts.filter((s) => s === 1)).toHaveLength(10);
     expect(starts.filter((s) => s === 2)).toHaveLength(5);
   });
+
+  it("seeds existing load so new starts avoid days already at cap", () => {
+    // 1 email touch at offset 0, cap 2, day 0 already has 2 booked (existing
+    // enrollments' follow-ups) → both new starts shift to day 1.
+    const starts = computeStaggeredStarts(2, [0], 2, { 0: 2 });
+    expect(starts).toEqual([1, 1]);
+  });
 });
 
 describe("computeCapacityPlan", () => {
