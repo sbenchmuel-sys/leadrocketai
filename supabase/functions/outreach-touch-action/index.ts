@@ -224,16 +224,32 @@ Deno.serve(async (req) => {
       body = body || content.body;
     }
 
-    // Sender (same sender-mismatch guard as the executor: require a connected
-    // mail_accounts row; never fall back).
-    const { data: mailAcct } = await admin
+    // Sender: prefer the LEAD OWNER's own connected mailbox. Selecting purely by
+    // workspace + is_default can pick a COWORKER's account in a multi-mailbox
+    // workspace, and the provider path would then send this rep's cold email from the
+    // colleague's mailbox/identity (Outlook sends with the selected account's token).
+    // Fall back to the workspace default only when the owner has no mailbox of their
+    // own (preserves single/shared-mailbox setups where user_id is null). Never fall
+    // back to legacy gmail_connections.
+    let { data: mailAcct } = await admin
       .from("mail_accounts")
       .select("id, provider")
       .eq("workspace_id", lead.workspace_id)
       .eq("status", "connected")
+      .eq("user_id", lead.owner_user_id)
       .order("is_default", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (!mailAcct) {
+      ({ data: mailAcct } = await admin
+        .from("mail_accounts")
+        .select("id, provider")
+        .eq("workspace_id", lead.workspace_id)
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle());
+    }
     if (!mailAcct) return json({ ok: false, error: "No connected mailbox to send from" }, 400);
 
     const unsubSecret = getUnsubscribeSecret();
