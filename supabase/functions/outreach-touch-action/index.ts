@@ -95,6 +95,11 @@ Deno.serve(async (req) => {
     .eq("id", touch.lead_id)
     .maybeSingle();
   if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
+  // Defense in depth: membership was checked against the CAMPAIGN's workspace, so
+  // confirm the lead lives in that same workspace before acting on it with the
+  // service-role client (a touch row tying a cross-workspace lead must not be
+  // actionable). Enrollment RLS already prevents this, but fail closed here too.
+  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
 
   // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
   // the scheduler's reply bridge only runs while touches are 'scheduled'. So

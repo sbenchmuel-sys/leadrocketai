@@ -92,7 +92,11 @@ export default function Queue() {
     refresh,
     removeLead,
     restoreLead,
-  } = useQueueSnapshot({ chip: tabToChip(tab), showAll });
+    // Pass chip: null so the snapshot (and its new-items delta) spans the full
+    // reactive set — the visible tabs are derived client-side in `reactiveList`
+    // and `tabCounts`. The "Follow up" tab unions followup_due + ooo_back, which a
+    // single-bucket chip would under-count.
+  } = useQueueSnapshot({ chip: null, showAll });
 
   // ── Outreach (cold campaign touches) — separate data source for the tab ──
   const [outreachTouches, setOutreachTouches] = useState<OutreachTouch[]>([]);
