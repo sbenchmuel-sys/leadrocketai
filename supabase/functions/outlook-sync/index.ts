@@ -184,11 +184,13 @@ serve(async (req) => {
     // from/to/cc/bcc and is the supported way to query participants.
     // Note: $search cannot be combined with $filter or $orderby. We sort + date-filter
     // client-side below (already done in the loop).
-    // participants: matches from/to/cc/bcc; the bare quoted term also matches the
-    // body, so DSN/bounce notifications that only mention the failed address in the
-    // delivery report are surfaced too. The direct-conversation filter + body
-    // correlation in the loop gate what's actually processed.
-    const searchKql = `participants:${leadEmailNorm} OR "${leadEmailNorm}"`;
+    // A single quoted free-text term: Microsoft Graph $search matches it across the
+    // indexed message properties (from/to/cc/subject AND body), so this catches both
+    // the direct rep↔lead conversation AND DSN/bounce notifications that only mention
+    // the failed address in the delivery-report body. Graph requires the $search
+    // value to be a quoted string — this is that single valid quoted expression. The
+    // direct-conversation filter + body correlation in the loop gate what's processed.
+    const searchKql = `"${leadEmailNorm}"`;
     const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
