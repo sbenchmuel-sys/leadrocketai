@@ -513,17 +513,33 @@ serve(async (req) => {
             provider: "automation",
           });
 
-          // Cold outreach (Unit C): mark the lead's STARTED enrollment(s) bounced +
-          // stopped so the scheduler's bounce-rate circuit breaker can act. Reuses
-          // THIS detection (no new bounce list). No-op for non-enrolled leads.
-          // Constrained to current_step_number >= 1 (i.e. ≥1 touch actually sent) so
-          // the numerator matches the breaker's denominator — a not-yet-started
-          // (scheduled, step 0) enrollment bouncing on an unrelated email must not
-          // count toward a campaign's bounce rate.
-          await serviceSupabase.from("campaign_enrollment")
-            .update({ bounced_at: new Date().toISOString(), status: "stopped" })
+          // Cold outreach (Unit C): mark the ORIGINATING enrollment bounced + stopped
+          // so the scheduler's bounce-rate circuit breaker can act. Reuses THIS
+          // detection (no new bounce list). No-op for non-enrolled leads.
+          //
+          // Scope to the SINGLE originating enrollment, NOT every enrollment for the
+          // lead: a lead in two active outreaches would otherwise charge BOTH
+          // campaigns' bounce numerators off one DSN and could auto-pause an unrelated
+          // campaign. The DSN can't reliably carry a campaign id, so correlate by the
+          // most recently SENT email touch — the cold email this bounce answers in the
+          // overwhelming common case. Stamping exactly one enrollment never
+          // over-charges; the lead-level unsubscribe above already halts sending to
+          // this (dead) address across all of its campaigns. Constrained to
+          // current_step_number >= 1 so the numerator matches the breaker's denominator.
+          const { data: originTouch } = await serviceSupabase.from("campaign_touch")
+            .select("enrollment_id")
             .eq("lead_id", leadId)
-            .gte("current_step_number", 1);
+            .eq("channel", "email")
+            .eq("status", "sent")
+            .order("sent_at", { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          if (originTouch?.enrollment_id) {
+            await serviceSupabase.from("campaign_enrollment")
+              .update({ bounced_at: new Date().toISOString(), status: "stopped" })
+              .eq("id", originTouch.enrollment_id)
+              .gte("current_step_number", 1);
+          }
         }
 
         // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated
