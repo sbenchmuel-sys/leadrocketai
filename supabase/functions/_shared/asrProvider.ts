@@ -329,6 +329,16 @@ export class TwilioAsrProvider implements AsrProvider {
     this.recordingSid = recordingSid;
   }
 
+  // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+  // Account SID stays in the URL path (Accounts/${this.accountSid}/...) either way.
+  private get authHeader(): string {
+    const apiKey = Deno.env.get("TWILIO_API_KEY");
+    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+    return apiKey && apiSecret
+      ? `Basic ${btoa(`${apiKey}:${apiSecret}`)}`
+      : `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`;
+  }
+
   async transcribe(_audioBase64: string, options: AsrOptions): Promise<AsrResult> {
     // Use Twilio's Transcription API to create a transcription from the recording
     const url = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}/Transcriptions.json`;
@@ -336,7 +346,7 @@ export class TwilioAsrProvider implements AsrProvider {
     const resp = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+        Authorization: this.authHeader,
         "Content-Type": "application/x-www-form-urlencoded",
       },
     });
@@ -364,7 +374,7 @@ export class TwilioAsrProvider implements AsrProvider {
       const statusUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}/Transcriptions/${transcriptionSid}.json`;
       const statusResp = await fetch(statusUrl, {
         headers: {
-          Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+          Authorization: this.authHeader,
         },
       });
 
@@ -399,7 +409,7 @@ export class TwilioAsrProvider implements AsrProvider {
     const audioUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Recordings/${this.recordingSid}.wav`;
     const audioResp = await fetch(audioUrl, {
       headers: {
-        Authorization: `Basic ${btoa(`${this.accountSid}:${this.authToken}`)}`,
+        Authorization: this.authHeader,
       },
     });
 

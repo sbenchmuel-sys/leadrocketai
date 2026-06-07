@@ -77,7 +77,13 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
   ) {}
 
   private get authHeader(): string {
-    return "Basic " + btoa(`${this.accountSid}:${this.authToken}`);
+    // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+    // Account SID stays in the URL path (Accounts/${this.accountSid}/...) either way.
+    const apiKey = Deno.env.get("TWILIO_API_KEY");
+    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+    return apiKey && apiSecret
+      ? "Basic " + btoa(`${apiKey}:${apiSecret}`)
+      : "Basic " + btoa(`${this.accountSid}:${this.authToken}`);
   }
 
   private get fromWhatsApp(): string {

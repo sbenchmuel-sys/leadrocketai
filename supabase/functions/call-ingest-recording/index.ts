@@ -71,7 +71,13 @@ Deno.serve(async (req) => {
     }
 
     const audioUrl = `${recording.twilio_recording_url}.wav`;
-    const authHeader = btoa(`${twilioSid}:${twilioToken}`);
+    // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+    // Account SID stays in the URL path either way.
+    const apiKey = Deno.env.get("TWILIO_API_KEY");
+    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+    const authHeader = apiKey && apiSecret
+      ? btoa(`${apiKey}:${apiSecret}`)
+      : btoa(`${twilioSid}:${twilioToken}`);
 
     const audioResp = await fetch(audioUrl, {
       headers: { Authorization: `Basic ${authHeader}` },

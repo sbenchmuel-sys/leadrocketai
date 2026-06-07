@@ -91,7 +91,13 @@ Deno.serve(async (req) => {
 
     // Create call via Twilio REST API
     const twilioApiUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Calls.json`;
-    const twilioAuth = btoa(`${twilioSid}:${twilioToken}`);
+    // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+    // Account SID stays in the URL path either way.
+    const apiKey = Deno.env.get("TWILIO_API_KEY");
+    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+    const twilioAuth = apiKey && apiSecret
+      ? btoa(`${apiKey}:${apiSecret}`)
+      : btoa(`${twilioSid}:${twilioToken}`);
 
     const callParams = new URLSearchParams({
       To: toNumber,
