@@ -109,7 +109,15 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
 
   // Touches are already constrained to active campaigns by the query above (paused
   // outreaches never surface cards; the action endpoint also refuses to advance them).
-  return rows.map((t): OutreachTouch => {
+  //
+  // Drop touches whose LEAD row didn't come back: leads are RLS-scoped to the owner
+  // (or a workspace admin), so a coworker's lead is invisible to this user even though
+  // their campaign_touch row may be readable. Surfacing such a touch would render a
+  // blank "—" card with no contact handles that the action endpoint would 403 anyway
+  // (it enforces the same owner-or-admin gate). Only show cards the rep can actually act on.
+  return rows
+    .filter((t) => leadMap.has(t.lead_id))
+    .map((t): OutreachTouch => {
     const lead = leadMap.get(t.lead_id) || {};
     const first = String(lead.name || "").split(" ")[0] || "there";
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);

@@ -75,6 +75,32 @@ Deno.serve(async (req) => {
     if (!member.ok) return json({ ok: false, error: member.error || "Forbidden" }, member.status || 403);
   }
 
+  // Load the lead and enforce workspace-match + OWNERSHIP before ANY action — incl.
+  // set_call_outcome. The membership check above only proves the caller is in the
+  // campaign's workspace; the review-send path sends FROM the lead owner's mailbox and
+  // every advancing action drives the OWNER's cadence, and even set_call_outcome
+  // mutates touch state that shapes later drafts — so a non-owner member must be kept
+  // out of all of them. Require the lead owner OR a workspace admin (mirrors the leads
+  // table's own owner-or-admin RLS). Internal/service callers (isPrivileged) are
+  // trusted — they run the scheduler/executor as service_role.
+  const { data: lead } = await admin
+    .from("leads")
+    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
+    .eq("id", touch.lead_id)
+    .maybeSingle();
+  if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
+  // Confirm the lead lives in the CAMPAIGN's workspace before acting on it with the
+  // service-role client (a touch row tying a cross-workspace lead must not be
+  // actionable). Enrollment RLS already prevents this, but fail closed here too.
+  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
+  if (!auth.isPrivileged && lead.owner_user_id !== auth.userId) {
+    const { data: isAdmin } = await admin.rpc("is_workspace_admin", {
+      _workspace_id: camp.workspace_id,
+      _user_id: auth.userId!,
+    });
+    if (!isAdmin) return json({ ok: false, error: "Only the lead owner can act on this outreach." }, 403);
+  }
+
   // ── set_call_outcome: record the outcome only (no advance) ──
   if (action === "set_call_outcome") {
     const outcome = payload.outcome;
@@ -88,33 +114,6 @@ Deno.serve(async (req) => {
   // mean stop). Paused campaigns are also filtered out of the Outreach list, so a
   // rep normally won't even see these; this is the server-side backstop.
   if (camp.status !== "active") return json({ ok: false, error: "Outreach is not active" }, 400);
-
-  const { data: lead } = await admin
-    .from("leads")
-    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
-    .eq("id", touch.lead_id)
-    .maybeSingle();
-  if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
-  // Defense in depth: membership was checked against the CAMPAIGN's workspace, so
-  // confirm the lead lives in that same workspace before acting on it with the
-  // service-role client (a touch row tying a cross-workspace lead must not be
-  // actionable). Enrollment RLS already prevents this, but fail closed here too.
-  if (lead.workspace_id !== camp.workspace_id) return json({ ok: false, error: "Forbidden" }, 403);
-
-  // OWNERSHIP (beyond workspace membership): the review-send path sends FROM the lead
-  // owner's connected mailbox and every action advances the OWNER's cadence, so a
-  // non-owner member must not act on another rep's cold touch — that would let them
-  // send mail as a colleague and drive their sequence. Require the caller to be the
-  // lead owner OR a workspace admin (mirrors the leads table's own owner-or-admin
-  // RLS). Internal/service callers (isPrivileged) skip this — they run the
-  // scheduler/executor as service_role and are already trusted.
-  if (!auth.isPrivileged && lead.owner_user_id !== auth.userId) {
-    const { data: isAdmin } = await admin.rpc("is_workspace_admin", {
-      _workspace_id: camp.workspace_id,
-      _user_id: auth.userId!,
-    });
-    if (!isAdmin) return json({ ok: false, error: "Only the lead owner can act on this outreach." }, 403);
-  }
 
   // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
   // the scheduler's reply bridge only runs while touches are 'scheduled'. So
