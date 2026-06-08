@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,14 +40,17 @@ import { toast } from "sonner";
 import {
   fetchCampaignById,
   fetchCampaignLeads,
+  fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
-  assignCampaignToLead,
   type CampaignWithSteps,
   type CampaignLead,
+  type CampaignCollateral,
 } from "@/lib/campaignQueries";
+import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
+import { CampaignCollateralSection } from "@/components/automations/CampaignCollateralSection";
 import { AddLeadsDialog } from "@/components/automations/AddLeadsDialog";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -69,14 +72,34 @@ export default function CampaignDetail() {
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [collateral, setCollateral] = useState<CampaignCollateral[]>([]);
+  // The campaign currently shown — guards against a stale collateral fetch from a
+  // previously-viewed campaign resolving after navigation and writing wrong-
+  // campaign rows into state (children filter by type/variant, not campaign_id).
+  const shownCampaignId = useRef<string | undefined>(undefined);
 
   const loadPeople = useCallback(() => {
     if (!id) return;
     fetchCampaignLeads(id).then(setPeople).catch(() => {});
   }, [id]);
 
+  // Collateral is owned here so the Collateral section and the email-review
+  // section share one source of truth (a link made in one shows in the other).
+  const loadCollateral = useCallback(() => {
+    if (!id) return;
+    fetchCampaignCollateral(id)
+      .then((rows) => {
+        if (shownCampaignId.current === id) setCollateral(rows);
+      })
+      .catch(() => {});
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
+    // Mark the active campaign and drop the previous one's collateral immediately
+    // so nothing from another campaign lingers while the new fetch is in flight.
+    shownCampaignId.current = id;
+    setCollateral([]);
     setLoading(true);
     fetchCampaignById(id)
       .then((c) => {
@@ -86,7 +109,8 @@ export default function CampaignDetail() {
       .catch(() => toast.error("Couldn't load this outreach"))
       .finally(() => setLoading(false));
     loadPeople();
-  }, [id, loadPeople]);
+    loadCollateral();
+  }, [id, loadPeople, loadCollateral]);
 
   const handleSaveInstructions = async () => {
     if (!id) return;
@@ -113,11 +137,14 @@ export default function CampaignDetail() {
   };
 
   const handleRemovePerson = async (leadId: string) => {
+    if (!id) return;
     try {
-      await assignCampaignToLead(leadId, null);
+      // Stop their schedule (delete enrollment → touches cascade) AND clear
+      // campaign_id — clearing campaign_id alone would leave the cadence running.
+      await unenrollLeadFromCampaign(id, leadId);
       setPeople((prev) => prev.filter((p) => p.id !== leadId));
-    } catch {
-      toast.error("Couldn't remove that person");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove that person");
     }
   };
 
@@ -227,8 +254,16 @@ export default function CampaignDetail() {
 
       {/* Full-cadence generated script (Unit B Phase 2) */}
       {campaign.steps.length > 0 && (
-        <CampaignContentReview campaign={campaign} people={people} />
+        <CampaignContentReview campaign={campaign} people={people} collateral={collateral} />
       )}
+
+      {/* Collateral (Unit D) */}
+      <CampaignCollateralSection
+        campaign={campaign}
+        people={people}
+        collateral={collateral}
+        onChanged={loadCollateral}
+      />
 
       {/* People */}
       <section className="space-y-3">

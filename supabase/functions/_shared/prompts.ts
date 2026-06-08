@@ -1579,6 +1579,66 @@ Knowledge Context:
 
 OUTPUT
 Return the subject line ONLY — a single short line, nothing else.`,
+
+  collateral_one_pager: `You are writing a one-page sales overview ("one-pager") a rep can share with a prospect. It is a REVIEWABLE DRAFT, not an email — clean, skimmable, and grounded entirely in the seller's own materials.
+
+CRITICAL OUTPUT RULE: Output ONLY the one-pager text. No reasoning, no preamble, no "Here is…", no code fences.
+
+GROUNDING (MANDATORY):
+- Use ONLY the Knowledge Context (the seller's uploaded materials) and the campaign instructions below. If something isn't supported there, leave it out — never invent product claims, customers, metrics, or guarantees.
+- This is seller-authored collateral. Do NOT reference or quote any specific prospect's emails or messages; write for the audience/industry in general.
+
+SHAPE (plain text, light markdown headers OK):
+- A short headline (one line).
+- 1–2 sentence intro framing the problem this audience faces.
+- 3–4 short bullets of concrete value / how it helps, each grounded in the materials.
+- One brief proof point or differentiator IF supported by the materials (otherwise skip).
+- A soft closing line inviting a conversation. No hard sell, no urgency, no pricing unless it's in the materials.
+
+STYLE: plain business English, no hype, no ALL-CAPS, no exclamation spam. Tailor wording to the audience/industry given below.
+
+INPUTS
+Audience / Industry:
+{{LEAD_CONTEXT}}
+
+What to emphasize (campaign instructions):
+{{CUSTOM_INSTRUCTIONS}}
+
+Seller materials (Knowledge Context):
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the one-pager text ONLY.`,
+
+  collateral_walkthrough: `You are writing a short TECHNICAL WALKTHROUGH a rep can share — a plain-language explanation of how the seller's product/offer works, for a slightly more technical reader. It is a REVIEWABLE DRAFT, not an email.
+
+CRITICAL OUTPUT RULE: Output ONLY the walkthrough text. No reasoning, no preamble, no "Here is…", no code fences.
+
+GROUNDING (MANDATORY):
+- Use ONLY the Knowledge Context (the seller's uploaded materials) and the campaign instructions below. Never invent capabilities, integrations, security claims, or numbers that aren't supported there.
+- Seller-authored collateral. Do NOT reference or quote any specific prospect's emails or messages; write for the audience/industry in general.
+
+SHAPE (plain text, light markdown headers OK):
+- A one-line title.
+- A 2–3 sentence overview of what it does.
+- A short ordered or bulleted "how it works" walkthrough (3–6 steps), each grounded in the materials.
+- A brief note on what's needed to get started / how it fits an existing setup, IF supported by the materials.
+- A soft closing line offering to go deeper on a call.
+
+STYLE: clear, concrete, no hype, no ALL-CAPS. Tailor depth and terminology to the audience/industry below.
+
+INPUTS
+Audience / Industry:
+{{LEAD_CONTEXT}}
+
+What to emphasize (campaign instructions):
+{{CUSTOM_INSTRUCTIONS}}
+
+Seller materials (Knowledge Context):
+{{KNOWLEDGE_CONTEXT}}
+
+OUTPUT
+Return the walkthrough text ONLY.`,
 };
 
 export const QUALITY_SCORER_PROMPT = `You are evaluating a cold outreach email. Score HARSHLY — most AI-generated emails deserve a 4-5, not a 7-8.

@@ -34,6 +34,7 @@ import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
 import {
   chipForLead,
+  leadWasAway,
   queueButtonLabel,
   type QueueLeadRow,
   type QueueLatestInbound,
@@ -50,10 +51,9 @@ export interface QueueCardProps {
 // Friendly category labels keyed off the chip bucket. Why-now line
 // derives from these so chip-vs-card stays in lockstep (brief
 // "chip-bucket mapping" note).
-const CATEGORY_LABEL: Record<"replied" | "followup_due" | "ooo_back", string> = {
+const CATEGORY_LABEL: Record<"replied" | "followup_due", string> = {
   replied: "Replied",
-  followup_due: "Follow-up due",
-  ooo_back: "OOO back",
+  followup_due: "Follow up",
 };
 
 // Intents we DISPLAY as why-now context. Deterministic-detector
@@ -83,12 +83,17 @@ function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound |
   });
   const category = bucket ? CATEGORY_LABEL[bucket] : (lead.next_action_label ?? "Action needed");
 
+  // Back-from-away: the trigger is the return, not the last-outbound
+  // age (which predates the absence and would read oddly). Show just
+  // the category — the "was away — back now" note below carries the
+  // context.
+  if (leadWasAway({ next_action_key: lead.next_action_key })) {
+    return category; // "Follow up"
+  }
+
   // Pick the timestamp that matches the action type. Customer-waiting
   // → relative to last inbound. Rep-waiting → relative to last outbound.
-  const ts =
-    bucket === "replied" || bucket === "ooo_back"
-      ? lead.last_inbound_at
-      : lead.last_outbound_at;
+  const ts = bucket === "replied" ? lead.last_inbound_at : lead.last_outbound_at;
 
   let timePhrase = "";
   if (ts) {
@@ -96,10 +101,8 @@ function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound |
       const dt = new Date(ts);
       if (Number.isFinite(dt.getTime())) {
         const rel = formatDistanceToNow(dt, { addSuffix: false });
-        // OOO-back framing: "today" reads better than "1 hour ago".
-        timePhrase = bucket === "ooo_back" ? "today" : `${rel} ago`;
         // Outbound side uses "sent X ago" framing per the brief examples.
-        if (bucket === "followup_due") timePhrase = `sent ${rel} ago`;
+        timePhrase = bucket === "followup_due" ? `sent ${rel} ago` : `${rel} ago`;
       }
     } catch {
       timePhrase = "";
@@ -117,8 +120,7 @@ function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound |
 
   // Compose. Examples from the brief:
   //   "Replied 2h ago — pricing question"
-  //   "Follow-up due — sent 6d ago"
-  //   "OOO back today"
+  //   "Follow up — sent 6d ago"
   if (bucket === "followup_due") {
     return `${category}${timePhrase ? " — " + timePhrase : ""}${intentSuffix}`;
   }
@@ -127,6 +129,9 @@ function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound |
 
 export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: QueueCardProps) {
   const whyNow = buildWhyNowLine(lead, latestInbound);
+  // Only genuine out-of-office returns get the note — never plain
+  // follow-ups (gated on the ooo_return_followup key via leadWasAway).
+  const wasAway = leadWasAway({ next_action_key: lead.next_action_key });
   const aiSummary = (latestInbound?.ai_summary ?? "").trim();
   // When ai_summary contains bullets, render with SummaryBody (keeps bullet
   // structure). Otherwise fall back to cleanBodyText prose flow.
@@ -177,6 +182,10 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
         </div>
 
         <p className="mt-0.5 text-xs text-muted-foreground">{whyNow}</p>
+
+        {wasAway && (
+          <p className="mt-0.5 text-xs text-muted-foreground/80">was away — back now</p>
+        )}
 
         {aiSummaryIsBulleted ? (
           <div className="mt-1.5">

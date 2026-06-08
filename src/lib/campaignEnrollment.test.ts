@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   nextBusinessDay,
   addBusinessDays,
+  businessDayOffset,
   cumulativeBusinessOffsets,
   emailOffsets,
   computeStaggeredStarts,
@@ -42,6 +43,24 @@ describe("business-day helpers", () => {
   it("addBusinessDays(d, 0) returns the same business day", () => {
     const wed = new Date("2026-06-03T12:00:00Z");
     expect(addBusinessDays(wed, 0).getUTCDate()).toBe(3);
+  });
+});
+
+describe("businessDayOffset", () => {
+  it("buckets a same-day-but-later touch as offset 0 (date-only compare)", () => {
+    const anchor = new Date("2026-06-03T09:00:00Z"); // Wed 9am
+    const laterSameDay = new Date("2026-06-03T17:00:00Z"); // Wed 5pm
+    expect(businessDayOffset(anchor, laterSameDay)).toBe(0);
+  });
+  it("counts business days and skips the weekend", () => {
+    const fri = new Date("2026-06-05T09:00:00Z");
+    const mon = new Date("2026-06-08T15:00:00Z"); // next business day, later time
+    expect(businessDayOffset(fri, mon)).toBe(1);
+  });
+  it("maps past dates to 0", () => {
+    const anchor = new Date("2026-06-10T09:00:00Z");
+    const past = new Date("2026-06-01T09:00:00Z");
+    expect(businessDayOffset(anchor, past)).toBe(0);
   });
 });
 
@@ -89,6 +108,63 @@ describe("computeStaggeredStarts", () => {
     expect(starts.filter((s) => s === 0)).toHaveLength(10);
     expect(starts.filter((s) => s === 1)).toHaveLength(10);
     expect(starts.filter((s) => s === 2)).toHaveLength(5);
+  });
+
+  it("seeds existing load so new starts avoid days already at cap", () => {
+    // 1 email touch at offset 0, cap 2, day 0 already has 2 booked (existing
+    // enrollments' follow-ups) → both new starts shift to day 1.
+    const starts = computeStaggeredStarts(2, [0], 2, { 0: 2 });
+    expect(starts).toEqual([1, 1]);
+  });
+
+  it("respects the cap when an offset repeats (two emails land on the same day)", () => {
+    // offsets [0, 0] = two email touches on the start day; cap 4 → each lead adds 2,
+    // so at most 2 leads/day. The naive (per-offset +1) check would have allowed 4.
+    const starts = computeStaggeredStarts(3, [0, 0], 4);
+    expect(starts.filter((s) => s === 0)).toHaveLength(2);
+    expect(starts.filter((s) => s === 1)).toHaveLength(1);
+  });
+
+  it("spreads one lead per day when a single lead's touches exceed the cap (infeasible cadence)", () => {
+    // Two day-0 email steps with cap 1 → even ONE lead overflows day 0; the cap is
+    // structurally unsatisfiable. The schedule must NOT pile every lead onto one day
+    // (the old fallback) — one lead per business day is the least-bad spread.
+    const starts = computeStaggeredStarts(3, [0, 0], 1);
+    expect(starts).toEqual([0, 1, 2]);
+    expect(new Set(starts).size).toBe(starts.length); // overflow never stacked
+  });
+
+  it("never stacks different leads when the infeasible offset is not day 0 ([0,1,1])", () => {
+    // offsets [0,1,1] cap 1 → each lead puts 2 emails on its OWN day+1 (unavoidable),
+    // but no OTHER lead's touch may land on that same day. Booking each placed lead
+    // into the load and skipping full days achieves that.
+    const starts = computeStaggeredStarts(3, [0, 1, 1], 1);
+    const owners: Record<number, Set<number>> = {};
+    starts.forEach((s, lead) => {
+      for (const o of [0, 1, 1]) (owners[s + o] ??= new Set()).add(lead);
+    });
+    // No day mixes touches from more than one lead.
+    for (const day of Object.keys(owners)) expect(owners[Number(day)].size).toBe(1);
+  });
+
+  it("respects seeded-full days even for an infeasible cadence", () => {
+    // [0,0] cap 1 is infeasible; days 0 and 1 are already full from existing touches.
+    // New leads must skip the seeded-full days, not pile onto day 0 (which the
+    // load-ignoring early return used to do).
+    const seeded = { 0: 1, 1: 1 };
+    const starts = computeStaggeredStarts(2, [0, 0], 1, seeded);
+    expect(starts).toEqual([2, 3]);
+  });
+
+  it("searches past seeded full days instead of overflowing one (running outreach)", () => {
+    // cap 1, days 0–5 already full from existing touches; 1 new lead, 1 email touch.
+    // The new start must land on day 6 (first day with room), not overflow a full day.
+    const seeded = { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 };
+    const starts = computeStaggeredStarts(1, [0], 1, seeded);
+    expect(starts).toEqual([6]);
+    const load: Record<number, number> = { ...seeded };
+    load[starts[0]] = (load[starts[0]] ?? 0) + 1;
+    expect(load[starts[0]]).toBeLessThanOrEqual(1); // never over cap
   });
 });
 
@@ -171,5 +247,21 @@ describe("buildTouchSchedule", () => {
     const manual = schedule.filter((t) => t.channel !== "email");
     expect(email.every((t) => t.max_age_at === null)).toBe(true);
     expect(manual.every((t) => t.max_age_at !== null)).toBe(true);
+  });
+
+  it("a 0-day gap after a manual touch gives a 1-day max-age, not a 5-day stall", () => {
+    // Manual call (step 1) immediately followed by a same-day step (delay_days 0).
+    // The manual touch's auto-skip horizon must be 1 business day, not balloon to the
+    // 5-day default (the old `nextGap || DEFAULT` bug treated 0 as missing).
+    const steps: CadenceStep[] = [
+      { step_number: 1, channel: "voice", delay_days: 0 },
+      { step_number: 2, channel: "email", delay_days: 0 },
+    ];
+    const wed = new Date("2026-06-03T09:00:00Z"); // Wed (no weekend skip)
+    const schedule = buildTouchSchedule(wed, steps);
+    const call = schedule[0];
+    // eligible Wed the 3rd; +1 business day = Thu the 4th.
+    expect(new Date(call.eligible_at).getUTCDate()).toBe(3);
+    expect(new Date(call.max_age_at as string).getUTCDate()).toBe(4);
   });
 });

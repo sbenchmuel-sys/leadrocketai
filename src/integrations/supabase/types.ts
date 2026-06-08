@@ -530,6 +530,163 @@ export type Database = {
         }
         Relationships: []
       }
+      campaign_collateral: {
+        Row: {
+          attached_step_number: number | null
+          body: string | null
+          campaign_id: string
+          collateral_type: string
+          created_at: string
+          id: string
+          is_edited: boolean
+          title: string | null
+          updated_at: string
+          variant_group: string | null
+        }
+        Insert: {
+          attached_step_number?: number | null
+          body?: string | null
+          campaign_id: string
+          collateral_type: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          title?: string | null
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Update: {
+          attached_step_number?: number | null
+          body?: string | null
+          campaign_id?: string
+          collateral_type?: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          title?: string | null
+          updated_at?: string
+          variant_group?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_collateral_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaign_enrollment: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          current_step_number: number
+          enrolled_at: string
+          id: string
+          lead_id: string
+          started_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          current_step_number?: number
+          enrolled_at?: string
+          id?: string
+          lead_id: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          current_step_number?: number
+          enrolled_at?: string
+          id?: string
+          lead_id?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_enrollment_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_enrollment_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaign_step_content: {
+        Row: {
+          body: string | null
+          campaign_id: string
+          created_at: string
+          id: string
+          is_edited: boolean
+          options_json: Json | null
+          selected_option: number | null
+          sms_text: string | null
+          step_number: number
+          subject: string | null
+          talking_points: string | null
+          updated_at: string
+          variant_group: string | null
+          voicemail_script: string | null
+        }
+        Insert: {
+          body?: string | null
+          campaign_id: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          options_json?: Json | null
+          selected_option?: number | null
+          sms_text?: string | null
+          step_number: number
+          subject?: string | null
+          talking_points?: string | null
+          updated_at?: string
+          variant_group?: string | null
+          voicemail_script?: string | null
+        }
+        Update: {
+          body?: string | null
+          campaign_id?: string
+          created_at?: string
+          id?: string
+          is_edited?: boolean
+          options_json?: Json | null
+          selected_option?: number | null
+          sms_text?: string | null
+          step_number?: number
+          subject?: string | null
+          talking_points?: string | null
+          updated_at?: string
+          variant_group?: string | null
+          voicemail_script?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_step_content_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaign_steps: {
         Row: {
           active: boolean
@@ -630,6 +787,82 @@ export type Database = {
           },
         ]
       }
+      campaign_touch: {
+        Row: {
+          automation_log_id: string | null
+          call_outcome: string | null
+          campaign_id: string
+          channel: string
+          created_at: string
+          draft_id: string | null
+          eligible_at: string | null
+          enrollment_id: string
+          id: string
+          lead_id: string
+          max_age_at: string | null
+          sent_at: string | null
+          status: string
+          step_number: number
+          updated_at: string
+        }
+        Insert: {
+          automation_log_id?: string | null
+          call_outcome?: string | null
+          campaign_id: string
+          channel: string
+          created_at?: string
+          draft_id?: string | null
+          eligible_at?: string | null
+          enrollment_id: string
+          id?: string
+          lead_id: string
+          max_age_at?: string | null
+          sent_at?: string | null
+          status?: string
+          step_number: number
+          updated_at?: string
+        }
+        Update: {
+          automation_log_id?: string | null
+          call_outcome?: string | null
+          campaign_id?: string
+          channel?: string
+          created_at?: string
+          draft_id?: string | null
+          eligible_at?: string | null
+          enrollment_id?: string
+          id?: string
+          lead_id?: string
+          max_age_at?: string | null
+          sent_at?: string | null
+          status?: string
+          step_number?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_touch_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_touch_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "campaign_enrollment"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_touch_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           campaign_type: string
@@ -639,9 +872,11 @@ export type Database = {
           id: string
           include_meeting_cta: boolean
           is_default: boolean
+          knowledge_document_id: string | null
           knowledge_ref: string | null
           motion: Database["public"]["Enums"]["campaign_motion"]
           name: string
+          send_mode: string
           status: string
           updated_at: string
           workspace_id: string
@@ -654,9 +889,11 @@ export type Database = {
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_document_id?: string | null
           knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name: string
+          send_mode?: string
           status?: string
           updated_at?: string
           workspace_id: string
@@ -669,9 +906,11 @@ export type Database = {
           id?: string
           include_meeting_cta?: boolean
           is_default?: boolean
+          knowledge_document_id?: string | null
           knowledge_ref?: string | null
           motion?: Database["public"]["Enums"]["campaign_motion"]
           name?: string
+          send_mode?: string
           status?: string
           updated_at?: string
           workspace_id?: string
@@ -3710,6 +3949,7 @@ export type Database = {
           after_hours_auto: boolean
           blocked_keywords: Json
           blocked_stages: Json
+          cold_auto_send_enabled: boolean
           confidence_threshold: number
           created_at: string
           default_mode: string
@@ -3722,6 +3962,7 @@ export type Database = {
           after_hours_auto?: boolean
           blocked_keywords?: Json
           blocked_stages?: Json
+          cold_auto_send_enabled?: boolean
           confidence_threshold?: number
           created_at?: string
           default_mode?: string
@@ -3734,6 +3975,7 @@ export type Database = {
           after_hours_auto?: boolean
           blocked_keywords?: Json
           blocked_stages?: Json
+          cold_auto_send_enabled?: boolean
           confidence_threshold?: number
           created_at?: string
           default_mode?: string
@@ -3983,6 +4225,7 @@ export type Database = {
         Row: {
           allow_personal_domains: boolean
           billing_email: string | null
+          cold_outreach_postal_address: string | null
           created_at: string
           default_sms_number: string | null
           id: string
@@ -3996,6 +4239,7 @@ export type Database = {
         Insert: {
           allow_personal_domains?: boolean
           billing_email?: string | null
+          cold_outreach_postal_address?: string | null
           created_at?: string
           default_sms_number?: string | null
           id?: string
@@ -4009,6 +4253,7 @@ export type Database = {
         Update: {
           allow_personal_domains?: boolean
           billing_email?: string | null
+          cold_outreach_postal_address?: string | null
           created_at?: string
           default_sms_number?: string | null
           id?: string
@@ -4171,6 +4416,7 @@ export type Database = {
         Args: {
           filter_content_types?: string[]
           filter_customer_facing?: boolean
+          filter_document_id?: string
           filter_lead_id?: string
           match_count?: number
           match_threshold?: number
