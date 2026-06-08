@@ -280,17 +280,20 @@ Deno.serve(async (req) => {
     }
     if (!sendRes.ok) {
       const reason = sendRes.reason || "Send failed";
-      // TERMINAL floor blocks (the lead opted out or is on the do-not-contact list)
-      // mean this lead must NEVER be emailed — re-queuing would loop the card forever
-      // and keep it consuming the capped Outreach queue with repeated send failures.
-      // Treat them like a stopped enrollment: stop it and clear its pending touches
-      // (mirrors the opt-out backstop). Other failures (provider error, missing postal
-      // address, transient floor errors) are retryable, so release the claim.
-      if (reason === "suppressed" || reason === "lead unsubscribed") {
+      // TERMINAL floor blocks mean this lead/address can NEVER be emailed — re-queuing
+      // would loop the card forever and keep it consuming the capped Outreach queue with
+      // repeated send failures. Treat them like a stopped enrollment: stop it and clear
+      // its pending touches (mirrors the opt-out backstop). Covers opt-out / do-not-
+      // contact AND a malformed/missing address (the floor's isSendableColdEmail rejects
+      // an address edited into an invalid shape after enrollment). Other failures
+      // (provider error, missing workspace postal address, transient floor read errors)
+      // are retryable, so release the claim.
+      const TERMINAL_REASONS = ["suppressed", "lead unsubscribed", "invalid email", "no email"];
+      if (TERMINAL_REASONS.includes(reason)) {
         await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
         await admin.from("campaign_touch").update({ status: "skipped" })
           .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
-        return json({ ok: false, error: "This lead can't be emailed (opted out / do-not-contact) — removed from outreach.", optedOut: true }, 409);
+        return json({ ok: false, error: "This lead can't be emailed (opted out, do-not-contact, or no valid address) — removed from outreach.", optedOut: true }, 409);
       }
       // Retryable — release the claim so the rep can try again from the Queue.
       await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
