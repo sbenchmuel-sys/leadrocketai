@@ -1681,7 +1681,17 @@ serve(async (req) => {
             .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
             .eq("user_id", lead.owner_user_id)
             .order("is_default", { ascending: false }).limit(1).maybeSingle();
-          if (!mailAcct) continue;
+          if (!mailAcct) {
+            // The lead owner has no connected mailbox — this touch can't auto-send. A bare
+            // continue would leave it 'scheduled' with the same eligible_at, so it stays at
+            // the front of the oldest-due 50-row page and starves sendable cold touches
+            // behind it every run. Push eligible_at out so the page can drain; it retries
+            // once the owner connects a mailbox.
+            await supabase.from("campaign_touch")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", touch.id);
+            continue;
+          }
 
           const firstName = (lead.name || "").split(" ")[0] || "there";
           const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName);
@@ -1729,6 +1739,23 @@ serve(async (req) => {
           };
           const { data: claim, error: claimErr } = await supabase.from("automation_log").insert(claimRow).select("id").single();
           if (claimErr || !claim) continue; // 23505 → already claimed by a concurrent run; no double-send
+
+          // LATE opt-out guard (closes the unsubscribe race). A recipient can POST the
+          // unsubscribe form — or a bounce / admin / keyword path can set unsubscribed —
+          // AFTER the earlier coldSendFloor passed but BEFORE this send; that window spans
+          // the mailbox/content/token/claim awaits above. Re-run the floor immediately
+          // before the provider call so the public unsubscribe guarantee holds under the
+          // race. On a terminal block, stop the enrollment and mark the claim skipped;
+          // transient read errors just skip this run (the touch stays scheduled, retries).
+          const lateFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!lateFloor.ok) {
+            await supabase.from("automation_log").update({
+              status: "skipped", error_message: `floor: ${lateFloor.reason}`.slice(0, 200), completed_at: new Date().toISOString(),
+            }).eq("id", claim.id);
+            const transient = lateFloor.reason === "suppression check failed" || lateFloor.reason === "lead lookup failed";
+            if (!transient) await endColdEnrollment(supabase, enr.id, "stopped");
+            continue;
+          }
 
           const sendRes = await sendColdEmailTouch({
             supabase, supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
