@@ -203,7 +203,11 @@ export default function NewCampaign() {
         })),
       });
 
-      let skipped = 0;
+      // Per-reason skip lines, mirroring the add-people dialog. enrollLeadsInCampaign
+      // skips leads for several distinct safety reasons (opted out, do-not-contact,
+      // already in another outreach, no email) — report the ACTUAL reason so the rep
+      // gets the right remediation, not a blanket "already in another outreach".
+      const skipLines: string[] = [];
       if (selectedLeads.size > 0) {
         // Route creation-time recipients through the SAME enrollment path as the
         // add-people dialog, so they get campaign_enrollment + campaign_touch rows
@@ -213,7 +217,11 @@ export default function NewCampaign() {
         // the campaign cascades to its steps and any partial enrollment/touch rows).
         try {
           const result = await enrollLeadsInCampaign(campaignId, Array.from(selectedLeads));
-          skipped = selectedLeads.size - result.enrolled;
+          const s = result.skips;
+          if (s.unsubscribed) skipLines.push(`${s.unsubscribed} opted out — won't be contacted`);
+          if (s.suppressed) skipLines.push(`${s.suppressed} on your do-not-contact list`);
+          if (s.alreadyEnrolled) skipLines.push(`${s.alreadyEnrolled} already in another outreach`);
+          if (s.missingEmail) skipLines.push(`${s.missingEmail} have no email address`);
         } catch (enrollErr) {
           await deleteCampaign(campaignId).catch(() => {
             /* best-effort cleanup; surface the ORIGINAL enrollment error below */
@@ -223,10 +231,8 @@ export default function NewCampaign() {
       }
 
       toast.success("Outreach saved as a draft");
-      if (skipped > 0) {
-        toast.info(
-          `${skipped} ${skipped === 1 ? "person was" : "people were"} already in another outreach and ${skipped === 1 ? "wasn't" : "weren't"} added.`,
-        );
+      if (skipLines.length > 0) {
+        toast.info(`Some people weren't added — ${skipLines.join("; ")}.`);
       }
       navigate(`/app/automations/${campaignId}`);
     } catch (err) {
