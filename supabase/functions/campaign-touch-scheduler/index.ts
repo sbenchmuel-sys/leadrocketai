@@ -59,16 +59,13 @@ Deno.serve(async (req) => {
 
   const counters = { queued: 0, auto_skipped: 0, replied: 0, left_for_executor: 0, skipped: 0 };
 
-  // ACTIVE campaign ids — used to CONSTRAIN both due-touch queries below. A
-  // paused/inactive campaign's overdue 'scheduled' touches must stay scheduled (so
-  // they resume on un-pause — we must NOT clear them), but they must NOT occupy the
-  // capped batch: with more than BATCH of them at the front of the oldest-due order
-  // they'd permanently starve live due work on other campaigns (the loop skips them
-  // but leaves them scheduled, so they'd be re-fetched every run). Filtering the
-  // candidate set — rather than mutating the rows — fixes the starvation while keeping
-  // pause reversible.
+  // ACTIVE campaigns — used to CONSTRAIN the due-touch queries below. A paused/inactive
+  // campaign's overdue 'scheduled' touches must stay scheduled (so they resume on
+  // un-pause — we must NOT clear them) but must NOT occupy the capped batch, or with
+  // more than BATCH of them at the front they'd permanently starve live work. Filtering
+  // the candidate set — not mutating the rows — fixes that while keeping pause reversible.
   const { data: activeCamps, error: campErr } = await supabase
-    .from("campaigns").select("id").eq("status", "active");
+    .from("campaigns").select("id, workspace_id, send_mode").eq("status", "active");
   if (campErr) {
     return new Response(JSON.stringify({ ok: false, error: campErr.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -76,23 +73,54 @@ Deno.serve(async (req) => {
   }
   const activeCampIds = (activeCamps || []).map((c: any) => c.id);
 
-  // 1) Due touches, oldest first — constrained to active campaigns.
+  // EXECUTOR-OWNED campaigns = active + send_mode='automatic' + workspace gate fully on
+  // (cold_auto_send_enabled + timezone + postal). The automation-executor sends those
+  // AUTOMATIC email touches directly; the scheduler only ever leaves them untouched.
+  // So the scheduler must NOT pull their EMAIL touches into its capped batch — a backlog
+  // of them at the front would starve the manual/review touches behind them. (Manual
+  // touches of the same campaigns are still the scheduler's job, so we exclude only by
+  // channel=email AND executor-owned.)
+  const autoWsIds = [...new Set((activeCamps || []).filter((c: any) => c.send_mode === "automatic").map((c: any) => c.workspace_id))];
+  let gatedWs = new Set<string>();
+  if (autoWsIds.length > 0) {
+    const [{ data: wsRows }, { data: autoRows }] = await Promise.all([
+      supabase.from("workspaces").select("id, timezone, cold_outreach_postal_address").in("id", autoWsIds),
+      supabase.from("workspace_automation_settings").select("workspace_id, cold_auto_send_enabled").in("workspace_id", autoWsIds),
+    ]);
+    const autoOn = new Set((autoRows || []).filter((r: any) => r.cold_auto_send_enabled).map((r: any) => r.workspace_id));
+    gatedWs = new Set((wsRows || [])
+      .filter((w: any) => w.timezone && String(w.cold_outreach_postal_address || "").trim() && autoOn.has(w.id))
+      .map((w: any) => w.id));
+  }
+  const executorOwned = new Set((activeCamps || [])
+    .filter((c: any) => c.send_mode === "automatic" && gatedWs.has(c.workspace_id))
+    .map((c: any) => c.id));
+  const schedulerEmailCampIds = activeCampIds.filter((id: string) => !executorOwned.has(id));
+
+  // 1) Due touches, oldest first. Two queries so neither channel starves the other:
+  //    (a) MANUAL touches across ALL active campaigns;
+  //    (b) EMAIL touches only for scheduler-owned campaigns (review-mode or
+  //        automatic-but-gate-off) — executor-owned email touches are excluded.
+  const TOUCH_SEL = "id, enrollment_id, campaign_id, lead_id, step_number, channel, status, eligible_at, max_age_at";
   let touches: any[] = [];
   if (activeCampIds.length > 0) {
-    const { data: dueTouches, error: dueErr } = await supabase
-      .from("campaign_touch")
-      .select("id, enrollment_id, campaign_id, lead_id, step_number, channel, status, eligible_at, max_age_at")
-      .eq("status", "scheduled")
-      .in("campaign_id", activeCampIds)
-      .lte("eligible_at", nowIso)
-      .order("eligible_at", { ascending: true })
-      .limit(BATCH);
-    if (dueErr) {
-      return new Response(JSON.stringify({ ok: false, error: dueErr.message }), {
+    const manualQ = supabase.from("campaign_touch").select(TOUCH_SEL)
+      .eq("status", "scheduled").in("campaign_id", activeCampIds)
+      .neq("channel", "email").lte("eligible_at", nowIso)
+      .order("eligible_at", { ascending: true }).limit(BATCH);
+    const emailQ = schedulerEmailCampIds.length === 0
+      ? Promise.resolve({ data: [], error: null })
+      : supabase.from("campaign_touch").select(TOUCH_SEL)
+          .eq("status", "scheduled").in("campaign_id", schedulerEmailCampIds)
+          .eq("channel", "email").lte("eligible_at", nowIso)
+          .order("eligible_at", { ascending: true }).limit(BATCH);
+    const [manualRes, emailRes] = await Promise.all([manualQ, emailQ]);
+    if (manualRes.error || emailRes.error) {
+      return new Response(JSON.stringify({ ok: false, error: (manualRes.error || emailRes.error)!.message }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    touches = dueTouches || [];
+    touches = [...(manualRes.data || []), ...(emailRes.data || [])];
   }
   // NOTE: do NOT early-return when there are no active campaigns / no due touches. The
   // stale-queued cleanup pass below must still run — an ignored manual touch already in

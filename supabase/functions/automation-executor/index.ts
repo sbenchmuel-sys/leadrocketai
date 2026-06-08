@@ -1544,22 +1544,36 @@ serve(async (req) => {
     if (privileged) try {
       const internalSecret = Deno.env.get("INTERNAL_API_SECRET") ?? "";
       const unsubSecret = getUnsubscribeSecret();
-      // CONSTRAIN the cold due query to campaigns that are actually auto-sendable here:
-      // active + send_mode='automatic'. Without this, overdue 'scheduled' email touches
-      // from PAUSED or REVIEW-mode campaigns sit at the front of the oldest-due order,
-      // fill the 50-row cap, get skipped by the per-touch checks below (which leave them
-      // 'scheduled'), and starve automatic cold sends beyond that first page. Filtering
-      // the candidate set keeps those touches untouched (paused resumes; review touches
-      // are surfaced by the scheduler) while letting live automatic sends through.
+      // CONSTRAIN the cold due query to genuinely AUTO-SENDABLE campaigns: active +
+      // send_mode='automatic' + workspace gate fully on (cold_auto_send_enabled +
+      // timezone + postal). Without the gate filter, email touches from automatic
+      // campaigns in NOT-yet-gated workspaces (and paused/review ones) sit at the front
+      // of the oldest-due order, fill the 50-row cap, get skipped by the per-touch gate
+      // check below (which leaves them 'scheduled' for the scheduler to surface), and
+      // starve genuinely sendable cold touches behind them. Filtering keeps those rows
+      // untouched while letting live automatic sends through. (The per-touch checks
+      // below remain as defense in depth.)
       const { data: autoCamps } = await supabase
-        .from("campaigns").select("id").eq("status", "active").eq("send_mode", "automatic");
-      const autoCampIds = (autoCamps || []).map((c: any) => c.id);
-      const coldDue = autoCampIds.length === 0 ? [] : (await supabase
+        .from("campaigns").select("id, workspace_id").eq("status", "active").eq("send_mode", "automatic");
+      const autoWsIds = [...new Set((autoCamps || []).map((c: any) => c.workspace_id))];
+      let gatedWs = new Set<string>();
+      if (autoWsIds.length > 0) {
+        const [{ data: wsRows }, { data: autoRows }] = await Promise.all([
+          supabase.from("workspaces").select("id, timezone, cold_outreach_postal_address").in("id", autoWsIds),
+          supabase.from("workspace_automation_settings").select("workspace_id, cold_auto_send_enabled").in("workspace_id", autoWsIds),
+        ]);
+        const autoOn = new Set((autoRows || []).filter((r: any) => r.cold_auto_send_enabled).map((r: any) => r.workspace_id));
+        gatedWs = new Set((wsRows || [])
+          .filter((w: any) => w.timezone && String(w.cold_outreach_postal_address || "").trim() && autoOn.has(w.id))
+          .map((w: any) => w.id));
+      }
+      const sendableCampIds = (autoCamps || []).filter((c: any) => gatedWs.has(c.workspace_id)).map((c: any) => c.id);
+      const coldDue = sendableCampIds.length === 0 ? [] : (await supabase
         .from("campaign_touch")
         .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at")
         .eq("channel", "email")
         .eq("status", "scheduled")
-        .in("campaign_id", autoCampIds)
+        .in("campaign_id", sendableCampIds)
         .lte("eligible_at", new Date().toISOString())
         .order("eligible_at", { ascending: true })
         .limit(50)).data;
