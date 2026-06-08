@@ -383,6 +383,15 @@ serve(async (req) => {
               .eq("id", originTouch.enrollment_id)
               .gte("current_step_number", 1);
           }
+          // The lead is now unsubscribed (set above), so its entire cold cadence is
+          // dead — clear any still-pending touches (mirrors endColdEnrollment), or the
+          // workers (which query campaign_touch by status before enrollment status)
+          // would keep re-selecting leftover 'scheduled'/'queued' rows and occupy the
+          // capped batch. Scoped by lead (unsubscribe kills all the lead's cadences).
+          await serviceSupabase.from("campaign_touch")
+            .update({ status: "skipped" })
+            .eq("lead_id", leadId)
+            .in("status", ["scheduled", "queued"]);
 
           // The bounce is fully handled (lead stopped + system_note written + cold
           // enrollment stamped). DO NOT fall through to the normal interaction insert:
