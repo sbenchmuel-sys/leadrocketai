@@ -59,26 +59,46 @@ Deno.serve(async (req) => {
 
   const counters = { queued: 0, auto_skipped: 0, replied: 0, left_for_executor: 0, skipped: 0 };
 
-  // 1) Due touches, oldest first.
-  const { data: dueTouches, error: dueErr } = await supabase
-    .from("campaign_touch")
-    .select("id, enrollment_id, campaign_id, lead_id, step_number, channel, status, eligible_at, max_age_at")
-    .eq("status", "scheduled")
-    .lte("eligible_at", nowIso)
-    .order("eligible_at", { ascending: true })
-    .limit(BATCH);
-  if (dueErr) {
-    return new Response(JSON.stringify({ ok: false, error: dueErr.message }), {
+  // ACTIVE campaign ids — used to CONSTRAIN both due-touch queries below. A
+  // paused/inactive campaign's overdue 'scheduled' touches must stay scheduled (so
+  // they resume on un-pause — we must NOT clear them), but they must NOT occupy the
+  // capped batch: with more than BATCH of them at the front of the oldest-due order
+  // they'd permanently starve live due work on other campaigns (the loop skips them
+  // but leaves them scheduled, so they'd be re-fetched every run). Filtering the
+  // candidate set — rather than mutating the rows — fixes the starvation while keeping
+  // pause reversible.
+  const { data: activeCamps, error: campErr } = await supabase
+    .from("campaigns").select("id").eq("status", "active");
+  if (campErr) {
+    return new Response(JSON.stringify({ ok: false, error: campErr.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  // NOTE: do NOT early-return when no scheduled touches are due. The stale-queued
-  // cleanup pass below must still run — if the only blocked work is an ignored
-  // manual touch already in status='queued', the scheduled query is empty and an
-  // early return would leave that touch (and the whole cadence) stalled forever.
-  // With no due touches the bulk loads run on empty id lists (harmless) and the
-  // processing loop is a no-op, so flow reaches the stale-queued cleanup.
-  const touches = dueTouches || [];
+  const activeCampIds = (activeCamps || []).map((c: any) => c.id);
+
+  // 1) Due touches, oldest first — constrained to active campaigns.
+  let touches: any[] = [];
+  if (activeCampIds.length > 0) {
+    const { data: dueTouches, error: dueErr } = await supabase
+      .from("campaign_touch")
+      .select("id, enrollment_id, campaign_id, lead_id, step_number, channel, status, eligible_at, max_age_at")
+      .eq("status", "scheduled")
+      .in("campaign_id", activeCampIds)
+      .lte("eligible_at", nowIso)
+      .order("eligible_at", { ascending: true })
+      .limit(BATCH);
+    if (dueErr) {
+      return new Response(JSON.stringify({ ok: false, error: dueErr.message }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    touches = dueTouches || [];
+  }
+  // NOTE: do NOT early-return when there are no active campaigns / no due touches. The
+  // stale-queued cleanup pass below must still run — an ignored manual touch already in
+  // status='queued' wouldn't match the scheduled query, and an early return would leave
+  // it (and the whole cadence) stalled forever. With no due touches the bulk loads run
+  // on empty id lists (harmless) and the processing loop is a no-op.
 
   // 2) Bulk-load the related rows into maps.
   const enrollmentIds = [...new Set(touches.map((t) => t.enrollment_id))];
@@ -200,13 +220,17 @@ Deno.serve(async (req) => {
   // must be enforced HERE — otherwise an ignored call/SMS/WhatsApp/LinkedIn card
   // would block the cadence forever (current_step_number never advances). Only
   // manual touches carry max_age_at; review emails (max_age_at NULL) wait for the rep.
-  const { data: staleQueued } = await supabase
+  // Also constrained to ACTIVE campaigns: a PAUSED campaign's queued touch must not be
+  // auto-skipped (that would advance a paused cadence), and its dead rows must not
+  // starve this capped batch either. They resume correctly when the campaign reactivates.
+  const staleQueued = activeCampIds.length === 0 ? [] : (await supabase
     .from("campaign_touch")
     .select("id, enrollment_id, campaign_id, lead_id, step_number")
     .eq("status", "queued")
+    .in("campaign_id", activeCampIds)
     .not("max_age_at", "is", null)
     .lt("max_age_at", nowIso)
-    .limit(BATCH);
+    .limit(BATCH)).data;
   for (const t of (staleQueued || [])) {
     const { data: enr } = await supabase.from("campaign_enrollment")
       .select("current_step_number, status, started_at").eq("id", t.enrollment_id).maybeSingle();

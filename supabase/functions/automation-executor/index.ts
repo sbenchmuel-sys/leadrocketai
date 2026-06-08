@@ -1544,14 +1544,25 @@ serve(async (req) => {
     if (privileged) try {
       const internalSecret = Deno.env.get("INTERNAL_API_SECRET") ?? "";
       const unsubSecret = getUnsubscribeSecret();
-      const { data: coldDue } = await supabase
+      // CONSTRAIN the cold due query to campaigns that are actually auto-sendable here:
+      // active + send_mode='automatic'. Without this, overdue 'scheduled' email touches
+      // from PAUSED or REVIEW-mode campaigns sit at the front of the oldest-due order,
+      // fill the 50-row cap, get skipped by the per-touch checks below (which leave them
+      // 'scheduled'), and starve automatic cold sends beyond that first page. Filtering
+      // the candidate set keeps those touches untouched (paused resumes; review touches
+      // are surfaced by the scheduler) while letting live automatic sends through.
+      const { data: autoCamps } = await supabase
+        .from("campaigns").select("id").eq("status", "active").eq("send_mode", "automatic");
+      const autoCampIds = (autoCamps || []).map((c: any) => c.id);
+      const coldDue = autoCampIds.length === 0 ? [] : (await supabase
         .from("campaign_touch")
         .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at")
         .eq("channel", "email")
         .eq("status", "scheduled")
+        .in("campaign_id", autoCampIds)
         .lte("eligible_at", new Date().toISOString())
         .order("eligible_at", { ascending: true })
-        .limit(50);
+        .limit(50)).data;
 
       for (const touch of (coldDue || [])) {
         // Honor the SAME per-run send cap as the legacy loop — cold sends count
