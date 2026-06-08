@@ -94,6 +94,16 @@ Deno.serve(async (req) => {
     .update({ status: "stopped" })
     .eq("lead_id", lead.id)
     .in("status", ["scheduled", "active"]);
+  // 2b) Clear the lead's still-pending touches (mirrors endColdEnrollment). The
+  //     scheduler/executor query campaign_touch by status/eligible_at BEFORE checking
+  //     enrollment status, so a 'scheduled'/'queued' touch left behind by an
+  //     unsubscribe would keep being re-selected and skipped — occupying the capped
+  //     batch and starving live touches. A fully-unsubscribed lead's entire cold
+  //     cadence is dead, so scope by lead.
+  await supabase.from("campaign_touch")
+    .update({ status: "skipped" })
+    .eq("lead_id", lead.id)
+    .in("status", ["scheduled", "queued"]);
 
   // 3) Add the address to the workspace do-not-contact list (idempotent on the
   //    table's UNIQUE constraint) so re-enrollment also fails closed.
