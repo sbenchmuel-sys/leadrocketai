@@ -25,7 +25,7 @@
 // would show after click. Single source of truth is the snapshot.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   getQueueState,
@@ -101,14 +101,21 @@ export default function Queue() {
   // ── Outreach (cold campaign touches) — separate data source for the tab ──
   const [outreachTouches, setOutreachTouches] = useState<OutreachTouch[]>([]);
   const [outreachLoading, setOutreachLoading] = useState(true);
+  // Monotonic request id: the mount load and the tab-open refresh can be in flight at
+  // once, and fetchOutreachQueue calls can resolve OUT OF ORDER. Only the latest call's
+  // response may touch state — otherwise a slow earlier request could overwrite the
+  // newer snapshot (and tab count) with stale data.
+  const outreachReqId = useRef(0);
   const loadOutreach = useCallback(async () => {
+    const reqId = ++outreachReqId.current;
     setOutreachLoading(true);
     try {
-      setOutreachTouches(await fetchOutreachQueue());
+      const data = await fetchOutreachQueue();
+      if (reqId === outreachReqId.current) setOutreachTouches(data);
     } catch {
       /* non-fatal — the reactive lists still render */
     } finally {
-      setOutreachLoading(false);
+      if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
   }, []);
   useEffect(() => { void loadOutreach(); }, [loadOutreach]);
