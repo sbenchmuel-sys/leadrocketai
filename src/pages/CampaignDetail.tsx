@@ -43,11 +43,11 @@ import {
   fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
-  assignCampaignToLead,
   type CampaignWithSteps,
   type CampaignLead,
   type CampaignCollateral,
 } from "@/lib/campaignQueries";
+import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
 import { CampaignCollateralSection } from "@/components/automations/CampaignCollateralSection";
@@ -137,11 +137,14 @@ export default function CampaignDetail() {
   };
 
   const handleRemovePerson = async (leadId: string) => {
+    if (!id) return;
     try {
-      await assignCampaignToLead(leadId, null);
+      // Stop their schedule (delete enrollment → touches cascade) AND clear
+      // campaign_id — clearing campaign_id alone would leave the cadence running.
+      await unenrollLeadFromCampaign(id, leadId);
       setPeople((prev) => prev.filter((p) => p.id !== leadId));
-    } catch {
-      toast.error("Couldn't remove that person");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove that person");
     }
   };
 
