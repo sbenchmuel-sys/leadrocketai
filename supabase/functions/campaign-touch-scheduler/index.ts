@@ -123,7 +123,14 @@ Deno.serve(async (req) => {
     // Enrollment / campaign must be live.
     if (!["scheduled", "active"].includes(enr.status)) { counters.skipped++; continue; }
     if (camp.status !== "active") { counters.skipped++; continue; }
-    if (lead.unsubscribed) { counters.skipped++; continue; }
+    // Unsubscribed → STOP the enrollment, not just skip: a bare continue leaves the
+    // touch 'scheduled' and the enrollment live, so it's re-selected and skipped every
+    // run forever (oldest-first, 200-row cap) and can crowd out legitimate due work.
+    if (lead.unsubscribed) {
+      await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", enr.id);
+      counters.skipped++;
+      continue;
+    }
 
     // Reply bridge: a reply since starting pulls the lead out of the cold cadence.
     if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {

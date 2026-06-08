@@ -1534,7 +1534,17 @@ serve(async (req) => {
           const { data: lead } = await supabase.from("leads")
             .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting")
             .eq("id", touch.lead_id).maybeSingle();
-          if (!lead || lead.unsubscribed || !lead.email) continue;
+          if (!lead) continue;
+          // Unsubscribed (via the unsubscribe endpoint, a bounce, or an admin/keyword
+          // path) → STOP the enrollment, don't just skip. A bare continue would leave
+          // the touch 'scheduled' and the enrollment live, so the cold query
+          // (oldest-first, 50-row cap) would re-select and skip it on every run forever,
+          // eventually crowding out legitimate due touches.
+          if (lead.unsubscribed) {
+            await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", enr.id);
+            continue;
+          }
+          if (!lead.email) continue;
           if (!["active", "new"].includes(lead.status)) continue;
 
           // Reply bridge: a reply since starting pulls the lead out of the cold cadence.
