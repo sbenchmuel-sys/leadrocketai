@@ -299,6 +299,29 @@ export async function advanceColdEnrollment(
     .eq("id", touch.enrollment_id);
 }
 
+/**
+ * End a cold enrollment: move it to a TERMINAL state AND clear its still-pending
+ * touches. The scheduler's and executor's due queries filter ONLY on
+ * campaign_touch.status / eligible_at (not on enrollment status), so a terminal
+ * enrollment that leaves a 'scheduled' (or 'queued') touch behind would have that
+ * dead row re-selected and skipped on every run — and once enough accumulate at the
+ * oldest-due front they starve legitimate live touches (the 50/200-row batch caps).
+ * Marking the pending touches 'skipped' removes them from those queries for good.
+ * Use this for EVERY terminal exit: replied, unsubscribed/stopped, floor-blocked.
+ */
+export async function endColdEnrollment(
+  supabase: ServiceClient,
+  enrollmentId: string,
+  status: "replied" | "stopped" | "completed",
+): Promise<void> {
+  await supabase.from("campaign_enrollment").update({ status }).eq("id", enrollmentId);
+  await supabase
+    .from("campaign_touch")
+    .update({ status: "skipped" })
+    .eq("enrollment_id", enrollmentId)
+    .in("status", ["scheduled", "queued"]);
+}
+
 /** The public unsubscribe URL carrying the signed token. */
 export function buildUnsubscribeUrl(supabaseUrl: string, token: string): string {
   return `${supabaseUrl}/functions/v1/outreach-unsubscribe?token=${encodeURIComponent(token)}`;

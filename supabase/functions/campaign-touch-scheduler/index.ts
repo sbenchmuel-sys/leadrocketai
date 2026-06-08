@@ -25,7 +25,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import { loadExecutionSettings, type ExecutionSettings } from "../_shared/executionSettings.ts";
-import { advanceColdEnrollment } from "../_shared/coldOutreach.ts";
+import { advanceColdEnrollment, endColdEnrollment } from "../_shared/coldOutreach.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -123,19 +123,20 @@ Deno.serve(async (req) => {
     // Enrollment / campaign must be live.
     if (!["scheduled", "active"].includes(enr.status)) { counters.skipped++; continue; }
     if (camp.status !== "active") { counters.skipped++; continue; }
-    // Unsubscribed → STOP the enrollment, not just skip: a bare continue leaves the
-    // touch 'scheduled' and the enrollment live, so it's re-selected and skipped every
-    // run forever (oldest-first, 200-row cap) and can crowd out legitimate due work.
+    // Unsubscribed → STOP the enrollment AND clear its pending touches: leaving the
+    // touch 'scheduled' would have it re-selected and skipped every run (oldest-first,
+    // 200-row cap), eventually crowding out legitimate due work.
     if (lead.unsubscribed) {
-      await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", enr.id);
+      await endColdEnrollment(supabase, enr.id, "stopped");
       counters.skipped++;
       continue;
     }
 
-    // Reply bridge: a reply since starting pulls the lead out of the cold cadence.
+    // Reply bridge: a reply since starting pulls the lead out of the cold cadence
+    // (and clears its pending touches so they don't linger in the due queue).
     if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {
       if (!markEnrollmentReplied.has(t.enrollment_id)) {
-        await supabase.from("campaign_enrollment").update({ status: "replied" }).eq("id", t.enrollment_id);
+        await endColdEnrollment(supabase, t.enrollment_id, "replied");
         markEnrollmentReplied.add(t.enrollment_id);
         counters.replied++;
       }
@@ -221,15 +222,13 @@ Deno.serve(async (req) => {
     // and arm the next step — continuing the cold cadence AFTER an inbound reply. Pull
     // the lead out instead (and clear the stranded card).
     if (ld.last_inbound_at && enr.started_at && new Date(ld.last_inbound_at) > new Date(enr.started_at)) {
-      await supabase.from("campaign_enrollment").update({ status: "replied" }).eq("id", t.enrollment_id);
-      await supabase.from("campaign_touch").update({ status: "skipped" }).eq("id", t.id).eq("status", "queued");
+      await endColdEnrollment(supabase, t.enrollment_id, "replied");
       counters.replied++;
       continue;
     }
     // Unsubscribed (bounce / keyword / admin) → stop the enrollment, don't advance it.
     if (ld.unsubscribed) {
-      await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", t.enrollment_id);
-      await supabase.from("campaign_touch").update({ status: "skipped" }).eq("id", t.id).eq("status", "queued");
+      await endColdEnrollment(supabase, t.enrollment_id, "stopped");
       continue;
     }
 

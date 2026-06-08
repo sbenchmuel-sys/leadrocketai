@@ -23,6 +23,7 @@ import {
   coldSendFloor,
   sendColdEmailTouch,
   advanceColdEnrollment,
+  endColdEnrollment,
   buildUnsubscribeUrl,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
@@ -1541,15 +1542,16 @@ serve(async (req) => {
           // (oldest-first, 50-row cap) would re-select and skip it on every run forever,
           // eventually crowding out legitimate due touches.
           if (lead.unsubscribed) {
-            await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", enr.id);
+            await endColdEnrollment(supabase, enr.id, "stopped");
             continue;
           }
           if (!lead.email) continue;
           if (!["active", "new"].includes(lead.status)) continue;
 
-          // Reply bridge: a reply since starting pulls the lead out of the cold cadence.
+          // Reply bridge: a reply since starting pulls the lead out of the cold cadence
+          // (and clears its pending touches so they don't linger in the cold due query).
           if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {
-            await supabase.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
+            await endColdEnrollment(supabase, enr.id, "replied");
             continue;
           }
 
@@ -1576,7 +1578,12 @@ serve(async (req) => {
           // Fail-closed floor: unsubscribed + workspace do-not-contact list.
           const floor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
           if (!floor.ok) {
-            await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", enr.id);
+            // PERMANENT blocks (unsubscribed / suppressed / bad address) end the
+            // enrollment and clear its pending touches. TRANSIENT failures (a DB read
+            // that errored) must NOT — that would kill a live cadence on a blip; just
+            // skip this run and let the still-scheduled touch retry next tick.
+            const transient = floor.reason === "suppression check failed" || floor.reason === "lead lookup failed";
+            if (!transient) await endColdEnrollment(supabase, enr.id, "stopped");
             continue;
           }
 
