@@ -106,16 +106,18 @@ Deno.serve(async (req) => {
 
   // Step 1: resolve which workspace(s) OWN the receiving number (params.To).
   // A workspace owns it if workspaces.default_sms_number OR
-  // call_settings.default_twilio_number matches on digits only. We narrow with an
-  // ilike on the last 10 digits, then confirm with exact digits equality (same
-  // semantics as the legacy disambiguation below).
-  const toLast10 = toDigits.slice(-10);
+  // call_settings.default_twilio_number matches on digits only. We compare on
+  // digits() in JS rather than a SQL prefilter: those settings inputs are free
+  // text, so a stored number may be formatted (e.g. "+1 (555) 123-4567") and its
+  // digits are NOT contiguous — a contiguous-substring ilike would miss it and the
+  // inbound SMS would be silently dropped as unscoped. Workspaces are pilot-scale
+  // (invited only), so scanning the non-null numbers is cheap.
   const ownerWorkspaceIds = new Set<string>();
 
   const { data: wsNumberRows } = await supabase
     .from("workspaces")
     .select("id, default_sms_number")
-    .ilike("default_sms_number", `%${toLast10}`);
+    .not("default_sms_number", "is", null);
   for (const w of wsNumberRows ?? []) {
     if (w.default_sms_number && digits(w.default_sms_number) === toDigits) {
       ownerWorkspaceIds.add(w.id);
@@ -125,7 +127,7 @@ Deno.serve(async (req) => {
   const { data: csNumberRows } = await supabase
     .from("call_settings")
     .select("workspace_id, default_twilio_number")
-    .ilike("default_twilio_number", `%${toLast10}`);
+    .not("default_twilio_number", "is", null);
   for (const c of csNumberRows ?? []) {
     if (c.default_twilio_number && digits(c.default_twilio_number) === toDigits) {
       ownerWorkspaceIds.add(c.workspace_id);
