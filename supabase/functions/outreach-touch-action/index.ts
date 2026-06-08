@@ -133,11 +133,12 @@ Deno.serve(async (req) => {
     if (enr && enr.status !== "replied") {
       await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
     }
-    // Clear the surfaced card: mark the queued touch skipped so it leaves the
-    // Outreach list (the fetch filters on status='queued'). Otherwise the card
-    // would reappear forever and every action would hit this same 409. The reply
-    // itself is handled in the normal Queue (Follow up).
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    // Clear ALL the enrollment's pending touches (not just this card): the workers
+    // query campaign_touch by status BEFORE checking enrollment status, so future
+    // 'scheduled' touches of a now-replied enrollment would linger and occupy the
+    // capped batch. The reply itself is handled in the normal Queue (Follow up).
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
   }
 
@@ -145,7 +146,8 @@ Deno.serve(async (req) => {
   // marked the enrollment stopped but left a queued touch behind) or completed,
   // clear the stranded card and refuse — never send/advance a dead enrollment.
   if (enr && !["scheduled", "active"].includes(enr.status)) {
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
   }
 
@@ -155,10 +157,12 @@ Deno.serve(async (req) => {
   // it, mark_sent on a manual touch would still advance an opted-out lead's cadence.
   // Clear the card and stop the enrollment, mirroring the replied / inactive backstops.
   if (lead.unsubscribed) {
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
     if (enr && ["scheduled", "active"].includes(enr.status)) {
       await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
     }
+    // Clear ALL the enrollment's pending touches, not just this card (see reply backstop).
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This lead opted out — removed from outreach.", optedOut: true }, 409);
   }
 
