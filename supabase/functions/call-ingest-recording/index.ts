@@ -20,6 +20,8 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const twilioSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const twilioToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  const apiKey = Deno.env.get("TWILIO_API_KEY");
+  const apiSecret = Deno.env.get("TWILIO_API_SECRET");
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
@@ -61,7 +63,9 @@ Deno.serve(async (req) => {
     }
 
     // Download from Twilio
-    if (!recording.twilio_recording_url || !twilioSid || !twilioToken) {
+    // Need the recording URL, the Account SID, and at least one credential pair —
+    // API key/secret OR auth token — so an outbound-only deployment runs on API keys.
+    if (!recording.twilio_recording_url || !twilioSid || (!(apiKey && apiSecret) && !twilioToken)) {
       logger.error("ingest_missing_config", { recordingId, hasTwilioUrl: !!recording.twilio_recording_url });
       await supabase.from("call_recordings").update({ status: "failed" }).eq("id", recordingId);
       return new Response(JSON.stringify({ ok: false, error: "Missing Twilio config or URL" }), {
@@ -73,8 +77,6 @@ Deno.serve(async (req) => {
     const audioUrl = `${recording.twilio_recording_url}.wav`;
     // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
     // Account SID stays in the URL path either way.
-    const apiKey = Deno.env.get("TWILIO_API_KEY");
-    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
     const authHeader = apiKey && apiSecret
       ? btoa(`${apiKey}:${apiSecret}`)
       : btoa(`${twilioSid}:${twilioToken}`);
