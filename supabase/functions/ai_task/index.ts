@@ -50,8 +50,8 @@ const SIGNOFF_WORDS = new Set([
   "kindly", "respectfully", "yours", "truly",
 ]);
 
-const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+[\p{L}\p{N}][^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
-const selfCheckLineRe = /^(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
+const greetingLineRe = /^(?:Subject:|(?:Hi|Hey|Hello|Dear|Thank you)\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])[^\n]{0,80}|[\p{Lu}][\p{Ll}]{1,20},)\s*$/iu;
+const selfCheckLineRe = /^(?:[-*•]\s*)?(?:\*\*)?\s*(?:Word count(?: check)?|All instructions|Initial sentence|One value point|Clear CTA|Constraint check|Output check|Final check|Compliance check|The email\b|This is under\b|All constraints\b|I (?:have|followed|checked)\b)/i;
 
 const isRealGreetingLine = (line: string): boolean => {
   const trimmed = line.trim();
@@ -62,7 +62,21 @@ const isRealGreetingLine = (line: string): boolean => {
 };
 
 const looksLikeCompleteEmail = (text: string): boolean =>
-  text.trim().length >= 40 && /^(?:Subject:|Hi|Hey|Hello|Dear|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+  text.trim().length >= 40 && /^(?:Subject:|Hi\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hey\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Hello\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Dear\s+(?:[\p{L}\p{N}]|\{FirstName\}|\[(?:First\s*)?Name\])|Thank you|[\p{Lu}][\p{Ll}]{1,20},)/iu.test(text.trim()) && /[.!?]/.test(text);
+
+function stripValidationNoiseLines(text: string): string {
+  return (text || "")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (selfCheckLineRe.test(trimmed)) return false;
+      return !/^(?:[-*•]\s*)?(?:\*\*)?\s*(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Notes?)\b/i.test(trimmed);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function getInboundWarmIntroViolation(content: string, payload: Record<string, unknown>): string | null {
   const text = (content || "").trim();
@@ -88,6 +102,53 @@ function getLeadFirstNameFromContext(leadContext?: string): string | null {
 
   if (!candidate || /^(?:unknown|none|null|n\/a)$/i.test(candidate)) return null;
   return candidate;
+}
+
+function getRepFirstNameFromContext(repContext?: string): string | null {
+  if (!repContext) return null;
+  const raw = repContext.match(/Sender Name:\s*(.+)/i)?.[1]?.trim();
+  if (!raw) return null;
+  const candidate = raw
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .match(/[\p{L}][\p{L}'’.-]{1,}/u)?.[0]
+    ?.replace(/[.,;:!?]+$/u, "");
+  if (!candidate || /^(?:unknown|none|null|n\/a|sales|rep)$/i.test(candidate)) return null;
+  return candidate;
+}
+
+function substitutePlaceholders(
+  text: string,
+  leadFirst: string | null,
+  repFirst: string | null,
+  meetingLink: string | null,
+): string {
+  let out = text;
+  if (leadFirst) {
+    out = out.replace(/\[(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\]/gi, leadFirst);
+    out = out.replace(/\{(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name)\}/gi, leadFirst);
+  }
+  if (repFirst) {
+    out = out.replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, repFirst);
+    out = out.replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name)\}/gi, repFirst);
+  }
+  if (meetingLink) {
+    out = out.replace(/\[(?:Meeting\s*Link|Calendar\s*Link|Booking\s*Link)\]/gi, meetingLink);
+  }
+  out = out.replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team");
+  return out;
+}
+
+function normalizeCampaignTemplatePlaceholders(text: string): string {
+  return text
+    .replace(/\[(?:First\s*Name|Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\]/gi, "{FirstName}")
+    .replace(/\{(?:First\s+Name|Lead'?s?\s*(?:First\s*)?Name|Prospect(?:'?s?\s*First)?\s*Name)\}/gi, "{FirstName}")
+    .replace(/\[(?:Company|Company\s*Name|Unknown\s*Company)\]/gi, "{Company}")
+    .replace(/\{(?:Company\s+Name|Unknown\s*Company)\}/gi, "{Company}")
+    .replace(/\[(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\]/gi, "{RepFirstName}")
+    .replace(/\{(?:Rep'?s?\s*(?:First\s*)?Name|Your\s*Name|Sender\s*Name|My\s*Name|Sales\s*Rep)\}/gi, "{RepFirstName}")
+    .replace(/\[(?:Your\s*Company|Sender\s*Company|Our\s*Company)\]/gi, "our team")
+    .replace(/\[(?:common|specific|relevant|insert|industry|persona|prospect|lead|customer|company|role)[^\]]{0,80}\]/gi, "a relevant priority");
 }
 
 function stripSelfChecksAndDuplicateBodies(text: string): string {
@@ -150,7 +211,7 @@ function stripLeakedReasoning(text: string): string {
       }
 
       if (lastGreetingLineIdx >= 0) {
-        const result = lines.slice(lastGreetingLineIdx).join("\n").trim();
+          const result = stripValidationNoiseLines(lines.slice(lastGreetingLineIdx).join("\n"));
         // Sanity-check: real email has greeting + body + sign-off, ≥40 chars
         // and contains either a sentence-ending punctuation or a sign-off line.
         if (result.length >= 40 && /[.!?]/.test(result)) {
@@ -162,7 +223,7 @@ function stripLeakedReasoning(text: string): string {
       const fwdGreetingRe = /\n((?:Subject:|Hi|Hey|Hello|Dear|Thank you)\s+[^\n]*)/i;
       const fwd = afterHeader.match(fwdGreetingRe);
       if (fwd && fwd.index !== undefined) {
-        const result = afterHeader.substring(fwd.index).trim();
+        const result = stripValidationNoiseLines(afterHeader.substring(fwd.index));
         if (result.length >= 40 && /[.!?]/.test(result)) return result;
       }
 
@@ -186,7 +247,57 @@ function stripLeakedReasoning(text: string): string {
     }
   }
 
-  return text.trim();
+  return stripValidationNoiseLines(text);
+}
+
+function stripLeakedReasoningForTask(text: string, task: string): string {
+  const cleaned = stripLeakedReasoning(text);
+  if (cleaned) return cleaned;
+
+  // stripLeakedReasoning is intentionally email-centric: after a reasoning
+  // header it searches for a real greeting to recover the final email body.
+  // Campaign authoring also asks for non-email artifacts (call bullets,
+  // voicemail scripts, subject lines). If those leak a reasoning header, there
+  // is no greeting to find, so salvage the final visible artifact instead of
+  // turning a valid model response into an empty 502.
+  const raw = (text || "").trim();
+  if (!raw || !/(INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Final\s+Output|OUTPUT)/i.test(raw)) {
+    return cleaned;
+  }
+
+  const markerRe = /(?:^|\n)\s*(?:FINAL\s+OUTPUT|FINAL\s+ANSWER|OUTPUT|SUBJECT\s+LINE|TALKING\s+POINTS|VOICEMAIL(?:\s+SCRIPT)?|SMS|MESSAGE)\s*:?\s*\n?/gi;
+  let start = -1;
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(raw)) !== null) start = match.index + match[0].length;
+  const tail = (start >= 0 ? raw.slice(start) : raw)
+    .replace(/```(?:text|markdown)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const lines = tail.split("\n").map((line) => line.trim()).filter(Boolean);
+  const visibleLines = lines.filter((line) =>
+    !/^(?:INTERNAL\s+REASONING|INTERNAL\s+REFLECTION|INTERNAL\s+ANALYSIS|CHAIN[\s-]?OF[\s-]?THOUGHT|Reasoning|Analysis|Plan|Check|Notes?)\b/i.test(line) &&
+    !/^(?:Here(?:'s| is)|I'?ll|I will|The final|Final answer)\b/i.test(line)
+  );
+
+  if (task === "cold_call_talking_points") {
+    const bullets = visibleLines.filter((line) => /^[-*•]\s+/.test(line));
+    if (bullets.length > 0) return bullets.slice(-4).join("\n");
+  }
+
+  if (task === "cold_email_subject") {
+    const subject = (visibleLines[visibleLines.length - 1] || "")
+      .replace(/^subject(?:\s+line)?\s*:\s*/i, "")
+      .replace(/^['"“”]+|['"“”]+$/g, "")
+      .trim();
+    return subject.length <= 120 ? subject : subject.slice(0, 120).trim();
+  }
+
+  if (["cold_voicemail", "warm_voicemail", "voicemail_script", "call_opener", "sms_message"].includes(task)) {
+    return visibleLines.slice(-4).join("\n").replace(/^(?:voicemail(?:\s+script)?|message|sms)\s*:\s*/i, "").trim();
+  }
+
+  return visibleLines.join("\n").trim();
 }
 
 // ============================================
@@ -213,6 +324,12 @@ const EMAIL_BODY_TASKS = new Set([
   "inbound_followup_1", "inbound_followup_2",
   "post_meeting_followup_email", "reply_to_thread",
 ]);
+
+// Campaign collateral tasks (Unit D). These are CAMPAIGN-LEVEL (no step_number):
+// they are the ONLY tasks allowed to enter the no-step campaign-authoring path.
+// The production sender (automation-executor) never emits these, so the live
+// send path can never reach campaign-authoring through them.
+const COLLATERAL_TASKS = new Set(["collateral_one_pager", "collateral_walkthrough"]);
 
 // Tasks that count as warm inbound and must follow the warm-meeting-CTA contract.
 const INBOUND_WARM_TASKS = new Set(["inbound_intro", "inbound_followup_1", "inbound_followup_2"]);
@@ -479,6 +596,10 @@ const TASK_KB_CONFIG: Record<string, string[]> = {
   cold_call_talking_points: ["messaging", "knowledge", "industry"],
   cold_voicemail: ["messaging", "knowledge", "industry"],
   cold_email_subject: ["messaging", "knowledge", "industry"],
+
+  // Campaign collateral (Unit D) — grounded in the seller's KB document.
+  collateral_one_pager: ["knowledge", "industry", "case_study", "messaging"],
+  collateral_walkthrough: ["knowledge", "industry", "case_study", "messaging"],
 
   // Last-mile / reply — narrow core, expanded on signal below
   reply_to_thread: ["objection", "case_study", "knowledge", "messaging"],
@@ -1027,6 +1148,14 @@ const TASK_MAX_TOKENS: Record<string, number> = {
   recommend_next_steps: 4096,
   lead_deep_analysis: 8192,
   post_meeting_followup_personalized: 6144,
+  // Voice tasks: short outputs, but gemini-2.5-flash consumes a large share
+  // of max_tokens on internal reasoning. 2048 frequently produces empty
+  // content (finish_reason=length before any visible tokens). Bump to 4096.
+  cold_call_talking_points: 4096,
+  cold_voicemail: 4096,
+  warm_voicemail: 4096,
+  voicemail_script: 4096,
+  call_opener: 4096,
 };
 
 function replaceTemplateVars(template: string, payload: Record<string, unknown>): string {
@@ -1240,13 +1369,24 @@ serve(async (req) => {
     let campaignAuthoring = false;
     let campaignKnowledgeDocId: string | null = null;
     let campaignKbOwnerId: string | null = null;
-    if (payload?.campaign_id && payload?.step_number !== undefined && payload?.step_number !== null) {
+    // Per-step authoring (Unit B): campaign_id + a real top-level step_number.
+    // This condition is UNCHANGED — non-collateral calls behave exactly as before.
+    const hasStepNumber = payload?.step_number !== undefined && payload?.step_number !== null;
+    // Campaign-level authoring (Unit D collateral): gated on the collateral_*
+    // task allowlist, NOT on a loosened campaign_id check. The live sender
+    // (automation-executor) only ever emits send tasks, never collateral tasks,
+    // so it can never enter this no-step path.
+    const isCollateralTask = COLLATERAL_TASKS.has(task);
+    if (payload?.campaign_id && (hasStepNumber || isCollateralTask)) {
       try {
         const authoringClient = createClient(supabaseUrl, supabaseServiceKey);
+        // Collateral is campaign-level → step null. Per-step path passes the
+        // numeric step_number exactly as before (byte-identical behavior).
+        const stepArg = isCollateralTask ? null : Number(payload.step_number);
         const instr = await resolveCampaignAuthoringInstruction(
           authoringClient,
           String(payload.campaign_id),
-          Number(payload.step_number),
+          stepArg,
           payload?.industry ? String(payload.industry) : null,
           user.id,
         );
@@ -1259,9 +1399,9 @@ serve(async (req) => {
           // may differ from the rep authoring now — that's fine, same workspace).
           campaignKnowledgeDocId = instr.knowledgeDocumentId;
           campaignKbOwnerId = instr.knowledgeDocOwnerId;
-          console.log(`[ai_task] [CAMPAIGN-AUTHORING] step ${payload.step_number} (variant=${instr.variantGroup ?? "General"}), doc=${campaignKnowledgeDocId ?? "none"}`);
+          console.log(`[ai_task] [CAMPAIGN-AUTHORING] ${isCollateralTask ? `collateral:${task}` : `step ${payload.step_number}`} (variant=${instr.variantGroup ?? "General"}), doc=${campaignKnowledgeDocId ?? "none"}`);
         } else {
-          console.warn(`[ai_task] [CAMPAIGN-AUTHORING] resolver returned null for campaign ${payload.campaign_id} step ${payload.step_number} (not a workspace member or step missing) — proceeding without campaign instruction`);
+          console.warn(`[ai_task] [CAMPAIGN-AUTHORING] resolver returned null for campaign ${payload.campaign_id} ${isCollateralTask ? `collateral:${task}` : `step ${payload.step_number}`} (not a workspace member or step missing) — proceeding without campaign instruction`);
         }
       } catch (err) {
         console.error("[ai_task] [CAMPAIGN-AUTHORING] resolution failed:", err);
@@ -1919,6 +2059,14 @@ ${customInstructionsText}
     if (structuredCampaignBlock) {
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
+    const campaignTemplateContract = campaignAuthoring
+      ? `=== CAMPAIGN TEMPLATE OUTPUT CONTRACT ===
+This is authoring-time reusable campaign copy, not a one-off email to a specific lead.
+Use exactly these merge tokens where personalization belongs: {FirstName}, {Company}, {RepFirstName}.
+Do not use bracketed placeholders like [Name] or spaced brace placeholders like {First Name}.
+Do not invent real prospect or rep names.
+=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===`
+      : "";
 
     // Build offer recommendation block for last-mile tasks
     let offerBlock = "";
@@ -1994,6 +2142,7 @@ ${customInstructionsText}
     if (messagingFrameworkBlock) promptParts.push(messagingFrameworkBlock);
     if (emailFrameworkBlock) promptParts.push(emailFrameworkBlock);
     if (structuredCampaignBlock) promptParts.push(structuredCampaignBlock);
+    if (campaignTemplateContract) promptParts.push(campaignTemplateContract);
     if (objectiveBlock) promptParts.push(objectiveBlock);          // Objective FIRST (controls everything)
     if (stagePolicyBlock) promptParts.push(stagePolicyBlock);      // Stage policy context
     if (decisionBlock) promptParts.push(decisionBlock);            // Decision context
@@ -2130,8 +2279,9 @@ ${customInstructionsText}
       console.error(`[ai_task] Raw response keys: ${JSON.stringify(Object.keys(aiResult))}`);
 
       // Retry once with a different model
-      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite...");
-      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite" };
+      console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite (boosted max_tokens)...");
+      const boostedMax = Math.max(Number((aiRequestBody as { max_tokens?: number }).max_tokens) || 2048, 8192);
+      const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite", max_tokens: boostedMax };
       const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
@@ -2181,7 +2331,7 @@ ${customInstructionsText}
     }
 
     const preStripLength = content.length;
-    content = stripLeakedReasoning(content);
+    content = stripLeakedReasoningForTask(content, task);
 
     // If the stripper had to remove a leaked reasoning block AND the result
     // is too thin to be a real email, retry once with the cheaper/faster model
@@ -2206,7 +2356,7 @@ ${customInstructionsText}
       if (retryResp.ok) {
         const retryJson = await retryResp.json();
         const retryContent = retryJson.choices?.[0]?.message?.content || "";
-        const cleaned = stripLeakedReasoning(retryContent);
+        const cleaned = stripLeakedReasoningForTask(retryContent, task);
         if (cleaned && cleaned.length >= 40) {
           content = cleaned;
         }
@@ -2240,7 +2390,7 @@ STRICT REWRITE REQUIRED:
         });
         if (retryResp.ok) {
           const retryJson = await retryResp.json();
-          const retryContent = stripLeakedReasoning(retryJson.choices?.[0]?.message?.content || "");
+          const retryContent = stripLeakedReasoningForTask(retryJson.choices?.[0]?.message?.content || "", task);
           if (retryContent && !getInboundWarmIntroViolation(retryContent, enhancedPayload as Record<string, unknown>)) {
             content = retryContent;
           }
@@ -2272,8 +2422,17 @@ STRICT REWRITE REQUIRED:
     // If validation fails, attempt one strict-repair regeneration.
     if (EMAIL_BODY_TASKS.has(task)) {
       const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
       const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
-      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck };
+      const allowTemplatePlaceholders = campaignAuthoring === true;
+      const validationCtx = { kind: kindFromTask(task), lead_first_name: leadFirstFromCtx, meeting_link: meetingLinkForCheck, allow_template_placeholders: allowTemplatePlaceholders };
+
+      // Deterministic placeholder substitution before validation. Models occasionally
+      // leak [Rep's first name] / [Your Name] / [Meeting Link] etc despite the prompt;
+      // resolve from rep_context/lead_context rather than failing the whole draft.
+      content = allowTemplatePlaceholders
+        ? normalizeCampaignTemplatePlaceholders(content)
+        : substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
 
       let validation = validateDraft(content, validationCtx);
       if (!validation.ok) {
@@ -2284,10 +2443,10 @@ STRICT REPAIR REQUIRED. The previous draft failed validation:
 ${validation.errors.map((e) => `- ${e}`).join("\n")}
 
 Output a complete email body that:
-- Starts with "Hi {FirstName}," using the prospect's first name from Lead Context
+- Starts with ${allowTemplatePlaceholders ? '"Hi {FirstName}," exactly' : '"Hi {FirstName}," using the prospect\'s first name from Lead Context'}
 - Has at least one real body sentence with substance
-- Ends with a sign-off line ("Best,") then the rep's first name on the next line
-- Contains NO placeholders like [Name], [Meeting Link], {First Name}
+- Ends with a sign-off line ("Best,") then ${allowTemplatePlaceholders ? '"{RepFirstName}" on the next line' : "the rep's first name on the next line"}
+- Contains NO unresolved placeholders like [Name], [Meeting Link], {First Name}; ${allowTemplatePlaceholders ? 'only {FirstName}, {Company}, and {RepFirstName} are allowed' : 'use real values instead'}
 - Contains NO reasoning, planning, word-count notes, or compliance check text
 ${validationCtx.kind === "inbound_intro" || validationCtx.kind === "inbound_followup"
   ? "- Acknowledges they reached out (warm) and includes a meeting CTA. NEVER use cold discovery questions like 'biggest challenge'."
@@ -2312,11 +2471,14 @@ Output ONLY the final email body.`;
           });
           if (repairResp.ok) {
             const repairJson = await repairResp.json();
-            let repaired = stripLeakedReasoning(repairJson.choices?.[0]?.message?.content || "");
+            let repaired = stripLeakedReasoningForTask(repairJson.choices?.[0]?.message?.content || "", task);
             // Re-apply greeting safety net to repaired
             if (repaired && leadFirstFromCtx && !/^(?:Hi|Hey|Hello|Dear)\b/i.test(repaired)) {
               repaired = `Hi ${leadFirstFromCtx},\n\n${repaired}`;
             }
+            repaired = allowTemplatePlaceholders
+              ? normalizeCampaignTemplatePlaceholders(repaired)
+              : substitutePlaceholders(repaired, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
             const reValidation = validateDraft(repaired, validationCtx);
             if (reValidation.ok) {
               content = repaired;
@@ -2331,12 +2493,12 @@ Output ONLY the final email body.`;
         }
       }
 
-      // Last-resort deterministic patch for greeting issues before refusing.
-      if (!validation.ok && leadFirstFromCtx &&
+      // Last-resort deterministic patch for template/live greeting issues before refusing.
+      if (!validation.ok && (leadFirstFromCtx || allowTemplatePlaceholders) &&
           (validation.codes.includes("greeting_unaddressed") || validation.codes.includes("missing_greeting"))) {
         const lines = content.split("\n");
         const firstIdx = lines.findIndex((l) => l.trim().length > 0);
-        const greetingLine = `Hi ${leadFirstFromCtx},`;
+        const greetingLine = allowTemplatePlaceholders ? "Hi {FirstName}," : `Hi ${leadFirstFromCtx},`;
         if (firstIdx >= 0 && /^(?:Hi|Hey|Hello|Dear|Thank you|Thanks)\b/i.test(lines[firstIdx].trim())) {
           lines[firstIdx] = greetingLine;
         } else {
@@ -2348,6 +2510,19 @@ Output ONLY the final email body.`;
           content = patched;
           validation = patchedValidation;
           console.log(`[ai_task] [${task}] Greeting auto-patched`);
+        }
+      }
+
+      // Campaign template authoring is not a send path. If the only remaining
+      // issue is a missing sign-off, append the allowed rep token instead of
+      // failing the whole content generation run.
+      if (!validation.ok && allowTemplatePlaceholders && validation.codes.includes("missing_signoff")) {
+        const patched = `${content.replace(/\s+$/u, "")}\n\nBest,\n{RepFirstName}`;
+        const patchedValidation = validateDraft(patched, validationCtx);
+        if (patchedValidation.ok) {
+          content = patched;
+          validation = patchedValidation;
+          console.log(`[ai_task] [${task}] Template sign-off auto-patched`);
         }
       }
 
@@ -2401,7 +2576,7 @@ Output ONLY the final email body.`;
             if (regenResponse.ok) {
               const regenResult = await regenResponse.json();
               let regenContent = regenResult.choices?.[0]?.message?.content || "";
-              regenContent = stripLeakedReasoning(regenContent);
+              regenContent = stripLeakedReasoningForTask(regenContent, task);
               if (regenContent) {
                 // Re-evaluate regenerated content
                 const reEval = evaluateReply(regenContent, replyObjective, resolvedStagePolicy, commercialDecision, latestInbound || "", dealMemEvalCtx);
@@ -2560,7 +2735,7 @@ Output ONLY the final email body.`;
               if (regenResponse.ok) {
                 const regenResult = await regenResponse.json();
                 let regenContent = regenResult.choices?.[0]?.message?.content || "";
-                regenContent = stripLeakedReasoning(regenContent);
+                regenContent = stripLeakedReasoningForTask(regenContent, task);
                 if (regenContent) {
                   regenerated_outbound = true;
                   selectedFramework = "neutral_observation" as any;
@@ -2609,6 +2784,15 @@ Output ONLY the final email body.`;
                     } catch (logErr) { console.error("[ai_task] Diversity log failed:", logErr); }
                   }
 
+                  if (campaignAuthoring) {
+                    regenContent = normalizeCampaignTemplatePlaceholders(regenContent);
+                  } else {
+                    const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+                    const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
+                    const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+                    regenContent = substitutePlaceholders(regenContent, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
+                  }
+
                   const responsePayload: Record<string, unknown> = {
                     ok: true, content: regenContent,
                     quality_score: qualityScore, regenerated: true, framework_used: selectedFramework,
@@ -2655,6 +2839,15 @@ Output ONLY the final email body.`;
           }
         }
       } catch (logErr) { console.error("[ai_task] Diversity log failed:", logErr); }
+    }
+
+    if (campaignAuthoring) {
+      content = normalizeCampaignTemplatePlaceholders(content);
+    } else {
+      const leadFirstFromCtx = getLeadFirstNameFromContext(payload.lead_context as string | undefined);
+      const repFirstFromCtx = getRepFirstNameFromContext(payload.rep_context as string | undefined);
+      const meetingLinkForCheck = enhancedPayload.meeting_link ? String(enhancedPayload.meeting_link) : null;
+      content = substitutePlaceholders(content, leadFirstFromCtx, repFirstFromCtx, meetingLinkForCheck);
     }
 
     const responsePayload: Record<string, unknown> = { ok: true, content };

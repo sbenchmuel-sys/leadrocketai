@@ -3,7 +3,7 @@
 // across navigation, mirroring `inboxStateCache.ts`.
 //
 // Persisted (localStorage):
-//   - chip filter ("replied" | "followup_due" | "ooo_back" | null)
+//   - chip filter ("replied" | "followup_due" | null)
 //   - current page index (0-based)
 //
 // Deliberately NOT persisted (per PR D spec §9):
@@ -19,7 +19,7 @@
 // existing exports without coordinating with Lead List.
 // ============================================================
 
-export type QueueChip = "replied" | "followup_due" | "ooo_back" | null;
+export type QueueChip = "replied" | "followup_due" | null;
 
 export interface QueueState {
   chip: QueueChip;
@@ -39,10 +39,11 @@ function loadFromStorage(): QueueState {
     if (!raw) return { ...DEFAULT_STATE };
     const parsed = JSON.parse(raw) as Partial<QueueState>;
     // Defensive: only accept known chip values; reset page if negative.
+    // A legacy persisted "ooo_back" falls through to null (no filter) —
+    // that group no longer exists; back-from-away leads live in
+    // "followup_due" now.
     const chip: QueueChip =
-      parsed.chip === "replied" ||
-      parsed.chip === "followup_due" ||
-      parsed.chip === "ooo_back"
+      parsed.chip === "replied" || parsed.chip === "followup_due"
         ? parsed.chip
         : null;
     const pageIndex =

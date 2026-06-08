@@ -31,6 +31,7 @@ import {
   Wand2,
   AlertTriangle,
   Check,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
@@ -43,7 +44,9 @@ import {
   type CampaignLead,
   type StepContent,
   type StepContentOption,
+  type CampaignCollateral,
 } from "@/lib/campaignQueries";
+import { collateralLabel } from "@/lib/generateCampaignCollateral";
 import {
   generateAllTouches,
   rewriteTouch,
@@ -62,9 +65,12 @@ const GENERAL = "__general__"; // Select value for the null/General variant
 interface Props {
   campaign: CampaignWithSteps;
   people: CampaignLead[];
+  // Collateral rows (lifted to CampaignDetail) so a touch can show what's linked
+  // to it. Read-only here — linking is managed in the Collateral section.
+  collateral?: CampaignCollateral[];
 }
 
-export function CampaignContentReview({ campaign, people }: Props) {
+export function CampaignContentReview({ campaign, people, collateral }: Props) {
   const isIndustry = campaign.campaign_type === "industry";
   const industries = useMemo(() => getIndustriesPresent(people), [people]);
   const primaryIndustry = useMemo(() => computePrimaryIndustry(people), [people]);
@@ -254,6 +260,11 @@ export function CampaignContentReview({ campaign, people }: Props) {
                 day={days[i]}
                 variant={variant}
                 content={rowFor(step.step_number)}
+                linkedCollateral={(collateral ?? []).filter(
+                  (c) =>
+                    c.attached_step_number === step.step_number &&
+                    variantKey(c.variant_group) === variantKey(variant),
+                )}
                 onChanged={reload}
               />
             ))}
@@ -271,10 +282,11 @@ interface TouchCardProps {
   day: number;
   variant: string | null;
   content: StepContent | null;
+  linkedCollateral?: CampaignCollateral[];
   onChanged: () => void;
 }
 
-function TouchCard({ campaign, step, day, variant, content, onChanged }: TouchCardProps) {
+function TouchCard({ campaign, step, day, variant, content, linkedCollateral, onChanged }: TouchCardProps) {
   const kind = contentKindForChannel(step.channel);
   const [busy, setBusy] = useState<null | "rewrite" | "soften" | "save">(null);
   const [editing, setEditing] = useState(false);
@@ -409,6 +421,19 @@ function TouchCard({ campaign, step, day, variant, content, onChanged }: TouchCa
             )}
           </div>
         </div>
+
+        {/* Linked collateral — a draft to share yourself; NOT auto-attached/sent. */}
+        {linkedCollateral && linkedCollateral.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {linkedCollateral.map((c) => (
+              <Badge key={c.id} variant="outline" className="gap-1 text-xs font-normal">
+                <FileText className="h-3 w-3" />
+                {c.title || collateralLabel(c.collateral_type)}
+              </Badge>
+            ))}
+            <span className="text-xs text-muted-foreground">linked — share it yourself when you send</span>
+          </div>
+        )}
 
         {!hasContent ? (
           <p className="text-sm text-muted-foreground">Not written yet — use “Fill in the rest”.</p>

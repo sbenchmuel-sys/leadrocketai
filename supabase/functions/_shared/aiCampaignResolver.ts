@@ -101,15 +101,40 @@ async function userIsWorkspaceMember(
   return !!data;
 }
 
+// Campaign-LEVEL instruction block (no specific step) — used by collateral
+// generation (Unit D). It carries the campaign's own global instructions and
+// motion, with no per-step framework. Mirrors the formatting envelope of
+// formatInstructionForPrompt so ai_task injects it the same way.
+function formatCampaignLevelInstruction(campaign: LoadedCampaign): string {
+  const parts: string[] = ["=== CAMPAIGN INSTRUCTION (CAMPAIGN-LEVEL) ==="];
+  parts.push(`Motion: ${campaign.motion || "outbound_prospecting"}`);
+  if (campaign.global_instructions) {
+    parts.push("\nCAMPAIGN CUSTOM INSTRUCTIONS (user-provided, MANDATORY):");
+    parts.push(campaign.global_instructions);
+  }
+  parts.push("=== END CAMPAIGN INSTRUCTION ===");
+  return parts.join("\n");
+}
+
 /**
- * Build the authoring-time campaign instruction for one touch.
- * Returns null (fail closed) when the campaign is missing, the user is not a
- * member of its workspace, or the requested step doesn't exist.
+ * Build the authoring-time campaign instruction.
+ *
+ * stepNumber:
+ *   • a number → per-touch authoring (Unit B): resolves the structured step's
+ *     framework/objective/hard-rules for that touch. UNCHANGED behavior.
+ *   • null → campaign-LEVEL authoring (Unit D collateral): no specific step;
+ *     returns the campaign's global instructions. The ai_task gate only passes
+ *     null for the collateral_* task allowlist, never for the live send path.
+ *
+ * Both paths share the SAME fail-closed workspace-membership gate and the SAME
+ * knowledge-document validation. Returns null (fail closed) when the campaign is
+ * missing, the user is not a member of its workspace, or (per-step) the
+ * requested step doesn't exist.
  */
 export async function resolveCampaignAuthoringInstruction(
   client: ServiceClient,
   campaignId: string,
-  stepNumber: number,
+  stepNumber: number | null,
   industry: string | null,
   requestingUserId: string,
 ): Promise<CampaignAuthoringInstruction | null> {
@@ -123,6 +148,8 @@ export async function resolveCampaignAuthoringInstruction(
   const workspaceId = (meta as { workspace_id?: string } | null)?.workspace_id;
   if (!workspaceId) return null;
 
+  // Fail-closed workspace-membership gate — identical for per-step and
+  // campaign-level. A rep can only author against their own workspace's campaign.
   if (!(await userIsWorkspaceMember(client, workspaceId, requestingUserId))) {
     console.warn(
       `[aiCampaignResolver] user ${requestingUserId} is not a member of workspace ${workspaceId} — refusing campaign ${campaignId}`,
@@ -133,14 +160,10 @@ export async function resolveCampaignAuthoringInstruction(
   const campaign = await loadCampaignById(campaignId, client);
   if (!campaign) return null;
 
-  const selected = selectVariant(campaign, industry);
-  const targetStep = selected.steps.find((s) => s.step_number === stepNumber && s.active);
-  if (!targetStep) return null;
-
   // Validate the campaign's knowledge document before trusting it to scope KB
-  // retrieval. knowledge_document_id is member-writable, so confirm the chunks'
-  // owner is a member of THIS workspace; otherwise ignore it (fail closed) so a
-  // crafted id can't surface another tenant's KB in the draft.
+  // retrieval (shared by both paths). knowledge_document_id is member-writable,
+  // so confirm the chunks' owner is a member of THIS workspace; otherwise ignore
+  // it (fail closed) so a crafted id can't surface another tenant's KB.
   let knowledgeDocumentId =
     (meta as { knowledge_document_id?: string | null } | null)?.knowledge_document_id ?? null;
   let knowledgeDocOwnerId: string | null = null;
@@ -161,6 +184,22 @@ export async function resolveCampaignAuthoringInstruction(
       knowledgeDocumentId = null; // fail closed — do not scope to a foreign document
     }
   }
+
+  // ── Campaign-level path (collateral) ──────────────────────────────────────
+  if (stepNumber == null) {
+    return {
+      promptBlock: formatCampaignLevelInstruction(campaign),
+      knowledgeDocumentId,
+      knowledgeDocOwnerId,
+      channel: (campaign.default_channel || "email") as CanonicalChannel,
+      variantGroup: industry?.trim() ? industry.trim() : null,
+    };
+  }
+
+  // ── Per-step path (Unit B) — unchanged ────────────────────────────────────
+  const selected = selectVariant(campaign, industry);
+  const targetStep = selected.steps.find((s) => s.step_number === stepNumber && s.active);
+  if (!targetStep) return null;
 
   const instruction = resolveCampaignInstruction({
     lead_id: "authoring",

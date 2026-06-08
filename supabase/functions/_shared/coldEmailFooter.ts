@@ -44,10 +44,12 @@ export function buildColdEmailFooter(opts: { unsubscribeUrl: string; postalAddre
     `Don't want to hear from us? Unsubscribe here: ${url}\n\n` +
     postal;
 
-  // RFC 2369 / RFC 8058 one-click. List-Unsubscribe-Post enables true one-click.
+  // RFC 2369 / RFC 8058 one-click. Per RFC 8058 the Post header value MUST be the
+  // exact key/value pair "List-Unsubscribe=One-Click" — Gmail/Yahoo one-click clients
+  // match on that literal string (the earlier "List=One-Click" was not recognized).
   const headers: Record<string, string> = {
     "List-Unsubscribe": `<${url}>`,
-    "List-Unsubscribe-Post": "List=One-Click",
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
   };
 
   return { footerText, headers };

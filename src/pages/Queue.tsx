@@ -3,7 +3,7 @@
 //
 // Composition:
 //   - useQueueSnapshot          → stable list + 30s count poll
-//   - QueueChips                → Replied / Follow-up due / OOO back
+//   - QueueChips                → Replied / Follow up
 //   - ShowAllToggle             → "N routine items hidden · show all"
 //   - NewItemsBanner            → "N new items — refresh"
 //   - QueueCard[] paginated     → 25/page (reuses LeadTable pattern)
@@ -25,7 +25,7 @@
 // would show after click. Single source of truth is the snapshot.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   getQueueState,
@@ -101,17 +101,30 @@ export default function Queue() {
   // ── Outreach (cold campaign touches) — separate data source for the tab ──
   const [outreachTouches, setOutreachTouches] = useState<OutreachTouch[]>([]);
   const [outreachLoading, setOutreachLoading] = useState(true);
+  // Monotonic request id: the mount load and the tab-open refresh can be in flight at
+  // once, and fetchOutreachQueue calls can resolve OUT OF ORDER. Only the latest call's
+  // response may touch state — otherwise a slow earlier request could overwrite the
+  // newer snapshot (and tab count) with stale data.
+  const outreachReqId = useRef(0);
   const loadOutreach = useCallback(async () => {
+    const reqId = ++outreachReqId.current;
     setOutreachLoading(true);
     try {
-      setOutreachTouches(await fetchOutreachQueue());
+      const data = await fetchOutreachQueue();
+      if (reqId === outreachReqId.current) setOutreachTouches(data);
     } catch {
       /* non-fatal — the reactive lists still render */
     } finally {
-      setOutreachLoading(false);
+      if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
   }, []);
   useEffect(() => { void loadOutreach(); }, [loadOutreach]);
+  // Refresh whenever the Outreach tab is (re-)opened. The scheduler queues new cold
+  // touches over time, so without this the one-shot mount load would leave the list —
+  // and its tab count — frozen at the page-load snapshot until a full page reload.
+  useEffect(() => {
+    if (tab === "outreach") void loadOutreach();
+  }, [tab, loadOutreach]);
   const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
 

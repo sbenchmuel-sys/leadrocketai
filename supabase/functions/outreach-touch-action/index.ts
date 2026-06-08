@@ -133,11 +133,12 @@ Deno.serve(async (req) => {
     if (enr && enr.status !== "replied") {
       await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);
     }
-    // Clear the surfaced card: mark the queued touch skipped so it leaves the
-    // Outreach list (the fetch filters on status='queued'). Otherwise the card
-    // would reappear forever and every action would hit this same 409. The reply
-    // itself is handled in the normal Queue (Follow up).
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    // Clear ALL the enrollment's pending touches (not just this card): the workers
+    // query campaign_touch by status BEFORE checking enrollment status, so future
+    // 'scheduled' touches of a now-replied enrollment would linger and occupy the
+    // capped batch. The reply itself is handled in the normal Queue (Follow up).
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This lead replied — handle it in your Queue.", replied: true }, 409);
   }
 
@@ -145,7 +146,8 @@ Deno.serve(async (req) => {
   // marked the enrollment stopped but left a queued touch behind) or completed,
   // clear the stranded card and refuse — never send/advance a dead enrollment.
   if (enr && !["scheduled", "active"].includes(enr.status)) {
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This outreach is no longer active for this lead.", inactive: true }, 409);
   }
 
@@ -155,10 +157,12 @@ Deno.serve(async (req) => {
   // it, mark_sent on a manual touch would still advance an opted-out lead's cadence.
   // Clear the card and stop the enrollment, mirroring the replied / inactive backstops.
   if (lead.unsubscribed) {
-    await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id).eq("status", "queued");
     if (enr && ["scheduled", "active"].includes(enr.status)) {
       await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
     }
+    // Clear ALL the enrollment's pending touches, not just this card (see reply backstop).
+    await admin.from("campaign_touch").update({ status: "skipped" })
+      .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
     return json({ ok: false, error: "This lead opted out — removed from outreach.", optedOut: true }, 409);
   }
 
@@ -275,9 +279,22 @@ Deno.serve(async (req) => {
       return json({ ok: false, error: err instanceof Error ? err.message : "Send failed" }, 502);
     }
     if (!sendRes.ok) {
-      // Send returned a failure — release the claim so the rep can retry from the Queue.
+      const reason = sendRes.reason || "Send failed";
+      // TERMINAL floor blocks (the lead opted out or is on the do-not-contact list)
+      // mean this lead must NEVER be emailed — re-queuing would loop the card forever
+      // and keep it consuming the capped Outreach queue with repeated send failures.
+      // Treat them like a stopped enrollment: stop it and clear its pending touches
+      // (mirrors the opt-out backstop). Other failures (provider error, missing postal
+      // address, transient floor errors) are retryable, so release the claim.
+      if (reason === "suppressed" || reason === "lead unsubscribed") {
+        await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+        await admin.from("campaign_touch").update({ status: "skipped" })
+          .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
+        return json({ ok: false, error: "This lead can't be emailed (opted out / do-not-contact) — removed from outreach.", optedOut: true }, 409);
+      }
+      // Retryable — release the claim so the rep can try again from the Queue.
       await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
-      return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+      return json({ ok: false, error: reason }, 400);
     }
 
     await advanceColdEnrollment(admin, exec, touch, "sent");

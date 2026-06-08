@@ -71,6 +71,28 @@ export function addBusinessDays(date: Date, n: number): Date {
   return d;
 }
 
+/**
+ * Business-day index of `date` relative to `anchor`, in the SAME space as
+ * computeStaggeredStarts (0 = the anchor's business day). Past/overdue dates map
+ * to 0. Used to seed the start planner with already-scheduled touch load.
+ */
+export function businessDayOffset(anchor: Date, date: Date): number {
+  // Compare by CALENDAR DAY, not timestamp — otherwise a touch later in the day
+  // than the anchor (e.g. anchor 9am, touch 2pm same day) would compare "greater"
+  // and be bucketed to the next business day instead of offset 0.
+  const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const start = startOfDay(nextBusinessDay(anchor));
+  const target = startOfDay(date);
+  if (target <= start) return 0;
+  let offset = 0;
+  let cur = start;
+  while (cur < target && offset < 1000) {
+    cur = startOfDay(addBusinessDays(cur, 1));
+    offset++;
+  }
+  return offset;
+}
+
 // ── Cadence shape ────────────────────────────────────────────────────────────
 
 export interface CadenceStep {
@@ -118,36 +140,88 @@ export function computeStaggeredStarts(
   leadCount: number,
   emailTouchOffsets: number[],
   dailyCap: number,
+  initialLoad?: Record<number, number>,
 ): number[] {
   if (leadCount <= 0) return [];
   // No email touches → nothing consumes the cap; everyone can start on day 0.
+  // (initialLoad is about email-day pressure, irrelevant when this cadence has none.)
   if (emailTouchOffsets.length === 0) return new Array(leadCount).fill(0);
 
   const cap = Math.max(1, Math.floor(dailyCap)); // guard: cap < 1 would never start
-  const load: Record<number, number> = {}; // business-day index → booked email touches
+  // Collapse DUPLICATE offsets into per-offset counts. A rep can set a later email's
+  // wait to 0 days, landing two email touches on the SAME relative day — so a lead
+  // can add more than one touch to a single day. Both the headroom check and the
+  // booking must use that multiplicity, or a day could be pushed over the cap.
+  const offsetCounts = new Map<number, number>();
+  for (const o of emailTouchOffsets) offsetCounts.set(o, (offsetCounts.get(o) ?? 0) + 1);
+  const distinctOffsets = [...offsetCounts.entries()]; // [offset, touchesOnThatDay]
+  const maxOffset = Math.max(...emailTouchOffsets);
+
+  // INFEASIBLE-CADENCE detector. If a single offset carries more email touches than
+  // the cap (e.g. two day-0 email steps with cap 1), even ONE lead overflows that day
+  // — no staggering can ever honor the cap, because the violation is per-lead, not
+  // volume. Handled below (after the seeded load is built) by spreading one lead per
+  // business day instead of letting `room` stay 0 forever and dumping every lead onto
+  // one day. The rep is warned separately — computeCapacityPlan flags overCapacity
+  // when the cap can't fit one lead's emails.
+  const feasiblePerLead = Math.min(...distinctOffsets.map(([, cnt]) => Math.floor(cap / cnt)));
+
+  // Seed with already-booked load (existing scheduled email touches) so new starts
+  // are placed AROUND days that are already at/near the cap.
+  const load: Record<number, number> = { ...(initialLoad || {}) }; // business-day index → booked email touches
   const starts: number[] = [];
   let assigned = 0;
   let day = 0;
-  // Generous upper bound on iterations: even at 1 start/day this terminates.
-  const maxDays = leadCount + emailTouchOffsets[emailTouchOffsets.length - 1] + leadCount * emailTouchOffsets.length;
+  // Generous upper bound on iterations: even at 1 start/day this terminates. It
+  // MUST extend past the seeded load's furthest day — otherwise, when existing
+  // touches already fill the cap through several future days, the loop could
+  // exhaust its iterations and the fallback would park new starts on a day still
+  // at capacity (the exact running-outreach case this seeding protects).
+  const seededMax = Object.keys(load).reduce((m, k) => Math.max(m, Number(k)), 0);
+  const maxDays = leadCount + maxOffset + leadCount * emailTouchOffsets.length + seededMax;
+
+  // Infeasible cadence: a single offset carries more email touches than the cap, so
+  // even ONE lead overflows that day — the cap can never be honored (per-lead, not
+  // volume). Place leads with a forward cursor that BOOKS each placed lead's own
+  // touches into `load` and skips any day already full at one of the offsets. This (a)
+  // respects the seeded load (initialLoad) and (b) — unlike a blind one-per-day spread
+  // — never stacks a DIFFERENT lead's touches onto a day another lead already loaded,
+  // even when the duplicate offset isn't day 0 (e.g. [0,1,1]). The lead's own
+  // unavoidable double remains, but nothing else piles on. Guaranteed to terminate:
+  // the overflowing offset (cnt > cap) makes day `d` full right after a placement, so
+  // the cursor always advances. The rep is warned separately (computeCapacityPlan).
+  if (feasiblePerLead === 0) {
+    const out: number[] = [];
+    let d = 0;
+    while (out.length < leadCount) {
+      const dayFull = distinctOffsets.some(([o]) => (load[d + o] ?? 0) >= cap);
+      if (dayFull) { d++; continue; }
+      out.push(d);
+      for (const [o, cnt] of distinctOffsets) load[d + o] = (load[d + o] ?? 0) + cnt;
+    }
+    return out;
+  }
 
   while (assigned < leadCount && day <= maxDays) {
-    // How many leads can START today? A start books +1 on day+offset for every
-    // email offset, so room is the tightest headroom across all those days.
+    // How many leads can START today? Each lead adds `cnt` touches to day+offset, so
+    // the per-day headroom in LEADS is floor((cap - load) / cnt); room is the tightest
+    // such headroom across all distinct offsets.
     let room = leadCount - assigned;
-    for (const o of emailTouchOffsets) {
-      room = Math.min(room, cap - (load[day + o] ?? 0));
+    for (const [o, cnt] of distinctOffsets) {
+      room = Math.min(room, Math.floor((cap - (load[day + o] ?? 0)) / cnt));
     }
     room = Math.max(0, room);
     for (let i = 0; i < room; i++) {
       starts.push(day);
-      for (const o of emailTouchOffsets) load[day + o] = (load[day + o] ?? 0) + 1;
+      for (const [o, cnt] of distinctOffsets) load[day + o] = (load[day + o] ?? 0) + cnt;
     }
     assigned += room;
     day++;
   }
-  // Fallback (should not happen): park any unassigned at the last considered day.
-  while (starts.length < leadCount) starts.push(day);
+  // Fallback (should not happen now the infeasible case returns early and every
+  // feasible cadence fits >=1 lead/day past the seeded load): if anything is still
+  // unplaced, spread one PER day rather than stacking them on a single day.
+  while (starts.length < leadCount) starts.push(day++);
   return starts;
 }
 
@@ -306,7 +380,12 @@ export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): Plann
     let maxAge: Date | null = null;
     if (isManual) {
       const nextGap = i + 1 < steps.length ? steps[i + 1].delay_days : DEFAULT_MAX_AGE_BUSINESS_DAYS;
-      const horizon = Math.max(1, Math.min(nextGap || DEFAULT_MAX_AGE_BUSINESS_DAYS, DEFAULT_MAX_AGE_BUSINESS_DAYS));
+      // Clamp to [1, DEFAULT]. Do NOT use `nextGap || DEFAULT`: a rep can legitimately
+      // set the FOLLOWING step's wait to 0 (same-day follow-up), and `0 || DEFAULT`
+      // would balloon that into a 5-business-day stall before auto-skip. The no-next-
+      // step case already substitutes DEFAULT above, so the only remaining 0 is a real
+      // same-day gap → Math.max(1, …) gives the intended 1-day horizon.
+      const horizon = Math.max(1, Math.min(nextGap, DEFAULT_MAX_AGE_BUSINESS_DAYS));
       maxAge = addBusinessDays(eligible, horizon);
     }
     touches.push({
@@ -395,10 +474,14 @@ async function gatherEnrollmentContext(
     .eq("workspace_id", workspaceId);
   const leads = (leadRows || []) as unknown as EnrollCandidateLead[];
 
-  const { data: supRows } = await supabase
+  const { data: supRows, error: supErr } = await supabase
     .from("campaign_suppression_list" as any)
     .select("kind, value")
     .eq("workspace_id", workspaceId);
+  // Fail CLOSED: this is the do-not-contact gate. If the lookup errors (bad RLS,
+  // missing grant, transient failure) we must NOT proceed treating the list as
+  // empty — that would enroll suppressed leads. Throw instead.
+  if (supErr) throw new Error("Couldn't verify the do-not-contact list — enrollment blocked for safety.");
   const suppressedEmails = new Set<string>();
   const suppressedDomains = new Set<string>();
   for (const r of (supRows || []) as any[]) {
@@ -431,10 +514,13 @@ async function gatherEnrollmentContext(
     if (alreadyEnrolledIds.has(lead.id)) { skips.alreadyEnrolled++; continue; }
     // In a DIFFERENT campaign → never steal it (would silently halt that outreach).
     const inOtherCampaign = lead.campaign_id != null && lead.campaign_id !== campaignId;
-    // Running a legacy reactive/nurture sequence (and not a member of THIS campaign)
-    // → don't double-schedule.
-    const activeLegacy =
-      lead.campaign_id == null && lead.automation_mode != null && lead.needs_action === true;
+    // Has CONSENTED automation (and isn't a member of THIS campaign) → don't
+    // double-schedule. The executor's consent gate is `automation_mode IS NOT NULL`
+    // (needs_action may be false between due actions), so gate on automation_mode
+    // alone — enrolling a consented-but-idle lead would create cold touches while
+    // the legacy executor can still resume against it. The rep must clear that
+    // lead's automation first.
+    const activeLegacy = lead.campaign_id == null && lead.automation_mode != null;
     if (inOtherCampaign || activeLegacy) { skips.alreadyEnrolled++; continue; }
     // Enrollable: unassigned (will be stamped) OR already a member of this campaign.
     enrollable.push(lead);
@@ -537,6 +623,9 @@ export async function enrollLeadsInCampaign(
   // by a concurrent enrollment between our read and write is excluded.
   const toStampIds = enrollable.filter((l) => l.campaign_id == null).map((l) => l.id);
   const stampedLeads: EnrollCandidateLead[] = [...members];
+  // IDs whose campaign_id THIS call set (excludes pre-existing members). Only these
+  // may be cleared on rollback — clearing members would evict them from the outreach.
+  const newlyStampedIds: string[] = [];
   if (toStampIds.length > 0) {
     const { data: stampedRows, error: stampErr } = await supabase
       .from("leads")
@@ -548,16 +637,35 @@ export async function enrollLeadsInCampaign(
     if (stampErr) throw new Error(stampErr.message || "Failed to enroll people");
     const stampedIds = new Set(((stampedRows || []) as any[]).map((r) => r.id));
     skips.alreadyEnrolled += toStampIds.length - stampedIds.size; // claimed concurrently
+    newlyStampedIds.push(...stampedIds);
     stampedLeads.push(...enrollable.filter((l) => stampedIds.has(l.id)));
   }
   if (stampedLeads.length === 0) {
     return { enrolled: 0, skips, channelSkips, capacity };
   }
 
-  // Staggered start day per lead, then enrollment + touch rows.
-  const offsets = emailOffsets(steps);
-  const starts = computeStaggeredStarts(stampedLeads.length, offsets, dailyCap);
+  // Staggered start day per lead. Seed the planner with the EXISTING scheduled/
+  // queued email-touch load for this campaign so adding people to a RUNNING outreach
+  // doesn't pile new follow-ups onto business days already at the daily cap.
   const anchor = opts?.anchor ?? new Date();
+  const offsets = emailOffsets(steps);
+  // Seed from the mailbox's WHOLE scheduled/queued email-touch load, not just this
+  // campaign — the daily cap is per-mailbox and spans every outreach, so other
+  // campaigns' booked email days must count too. RLS scopes this to the rep's
+  // workspace (a safe, slightly conservative proxy for per-mailbox); the executor
+  // enforces the precise per-owner daily cap at send time regardless.
+  const { data: existingEmailTouches } = await supabase
+    .from("campaign_touch" as any)
+    .select("eligible_at")
+    .eq("channel", "email")
+    .in("status", ["scheduled", "queued"])
+    .not("eligible_at", "is", null);
+  const initialLoad: Record<number, number> = {};
+  for (const et of (existingEmailTouches || []) as any[]) {
+    const off = businessDayOffset(anchor, new Date(et.eligible_at));
+    initialLoad[off] = (initialLoad[off] ?? 0) + 1;
+  }
+  const starts = computeStaggeredStarts(stampedLeads.length, offsets, dailyCap, initialLoad);
 
   const enrollmentRows = stampedLeads.map((lead, i) => ({
     campaign_id: campaignId,
@@ -571,8 +679,11 @@ export async function enrollLeadsInCampaign(
     .insert(enrollmentRows as any)
     .select("id, lead_id, started_at");
   if (enrErr) {
-    // Roll back the campaign_id stamp so a failed enroll doesn't strand leads.
-    await supabase.from("leads").update({ campaign_id: null } as any).in("id", stampedLeads.map((l) => l.id));
+    // Roll back ONLY the campaign_id values this call stamped — never members that
+    // were already in the outreach before this call.
+    if (newlyStampedIds.length > 0) {
+      await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
+    }
     throw new Error(enrErr.message || "Failed to create enrollments");
   }
 
@@ -597,8 +708,46 @@ export async function enrollLeadsInCampaign(
     const { error: touchErr } = await supabase
       .from("campaign_touch" as any)
       .insert(touchRows as any);
-    if (touchErr) throw new Error(touchErr.message || "Failed to schedule touches");
+    if (touchErr) {
+      // Atomicity: a touch-insert failure would otherwise strand leads as enrolled
+      // with NO cadence (and a later retry skips them as already-enrolled). Roll the
+      // enrollment back to its pre-call state: delete the enrollment rows we just
+      // created and clear ONLY the campaign_id values this call stamped (members keep
+      // theirs). Any partial touch rows cascade-delete with their enrollment.
+      const enrIds = ((insertedEnrollments || []) as any[]).map((e) => e.id);
+      if (enrIds.length > 0) {
+        await supabase.from("campaign_enrollment" as any).delete().in("id", enrIds);
+      }
+      if (newlyStampedIds.length > 0) {
+        await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
+      }
+      throw new Error(touchErr.message || "Failed to schedule touches");
+    }
   }
 
   return { enrolled: stampedLeads.length, skips, channelSkips, capacity };
+}
+
+/**
+ * Remove a lead from a campaign — the proper counterpart to enrollment now that
+ * campaign_enrollment / campaign_touch are the scheduler's source of truth.
+ * Deletes the enrollment row (campaign_touch cascades via FK) so the scheduler and
+ * executor immediately stop processing the lead, THEN clears leads.campaign_id.
+ * Just clearing campaign_id (the old removal path) would leave the schedule rows
+ * behind and the cold cadence would keep running.
+ */
+export async function unenrollLeadFromCampaign(campaignId: string, leadId: string): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("campaign_enrollment" as any)
+    .delete()
+    .eq("campaign_id", campaignId)
+    .eq("lead_id", leadId);
+  if (delErr) throw new Error(delErr.message || "Couldn't stop the schedule");
+
+  const { error: updErr } = await supabase
+    .from("leads")
+    .update({ campaign_id: null } as any)
+    .eq("id", leadId)
+    .eq("campaign_id", campaignId); // only clear if the lead is still in THIS campaign
+  if (updErr) throw new Error(updErr.message || "Couldn't remove the person");
 }
