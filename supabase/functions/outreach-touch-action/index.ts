@@ -291,6 +291,12 @@ Deno.serve(async (req) => {
       const TERMINAL_REASONS = ["suppressed", "lead unsubscribed", "invalid email", "no email"];
       if (TERMINAL_REASONS.includes(reason)) {
         await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+        // This touch was optimistically claimed 'sent' above, but the send was blocked
+        // and NOTHING was delivered — reset just this row to 'skipped' so it isn't counted
+        // as a real send (the bulk skip below only catches still-scheduled/queued rows, so
+        // without this the never-delivered touch stays 'sent' and inflates sent metrics +
+        // the audit trail). Scope to touch.id so genuinely-sent prior touches stay 'sent'.
+        await admin.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id);
         await admin.from("campaign_touch").update({ status: "skipped" })
           .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
         return json({ ok: false, error: "This lead can't be emailed (opted out, do-not-contact, or no valid address) — removed from outreach.", optedOut: true }, 409);
