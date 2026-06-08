@@ -14,6 +14,16 @@ describe("isValidEmail", () => {
   it("rejects over-long addresses", () => {
     expect(isValidEmail("a".repeat(300) + "@x.com")).toBe(false);
   });
+  it("rejects leading/trailing dots in the local part", () => {
+    expect(isValidEmail(".alice@acme.com")).toBe(false);
+    expect(isValidEmail("alice.@acme.com")).toBe(false);
+    expect(isValidEmail("first.last@acme.com")).toBe(true); // interior dots are fine
+  });
+  it("rejects non-DNS chars and bad labels in the domain", () => {
+    for (const bad of ["a@exa_mple.com", "a@foo!.com", "a@foo-.example.com", "a@bar.-example.com"]) {
+      expect(isValidEmail(bad)).toBe(false);
+    }
+  });
 });
 
 describe("isSuspiciousEmail", () => {

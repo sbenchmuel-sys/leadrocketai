@@ -94,6 +94,7 @@ function isSendableColdEmail(raw: string): boolean {
   if (e.includes("..")) return false; // consecutive dots
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
+  if (local.startsWith(".") || local.endsWith(".")) return false; // dot can't bound the local part
   if (!domain) return false;
   // Validate EVERY domain label against DNS hostname syntax. Checking only the WHOLE
   // domain's first/last char misses an invalid intermediate label (foo-.example.com),

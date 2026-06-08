@@ -313,7 +313,11 @@ Deno.serve(async (req) => {
     const thresholdRaw = numEnv("BOUNCE_RATE_THRESHOLD");
     const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 1 ? thresholdRaw : 0.08; // 8%
     const minVolumeRaw = numEnv("BOUNCE_MIN_VOLUME");
-    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeRaw > 0 ? Math.floor(minVolumeRaw) : 20; // avoid early noise
+    // Floor FIRST, then require >= 1. A fractional value like 0.5 passes `> 0` but
+    // floors to 0, which makes `denom < minVolume` never true and lets a 0/0 = NaN
+    // rate through (NaN < threshold is false), pausing campaigns with zero sends.
+    const minVolumeFloored = Math.floor(minVolumeRaw);
+    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeFloored >= 1 ? minVolumeFloored : 20; // avoid early noise
     // Page through ALL active campaigns (ordered + stable), not just one capped,
     // unordered subset — otherwise, with more than a page of active outreaches, an
     // over-threshold campaign outside the subset could be evaluated on no tick.

@@ -26,6 +26,7 @@ export function isValidEmail(email: string | null | undefined): boolean {
   if (e.includes("..")) return false;               // consecutive dots
   const [local, domain] = e.split("@");
   if (!local || local.length > 64) return false;
+  if (local.startsWith(".") || local.endsWith(".")) return false; // dot can't bound the local part
   if (!domain) return false;
   // Validate EVERY domain label against DNS hostname syntax — not just the whole
   // domain's first/last char — so invalid intermediate labels (foo-.example.com) and

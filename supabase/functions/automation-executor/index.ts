@@ -1720,7 +1720,10 @@ serve(async (req) => {
             .select("id").eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "sent")
             .limit(1).maybeSingle();
           if (priorSent) {
-            await advanceColdEnrollment(supabase, exec, touch, "sent", { automationLogId: priorSent.id });
+            // Use execForLead (recipient timezone) to anchor the next touch, matching the
+            // normal send-success advance below — otherwise a recovered re-advance would
+            // schedule the next touch in the workspace timezone instead of the prospect's.
+            await advanceColdEnrollment(supabase, execForLead, touch, "sent", { automationLogId: priorSent.id });
             continue;
           }
           // Column set matches the legacy claim exactly (no workspace_id — that

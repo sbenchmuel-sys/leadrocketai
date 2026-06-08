@@ -378,10 +378,16 @@ serve(async (req) => {
             .limit(1)
             .maybeSingle();
           if (originTouch?.enrollment_id) {
+            // Stamp bounced_at only the FIRST time (.is bounced_at null). The DSN can be
+            // re-fetched by the broadened bounce search on later syncs; without this guard
+            // each re-process would push bounced_at forward. The breaker only cares that
+            // it's non-null, and the lead is already unsubscribed/stopped, so a one-shot
+            // stamp is both sufficient and stable.
             await serviceSupabase.from("campaign_enrollment")
               .update({ bounced_at: new Date().toISOString(), status: "stopped" })
               .eq("id", originTouch.enrollment_id)
-              .gte("current_step_number", 1);
+              .gte("current_step_number", 1)
+              .is("bounced_at", null);
           }
           // The lead is now unsubscribed (set above), so its entire cold cadence is
           // dead — clear any still-pending touches (mirrors endColdEnrollment), or the
