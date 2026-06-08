@@ -16,6 +16,7 @@ export interface ValidationContext {
   kind: DraftKind;
   lead_first_name?: string | null;
   meeting_link?: string | null;
+  allow_template_placeholders?: boolean;
 }
 
 export interface ValidationResult {
@@ -77,6 +78,9 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
   const errors: string[] = [];
   const codes: string[] = [];
   const text = (body || "").trim();
+  const placeholderScanText = ctx.allow_template_placeholders
+    ? text.replace(/\{(?:FirstName|Company|RepFirstName)\}/gi, "TemplateValue")
+    : text;
   const length = text.length;
 
   if (length < 40) {
@@ -94,7 +98,7 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
   }
 
   for (const re of PLACEHOLDER_PATTERNS) {
-    if (re.test(text)) {
+    if (re.test(placeholderScanText)) {
       errors.push(`Unresolved placeholder: ${re.source}`);
       codes.push("placeholder");
       break;

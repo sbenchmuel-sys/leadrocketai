@@ -265,14 +265,13 @@ export async function advanceColdEnrollment(
   }
   await supabase.from("campaign_touch").update(patch).eq("id", touch.id);
 
-  // Promote the enrollment's cursor to this step (and keep it active while there
-  // are more touches; the no-next branch below flips it to 'completed').
-  await supabase
-    .from("campaign_enrollment")
-    .update({ current_step_number: touch.step_number, status: "active" })
-    .eq("id", touch.enrollment_id);
-
-  // Arm the next touch, or complete the enrollment.
+  // Read the next touch BEFORE exposing the cursor. The cursor advance is deliberately
+  // LAST: a touch becomes "ready" only when step_number === current_step_number + 1, so
+  // if we promoted the cursor first (as before) there would be a window where the next
+  // touch is ready but still carries its OLD, possibly-already-due eligible_at — and a
+  // concurrent executor/scheduler run could send/process it immediately, bypassing the
+  // cadence spacing. Re-anchoring it into the future first, then advancing the cursor,
+  // closes that window.
   const { data: next } = await supabase
     .from("campaign_touch")
     .select("id, step_number, eligible_at, max_age_at")
@@ -281,7 +280,11 @@ export async function advanceColdEnrollment(
     .maybeSingle();
 
   if (!next) {
-    await supabase.from("campaign_enrollment").update({ status: "completed" }).eq("id", touch.enrollment_id);
+    // No more touches — advance the cursor and complete the enrollment together.
+    await supabase
+      .from("campaign_enrollment")
+      .update({ current_step_number: touch.step_number, status: "completed" })
+      .eq("id", touch.enrollment_id);
     return;
   }
 
@@ -309,10 +312,37 @@ export async function advanceColdEnrollment(
     const windowMs = new Date(next.max_age_at).getTime() - new Date(next.eligible_at).getTime();
     if (windowMs > 0) update.max_age_at = new Date(nextEligible.getTime() + windowMs).toISOString();
   }
+  await supabase.from("campaign_touch").update(update).eq("id", next.id);
+
+  // ONLY NOW expose the cursor — the next touch is already correctly timed, so it
+  // can't be picked up early.
+  await supabase
+    .from("campaign_enrollment")
+    .update({ current_step_number: touch.step_number, status: "active" })
+    .eq("id", touch.enrollment_id);
+}
+
+/**
+ * End a cold enrollment: move it to a TERMINAL state AND clear its still-pending
+ * touches. The scheduler's and executor's due queries filter ONLY on
+ * campaign_touch.status / eligible_at (not on enrollment status), so a terminal
+ * enrollment that leaves a 'scheduled' (or 'queued') touch behind would have that
+ * dead row re-selected and skipped on every run — and once enough accumulate at the
+ * oldest-due front they starve legitimate live touches (the 50/200-row batch caps).
+ * Marking the pending touches 'skipped' removes them from those queries for good.
+ * Use this for EVERY terminal exit: replied, unsubscribed/stopped, floor-blocked.
+ */
+export async function endColdEnrollment(
+  supabase: ServiceClient,
+  enrollmentId: string,
+  status: "replied" | "stopped" | "completed",
+): Promise<void> {
+  await supabase.from("campaign_enrollment").update({ status }).eq("id", enrollmentId);
   await supabase
     .from("campaign_touch")
-    .update(update)
-    .eq("id", next.id);
+    .update({ status: "skipped" })
+    .eq("enrollment_id", enrollmentId)
+    .in("status", ["scheduled", "queued"]);
 }
 
 /** The public unsubscribe URL carrying the signed token. */

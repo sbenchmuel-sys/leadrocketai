@@ -3,7 +3,7 @@
 //
 // Composition:
 //   - useQueueSnapshot          → stable list + 30s count poll
-//   - QueueChips                → Replied / Follow-up due / OOO back
+//   - QueueChips                → Replied / Follow up
 //   - ShowAllToggle             → "N routine items hidden · show all"
 //   - NewItemsBanner            → "N new items — refresh"
 //   - QueueCard[] paginated     → 25/page (reuses LeadTable pattern)
