@@ -18,7 +18,7 @@ import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
-import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import {
   renewOutlookSubscription,
@@ -525,7 +525,8 @@ async function processChangeNotification(
   );
 
   if (!hasListUnsubscribeHeader && !leadRow.unsubscribed) {
-    const bodyLower = bodyText.toLowerCase();
+    // Strip quoted thread history first so our own quoted pitch can't self-trigger an opt-out.
+    const bodyLower = stripQuotedReply(bodyText).toLowerCase();
     if (isHumanUnsubscribeRequest(bodyLower)) {
       logger.info("mail.outlook.unsubscribe_detected", { lead_id: leadRow.id });
 

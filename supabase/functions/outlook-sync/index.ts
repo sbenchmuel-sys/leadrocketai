@@ -19,6 +19,7 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
+import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -398,7 +399,8 @@ serve(async (req) => {
         // UNSUBSCRIBE detection (human opt-out only, skip newsletters)
         const hasListUnsubscribeHeader = !!getInternetHeader(msg, "List-Unsubscribe");
         if (direction === "inbound" && !hasListUnsubscribeHeader) {
-          const bodyLower = bodyText.toLowerCase();
+          // Strip quoted thread history first so our own quoted pitch can't self-trigger an opt-out.
+          const bodyLower = stripQuotedReply(bodyText).toLowerCase();
           if (/\bstop\s+emailing\b/.test(bodyLower) || /\bremove\s+me\b/.test(bodyLower) || /\bplease\s+(don['']t|do\s+not|stop)\s+(email|contact|reach)\b/.test(bodyLower)) {
             console.log(`[outlook-sync] Lead ${leadId}: Unsubscribe keyword detected`);
             await serviceSupabase.from("leads").update({

@@ -4,7 +4,7 @@ import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
-import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
+import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
@@ -573,7 +573,8 @@ serve(async (req) => {
         //   3. The phrase matches a human opt-out, not a newsletter footer link
         const hasListUnsubscribeHeader = !!getHeader(headers, "List-Unsubscribe");
         if (direction === "inbound" && !hasListUnsubscribeHeader) {
-          const bodyLower = bodyText.toLowerCase();
+          // Strip quoted thread history first so our own quoted pitch can't self-trigger an opt-out.
+          const bodyLower = stripQuotedReply(bodyText).toLowerCase();
           if (isHumanUnsubscribeRequest(bodyLower)) {
             console.log(`[gmail-sync] Lead ${leadId}: Unsubscribe keyword detected in inbound email`);
             await serviceSupabase.from("leads").update({
