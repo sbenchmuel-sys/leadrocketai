@@ -43,11 +43,11 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
   const safetyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Guards against overlapping re-registration attempts (online + visibility + unregistered can all fire together)
   const reregisteringRef = useRef(false);
-  // Guards against overlapping initDevice() runs. deviceRef is only set AFTER the async
-  // register() resolves, so without this flag two near-simultaneous triggers (mount +
-  // SIGNED_IN + a Call click) would each build a Device and overwrite the timer/listener/
-  // cleanup refs, leaking the earlier device's timers and listeners.
-  const initializingRef = useRef(false);
+  // Tracks the single in-flight initDevice run. deviceRef is only set AFTER the async
+  // register() resolves, so without this two near-simultaneous triggers (mount + SIGNED_IN
+  // + a Call click) would each build a Device and overwrite the timer/listener/cleanup refs,
+  // leaking the earlier device. Concurrent callers await this promise instead of being dropped.
+  const initPromiseRef = useRef<Promise<void> | null>(null);
   // Ensures the "please refresh" toast is shown at most once per failure streak (reset on any success)
   const refreshFailedToastShownRef = useRef(false);
   // Removes the per-device timer + window listeners; set in initDevice, called on teardown
@@ -83,12 +83,11 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const initDevice = useCallback(async () => {
-    if (deviceRef.current || initializingRef.current) return;
-    initializingRef.current = true;
+  const initDeviceRaw = useCallback(async () => {
+    if (deviceRef.current) return;
 
     const token = await fetchToken();
-    if (!token) { initializingRef.current = false; return; }
+    if (!token) return;
 
     setState((s) => ({ ...s, status: "registering" }));
 
@@ -223,13 +222,27 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
 
     try {
       await device.register();
-    } finally {
-      // Clear the in-flight flag whether register succeeds or throws (a thrown
-      // registration must not wedge the flag and block every future init attempt).
-      initializingRef.current = false;
+    } catch (e) {
+      // Registration failed — tear down the partial device, safety timer, and window
+      // listeners so a later retry starts clean instead of overwriting (and leaking) them.
+      console.error("[BrowserCall] device registration failed:", e);
+      connectionCleanupRef.current?.();
+      try { device.destroy(); } catch { /* ignore */ }
+      return;
     }
     deviceRef.current = device;
   }, [fetchToken]);
+
+  // Concurrency wrapper: collapse overlapping initDevice() triggers (mount + SIGNED_IN +
+  // a Call click) onto ONE in-flight init, and let concurrent callers (e.g. makeCall)
+  // await that same init instead of being dropped while deviceRef is still null.
+  const initDevice = useCallback(async () => {
+    if (deviceRef.current) return;
+    if (initPromiseRef.current) { await initPromiseRef.current; return; }
+    const p = initDeviceRaw();
+    initPromiseRef.current = p;
+    try { await p; } finally { initPromiseRef.current = null; }
+  }, [initDeviceRaw]);
 
   // Initialize device on mount if user is authenticated
   useEffect(() => {
