@@ -101,10 +101,17 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     .from("campaign_step_content" as any)
     .select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script")
     .in("campaign_id", campaignIds);
-  // content keyed by `${campaign}|${step}|${variant ?? ""}`
+  // content keyed by `${campaign}|${step}|${variant ?? ""}`; plus a first-row-per-step
+  // fallback so the UI matches the SENDER (resolveTouchContent), which falls back to
+  // the first available row for a (campaign, step) when neither the lead's industry
+  // variant nor a General/NULL row exists. Without it those review cards render empty
+  // and the dialog disables Send even though the sender could resolve content.
   const contentMap = new Map<string, any>();
+  const firstByStep = new Map<string, any>();
   for (const c of (content || []) as any[]) {
     contentMap.set(`${c.campaign_id}|${c.step_number}|${c.variant_group ?? ""}`, c);
+    const stepKey = `${c.campaign_id}|${c.step_number}`;
+    if (!firstByStep.has(stepKey)) firstByStep.set(stepKey, c);
   }
 
   const resolveContent = (campaignId: string, step: number, industry: string | null) => {
@@ -112,6 +119,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     return (
       (variant && contentMap.get(`${campaignId}|${step}|${variant}`)) ||
       contentMap.get(`${campaignId}|${step}|`) ||
+      firstByStep.get(`${campaignId}|${step}`) ||
       null
     );
   };

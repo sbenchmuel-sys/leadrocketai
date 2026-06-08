@@ -279,9 +279,22 @@ Deno.serve(async (req) => {
       return json({ ok: false, error: err instanceof Error ? err.message : "Send failed" }, 502);
     }
     if (!sendRes.ok) {
-      // Send returned a failure — release the claim so the rep can retry from the Queue.
+      const reason = sendRes.reason || "Send failed";
+      // TERMINAL floor blocks (the lead opted out or is on the do-not-contact list)
+      // mean this lead must NEVER be emailed — re-queuing would loop the card forever
+      // and keep it consuming the capped Outreach queue with repeated send failures.
+      // Treat them like a stopped enrollment: stop it and clear its pending touches
+      // (mirrors the opt-out backstop). Other failures (provider error, missing postal
+      // address, transient floor errors) are retryable, so release the claim.
+      if (reason === "suppressed" || reason === "lead unsubscribed") {
+        await admin.from("campaign_enrollment").update({ status: "stopped" }).eq("id", touch.enrollment_id);
+        await admin.from("campaign_touch").update({ status: "skipped" })
+          .eq("enrollment_id", touch.enrollment_id).in("status", ["scheduled", "queued"]);
+        return json({ ok: false, error: "This lead can't be emailed (opted out / do-not-contact) — removed from outreach.", optedOut: true }, 409);
+      }
+      // Retryable — release the claim so the rep can try again from the Queue.
       await admin.from("campaign_touch").update({ status: "queued" }).eq("id", touch.id);
-      return json({ ok: false, error: sendRes.reason || "Send failed" }, 400);
+      return json({ ok: false, error: reason }, 400);
     }
 
     await advanceColdEnrollment(admin, exec, touch, "sent");
