@@ -149,6 +149,21 @@ Deno.serve(async (req) => {
       !!ws?.timezone &&
       !!(ws?.cold_outreach_postal_address && String(ws.cold_outreach_postal_address).trim());
 
+    // Re-read the touch FRESH before acting. A concurrent advanceColdEnrollment — the
+    // executor sending the PRIOR touch, or another scheduler run — may have re-anchored
+    // THIS touch's eligible_at/max_age_at into the future after this batch was selected,
+    // while the freshly-loaded enrollment cursor now makes it pass the next-in-line
+    // check above. Acting on the stale batch snapshot would queue or auto-skip it
+    // prematurely, bypassing the cadence spacing. (The executor does the same re-check.)
+    const { data: fresh } = await supabase
+      .from("campaign_touch")
+      .select("status, eligible_at, max_age_at")
+      .eq("id", t.id)
+      .maybeSingle();
+    if (!fresh || fresh.status !== "scheduled") { counters.skipped++; continue; }
+    if (fresh.eligible_at && new Date(fresh.eligible_at) > now) { counters.skipped++; continue; }
+    const maxAgeAt = fresh.max_age_at; // use the fresh deadline for the auto-skip decision
+
     // ── Email touches ──
     if (t.channel === "email") {
       if (autoSendable) {
@@ -164,7 +179,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Manual touches (call / SMS / WhatsApp / LinkedIn) ──
-    const pastMaxAge = t.max_age_at && new Date(t.max_age_at) < now;
+    const pastMaxAge = maxAgeAt && new Date(maxAgeAt) < now;
     const unreachable = !canReceive(t.channel, lead);
     if (pastMaxAge || unreachable) {
       const exec = await getExec(lead.owner_user_id);
@@ -193,11 +208,31 @@ Deno.serve(async (req) => {
     .limit(BATCH);
   for (const t of (staleQueued || [])) {
     const { data: enr } = await supabase.from("campaign_enrollment")
-      .select("current_step_number, status").eq("id", t.enrollment_id).maybeSingle();
+      .select("current_step_number, status, started_at").eq("id", t.enrollment_id).maybeSingle();
     if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
     if (t.step_number !== (enr.current_step_number ?? 0) + 1) continue; // only the live touch
-    const { data: ld } = await supabase.from("leads").select("owner_user_id").eq("id", t.lead_id).maybeSingle();
+    const { data: ld } = await supabase.from("leads")
+      .select("owner_user_id, last_inbound_at, unsubscribed").eq("id", t.lead_id).maybeSingle();
     if (!ld) continue;
+
+    // REPLY BRIDGE for already-QUEUED manual touches. The main loop's reply bridge only
+    // runs on 'scheduled' touches, so a reply that lands WHILE a manual card is queued
+    // never reaches it. Without this check the max-age cleanup would auto-skip the card
+    // and arm the next step — continuing the cold cadence AFTER an inbound reply. Pull
+    // the lead out instead (and clear the stranded card).
+    if (ld.last_inbound_at && enr.started_at && new Date(ld.last_inbound_at) > new Date(enr.started_at)) {
+      await supabase.from("campaign_enrollment").update({ status: "replied" }).eq("id", t.enrollment_id);
+      await supabase.from("campaign_touch").update({ status: "skipped" }).eq("id", t.id).eq("status", "queued");
+      counters.replied++;
+      continue;
+    }
+    // Unsubscribed (bounce / keyword / admin) → stop the enrollment, don't advance it.
+    if (ld.unsubscribed) {
+      await supabase.from("campaign_enrollment").update({ status: "stopped" }).eq("id", t.enrollment_id);
+      await supabase.from("campaign_touch").update({ status: "skipped" }).eq("id", t.id).eq("status", "queued");
+      continue;
+    }
+
     const exec = await getExec(ld.owner_user_id);
     await advanceColdEnrollment(supabase, exec, t, "auto_skipped");
     counters.auto_skipped++;
