@@ -26,7 +26,13 @@ import {
 } from "../_shared/outlookSubscription.ts";
 
 // Strip HTML tags for plain-text body_text
-function htmlToPlainText(html: string): string {
+// preserveNewlines: keep line breaks instead of flattening everything to single spaces.
+// Needed for unsubscribe quote-stripping — stripQuotedReply keys off LINE-ANCHORED markers
+// ("On … wrote:", "From:"/"Sent:" header blocks, "____" dividers, ">" quotes), so a flattened
+// single-line body matches none of them and our own quoted pitch can re-trigger a false
+// opt-out. All other consumers (OOO / defer / meeting detection, stored body) keep the
+// default flattened form so their phrase matching is unaffected.
+function htmlToPlainText(html: string, preserveNewlines = false): string {
   let text = html;
   text = text.replace(/<br\s*\/?>/gi, "\n");
   text = text.replace(/<\/p>/gi, "\n\n");
@@ -40,7 +46,13 @@ function htmlToPlainText(html: string): string {
   text = text.replace(/&gt;/gi, ">");
   text = text.replace(/&quot;/gi, '"');
   text = text.replace(/&#39;/gi, "'");
-  text = text.replace(/\s+/g, " ");
+  if (preserveNewlines) {
+    text = text.replace(/[ \t\f\v ]+/g, " "); // collapse horizontal runs only
+    text = text.replace(/[ \t]*\n[ \t]*/g, "\n");  // trim spaces hugging newlines
+    text = text.replace(/\n{3,}/g, "\n\n");        // cap blank-line runs
+  } else {
+    text = text.replace(/\s+/g, " ");
+  }
   return text.trim();
 }
 
@@ -294,6 +306,7 @@ async function processChangeNotification(
   let messageSubject: string | null = null;
   let conversationId: string | null = null;
   let bodyText = "";
+  let bodyTextLined = ""; // newline-preserving copy, used only for unsubscribe quote-stripping
   let toRecipients: string[] = [];
   let ccRecipients: string[] = [];
   let internetMessageHeaders: Array<{ name: string; value: string }> = [];
@@ -314,6 +327,12 @@ async function processChangeNotification(
       if (msg.body?.content) {
         bodyText = msg.body.contentType === "html"
           ? htmlToPlainText(msg.body.content)
+          : msg.body.content;
+        // Newline-preserving copy for the unsubscribe path: an HTML body flattened by
+        // htmlToPlainText would defeat stripQuotedReply's line-anchored markers; a
+        // text/plain body already carries its own newlines.
+        bodyTextLined = msg.body.contentType === "html"
+          ? htmlToPlainText(msg.body.content, true)
           : msg.body.content;
       }
 
@@ -526,7 +545,9 @@ async function processChangeNotification(
 
   if (!hasListUnsubscribeHeader && !leadRow.unsubscribed) {
     // Strip quoted thread history first so our own quoted pitch can't self-trigger an opt-out.
-    const bodyLower = stripQuotedReply(bodyText).toLowerCase();
+    // Use the newline-preserving body — stripQuotedReply's markers are line-anchored, so the
+    // flattened bodyText would strip nothing and let a quoted pitch re-trigger a false opt-out.
+    const bodyLower = stripQuotedReply(bodyTextLined).toLowerCase();
     if (isHumanUnsubscribeRequest(bodyLower)) {
       logger.info("mail.outlook.unsubscribe_detected", { lead_id: leadRow.id });
 

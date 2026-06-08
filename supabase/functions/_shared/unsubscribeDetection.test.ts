@@ -55,6 +55,23 @@ Deno.test("REGRESSION: quoted pitch with no new text returns no opt-out", () => 
   assertEquals(detects(body), false);
 });
 
+Deno.test("REGRESSION: a flattened (newline-stripped) body defeats quote-stripping", () => {
+  // The Outlook-webhook bug (PR #68 follow-up): htmlToPlainText collapsed ALL whitespace —
+  // including newlines — to single spaces before calling stripQuotedReply. The markers are
+  // line-anchored, so a one-line body strips nothing and our own quoted pitch self-triggers.
+  // This pins the contract: callers MUST feed newline-preserving text. processor.ts now does
+  // (htmlToPlainText(..., preserveNewlines=true) for the unsubscribe path).
+  const multiline = [
+    "Thanks, talk soon.",
+    "",
+    "On Mon, Jun 8, 2026 at 3:00 PM DrivePilot <rep@drivepilot.io> wrote:",
+    "> ...so you stop emailing people who already wrote back.",
+  ].join("\n");
+  const flattened = multiline.replace(/\s+/g, " "); // what the OLD htmlToPlainText produced
+  assertEquals(detects(flattened), true);  // bug form: quote not stripped → false positive
+  assertEquals(detects(multiline), false); // fixed form: newlines preserved → quote stripped
+});
+
 Deno.test("plain single-message body is unaffected", () => {
   assertEquals(stripQuotedReply("Hi, can you send pricing?"), "Hi, can you send pricing?");
   assertEquals(detects("Hi, can you send pricing?"), false);
