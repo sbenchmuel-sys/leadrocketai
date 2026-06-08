@@ -1637,7 +1637,14 @@ serve(async (req) => {
           }
 
           // 24h new-lead cooldown (Unit 0): never blast a brand-new address.
-          if (lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000) continue;
+          if (lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000) {
+            // Push eligible_at to cooldown expiry rather than a bare continue: a bulk import
+            // of >50 new cold leads would otherwise keep re-filling the oldest-due 50-row
+            // page every tick and starve sendable touches until the cooldown lapses.
+            const readyAt = new Date(new Date(lead.created_at).getTime() + 24 * 60 * 60 * 1000);
+            await supabase.from("campaign_touch").update({ eligible_at: readyAt.toISOString() }).eq("id", touch.id);
+            continue;
+          }
 
           const exec = await loadExecutionSettings(lead.owner_user_id, supabase);
 
