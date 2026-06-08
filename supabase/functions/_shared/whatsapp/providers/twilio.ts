@@ -141,11 +141,15 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
 
   async checkHealth(): Promise<WhatsAppHealthResult> {
     try {
-      // Check account status via Twilio API
+      // Check account status via Twilio API. The Accounts endpoint requires
+      // account-level access, which Standard API keys do NOT have — so probe it
+      // with Account SID:Auth Token explicitly (always present for WhatsApp; the
+      // service throws without it), not the API-key-preferring authHeader used
+      // for message sends. Otherwise a Standard key would falsely report unhealthy.
       const res = await fetch(
         `${TWILIO_API}/Accounts/${this.accountSid}.json`,
         {
-          headers: { Authorization: this.authHeader },
+          headers: { Authorization: "Basic " + btoa(`${this.accountSid}:${this.authToken}`) },
         },
       );
 
