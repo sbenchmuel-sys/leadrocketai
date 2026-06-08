@@ -32,6 +32,7 @@ import {
 } from "@/lib/campaignDefaults";
 import {
   createCampaignWithSteps,
+  deleteCampaign,
   type CampaignType,
 } from "@/lib/campaignQueries";
 import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
@@ -207,8 +208,18 @@ export default function NewCampaign() {
         // Route creation-time recipients through the SAME enrollment path as the
         // add-people dialog, so they get campaign_enrollment + campaign_touch rows
         // (the scheduler/queue source of truth) — not just a campaign_id stamp.
-        const result = await enrollLeadsInCampaign(campaignId, Array.from(selectedLeads));
-        skipped = selectedLeads.size - result.enrolled;
+        // If enrollment throws, the campaign + steps were already created — roll them
+        // back so a failed create doesn't leave an orphaned outreach behind (deleting
+        // the campaign cascades to its steps and any partial enrollment/touch rows).
+        try {
+          const result = await enrollLeadsInCampaign(campaignId, Array.from(selectedLeads));
+          skipped = selectedLeads.size - result.enrolled;
+        } catch (enrollErr) {
+          await deleteCampaign(campaignId).catch(() => {
+            /* best-effort cleanup; surface the ORIGINAL enrollment error below */
+          });
+          throw enrollErr;
+        }
       }
 
       toast.success("Outreach saved as a draft");
