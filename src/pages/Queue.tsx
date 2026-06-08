@@ -112,6 +112,12 @@ export default function Queue() {
     }
   }, []);
   useEffect(() => { void loadOutreach(); }, [loadOutreach]);
+  // Refresh whenever the Outreach tab is (re-)opened. The scheduler queues new cold
+  // touches over time, so without this the one-shot mount load would leave the list —
+  // and its tab count — frozen at the page-load snapshot until a full page reload.
+  useEffect(() => {
+    if (tab === "outreach") void loadOutreach();
+  }, [tab, loadOutreach]);
   const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
 
