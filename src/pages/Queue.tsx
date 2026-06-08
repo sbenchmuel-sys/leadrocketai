@@ -62,10 +62,11 @@ const UNDO_DURATION_MS_DESKTOP = 5_000;
 const UNDO_DURATION_MS_MOBILE = 7_000;
 
 // Map between the persisted reactive bucket (queueStateCache) and the visible
-// tab. "Follow up" absorbs both followup_due and ooo_back (Unit E OOO fold).
+// tab. "Follow up" = the followup_due bucket, which already folds in back-from-away
+// (ooo_return_followup) leads — see queueQueries.chipForLead/leadWasAway.
 function chipToTab(c: QueueChipBucket | null): QueueTab | null {
   if (c === "replied") return "replied";
-  if (c === "followup_due" || c === "ooo_back") return "followup";
+  if (c === "followup_due") return "followup";
   return null;
 }
 function tabToChip(t: QueueTab | null): QueueChipBucket | null {
@@ -94,8 +95,8 @@ export default function Queue() {
     restoreLead,
     // Pass chip: null so the snapshot (and its new-items delta) spans the full
     // reactive set — the visible tabs are derived client-side in `reactiveList`
-    // and `tabCounts`. The "Follow up" tab unions followup_due + ooo_back, which a
-    // single-bucket chip would under-count.
+    // and `tabCounts` off the followup_due bucket (which already folds in
+    // back-from-away leads).
   } = useQueueSnapshot({ chip: null, showAll });
 
   // ── Outreach (cold campaign touches) — separate data source for the tab ──
@@ -136,13 +137,12 @@ export default function Queue() {
   // The snapshot itself never reorders (brief §8). The view layer is
   // a pure function of (snapshot, chip, page) — chip filtering and
   // pagination are pure transformations applied per render.
-  // Reactive list for the Replied / Follow up tabs. "Follow up" unions the
-  // followup_due and ooo_back buckets (Unit E OOO fold); null shows everything.
+  // Reactive list for the Replied / Follow up tabs. "Follow up" = the followup_due
+  // bucket, which already includes back-from-away leads (queueQueries folds
+  // ooo_return_followup into followup_due); null shows everything.
   const reactiveList = useMemo(() => {
     if (tab === "replied") return applyChipFilter(snapshot, "replied");
-    if (tab === "followup") {
-      return [...applyChipFilter(snapshot, "followup_due"), ...applyChipFilter(snapshot, "ooo_back")];
-    }
+    if (tab === "followup") return applyChipFilter(snapshot, "followup_due");
     return snapshot; // null = all reactive (outreach tab uses its own source)
   }, [snapshot, tab]);
 
@@ -160,7 +160,7 @@ export default function Queue() {
   const tabCounts = useMemo(
     () => ({
       replied: chipCounts.replied,
-      followup: chipCounts.followup_due + chipCounts.ooo_back,
+      followup: chipCounts.followup_due,
       outreach: outreachTouches.length,
     }),
     [chipCounts, outreachTouches.length],
