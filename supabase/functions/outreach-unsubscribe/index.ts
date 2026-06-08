@@ -37,6 +37,38 @@ function page(title: string, message: string, status = 200): Response {
   });
 }
 
+// Escape any value reflected into HTML (the token comes from the query string and
+// is attacker-controllable, so it must never be emitted raw).
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// GET confirmation page: a button that POSTs the token back. The actual opt-out
+// only happens on POST, so a link prefetch (mailbox/security scanner, link preview)
+// can never silently unsubscribe the lead.
+function confirmPage(token: string): Response {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unsubscribe</title></head>
+<body style="font-family:Arial,sans-serif;max-width:480px;margin:80px auto;padding:0 24px;color:#222;text-align:center">
+<h1 style="font-size:20px">Unsubscribe from these emails?</h1>
+<p style="color:#555;line-height:1.6">Click the button below to stop receiving emails from us.</p>
+<form method="POST">
+<input type="hidden" name="token" value="${escapeHtml(token)}">
+<button type="submit" style="margin-top:16px;padding:12px 24px;font-size:15px;color:#fff;background:#222;border:none;border-radius:6px;cursor:pointer">Unsubscribe me</button>
+</form>
+</body></html>`;
+  return new Response(html, {
+    status: 200,
+    headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -60,6 +92,15 @@ Deno.serve(async (req) => {
   if (!payload) {
     // Fail closed and generic — never reveal whether a lead exists.
     return page("Link not valid", "This unsubscribe link is invalid or has expired. If you keep receiving emails, just reply with “unsubscribe”.", 400);
+  }
+
+  // A GET is a link click OR an unsolicited prefetch (mailbox/security scanner,
+  // link-preview crawler). NEVER mutate on GET — that would let a prefetch opt the
+  // lead out before they ever asked. Render a confirmation page whose button POSTs
+  // back; the opt-out below runs only for POST (the form button AND the RFC 8058
+  // List-Unsubscribe one-click are both POST). This keeps GET safe/idempotent.
+  if (req.method !== "POST") {
+    return confirmPage(token);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
