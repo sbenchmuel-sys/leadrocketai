@@ -118,9 +118,18 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           {touch.channel === "email" ? (
-            <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
-              <Send className="mr-1.5 h-4 w-4" /> Send
-            </Button>
+            (touch.subject || touch.body) ? (
+              <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
+                <Send className="mr-1.5 h-4 w-4" /> Send
+              </Button>
+            ) : (
+              // No content resolved for this lead's industry (and no General variant) —
+              // the sender would refuse it, so don't offer Send; the rep can Skip.
+              <Button size="sm" variant="outline" className="h-8 text-xs" disabled
+                title="No email content for this lead's industry yet — add a General variant or this industry's copy in the campaign.">
+                No content
+              </Button>
+            )
           ) : !opened ? (
             <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={openChannelApp}>
               {channelMeta[touch.channel]?.icon}
