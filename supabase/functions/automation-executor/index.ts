@@ -1775,8 +1775,9 @@ serve(async (req) => {
           const sendRes = await sendColdEmailTouch({
             supabase, supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
             lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
+            workspaceId: lead.workspace_id,
             mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
-            subject: content.subject, body: content.body, unsubscribeUrl, postalAddress: postal,
+            subject: content.subject, body: content.body, unsubscribeUrl,
           });
 
           if (!sendRes.ok) {

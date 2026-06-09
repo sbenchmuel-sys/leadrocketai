@@ -146,3 +146,9 @@ verify_jwt = false
 # token only (UNSUBSCRIBE_TOKEN_SECRET); a missing secret fails closed.
 [functions.outreach-unsubscribe]
 verify_jwt = false
+
+# Rep actions on cold Outreach touches (review "Send" / manual "Sent it" / skip /
+# call outcome). USER-authenticated: verify_jwt stays true and the function also
+# enforces workspace membership in code (requireAuth + assertWorkspaceMembership).
+[functions.outreach-touch-action]
+verify_jwt = true

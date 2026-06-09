@@ -19,6 +19,9 @@ export type CampaignMotion =
 
 export type CampaignType = "general" | "industry";
 export type CampaignStatus = "draft" | "active" | "paused" | "completed";
+// Outreach Unit C: review = email touches surface as approve-cards; automatic =
+// email touches auto-send behind the workspace cold-send gate. Default review.
+export type SendMode = "review" | "automatic";
 
 export interface Campaign {
   id: string;
@@ -34,6 +37,7 @@ export interface Campaign {
   // only after the migration is applied; reads/writes below cast as needed.
   campaign_type: CampaignType;
   status: CampaignStatus;
+  send_mode: SendMode;
   knowledge_ref: string | null;
   // Added in Unit B Phase 2 (migration 20260603120000): the kb_chunks.document_id
   // of the campaign's uploaded knowledge file. Authoring-time KB retrieval is
@@ -233,7 +237,7 @@ export async function createCampaignWithSteps(input: CreateCampaignInput): Promi
 /** Update editable campaign-level fields. */
 export async function updateCampaign(
   campaignId: string,
-  patch: Partial<Pick<Campaign, "name" | "global_instructions" | "include_meeting_cta" | "knowledge_ref" | "knowledge_document_id" | "status">>,
+  patch: Partial<Pick<Campaign, "name" | "global_instructions" | "include_meeting_cta" | "knowledge_ref" | "knowledge_document_id" | "status" | "send_mode">>,
 ) {
   const { error } = await supabase
     .from("campaigns")
