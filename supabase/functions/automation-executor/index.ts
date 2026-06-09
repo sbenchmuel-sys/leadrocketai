@@ -18,6 +18,15 @@ import {
 } from "../_shared/executionSettings.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
 import { logger } from "../_shared/logger.ts";
+import {
+  resolveTouchContent,
+  coldSendFloor,
+  sendColdEmailTouch,
+  advanceColdEnrollment,
+  endColdEnrollment,
+  buildUnsubscribeUrl,
+} from "../_shared/coldOutreach.ts";
+import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -315,13 +324,17 @@ serve(async (req) => {
       });
     }
 
-    if (!eligibleLeads || eligibleLeads.length === 0) {
-      return new Response(JSON.stringify({ ok: true, processed: 0, message: "No eligible leads" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // NOTE: do NOT early-return when there are no legacy leads. Cold-outreach
+    // automatic touches must still run in the cold pass below — cold leads carry no
+    // automation_mode, so the candidate query above legitimately finds nothing in
+    // the common cold-only case. Falling through (legacy loop iterates an empty
+    // list) lets the cold pass execute before the final response.
+    const legacyLeads = eligibleLeads || [];
+    if (legacyLeads.length === 0) {
+      console.log("[automation-executor] No eligible legacy leads — proceeding to cold pass");
+    } else {
+      console.log(`[automation-executor] Found ${legacyLeads.length} eligible leads`);
     }
-
-    console.log(`[automation-executor] Found ${eligibleLeads.length} eligible leads`);
 
     // --- STRATEGY 6: Rep Profile/Signature Preloading (per-owner cache) ---
     type RepContext = {
@@ -365,7 +378,7 @@ serve(async (req) => {
     const sentWorkspaceIds = new Set<string>();                   // workspaces (by lead)
     const ownerSentWorkspaces = new Map<string, Set<string>>();   // owner → workspaces it sent into
 
-    for (const lead of eligibleLeads) {
+    for (const lead of legacyLeads) {
       // Enforce MAX_SENDS_PER_RUN cap
       if (processed >= maxSendsPerRun) {
         console.log(`[automation-executor] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping`);
@@ -1501,6 +1514,299 @@ serve(async (req) => {
         }).eq("id", lead.id);
         errors.push(`Lead ${lead.id}: ${leadErr instanceof Error ? leadErr.message : "Unknown error"}`);
       }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // COLD OUTREACH — AUTOMATIC email touches (Outreach Unit C, PR 2)
+    //
+    // ADDITIVE + SELF-CONTAINED. The legacy loop above is byte-unchanged: cold
+    // leads never carry `automation_mode`, so the legacy candidate query never
+    // sees them. Here we query due AUTOMATIC-mode cold email touches DIRECTLY and
+    // send them through the SAME guardrail engine + provider path. Key safety:
+    //   • Ordering: a touch is processed ONLY when its step_number ==
+    //     enrollment.current_step_number + 1, so touches can't fire out of order
+    //     even though all rows are pre-created.
+    //   • No double-send: the per-touch CLAIM (action_key = cold_touch_<id>) on
+    //     the existing automation_log unique index is the single guard; a
+    //     duplicate insert (23505) means another run already claimed it → skip.
+    //   • No stall: on send failure the touch is LEFT scheduled (no state change)
+    //     and retries next run; advance happens ONLY on a confirmed send.
+    // REVIEW-mode and manual touches are NOT handled here — the scheduler surfaces
+    // those as Queue cards (this branch only fires when the campaign is automatic
+    // AND the workspace gate + timezone + postal address are all set).
+    //
+    // SCOPING: cold AUTOMATIC sends are a cron/internal background concern. Only a
+    // PRIVILEGED caller (X-Internal-Secret / service-role, i.e. the cron dispatch)
+    // runs this pass. User-JWT entry points (automation-check, NurturePreviewCard)
+    // must NOT trigger cold sends — the cold query is service-role + unscoped, so
+    // letting a user call it would send across other owners/workspaces.
+    // ════════════════════════════════════════════════════════════════════════
+    if (privileged) try {
+      const internalSecret = Deno.env.get("INTERNAL_API_SECRET") ?? "";
+      const unsubSecret = getUnsubscribeSecret();
+      // CONSTRAIN the cold due query to genuinely AUTO-SENDABLE campaigns: active +
+      // send_mode='automatic' + workspace gate fully on (cold_auto_send_enabled +
+      // timezone + postal). Without the gate filter, email touches from automatic
+      // campaigns in NOT-yet-gated workspaces (and paused/review ones) sit at the front
+      // of the oldest-due order, fill the 50-row cap, get skipped by the per-touch gate
+      // check below (which leaves them 'scheduled' for the scheduler to surface), and
+      // starve genuinely sendable cold touches behind them. Filtering keeps those rows
+      // untouched while letting live automatic sends through. (The per-touch checks
+      // below remain as defense in depth.)
+      const { data: autoCamps } = await supabase
+        .from("campaigns").select("id, workspace_id").eq("status", "active").eq("send_mode", "automatic");
+      const autoWsIds = [...new Set((autoCamps || []).map((c: any) => c.workspace_id))];
+      let gatedWs = new Set<string>();
+      if (autoWsIds.length > 0) {
+        const [{ data: wsRows }, { data: autoRows }] = await Promise.all([
+          supabase.from("workspaces").select("id, timezone, cold_outreach_postal_address").in("id", autoWsIds),
+          supabase.from("workspace_automation_settings").select("workspace_id, cold_auto_send_enabled").in("workspace_id", autoWsIds),
+        ]);
+        const autoOn = new Set((autoRows || []).filter((r: any) => r.cold_auto_send_enabled).map((r: any) => r.workspace_id));
+        gatedWs = new Set((wsRows || [])
+          .filter((w: any) => w.timezone && String(w.cold_outreach_postal_address || "").trim() && autoOn.has(w.id))
+          .map((w: any) => w.id));
+      }
+      const sendableCampIds = (autoCamps || []).filter((c: any) => gatedWs.has(c.workspace_id)).map((c: any) => c.id);
+      const coldDue = sendableCampIds.length === 0 ? [] : (await supabase
+        .from("campaign_touch")
+        .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at")
+        .eq("channel", "email")
+        .eq("status", "scheduled")
+        .in("campaign_id", sendableCampIds)
+        .lte("eligible_at", new Date().toISOString())
+        .order("eligible_at", { ascending: true })
+        .limit(50)).data;
+
+      for (const touch of (coldDue || [])) {
+        // Honor the SAME per-run send cap as the legacy loop — cold sends count
+        // toward MAX_SENDS_PER_RUN so one tick can't blow past the throttle.
+        if (processed >= maxSendsPerRun) {
+          console.log(`[automation-executor:cold] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping cold pass`);
+          break;
+        }
+        try {
+          // Re-check the touch FRESH (the batch snapshot can go stale within this
+          // run: sending an earlier step re-anchors the next step's eligible_at to
+          // the future, so this guards against bunching two sends for one lead in
+          // one run, and against a touch a concurrent run already advanced).
+          const { data: freshTouch } = await supabase.from("campaign_touch")
+            .select("status, eligible_at").eq("id", touch.id).maybeSingle();
+          if (!freshTouch || freshTouch.status !== "scheduled") continue;
+          if (!freshTouch.eligible_at || new Date(freshTouch.eligible_at) > new Date()) continue;
+
+          const { data: enr } = await supabase.from("campaign_enrollment")
+            .select("id, status, current_step_number, started_at").eq("id", touch.enrollment_id).maybeSingle();
+          if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
+          if (touch.step_number !== (enr.current_step_number ?? 0) + 1) continue; // not next-in-line
+
+          const { data: camp } = await supabase.from("campaigns")
+            .select("id, status, send_mode, workspace_id").eq("id", touch.campaign_id).maybeSingle();
+          if (!camp || camp.status !== "active" || camp.send_mode !== "automatic") continue;
+
+          // Gate: cold auto-send on + timezone set + postal address present. Else
+          // it's not auto-sendable — the scheduler surfaces it for review instead.
+          const { data: ws } = await supabase.from("workspaces")
+            .select("timezone, cold_outreach_postal_address").eq("id", camp.workspace_id).maybeSingle();
+          const { data: autoSet } = await supabase.from("workspace_automation_settings")
+            .select("cold_auto_send_enabled").eq("workspace_id", camp.workspace_id).maybeSingle();
+          const postal = (ws?.cold_outreach_postal_address || "").trim();
+          if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) continue;
+
+          const { data: lead } = await supabase.from("leads")
+            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting")
+            .eq("id", touch.lead_id).maybeSingle();
+          if (!lead) continue;
+          // Unsubscribed (via the unsubscribe endpoint, a bounce, or an admin/keyword
+          // path) → STOP the enrollment, don't just skip. A bare continue would leave
+          // the touch 'scheduled' and the enrollment live, so the cold query
+          // (oldest-first, 50-row cap) would re-select and skip it on every run forever,
+          // eventually crowding out legitimate due touches.
+          if (lead.unsubscribed) {
+            await endColdEnrollment(supabase, enr.id, "stopped");
+            continue;
+          }
+          if (!lead.email) continue;
+          if (!["active", "new"].includes(lead.status)) continue;
+
+          // Reply bridge: a reply since starting pulls the lead out of the cold cadence
+          // (and clears its pending touches so they don't linger in the cold due query).
+          if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {
+            await endColdEnrollment(supabase, enr.id, "replied");
+            continue;
+          }
+
+          // 24h new-lead cooldown (Unit 0): never blast a brand-new address.
+          if (lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000) {
+            // Push eligible_at to cooldown expiry rather than a bare continue: a bulk import
+            // of >50 new cold leads would otherwise keep re-filling the oldest-due 50-row
+            // page every tick and starve sendable touches until the cooldown lapses.
+            const readyAt = new Date(new Date(lead.created_at).getTime() + 24 * 60 * 60 * 1000);
+            await supabase.from("campaign_touch").update({ eligible_at: readyAt.toISOString() }).eq("id", touch.id);
+            continue;
+          }
+
+          const exec = await loadExecutionSettings(lead.owner_user_id, supabase);
+
+          // Meeting-stop: the legacy path runs checkStopConditions (which pauses on a
+          // booked meeting) before every send; the cold guardrail block reused only
+          // window/gap/caps, so without this a cold-enrolled lead with a future meeting
+          // would still get auto-blasted. Honor pause_when_meeting_scheduled here too.
+          if (exec.stop_pause_rules.pause_when_meeting_scheduled && lead.has_future_meeting) continue;
+
+          // Reuse the SAME guardrail engine as the legacy path.
+          if (!checkSendWindow(exec).allowed) continue;                                   // send window / business hours
+          if (!checkMinGap(lead.last_outbound_at, exec.guardrails.min_gap_hours_between_emails).allowed) continue;
+          if (!(await checkPerLeadCaps(lead.id, exec.guardrails, supabase)).allowed) continue;
+
+          // Per-mailbox daily cap (shared across ALL automation — oldest-due first).
+          const dailyCap = await getDailyCapForOwner(lead.owner_user_id);
+          if ((await getDailySendCount(lead.owner_user_id)) >= dailyCap) continue;
+
+          // Fail-closed floor: unsubscribed + workspace do-not-contact list.
+          const floor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!floor.ok) {
+            // PERMANENT blocks (unsubscribed / suppressed / bad address) end the
+            // enrollment and clear its pending touches. TRANSIENT failures (a DB read
+            // that errored) must NOT — that would kill a live cadence on a blip; just
+            // skip this run and let the still-scheduled touch retry next tick.
+            const transient = floor.reason === "suppression check failed" || floor.reason === "lead lookup failed";
+            if (!transient) await endColdEnrollment(supabase, enr.id, "stopped");
+            continue;
+          }
+
+          // Sender: require the LEAD OWNER's OWN connected mailbox (user_id = owner).
+          // The whole cold model is owner-centric — the daily cap is counted per
+          // owner_user_id and gmail-send sends from the owner's gmail_connections — so
+          // the sending mailbox MUST be the owner's. Selecting by workspace+is_default
+          // (or a shared/coworker row) would either send from someone else's identity
+          // or leak the per-mailbox cap across owners (a shared Outlook mailbox would
+          // get each owner's full cap; a shared Gmail row just fails the owner-Gmail
+          // match check). If the owner has no own connected mailbox, skip — never
+          // impersonate or fall back to legacy gmail_connections (wrong-address mode).
+          const { data: mailAcct } = await supabase.from("mail_accounts")
+            .select("id, provider").eq("workspace_id", lead.workspace_id).eq("status", "connected")
+            .eq("user_id", lead.owner_user_id)
+            .order("is_default", { ascending: false }).limit(1).maybeSingle();
+          if (!mailAcct) {
+            // The lead owner has no connected mailbox — this touch can't auto-send. A bare
+            // continue would leave it 'scheduled' with the same eligible_at, so it stays at
+            // the front of the oldest-due 50-row page and starves sendable cold touches
+            // behind it every run. Push eligible_at out so the page can drain; it retries
+            // once the owner connects a mailbox.
+            await supabase.from("campaign_touch")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", touch.id);
+            continue;
+          }
+
+          const firstName = (lead.name || "").split(" ")[0] || "there";
+          const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName);
+          if (!content) {
+            console.warn(`[automation-executor:cold] no content for campaign ${camp.id} step ${touch.step_number} — deferring touch ${touch.id}`);
+            // No generated content for this step (generation pending/failed or the row was
+            // deleted). Push eligible_at out instead of a bare continue: otherwise a batch of
+            // no-content touches keeps re-filling the oldest-due 50-row page and starves
+            // sendable touches. Deferring (vs marking skipped) lets it send once content
+            // exists; if it never does, it just keeps deferring harmlessly.
+            await supabase.from("campaign_touch")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", touch.id);
+            continue;
+          }
+
+          // Unsubscribe link (signed token). Fail closed if the secret is unset.
+          if (!unsubSecret) { console.error("[automation-executor:cold] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send (fail closed)"); continue; }
+          const token = await signUnsubscribeToken(
+            { lid: lead.id, wid: lead.workspace_id, cid: camp.id, iat: Math.floor(Date.now() / 1000) }, unsubSecret);
+          const unsubscribeUrl = buildUnsubscribeUrl(supabaseUrl, token);
+
+          // Per-touch CLAIM — the single double-send guard.
+          const actionKey = `cold_touch_${touch.id}`;
+
+          // LIFETIME double-send guard. action_key embeds the globally-unique touch.id,
+          // but automation_log_claim_unique is (lead_id, action_key, claim_date) — so
+          // the claim only blocks a re-send on the SAME day. If a send SUCCEEDED but the
+          // subsequent advanceColdEnrollment failed (transient error), the touch stays
+          // 'scheduled' and a NEXT-DAY run would claim again (new claim_date) and
+          // re-send the same email. Guard against that: if this touch already has a
+          // 'sent' claim on ANY date, the email is already out — do NOT re-send; just
+          // re-run the idempotent advance to recover the stalled cadence.
+          const { data: priorSent } = await supabase.from("automation_log")
+            .select("id").eq("lead_id", lead.id).eq("action_key", actionKey).eq("status", "sent")
+            .limit(1).maybeSingle();
+          if (priorSent) {
+            await advanceColdEnrollment(supabase, exec, touch, "sent", { automationLogId: priorSent.id });
+            continue;
+          }
+          // Column set matches the legacy claim exactly (no workspace_id — that
+          // column is not written to automation_log in the legacy path either).
+          const claimRow: Record<string, unknown> = {
+            lead_id: lead.id,
+            owner_user_id: lead.owner_user_id,
+            action_key: actionKey,
+            status: "claiming",
+            claim_date: new Date().toISOString().slice(0, 10),
+            claimed_at: new Date().toISOString(),
+            claim_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            subject: content.subject,
+            mail_account_id: mailAcct.id,
+          };
+          const { data: claim, error: claimErr } = await supabase.from("automation_log").insert(claimRow).select("id").single();
+          if (claimErr || !claim) continue; // 23505 → already claimed by a concurrent run; no double-send
+
+          // LATE opt-out guard (closes the unsubscribe race). A recipient can POST the
+          // unsubscribe form — or a bounce / admin / keyword path can set unsubscribed —
+          // AFTER the earlier coldSendFloor passed but BEFORE this send; that window spans
+          // the mailbox/content/token/claim awaits above. Re-run the floor immediately
+          // before the provider call so the public unsubscribe guarantee holds under the
+          // race. On a terminal block, stop the enrollment and mark the claim skipped;
+          // transient read errors just skip this run (the touch stays scheduled, retries).
+          const lateFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!lateFloor.ok) {
+            await supabase.from("automation_log").update({
+              status: "skipped", error_message: `floor: ${lateFloor.reason}`.slice(0, 200), completed_at: new Date().toISOString(),
+            }).eq("id", claim.id);
+            const transient = lateFloor.reason === "suppression check failed" || lateFloor.reason === "lead lookup failed";
+            if (!transient) await endColdEnrollment(supabase, enr.id, "stopped");
+            continue;
+          }
+
+          const sendRes = await sendColdEmailTouch({
+            supabase, supabaseUrl, serviceKey: supabaseServiceKey, internalSecret,
+            lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
+            mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
+            subject: content.subject, body: content.body, unsubscribeUrl, postalAddress: postal,
+          });
+
+          if (!sendRes.ok) {
+            await supabase.from("automation_log").update({
+              status: "failed", error_message: String(sendRes.reason || "send failed").slice(0, 200), completed_at: new Date().toISOString(),
+            }).eq("id", claim.id);
+            continue; // touch LEFT scheduled → retries next run (no stall, no advance)
+          }
+
+          await supabase.from("automation_log").update({
+            status: "sent", gmail_message_id: sendRes.messageId ?? null, completed_at: new Date().toISOString(),
+          }).eq("id", claim.id);
+          await advanceColdEnrollment(supabase, exec, touch, "sent", { automationLogId: claim.id });
+          dailySendCounts.set(lead.owner_user_id, (dailySendCounts.get(lead.owner_user_id) ?? 0) + 1);
+          // Feed the Unit 0 volume tripwire (merged from main): cold AUTOMATIC sends are
+          // the highest-risk blast vector, so they must count toward the per-mailbox /
+          // per-workspace volume alert just like legacy sends do.
+          sentOwnerIds.add(lead.owner_user_id);
+          sentWorkspaceIds.add(lead.workspace_id);
+          if (!ownerSentWorkspaces.has(lead.owner_user_id)) ownerSentWorkspaces.set(lead.owner_user_id, new Set());
+          ownerSentWorkspaces.get(lead.owner_user_id)!.add(lead.workspace_id);
+          processed++;
+          sentLeads.push({ leadId: lead.id, leadName: lead.name, subject: content.subject });
+          console.log(`[automation-executor:cold] sent cold touch ${touch.id} (step ${touch.step_number}) for lead ${lead.id}`);
+        } catch (touchErr) {
+          console.error(`[automation-executor:cold] error on touch ${touch.id}:`, touchErr);
+        }
+      }
+    } catch (coldErr) {
+      console.error("[automation-executor:cold] section error:", coldErr);
     }
 
     // ── VOLUME TRIPWIRE (Unit 0) ────────────────────────────────

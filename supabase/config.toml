@@ -133,3 +133,16 @@ verify_jwt = false
 # signature is verified in code via X-Twilio-Signature.
 [functions.sms-status-webhook]
 verify_jwt = false
+
+# Cold outreach cadence brain (Outreach Unit C). Invoked every minute by
+# cron-dispatcher (target=campaign-touch-scheduler) via X-Internal-Secret /
+# service-role through requireScheduledCaller; no user JWT, so the gateway must
+# skip verification.
+[functions.campaign-touch-scheduler]
+verify_jwt = false
+
+# PUBLIC one-click unsubscribe for cold outreach (CAN-SPAM). Email clients open
+# this UNAUTHENTICATED — verify_jwt MUST be false. Security is the signed HMAC
+# token only (UNSUBSCRIBE_TOKEN_SECRET); a missing secret fails closed.
+[functions.outreach-unsubscribe]
+verify_jwt = false

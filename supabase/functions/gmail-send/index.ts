@@ -152,7 +152,7 @@ serve(async (req) => {
       userId = user.id;
     }
 
-    const { to, cc, subject, body, leadId, draftId, threadId, replyToMessageId, skipStateUpdate } = (req as any)._parsedBody || await req.json();
+    const { to, cc, subject, body, leadId, draftId, threadId, replyToMessageId, skipStateUpdate, headers: extraHeaders } = (req as any)._parsedBody || await req.json();
 
     // Normalize recipients: accept either legacy `to: string` or new `to: string[]`,
     // plus optional `cc: string[]`. The first To address remains the canonical
@@ -222,6 +222,19 @@ serve(async (req) => {
       emailLines.push(`In-Reply-To: <${replyToMessageId}>`);
       emailLines.push(`References: <${replyToMessageId}>`);
       console.log(`[gmail-send] Adding threading headers for reply to message: ${replyToMessageId}`);
+    }
+
+    // Optional extra headers (e.g. List-Unsubscribe for cold outreach). Purely
+    // additive and placed AFTER the threading block so it never disturbs
+    // In-Reply-To / References. CR/LF is stripped from each value to prevent
+    // header injection. Threading is unaffected when this is absent (the common case).
+    if (extraHeaders && typeof extraHeaders === "object") {
+      for (const [name, value] of Object.entries(extraHeaders as Record<string, unknown>)) {
+        if (!name || value == null) continue;
+        const safeName = String(name).replace(/[\r\n:]+/g, "").trim();
+        const safeValue = String(value).replace(/[\r\n]+/g, " ").trim();
+        if (safeName && safeValue) emailLines.push(`${safeName}: ${safeValue}`);
+      }
     }
 
     emailLines.push(``, body);
