@@ -67,7 +67,11 @@ const COLD_DISCOVERY_PHRASES = [
   /what\s+challenges?\s+/i,
 ];
 
-const SIGNOFF_LINE_RE = /^(?:Best|Thanks|Thank you|Regards|Kind regards|Cheers|Sincerely|Warmly)[,!.\s]?$/i;
+// Matches a sign-off LINE: must START with a sign-off word, optionally followed
+// by short trailing text like "regards", "so much", "in advance", "again", "!",
+// "," etc. We deliberately don't require the line to be ONLY the sign-off word —
+// LLMs commonly emit "Best regards,", "Thanks so much,", "Talk soon,", etc.
+const SIGNOFF_LINE_RE = /^(?:Best(?:\s+regards)?|Thanks(?:\s+(?:so\s+much|again|in\s+advance))?|Thank\s+you|Regards|Kind\s+regards|Warm\s+regards|Cheers|Sincerely|Warmly|Talk\s+soon|Speak\s+soon|All\s+the\s+best)\b[\s,!.\-–—]*$/i;
 
 function hasAddressedGreeting(line: string): boolean {
   const remainder = line
