@@ -132,10 +132,11 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
 
   // 5. Sign-off + body presence
   const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  const lastLine = lines[lines.length - 1] || "";
-  const secondLast = lines[lines.length - 2] || "";
-  const hasSignOff = SIGNOFF_LINE_RE.test(secondLast) || SIGNOFF_LINE_RE.test(lastLine) ||
-    /\b(?:Best|Thanks|Regards|Cheers|Sincerely)\b[,.]?\s*$/i.test(lines.slice(-3).join(" "));
+  // Check last 3 lines: any line that starts with a sign-off counts (sender
+  // name often follows on the next line, so don't require sign-off at the end).
+  const tail = lines.slice(-3);
+  const hasSignOff = tail.some((l) => SIGNOFF_LINE_RE.test(l)) ||
+    /\b(?:Best(?:\s+regards)?|Thanks(?:\s+so\s+much)?|Thank\s+you|Kind\s+regards|Warm\s+regards|Regards|Cheers|Sincerely|Warmly|Talk\s+soon|Speak\s+soon|All\s+the\s+best)\b[,.!\-–—]?/i.test(tail.join("\n"));
   if (!hasSignOff) {
     errors.push("Missing sign-off (Best, Thanks, etc.)");
     codes.push("missing_signoff");
