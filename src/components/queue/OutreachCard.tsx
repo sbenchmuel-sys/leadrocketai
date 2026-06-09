@@ -41,6 +41,15 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
+  // True when the sender resolved content for this (campaign, step, industry). When the
+  // resolver returns nothing (no industry match and no General variant) ALL of these are
+  // null, and NO channel should be actionable — email would open an empty compose, and a
+  // manual step (SMS/WhatsApp/LinkedIn/voice) would deep-link a blank message and let the
+  // rep mark it sent. Gate every channel on this so a missing-content touch is Skip-only.
+  const hasContent = !!(
+    touch.subject || touch.body || touch.smsText || touch.talkingPoints || touch.voicemailScript
+  );
+
   // ── Action runners (optimistic: parent removes the card) ──
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>, successMsg: string) {
     setBusy(true);
@@ -117,19 +126,17 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          {touch.channel === "email" ? (
-            (touch.subject || touch.body) ? (
-              <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
-                <Send className="mr-1.5 h-4 w-4" /> Send
-              </Button>
-            ) : (
-              // No content resolved for this lead's industry (and no General variant) —
-              // the sender would refuse it, so don't offer Send; the rep can Skip.
-              <Button size="sm" variant="outline" className="h-8 text-xs" disabled
-                title="No email content for this lead's industry yet — add a General variant or this industry's copy in the campaign.">
-                No content
-              </Button>
-            )
+          {!hasContent ? (
+            // No content resolved for this lead's industry (and no General variant) — the
+            // sender would refuse it, so no channel is actionable; the rep can Skip.
+            <Button size="sm" variant="outline" className="h-8 text-xs" disabled
+              title="No content for this lead's industry yet — add a General variant or this industry's copy in the campaign.">
+              No content
+            </Button>
+          ) : touch.channel === "email" ? (
+            <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
+              <Send className="mr-1.5 h-4 w-4" /> Send
+            </Button>
           ) : !opened ? (
             <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={openChannelApp}>
               {channelMeta[touch.channel]?.icon}
