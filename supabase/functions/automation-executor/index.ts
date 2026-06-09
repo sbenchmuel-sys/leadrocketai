@@ -1703,7 +1703,15 @@ serve(async (req) => {
           const firstName = (lead.name || "").split(" ")[0] || "there";
           const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName);
           if (!content) {
-            console.warn(`[automation-executor:cold] no content for campaign ${camp.id} step ${touch.step_number} — skipping touch ${touch.id}`);
+            console.warn(`[automation-executor:cold] no content for campaign ${camp.id} step ${touch.step_number} — deferring touch ${touch.id}`);
+            // No generated content for this step (generation pending/failed or the row was
+            // deleted). Push eligible_at out instead of a bare continue: otherwise a batch of
+            // no-content touches keeps re-filling the oldest-due 50-row page and starves
+            // sendable touches. Deferring (vs marking skipped) lets it send once content
+            // exists; if it never does, it just keeps deferring harmlessly.
+            await supabase.from("campaign_touch")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", touch.id);
             continue;
           }
 
