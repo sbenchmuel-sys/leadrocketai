@@ -579,6 +579,7 @@ export type Database = {
       }
       campaign_enrollment: {
         Row: {
+          bounced_at: string | null
           campaign_id: string
           created_at: string
           current_step_number: number
@@ -590,6 +591,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          bounced_at?: string | null
           campaign_id: string
           created_at?: string
           current_step_number?: number
@@ -601,6 +603,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          bounced_at?: string | null
           campaign_id?: string
           created_at?: string
           current_step_number?: number
