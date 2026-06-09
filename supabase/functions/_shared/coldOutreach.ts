@@ -50,11 +50,16 @@ export async function resolveTouchContent(
   const all = (rows || []) as Array<{ subject: string | null; body: string | null; variant_group: string | null }>;
   if (all.length === 0) return null;
 
-  const industry = (leadIndustry || "").trim();
+  // Prefer the lead's industry variant (case-insensitive — "Healthcare" must match a
+  // "healthcare" lead), then the General/NULL variant. Do NOT fall back to an arbitrary
+  // first row: that would send industry-specific copy to the wrong industry (e.g. only
+  // the Healthcare variant is generated and a Finance lead gets it). Return null instead
+  // so the caller defers (auto path) / shows no-content (review) rather than mis-targeting.
+  const industry = (leadIndustry || "").trim().toLowerCase();
   const match =
-    (industry && all.find((r) => (r.variant_group || "") === industry)) ||
-    all.find((r) => !r.variant_group) ||
-    all[0];
+    (industry && all.find((r) => (r.variant_group || "").trim().toLowerCase() === industry)) ||
+    all.find((r) => !(r.variant_group || "").trim()) ||
+    null;
   if (!match || !match.body) return null;
 
   const first = (leadFirstName || "there").trim() || "there";
