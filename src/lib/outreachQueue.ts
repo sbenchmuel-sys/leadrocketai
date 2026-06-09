@@ -101,25 +101,24 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     .from("campaign_step_content" as any)
     .select("campaign_id, step_number, variant_group, subject, body, sms_text, talking_points, voicemail_script")
     .in("campaign_id", campaignIds);
-  // content keyed by `${campaign}|${step}|${variant ?? ""}`; plus a first-row-per-step
-  // fallback so the UI matches the SENDER (resolveTouchContent), which falls back to
-  // the first available row for a (campaign, step) when neither the lead's industry
-  // variant nor a General/NULL row exists. Without it those review cards render empty
-  // and the dialog disables Send even though the sender could resolve content.
+  // Resolve content to MATCH the server sender (resolveTouchContent in coldOutreach.ts):
+  // the lead's industry variant (case-insensitive), then the General/NULL variant, else
+  // NOTHING. The sender no longer falls back to an arbitrary first row — that could send
+  // industry-specific copy to the wrong industry — so neither do we. A card with no
+  // matching content renders as not-sendable (see OutreachCard) instead of previewing
+  // copy the sender would refuse to send. Keys are lowercased so matching is
+  // case-insensitive, mirroring the server.
   const contentMap = new Map<string, any>();
-  const firstByStep = new Map<string, any>();
   for (const c of (content || []) as any[]) {
-    contentMap.set(`${c.campaign_id}|${c.step_number}|${c.variant_group ?? ""}`, c);
-    const stepKey = `${c.campaign_id}|${c.step_number}`;
-    if (!firstByStep.has(stepKey)) firstByStep.set(stepKey, c);
+    const variantKey = String(c.variant_group ?? "").trim().toLowerCase();
+    contentMap.set(`${c.campaign_id}|${c.step_number}|${variantKey}`, c);
   }
 
   const resolveContent = (campaignId: string, step: number, industry: string | null) => {
-    const variant = (industry || "").trim();
+    const variant = (industry || "").trim().toLowerCase();
     return (
       (variant && contentMap.get(`${campaignId}|${step}|${variant}`)) ||
       contentMap.get(`${campaignId}|${step}|`) ||
-      firstByStep.get(`${campaignId}|${step}`) ||
       null
     );
   };
