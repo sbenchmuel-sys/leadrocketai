@@ -122,11 +122,12 @@ Deno.serve(async (req) => {
     }
     touches = [...(manualRes.data || []), ...(emailRes.data || [])];
   }
-  // NOTE: do NOT early-return when there are no active campaigns / no due touches. The
-  // stale-queued cleanup pass below must still run — an ignored manual touch already in
-  // status='queued' wouldn't match the scheduled query, and an early return would leave
-  // it (and the whole cadence) stalled forever. With no due touches the bulk loads run
-  // on empty id lists (harmless) and the processing loop is a no-op.
+  // NOTE: do NOT early-return when there are no active campaigns / no due touches. BOTH
+  // later passes must still run on every tick: (a) the stale-queued cleanup — an ignored
+  // manual touch already in status='queued' wouldn't match the scheduled query, and an
+  // early return would stall the cadence forever; and (b) the bounce-rate circuit
+  // breaker — an over-threshold campaign must still auto-pause. With no due touches the
+  // bulk loads run on empty id lists (harmless) and the processing loop is a no-op.
 
   // 2) Bulk-load the related rows into maps.
   const enrollmentIds = [...new Set(touches.map((t) => t.enrollment_id))];
@@ -288,6 +289,90 @@ Deno.serve(async (req) => {
     await advanceColdEnrollment(supabase, exec, t, "auto_skipped");
     counters.auto_skipped++;
     console.log(`[campaign-touch-scheduler] auto-skipped STALE queued touch ${t.id} (past max-age)`);
+  }
+
+  // ── Bounce-rate circuit breaker (Unit C, PR 4) ──────────────────────────────
+  // Beyond the per-lead bounce stop (detectBounce → enrollment.bounced_at), track
+  // each ACTIVE outreach's aggregate bounce rate; if too many addresses bounce,
+  // auto-PAUSE the whole outreach (protects the rep's mailbox/domain reputation)
+  // and log a volume_alert to cron_run_log (reusing the Unit 0 tripwire channel).
+  // No new bounce list — counts come from the enrollment rows the sync handler
+  // already stamps. Fully wrapped so it can never abort the run.
+  try {
+    // Validate env overrides before they gate a DESTRUCTIVE action (auto-pause). A
+    // malformed BOUNCE_RATE_THRESHOLD → NaN → `rate < threshold` is always false →
+    // EVERY campaign at min-volume gets auto-paused; a malformed BOUNCE_MIN_VOLUME
+    // removes the early-noise guard. Use Number() (NOT parseFloat/parseInt, which
+    // silently accept a numeric prefix — "1oops" → 1, "0.01oops" → 0.01) so any value
+    // that isn't FULLY numeric falls back to the safe default, and clamp the threshold
+    // to a sane (0,1].
+    const numEnv = (key: string): number => {
+      const raw = Deno.env.get(key);
+      return raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+    };
+    const thresholdRaw = numEnv("BOUNCE_RATE_THRESHOLD");
+    const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 1 ? thresholdRaw : 0.08; // 8%
+    const minVolumeRaw = numEnv("BOUNCE_MIN_VOLUME");
+    // Floor FIRST, then require >= 1. A fractional value like 0.5 passes `> 0` but
+    // floors to 0, which makes `denom < minVolume` never true and lets a 0/0 = NaN
+    // rate through (NaN < threshold is false), pausing campaigns with zero sends.
+    const minVolumeFloored = Math.floor(minVolumeRaw);
+    const minVolume = Number.isFinite(minVolumeRaw) && minVolumeFloored >= 1 ? minVolumeFloored : 20; // avoid early noise
+    // Page through ALL active campaigns (ordered + stable), not just one capped,
+    // unordered subset — otherwise, with more than a page of active outreaches, an
+    // over-threshold campaign outside the subset could be evaluated on no tick.
+    //
+    // KEYSET (id-cursor) pagination, NOT offset .range(): this loop PAUSES campaigns
+    // as it goes, which removes them from the status='active' filter. An offset
+    // window (.range(200,399)) would then shift — every campaign paused on an earlier
+    // page slides a later, still-active campaign backward past the window boundary,
+    // so it is skipped entirely. Advancing a cursor by last-seen id is immune: paused
+    // rows simply fall out behind the cursor and the next page resumes from id > last.
+    const PAGE = 200;
+    // Minimum uuid sentinel — id is a uuid column, so the cursor must be a valid
+    // uuid (an empty string would fail the uuid cast in the gt filter).
+    let lastId = "00000000-0000-0000-0000-000000000000";
+    for (;;) {
+      const { data: activeCampaigns } = await supabase
+        .from("campaigns").select("id, name, workspace_id").eq("status", "active")
+        .gt("id", lastId).order("id", { ascending: true }).limit(PAGE);
+      if (!activeCampaigns || activeCampaigns.length === 0) break;
+      lastId = activeCampaigns[activeCampaigns.length - 1].id;
+
+      for (const c of activeCampaigns) {
+        // Denominator: enrolled leads that have had ≥1 touch completed. Numerator: bounced.
+        const [{ count: started }, { count: bounced }] = await Promise.all([
+          supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+            .eq("campaign_id", c.id).gte("current_step_number", 1),
+          supabase.from("campaign_enrollment").select("id", { count: "exact", head: true })
+            .eq("campaign_id", c.id).not("bounced_at", "is", null),
+        ]);
+        const denom = started ?? 0;
+        const numer = bounced ?? 0;
+        if (denom < minVolume) continue;
+        const rate = numer / denom;
+        if (rate < threshold) continue;
+
+        // Pause (guard on status='active' so we don't fight a concurrent change).
+        const { data: paused } = await supabase.from("campaigns")
+          .update({ status: "paused" }).eq("id", c.id).eq("status", "active").select("id");
+        if ((paused || []).length === 0) continue; // someone else already changed it
+        const pct = Math.round(rate * 100);
+        await supabase.from("cron_run_log").insert({
+          job_name: "campaign-touch-scheduler",
+          dispatcher_target: "bounce_circuit_breaker",
+          request_id: crypto.randomUUID(),
+          started_at: new Date().toISOString(),
+          status: "volume_alert",
+          error_message: `Outreach ${c.id} (${c.name}) auto-paused: bounce rate ${pct}% (${numer}/${denom}) >= ${Math.round(threshold * 100)}%`,
+        }).then(({ error }) => { if (error) console.warn("[campaign-touch-scheduler] alert log failed:", error.message); });
+        console.warn(`[campaign-touch-scheduler] bounce breaker paused campaign ${c.id}: ${pct}% (${numer}/${denom})`);
+      }
+
+      if (activeCampaigns.length < PAGE) break;
+    }
+  } catch (breakerErr) {
+    console.error("[campaign-touch-scheduler] bounce breaker error:", breakerErr);
   }
 
   console.log(`[campaign-touch-scheduler]`, JSON.stringify(counters));

@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { SOURCE_PRESETS, SOURCE_TYPE_COLORS } from "@/lib/dashboardUtils";
 import { parseLeadFile, extractLeadContextItems, type ParsedLead } from "@/lib/parseLeadFile";
+import { summarizeEmailQuality } from "@/lib/emailValidation";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type ImportStep = "upload" | "source" | "confirm";
@@ -456,6 +457,22 @@ export function LeadImportDialog({ onImportComplete }: LeadImportDialogProps) {
                   </div>
                 )}
               </div>
+
+              {/* Email-quality heads-up (cold-send safety) */}
+              {(() => {
+                const q = summarizeEmailQuality(parsedLeads.map((l) => l.email));
+                if (!q.invalid && !q.suspicious) return null;
+                return (
+                  <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/10 dark:text-amber-300">
+                    {q.invalid > 0 && (
+                      <p>{q.invalid} address{q.invalid === 1 ? "" : "es"} look invalid — they won't be emailed.</p>
+                    )}
+                    {q.suspicious > 0 && (
+                      <p>{q.suspicious} look risky (test/role/throwaway) — double-check before adding to an outreach.</p>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Lead preview */}
               <div className="max-h-36 overflow-y-auto border border-border rounded-md divide-y divide-border">

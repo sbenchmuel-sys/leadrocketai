@@ -49,6 +49,7 @@ interface GraphMessage {
   from: { emailAddress: { address: string; name: string } };
   toRecipients: Array<{ emailAddress: { address: string; name: string } }>;
   ccRecipients?: Array<{ emailAddress: { address: string; name: string } }>;
+  bccRecipients?: Array<{ emailAddress: { address: string; name: string } }>;
   receivedDateTime: string;
   sentDateTime: string;
   internetMessageId: string;
@@ -184,8 +185,22 @@ serve(async (req) => {
     // from/to/cc/bcc and is the supported way to query participants.
     // Note: $search cannot be combined with $filter or $orderby. We sort + date-filter
     // client-side below (already done in the loop).
-    const searchKql = `"participants:${leadEmailNorm}"`;
-    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
+    // TWO KQL clauses joined by OR. Graph requires each clause to be its OWN quoted
+    // string with the logical operator OUTSIDE the quotes — `"clause1" OR "clause2"`
+    // (see learn.microsoft.com/.../search-query-parameter). Putting the OR inside a
+    // single quoted value makes Graph treat the whole thing as one literal clause (or
+    // reject it), which would stop finding BOTH normal participant messages AND DSNs.
+    //   participants:<email> — covers from/to/cc/bcc, so it catches the direct
+    //     rep↔lead conversation INCLUDING rep→lead messages where the lead is only a
+    //     recipient. An UNQUALIFIED message $search targets only from/subject/body, so
+    //     a bare term would silently drop those outbound messages.
+    //   body:<email> — catches DSN/bounce notifications that mention the failed
+    //     address only in the delivery-report body (the DSN's own participants are
+    //     postmaster→rep, so participants: alone would miss it).
+    // The direct-conversation filter + body correlation in the loop gate what's
+    // actually processed; this just widens the candidate set.
+    const searchKql = `"participants:${leadEmailNorm}" OR "body:${leadEmailNorm}"`;
+    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
       headers: {
@@ -244,15 +259,39 @@ serve(async (req) => {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
         const ccEmails = (msg.ccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
+        const bccEmails = (msg.bccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
+        // Any recipient field counts as "addressed to": the widened participants:
+        // search now surfaces messages where the lead (or rep) is only Cc'd or Bcc'd,
+        // so the direct-conversation gate must check To + Cc + Bcc — otherwise those
+        // hits are found and then dropped as 3rd-party, silently losing real rep↔lead
+        // mail (e.g. a rep→lead where the lead was Cc'd).
+        const recipientEmails = [...toEmails, ...ccEmails, ...bccEmails];
 
         // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
         const isFromLead = fromEmail === leadEmailNorm;
         const isFromRep = fromEmail === repEmail;
-        const isToLead = toEmails.includes(leadEmailNorm);
-        const isToRep = toEmails.includes(repEmail);
+        const isToLead = recipientEmails.includes(leadEmailNorm);
+        const isToRep = recipientEmails.includes(repEmail);
         const isDirectConversation = (isFromLead && isToRep) || (isFromRep && isToLead);
 
-        if (!isDirectConversation) {
+        // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
+        // they'd be dropped here before isBounce runs — and the bounce-stop +
+        // bounced_at stamp (the circuit breaker's signal) would never fire. Let
+        // likely bounces through; the isBounce block below still does the handling.
+        const _fromL = fromEmail;
+        const _subjL = (msg.subject || "").toLowerCase();
+        const isLikelyBounce =
+          _fromL.includes("postmaster") ||
+          _fromL.includes("mailer-daemon") ||
+          _fromL.includes("mail delivery") ||
+          _subjL.includes("delivery status notification") ||
+          _subjL.includes("undeliverable") ||
+          _subjL.includes("mail delivery failed") ||
+          _subjL.includes("returned mail") ||
+          _subjL.includes("failure notice") ||
+          _subjL.includes("delivery failure");
+
+        if (!isDirectConversation && !isLikelyBounce) {
           console.log(`[outlook-sync] Skipping 3rd-party message ${msg.id} (from: "${fromEmail}", to: "${toEmails.join(",")}")`);
           continue;
         }
@@ -292,6 +331,14 @@ serve(async (req) => {
         );
 
         if (isBounce) {
+          // Attribute a bounce to THIS lead only if it's actually named in it —
+          // a direct message, or the DSN body contains the failed address. The
+          // broadened search can return DSNs; this prevents mis-attribution.
+          const aboutThisLead = isDirectConversation || bodyText.toLowerCase().includes(leadEmailNorm);
+          if (!aboutThisLead) {
+            console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
+            continue;
+          }
           console.log(`[outlook-sync] Lead ${leadId}: Bounce detected — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true, needs_action: false, eligible_at: null,
@@ -308,6 +355,59 @@ serve(async (req) => {
             workspace_id: leadData?.workspace_id ?? null,
             provider: "automation",
           });
+
+          // Cold outreach (Unit C): mark the ORIGINATING enrollment bounced + stopped
+          // so the scheduler's bounce-rate circuit breaker can act. Reuses THIS
+          // detection (no new bounce list). No-op for non-enrolled leads.
+          //
+          // Scope to the SINGLE originating enrollment, NOT every enrollment for the
+          // lead: a lead in two active outreaches would otherwise charge BOTH
+          // campaigns' bounce numerators off one DSN and could auto-pause an unrelated
+          // campaign. The DSN can't reliably carry a campaign id, so correlate by the
+          // most recently SENT email touch — the cold email this bounce answers in the
+          // overwhelming common case. Stamping exactly one enrollment never
+          // over-charges; the lead-level unsubscribe above already halts sending to
+          // this (dead) address across all of its campaigns. Constrained to
+          // current_step_number >= 1 so the numerator matches the breaker's denominator.
+          const { data: originTouch } = await serviceSupabase.from("campaign_touch")
+            .select("enrollment_id")
+            .eq("lead_id", leadId)
+            .eq("channel", "email")
+            .eq("status", "sent")
+            .order("sent_at", { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          if (originTouch?.enrollment_id) {
+            // Stamp bounced_at only the FIRST time (.is bounced_at null). The DSN can be
+            // re-fetched by the broadened bounce search on later syncs; without this guard
+            // each re-process would push bounced_at forward. The breaker only cares that
+            // it's non-null, and the lead is already unsubscribed/stopped, so a one-shot
+            // stamp is both sufficient and stable.
+            await serviceSupabase.from("campaign_enrollment")
+              .update({ bounced_at: new Date().toISOString(), status: "stopped" })
+              .eq("id", originTouch.enrollment_id)
+              .gte("current_step_number", 1)
+              .is("bounced_at", null);
+          }
+          // The lead is now unsubscribed (set above), so its entire cold cadence is
+          // dead — clear any still-pending touches (mirrors endColdEnrollment), or the
+          // workers (which query campaign_touch by status before enrollment status)
+          // would keep re-selecting leftover 'scheduled'/'queued' rows and occupy the
+          // capped batch. Scoped by lead (unsubscribe kills all the lead's cadences).
+          await serviceSupabase.from("campaign_touch")
+            .update({ status: "skipped" })
+            .eq("lead_id", leadId)
+            .in("status", ["scheduled", "queued"]);
+
+          // The bounce is fully handled (lead stopped + system_note written + cold
+          // enrollment stamped). DO NOT fall through to the normal interaction insert:
+          // a DSN is from postmaster/mailer-daemon, so isFromLead is false and the
+          // direction logic would store it as email_outbound — corrupting
+          // last_outbound_at / outbound counts and (for the broadened body-correlated
+          // DSNs that aren't a direct rep↔lead message) recording a non-conversation
+          // system message as a real sent email. Skip to the next message.
+          existingMessageIds.add(messageId);
+          continue;
         }
 
         // OOO detection

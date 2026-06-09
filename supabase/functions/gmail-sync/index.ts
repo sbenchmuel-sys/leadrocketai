@@ -288,7 +288,16 @@ serve(async (req) => {
     const syncStartDate = new Date(leadCreatedAt);
     syncStartDate.setDate(syncStartDate.getDate() - 30);
     const afterDateStr = `${syncStartDate.getFullYear()}/${String(syncStartDate.getMonth() + 1).padStart(2, '0')}/${String(syncStartDate.getDate()).padStart(2, '0')}`;
-    const query = `(from:"${leadEmailNorm}" OR to:"${leadEmailNorm}") after:${afterDateStr}`;
+    // Also surface DSN/bounce notifications ABOUT this lead. They come from
+    // postmaster/mailer-daemon and mention the failed address only in the body, so
+    // they'd never match a from:/to: search. A full-text term for the lead's email
+    // + a bounce signal finds them and (because the body must contain the lead's
+    // address) attributes them to the right lead. The direct-conversation filter
+    // still gates any non-bounce 3rd-party message this broader query returns.
+    const query =
+      `((from:"${leadEmailNorm}" OR to:"${leadEmailNorm}")` +
+      ` OR ("${leadEmailNorm}" (from:mailer-daemon OR from:postmaster OR subject:undeliverable OR subject:"delivery status" OR subject:"failure notice")))` +
+      ` after:${afterDateStr}`;
     
     // Server-side date cutoff for additional safety (Gmail after: can be unreliable)
     const syncStartMs = syncStartDate.getTime();
@@ -373,8 +382,27 @@ serve(async (req) => {
           continue;
         }
         
+        // Bounce/DSN messages come FROM postmaster/mailer-daemon TO the rep, so the
+        // lead's address is only in the body — they'd be dropped by the direct-
+        // conversation filters below before isBounce runs, and the bounce-stop +
+        // bounced_at stamp (which the circuit breaker depends on) would never fire.
+        // Detect likely bounces up front and let them THROUGH both filters; the
+        // isBounce block further down still does the actual detection + handling.
+        const earlyFromLower = (getHeader(headers, "From") || "").toLowerCase();
+        const earlySubjectLower = (getHeader(headers, "Subject") || "").toLowerCase();
+        const isLikelyBounce =
+          earlyFromLower.includes("postmaster") ||
+          earlyFromLower.includes("mailer-daemon") ||
+          earlyFromLower.includes("mail delivery") ||
+          earlySubjectLower.includes("delivery status notification") ||
+          earlySubjectLower.includes("undeliverable") ||
+          earlySubjectLower.includes("mail delivery failed") ||
+          earlySubjectLower.includes("returned mail") ||
+          earlySubjectLower.includes("failure notice") ||
+          earlySubjectLower.includes("delivery failure");
+
         // Safety check: never attach a message to a lead unless the headers actually include the lead email
-        if (!messageInvolvesLead(headers, leadEmailNorm)) {
+        if (!messageInvolvesLead(headers, leadEmailNorm) && !isLikelyBounce) {
           console.warn(
             `[gmail-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
           );
@@ -400,7 +428,7 @@ serve(async (req) => {
 
         // Only allow: (lead → rep) or (rep → lead). Skip everything else.
         const isDirectConversation = (isFromLead_check && isToRep_check) || (isFromRep_check && isToLead_check);
-        if (!isDirectConversation) {
+        if (!isDirectConversation && !isLikelyBounce) {
           console.log(
             `[gmail-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
           );
@@ -454,6 +482,16 @@ serve(async (req) => {
         );
 
         if (isBounce) {
+          // Attribute a bounce to THIS lead only if it's actually named in it —
+          // in the headers (direct) or the DSN body (the failed recipient). The
+          // broadened search can return DSNs, so this prevents mis-attributing a
+          // bounce for a different recipient to this lead.
+          const aboutThisLead =
+            messageInvolvesLead(headers, leadEmailNorm) || bodyText.toLowerCase().includes(leadEmailNorm);
+          if (!aboutThisLead) {
+            console.log(`[gmail-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
+            continue;
+          }
           console.log(`[gmail-sync] Lead ${leadId}: Bounce detected (subject: "${subject}", from: "${from}") — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true,
@@ -474,6 +512,60 @@ serve(async (req) => {
             workspace_id: leadData?.workspace_id ?? null,
             provider: "automation",
           });
+
+          // Cold outreach (Unit C): mark the ORIGINATING enrollment bounced + stopped
+          // so the scheduler's bounce-rate circuit breaker can act. Reuses THIS
+          // detection (no new bounce list). No-op for non-enrolled leads.
+          //
+          // Scope to the SINGLE originating enrollment, NOT every enrollment for the
+          // lead: a lead in two active outreaches would otherwise charge BOTH
+          // campaigns' bounce numerators off one DSN and could auto-pause an unrelated
+          // campaign. The DSN can't reliably carry a campaign id, so correlate by the
+          // most recently SENT email touch — the cold email this bounce answers in the
+          // overwhelming common case. Stamping exactly one enrollment never
+          // over-charges; the lead-level unsubscribe above already halts sending to
+          // this (dead) address across all of its campaigns. Constrained to
+          // current_step_number >= 1 so the numerator matches the breaker's denominator.
+          const { data: originTouch } = await serviceSupabase.from("campaign_touch")
+            .select("enrollment_id")
+            .eq("lead_id", leadId)
+            .eq("channel", "email")
+            .eq("status", "sent")
+            .order("sent_at", { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          if (originTouch?.enrollment_id) {
+            // Stamp bounced_at only the FIRST time (.is bounced_at null). The DSN can be
+            // re-fetched by the broadened bounce search on later syncs; without this guard
+            // each re-process would push bounced_at forward. The breaker only cares that
+            // it's non-null, and the lead is already unsubscribed/stopped, so a one-shot
+            // stamp is both sufficient and stable.
+            await serviceSupabase.from("campaign_enrollment")
+              .update({ bounced_at: new Date().toISOString(), status: "stopped" })
+              .eq("id", originTouch.enrollment_id)
+              .gte("current_step_number", 1)
+              .is("bounced_at", null);
+          }
+          // The lead is now unsubscribed (set above), so its entire cold cadence is
+          // dead — clear any still-pending touches (mirrors endColdEnrollment). Both
+          // workers query campaign_touch by status BEFORE checking enrollment status,
+          // so leftover 'scheduled'/'queued' rows would keep being re-selected and
+          // skipped, occupying the capped batch. Scoped by lead (unsubscribe kills all
+          // of the lead's cadences, not just the originating one).
+          await serviceSupabase.from("campaign_touch")
+            .update({ status: "skipped" })
+            .eq("lead_id", leadId)
+            .in("status", ["scheduled", "queued"]);
+
+          // The bounce is fully handled (lead stopped + system_note written + cold
+          // enrollment stamped). DO NOT fall through to the normal interaction insert:
+          // a DSN is from postmaster/mailer-daemon, so isFromLead is false and the
+          // direction logic would store it as email_outbound — corrupting
+          // last_outbound_at / outbound counts and (for the broadened body-correlated
+          // DSNs that aren't a direct rep↔lead message) recording a non-conversation
+          // system message as a real sent email. Skip to the next message.
+          existingMessageIds.add(gmailMessageId);
+          continue;
         }
 
         // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated

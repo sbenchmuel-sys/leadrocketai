@@ -83,6 +83,36 @@ export interface FloorResult {
   reason?: string;
 }
 
+// Mirrors src/lib/emailValidation.ts isValidEmail — the validator import + enrollment
+// use to admit a lead. Deno can't import the frontend module, so this is the
+// established frontend/_shared duplication; KEEP IN SYNC. The floor is the LAST guard
+// before an automatic or review cold send, so it must be no weaker than the gate that
+// let the address in — otherwise invalid data edited in afterward (person@-example.com,
+// person@example-.com, an over-long local part) would slip past every check and send.
+const COLD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// RFC 1123 DNS label: alphanumeric ends, only alphanumerics + hyphen between.
+const COLD_DNS_LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i;
+function isSendableColdEmail(raw: string): boolean {
+  const e = (raw || "").trim();
+  if (!e || e.length > 254) return false;
+  if (!COLD_EMAIL_RE.test(e)) return false;
+  if (e.includes("..")) return false; // consecutive dots
+  const [local, domain] = e.split("@");
+  if (!local || local.length > 64) return false;
+  if (local.startsWith(".") || local.endsWith(".")) return false; // dot can't bound the local part
+  if (!domain) return false;
+  // Validate EVERY domain label against DNS hostname syntax. Checking only the WHOLE
+  // domain's first/last char misses an invalid intermediate label (foo-.example.com),
+  // and the loose regex above admits non-DNS chars (exa_mple.com, foo!.com) — both
+  // would pass the fail-closed floor. The label regex also rejects empty labels.
+  const labels = domain.split(".");
+  if (labels.length < 2) return false;
+  for (const label of labels) {
+    if (label.length > 63 || !COLD_DNS_LABEL_RE.test(label)) return false;
+  }
+  return true;
+}
+
 /**
  * The mandatory floor: never send to an opted-out or suppressed lead. Re-reads
  * leads.unsubscribed fresh (detectBounce sets it on a bounce, so this also closes
@@ -102,7 +132,11 @@ export async function coldSendFloor(
   if (error || !lead) return { ok: false, reason: "lead lookup failed" };
   if (lead.unsubscribed) return { ok: false, reason: "lead unsubscribed" };
   const email = (lead.email || "").trim().toLowerCase();
-  if (!email || !email.includes("@")) return { ok: false, reason: "no email" };
+  // Backstop email validation — mirrors the import/enrollment validator (isValidEmail)
+  // so this last-resort floor is no weaker than the gate that admitted the lead.
+  if (!isSendableColdEmail(email)) {
+    return { ok: false, reason: "invalid email" };
+  }
 
   const domain = email.split("@")[1] || "";
   // Parameter-safe (no interpolation into the filter string): fetch any rows whose
