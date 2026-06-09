@@ -1569,6 +1569,18 @@ serve(async (req) => {
           .map((w: any) => w.id));
       }
       const sendableCampIds = (autoCamps || []).filter((c: any) => gatedWs.has(c.workspace_id)).map((c: any) => c.id);
+      // OVER-FETCH the due batch (scan limit >> the per-run send cap). The per-touch
+      // checks below skip rows that are transiently blocked at the front of the
+      // oldest-due order — outside the send window, within the min-gap, or over a
+      // per-lead/daily cap. Those are correct-by-design "retry later" skips (the
+      // blocker clears on its own), so we must NOT defer their eligible_at. But with a
+      // tight fetch they could fill the page every tick and starve sendable touches
+      // behind them (e.g. a different owner/timezone). Scanning a larger window lets the
+      // loop reach those sendable touches; actual sends stay bounded by the
+      // MAX_SENDS_PER_RUN break inside the loop, which still fires after maxSendsPerRun
+      // sends regardless of how many rows were scanned. (Read cost grows only when many
+      // rows are blocked — exactly the starvation case this is meant to drain.)
+      const COLD_DUE_SCAN_LIMIT = 200;
       const coldDue = sendableCampIds.length === 0 ? [] : (await supabase
         .from("campaign_touch")
         .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at")
@@ -1577,7 +1589,7 @@ serve(async (req) => {
         .in("campaign_id", sendableCampIds)
         .lte("eligible_at", new Date().toISOString())
         .order("eligible_at", { ascending: true })
-        .limit(50)).data;
+        .limit(COLD_DUE_SCAN_LIMIT)).data;
 
       for (const touch of (coldDue || [])) {
         // Honor the SAME per-run send cap as the legacy loop — cold sends count
