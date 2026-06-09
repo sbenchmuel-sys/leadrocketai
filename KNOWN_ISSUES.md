@@ -482,3 +482,40 @@ Two open questions block confident Phase 2a sizing:
    [LeadTable.tsx:304](src/components/dashboard/LeadTable.tsx:304)
    hard-codes `PAGE_SIZE = 25`; the new queue should pick a default
    grounded in real distributions.
+
+---
+
+## Inbound unsubscribe detection — quoted-thread false positive (FIXED 2026-06-08)
+
+**Status: root cause fixed in code; one-off data remediation pending.**
+
+A lead promoted from Pending Leads (Ryan Frankel,
+rfrankel@researchoninvestment.com, an **Outlook** workspace) was wrongly
+auto-flagged `unsubscribed=true` after a manual sync. Root cause: inbound
+unsubscribe detection ran its keyword regex over the FULL plain-text body
+**including quoted thread history**. The reply quoted DrivePilot's own pitch
+line — "…so you **stop emailing** people who already wrote back" — which
+matched `\bstop\s+emailing\b`. HTML→text conversion (`htmlToPlainText`)
+discards `<blockquote>`/`>` prefixes, so the quoted text was indistinguishable
+from freshly-typed text.
+
+**Fix:** new `stripQuotedReply()` in
+`supabase/functions/_shared/unsubscribeDetection.ts` removes quoted reply /
+forwarded history (Gmail "On … wrote:" attribution, Outlook
+"-----Original Message-----" + From:/Sent:/To:/Subject: header block, `>`
+plain-text quotes) before matching. Applied at all THREE detector call sites:
+`outlook-sync/index.ts` (narrow inline regex, kept), `gmail-sync/index.ts` and
+`outlook-webhook/processor.ts` (shared `isHumanUnsubscribeRequest`). Contract
+encoded in `_shared/unsubscribeDetection.test.ts`.
+
+**Guardrail / safety direction:** stripping errs toward fewer detections — if
+the sender typed nothing above the quote, `stripQuotedReply` returns "" and no
+opt-out fires. A bottom-posted opt-out *below* a quote is a tolerated
+false-negative (the inbound stays visible to the rep) because a false
+unsubscribe silently kills automation, which is the worse failure.
+
+**Pending:** run `remediation_clear_false_unsubscribe_ryan.sql` (data fix,
+not a migration) to re-arm the lead and delete the spurious "Lead requested to
+unsubscribe…" system note. Requires DB access — hand to Lovable or run in the
+Supabase SQL editor. Needs ai_task/sync edge functions redeployed for the code
+fix to take effect.
