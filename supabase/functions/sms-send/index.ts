@@ -127,7 +127,12 @@ Deno.serve(async (req) => {
   // ── Send via Twilio ───────────────────────────────
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-  if (!accountSid || !authToken) {
+  // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+  const apiKey = Deno.env.get("TWILIO_API_KEY");
+  const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+  // Need the Account SID plus at least one credential pair — API key/secret OR
+  // auth token — so an outbound-only deployment can run on API keys alone.
+  if (!accountSid || (!(apiKey && apiSecret) && !authToken)) {
     return new Response(
       JSON.stringify({ ok: false, error: "Twilio credentials not configured" }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -135,7 +140,10 @@ Deno.serve(async (req) => {
   }
 
   const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
-  const twilioAuth = btoa(`${accountSid}:${authToken}`);
+  // Account SID stays in the URL path either way.
+  const twilioAuth = apiKey && apiSecret
+    ? btoa(`${apiKey}:${apiSecret}`)
+    : btoa(`${accountSid}:${authToken}`);
 
   // Twilio will POST delivery-status events back to this URL.
   // Must be the public Supabase Functions URL (Twilio signs against it).

@@ -21,6 +21,8 @@ Deno.serve(async (req) => {
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const twilioSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const twilioToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  const apiKey = Deno.env.get("TWILIO_API_KEY");
+  const apiSecret = Deno.env.get("TWILIO_API_SECRET");
 
   // ---- Authenticate user ----
   const authHeader = req.headers.get("Authorization");
@@ -69,7 +71,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!twilioSid || !twilioToken) {
+    // Need the Account SID plus at least one credential pair — API key/secret OR
+    // auth token — so an outbound-only deployment can run on API keys alone.
+    if (!twilioSid || (!(apiKey && apiSecret) && !twilioToken)) {
       return new Response(JSON.stringify({ ok: false, error: "Twilio credentials not configured" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -91,7 +95,11 @@ Deno.serve(async (req) => {
 
     // Create call via Twilio REST API
     const twilioApiUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Calls.json`;
-    const twilioAuth = btoa(`${twilioSid}:${twilioToken}`);
+    // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+    // Account SID stays in the URL path either way.
+    const twilioAuth = apiKey && apiSecret
+      ? btoa(`${apiKey}:${apiSecret}`)
+      : btoa(`${twilioSid}:${twilioToken}`);
 
     const callParams = new URLSearchParams({
       To: toNumber,

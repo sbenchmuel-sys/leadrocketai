@@ -5,6 +5,12 @@ import { toast } from "sonner";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
+// Token refresh hardening tunables
+const MAX_REFRESH_ATTEMPTS = 4;
+const SAFETY_REFRESH_MS = 50 * 60 * 1000; // proactively refresh well before the ~1h token TTL
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 interface BrowserCallState {
   status: "idle" | "registering" | "ready" | "connecting" | "on-call";
   activeCall: Call | null;
@@ -33,6 +39,19 @@ export function useBrowserCall() {
 export function BrowserCallProvider({ children }: { children: ReactNode }) {
   const deviceRef = useRef<Device | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Periodic safety-refresh timer handle
+  const safetyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Guards against overlapping re-registration attempts (online + visibility + unregistered can all fire together)
+  const reregisteringRef = useRef(false);
+  // Tracks the single in-flight initDevice run. deviceRef is only set AFTER the async
+  // register() resolves, so without this two near-simultaneous triggers (mount + SIGNED_IN
+  // + a Call click) would each build a Device and overwrite the timer/listener/cleanup refs,
+  // leaking the earlier device. Concurrent callers await this promise instead of being dropped.
+  const initPromiseRef = useRef<Promise<void> | null>(null);
+  // Ensures the "please refresh" toast is shown at most once per failure streak (reset on any success)
+  const refreshFailedToastShownRef = useRef(false);
+  // Removes the per-device timer + window listeners; set in initDevice, called on teardown
+  const connectionCleanupRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<BrowserCallState>({
     status: "idle",
     activeCall: null,
@@ -64,7 +83,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const initDevice = useCallback(async () => {
+  const initDeviceRaw = useCallback(async () => {
     if (deviceRef.current) return;
 
     const token = await fetchToken();
@@ -97,8 +116,65 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       // setSinkId may not be supported — safe to ignore
     }
 
+    // Refresh the token with exponential backoff, then push it into the live Device.
+    // Returns true on success. Used by both tokenWillExpire and the safety timer.
+    const refreshTokenWithRetry = async (): Promise<boolean> => {
+      for (let attempt = 0; attempt < MAX_REFRESH_ATTEMPTS; attempt++) {
+        const token = await fetchToken();
+        if (token) {
+          try {
+            device.updateToken(token);
+            refreshFailedToastShownRef.current = false; // recovered — allow future alerts
+            return true;
+          } catch (e) {
+            console.error("[BrowserCall] updateToken failed:", e);
+          }
+        }
+        // Backoff before the next try (1s, 2s, 4s …, capped), skipping the wait after the last attempt
+        if (attempt < MAX_REFRESH_ATTEMPTS - 1) {
+          await sleep(Math.min(1000 * 2 ** attempt, 8000));
+        }
+      }
+      // All attempts failed — surface a single, non-spammy prompt to reload
+      if (!refreshFailedToastShownRef.current) {
+        refreshFailedToastShownRef.current = true;
+        toast.error("Call connection lost", {
+          description: "We couldn't refresh your calling session. Please refresh the page to keep making calls.",
+        });
+      }
+      return false;
+    };
+
+    // Re-register the Device if it has dropped out of the registered state.
+    // Guarded so overlapping triggers (unregistered event + online + visibility) don't pile up.
+    const reregisterDevice = async () => {
+      if (reregisteringRef.current) return;
+      if (deviceRef.current !== device) return; // stale closure after teardown
+      const st = device.state;
+      if (st === Device.State.Destroyed || st === Device.State.Registered || st === Device.State.Registering) return;
+      reregisteringRef.current = true;
+      try {
+        setState((s) => (s.status === "ready" || s.status === "idle" ? { ...s, status: "registering" } : s));
+        // Make sure the token is fresh before re-registering (a drop usually means it's stale/expired)
+        await refreshTokenWithRetry();
+        if (device.state !== Device.State.Destroyed) {
+          await device.register();
+        }
+      } catch (e) {
+        console.error("[BrowserCall] re-registration failed:", e);
+      } finally {
+        reregisteringRef.current = false;
+      }
+    };
+
     device.on("registered", () => {
+      refreshFailedToastShownRef.current = false;
       setState((s) => ({ ...s, status: "ready" }));
+    });
+
+    // Device fell out of registration (network blip, server-side expiry) — recover automatically
+    device.on("unregistered", () => {
+      reregisterDevice();
     });
 
     device.on("error", (err) => {
@@ -116,14 +192,57 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       toast.error(title, { description: desc });
     });
 
-    device.on("tokenWillExpire", async () => {
-      const newToken = await fetchToken();
-      if (newToken) device.updateToken(newToken);
+    device.on("tokenWillExpire", () => {
+      refreshTokenWithRetry();
     });
 
-    await device.register();
+    // Periodic safety refresh independent of the tokenWillExpire event, in case that
+    // event is missed (e.g. tab was backgrounded/asleep when it should have fired).
+    safetyTimerRef.current = setInterval(() => {
+      refreshTokenWithRetry();
+    }, SAFETY_REFRESH_MS);
+
+    // Recover when the browser regains connectivity or the tab becomes visible again
+    const handleOnline = () => reregisterDevice();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") reregisterDevice();
+    };
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    connectionCleanupRef.current = () => {
+      if (safetyTimerRef.current != null) {
+        clearInterval(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      connectionCleanupRef.current = null;
+    };
+
+    try {
+      await device.register();
+    } catch (e) {
+      // Registration failed — tear down the partial device, safety timer, and window
+      // listeners so a later retry starts clean instead of overwriting (and leaking) them.
+      console.error("[BrowserCall] device registration failed:", e);
+      connectionCleanupRef.current?.();
+      try { device.destroy(); } catch { /* ignore */ }
+      return;
+    }
     deviceRef.current = device;
   }, [fetchToken]);
+
+  // Concurrency wrapper: collapse overlapping initDevice() triggers (mount + SIGNED_IN +
+  // a Call click) onto ONE in-flight init, and let concurrent callers (e.g. makeCall)
+  // await that same init instead of being dropped while deviceRef is still null.
+  const initDevice = useCallback(async () => {
+    if (deviceRef.current) return;
+    if (initPromiseRef.current) { await initPromiseRef.current; return; }
+    const p = initDeviceRaw();
+    initPromiseRef.current = p;
+    try { await p; } finally { initPromiseRef.current = null; }
+  }, [initDeviceRaw]);
 
   // Initialize device on mount if user is authenticated
   useEffect(() => {
@@ -134,6 +253,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_IN") initDevice();
       if (event === "SIGNED_OUT") {
+        connectionCleanupRef.current?.();
         deviceRef.current?.destroy();
         deviceRef.current = null;
         setState({
@@ -151,6 +271,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
 
     return () => {
       subscription.unsubscribe();
+      connectionCleanupRef.current?.();
       deviceRef.current?.destroy();
       deviceRef.current = null;
       if (audioRef.current) {

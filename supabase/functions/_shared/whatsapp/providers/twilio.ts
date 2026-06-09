@@ -77,7 +77,13 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
   ) {}
 
   private get authHeader(): string {
-    return "Basic " + btoa(`${this.accountSid}:${this.authToken}`);
+    // Prefer API Key auth for outbound REST; fall back to Account SID:Auth Token.
+    // Account SID stays in the URL path (Accounts/${this.accountSid}/...) either way.
+    const apiKey = Deno.env.get("TWILIO_API_KEY");
+    const apiSecret = Deno.env.get("TWILIO_API_SECRET");
+    return apiKey && apiSecret
+      ? "Basic " + btoa(`${apiKey}:${apiSecret}`)
+      : "Basic " + btoa(`${this.accountSid}:${this.authToken}`);
   }
 
   private get fromWhatsApp(): string {
@@ -93,10 +99,20 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
     const formData = new URLSearchParams();
     formData.set("From", this.fromWhatsApp);
     formData.set("To", toWhatsApp);
-    formData.set("Body", params.body);
 
-    if (params.mediaUrl) {
-      formData.set("MediaUrl", params.mediaUrl);
+    if (params.contentSid) {
+      // Template send — required to START a conversation outside the 24-hour
+      // window. Twilio uses ContentSid (+ optional ContentVariables) instead of Body.
+      formData.set("ContentSid", params.contentSid);
+      if (params.contentVariables && Object.keys(params.contentVariables).length > 0) {
+        formData.set("ContentVariables", JSON.stringify(params.contentVariables));
+      }
+    } else {
+      // Free-form body — valid for replies inside the 24-hour window.
+      formData.set("Body", params.body ?? "");
+      if (params.mediaUrl) {
+        formData.set("MediaUrl", params.mediaUrl);
+      }
     }
 
     const res = await fetch(
@@ -125,11 +141,15 @@ export class TwilioWhatsAppProvider implements IWhatsAppProvider {
 
   async checkHealth(): Promise<WhatsAppHealthResult> {
     try {
-      // Check account status via Twilio API
+      // Check account status via Twilio API. The Accounts endpoint requires
+      // account-level access, which Standard API keys do NOT have — so probe it
+      // with Account SID:Auth Token explicitly (always present for WhatsApp; the
+      // service throws without it), not the API-key-preferring authHeader used
+      // for message sends. Otherwise a Standard key would falsely report unhealthy.
       const res = await fetch(
         `${TWILIO_API}/Accounts/${this.accountSid}.json`,
         {
-          headers: { Authorization: this.authHeader },
+          headers: { Authorization: "Basic " + btoa(`${this.accountSid}:${this.authToken}`) },
         },
       );
 

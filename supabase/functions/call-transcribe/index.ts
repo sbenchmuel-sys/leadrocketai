@@ -25,29 +25,31 @@ function respond(body: Record<string, unknown>, status = 200) {
   });
 }
 
-// §1 — Safe chunked base64 conversion (prevents stack overflow on large buffers)
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunkSize = 0x8000; // 32KB chunks
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
+// Upper memory bound for the raw recording buffer. The ASR provider chunks audio
+// into ~55s slices internally, so the whole file never has to fit in one Google
+// request — this only guards edge-function memory. Long sales calls (a 15-min
+// dual-channel WAV is ~25-30MB) must stay under it.
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // 50MB
 
-const MAX_AUDIO_BYTES = 12 * 1024 * 1024; // 12MB safe limit
+// Wall-clock budget for the chunked ASR loop. Leaves headroom under the edge
+// function limit so a run that can't finish marks the transcript failed (and can
+// be retried) instead of being hard-killed mid-flight.
+const TRANSCRIBE_BUDGET_MS = 120_000;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const startedAt = Date.now();
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const googleSpeechApiKey = Deno.env.get("GOOGLE_SPEECH_API_KEY");
   const supabase = createClient(supabaseUrl, serviceKey);
+
+  // Hoisted so the outer catch can mark the transcript failed rather than leaving
+  // it stuck in "processing".
+  let transcriptId: string | null = null;
 
   try {
     const { callSessionId } = await req.json();
@@ -138,6 +140,8 @@ Deno.serve(async (req) => {
       return respond({ ok: true, status: "already_started_or_completed" });
     }
 
+    transcriptId = transcript.id;
+
     // ---- Get recording audio ----
     const { data: recording } = await supabase
       .from("call_recordings")
@@ -174,37 +178,49 @@ Deno.serve(async (req) => {
 
     // ---- §6 Audio size guard ----
     const audioBuffer = await audioData.arrayBuffer();
+    logger.info("transcribe_audio_downloaded", { callSessionId, audioBytes: audioBuffer.byteLength });
 
     if (audioBuffer.byteLength > MAX_AUDIO_BYTES) {
-      logger.warn("audio_too_large", { size: audioBuffer.byteLength, callSessionId });
+      logger.warn("audio_too_large", { size: audioBuffer.byteLength, max: MAX_AUDIO_BYTES, callSessionId });
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       return respond({ ok: false, error: "Audio too large" }, 400);
     }
 
-    // ---- §1 Safe base64 conversion ----
-    const base64Audio = arrayBufferToBase64(audioBuffer);
-
     // ---- ASR via Google Speech-to-Text ----
+    // Pass the raw buffer directly (no whole-file base64 step); the provider
+    // chunks it into ~55s slices internally and base64-encodes each chunk.
     const asr = new GoogleSpeechAsrProvider(googleSpeechApiKey);
 
     let asrResult;
     try {
-      asrResult = await asr.transcribe(base64Audio, {
+      asrResult = await asr.transcribeBuffer(audioBuffer, {
         language: resolvedLanguage,
         autoDetect: true, // Always on — bias toward workspace lang but detect actual
         allowedLanguages: supportedLangs as string[],
         diarization: true,
         timestamps: true,
         channelCount: recording.channels ?? 1,
+        deadlineMs: startedAt + TRANSCRIBE_BUDGET_MS,
       });
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
       await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcript.id);
       logger.error("transcribe_asr_failed", {
         callSessionId,
-        error: err instanceof Error ? err.message : String(err),
+        audioBytes: audioBuffer.byteLength,
+        elapsedMs: Date.now() - startedAt,
+        reason,
       });
-      return respond({ ok: false, error: "ASR transcription failed" }, 500);
+      return respond({ ok: false, error: "ASR transcription failed", reason }, 500);
     }
+
+    // ---- Observability: audio size + chunk count for this run ----
+    logger.info("transcribe_audio_stats", {
+      callSessionId,
+      audioBytes: audioBuffer.byteLength,
+      chunkCount: asrResult.chunkCount ?? 1,
+      elapsedMs: Date.now() - startedAt,
+    });
 
     // ---- Diarization normalization ----
     const normalizedSegments = normalizeSpeakerRoles(asrResult.segments, session.direction);
@@ -257,7 +273,15 @@ Deno.serve(async (req) => {
 
     return respond({ ok: true, transcriptId: transcript.id });
   } catch (err) {
-    logger.error("transcribe_error", { error: err instanceof Error ? err.message : String(err) });
-    return respond({ ok: false, error: "Internal error" }, 500);
+    const reason = err instanceof Error ? err.message : String(err);
+    if (transcriptId) {
+      // Don't leave the transcript stuck in "processing" — mark it failed so it can retry.
+      await supabase.from("call_transcripts").update({ status: "failed" }).eq("id", transcriptId).then(
+        () => {},
+        (e) => logger.error("transcribe_fail_mark_error", { error: e instanceof Error ? e.message : String(e) }),
+      );
+    }
+    logger.error("transcribe_error", { reason });
+    return respond({ ok: false, error: "Internal error", reason }, 500);
   }
 });

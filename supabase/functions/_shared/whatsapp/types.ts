@@ -71,9 +71,25 @@ export interface ChannelEventRow {
 
 export interface SendWhatsAppParams {
   to: string;
-  body: string;
+  /**
+   * Free-form message body. Required for replies inside the 24-hour customer
+   * service window. Omit when starting a conversation via a template (contentSid).
+   */
+  body?: string;
   mediaUrl?: string;
   replyToMessageId?: string;
+  /**
+   * Twilio Content template SID (HX...). When provided, the message is sent as a
+   * pre-approved template using ContentSid/ContentVariables instead of Body —
+   * required to START a conversation outside the 24-hour window. Passed in by the
+   * caller; never hardcoded.
+   */
+  contentSid?: string;
+  /**
+   * Template variable substitutions keyed by variable index, e.g.
+   * { "1": "Manu", "2": "Friday" }. Serialized to Twilio's ContentVariables JSON.
+   */
+  contentVariables?: Record<string, string>;
 }
 
 export interface SendWhatsAppResult {
