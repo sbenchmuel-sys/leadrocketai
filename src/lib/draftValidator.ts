@@ -63,7 +63,7 @@ const COLD_DISCOVERY_PHRASES = [
   /what\s+challenges?\s+/i,
 ];
 
-const SIGNOFF_LINE_RE = /^(?:Best|Thanks|Thank you|Regards|Kind regards|Cheers|Sincerely|Warmly)[,!.\s]?$/i;
+const SIGNOFF_LINE_RE = /^(?:Best(?:\s+regards)?|Thanks(?:\s+(?:so\s+much|again|in\s+advance))?|Thank\s+you|Regards|Kind\s+regards|Warm\s+regards|Cheers|Sincerely|Warmly|Talk\s+soon|Speak\s+soon|All\s+the\s+best)\b[\s,!.\-–—]*$/i;
 
 function hasAddressedGreeting(line: string): boolean {
   const remainder = line
@@ -118,10 +118,9 @@ export function validateDraft(body: string, ctx: ValidationContext): ValidationR
   }
 
   const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  const lastLine = lines[lines.length - 1] || "";
-  const secondLast = lines[lines.length - 2] || "";
-  const hasSignOff = SIGNOFF_LINE_RE.test(secondLast) || SIGNOFF_LINE_RE.test(lastLine) ||
-    /\b(?:Best|Thanks|Regards|Cheers|Sincerely)\b[,.]?\s*$/i.test(lines.slice(-3).join(" "));
+  const tail = lines.slice(-3);
+  const hasSignOff = tail.some((l) => SIGNOFF_LINE_RE.test(l)) ||
+    /\b(?:Best(?:\s+regards)?|Thanks(?:\s+so\s+much)?|Thank\s+you|Kind\s+regards|Warm\s+regards|Regards|Cheers|Sincerely|Warmly|Talk\s+soon|Speak\s+soon|All\s+the\s+best)\b[,.!\-–—]?/i.test(tail.join("\n"));
   if (!hasSignOff) {
     errors.push("Missing sign-off (Best, Thanks, etc.)");
     codes.push("missing_signoff");
