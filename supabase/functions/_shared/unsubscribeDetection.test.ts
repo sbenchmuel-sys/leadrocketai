@@ -21,6 +21,35 @@ Deno.test("bare 'unsubscribe' reply still fires", () => {
   assertEquals(detects("Unsubscribe\n\nOn ... wrote:\n> pitch"), true);
 });
 
+Deno.test("opt-out fires when the reply ITSELF starts with 'On' above the quote", () => {
+  // The attribution matcher must not span the blank line between the user's own
+  // "On second thought…" sentence and the quoted "On … wrote:" below it. If it did,
+  // it would strip the user's real opt-out text and miss it.
+  const body = [
+    "On second thought, please remove me from your list.",
+    "",
+    "On Mon, Jun 8, 2026 at 3:00 PM DrivePilot <rep@drivepilot.io> wrote:",
+    "> ...so you stop emailing people who already wrote back.",
+  ].join("\n");
+  assertEquals(stripQuotedReply(body), "On second thought, please remove me from your list.");
+  assertEquals(detects(body), true);
+});
+
+Deno.test("a legitimately wrapped attribution is still stripped (no false-unsubscribe regression)", () => {
+  // Soft-wrapped over multiple lines but NO blank line inside it — must still be
+  // recognized as the quote boundary so our quoted pitch can't self-trigger.
+  const body = [
+    "Thanks, talk soon.",
+    "",
+    "On Mon, Jun 8, 2026 at 3:00 PM",
+    "DrivePilot <rep@drivepilot.io>",
+    "wrote:",
+    "> ...so you stop emailing people who already wrote back.",
+  ].join("\n");
+  assertEquals(stripQuotedReply(body), "Thanks, talk soon.");
+  assertEquals(detects(body), false);
+});
+
 Deno.test("REGRESSION: our quoted pitch does NOT self-trigger (Gmail attribution)", () => {
   const body = [
     "Sounds good, let's chat Thursday.",

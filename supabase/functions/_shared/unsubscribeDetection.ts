@@ -37,8 +37,17 @@ export function stripQuotedReply(body: string): string {
   const text = body.replace(/\r\n/g, "\n");
 
   const markers: RegExp[] = [
-    // Gmail / Apple Mail attribution: "On <date>, <name> wrote:" (may wrap lines)
-    /^[ \t]*On\b[\s\S]{0,300}?\bwrote:[ \t]*$/im,
+    // Gmail / Apple Mail attribution: "On <date>, <name> wrote:" (may soft-wrap over a
+    // few lines). The middle is "tempered" — it matches across single newlines (so a
+    // wrapped attribution still matches) but REFUSES to cross a BLANK line (\n[ \t]*\n).
+    // Without that guard, a reply that ITSELF starts with "On …" and has the quoted
+    // attribution further down (e.g. "On second thought, please remove me…\n\nOn Mon …
+    // wrote:") would match from the user's own line through to the quoted "wrote:",
+    // stripping the user's real text and MISSING their opt-out. A blank line never
+    // appears inside a genuine attribution, so it's the correct boundary — and keeping
+    // single-newline matching means a legitimately wrapped attribution is still stripped
+    // (so this does NOT reintroduce the false-unsubscribe it was guarding against).
+    /^[ \t]*On\b(?:(?!\n[ \t]*\n)[\s\S]){0,300}?\bwrote:[ \t]*$/im,
     // Outlook / generic "-----Original Message-----" separator
     /^[ \t]*-{2,}[ \t]*Original Message[ \t]*-{2,}/im,
     // Outlook reply header block: From: followed by Sent/Date/To/Cc/Subject lines
