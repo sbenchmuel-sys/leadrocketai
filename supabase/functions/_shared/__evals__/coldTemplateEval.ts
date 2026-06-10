@@ -231,30 +231,53 @@ interface FixtureResult {
 async function runOne(fx: Fixture, runs: number): Promise<FixtureResult> {
   const system = SYSTEM_GLOBAL_PROMPT;
   const user = fill(PROMPTS[fx.template], fx.vars);
-  // Use the last of N generations (or 1). Averaging numeric scores below.
-  let email = "";
+  // Evidence the scorers must see — INCLUDE Knowledge Context so KB-grounded
+  // sentences (e.g. a follow-up's "~20% proofing" insight) are judged WITH the
+  // evidence they came from, not falsely flagged as ungrounded.
+  const evidence =
+    `LEAD CONTEXT:\n${fx.vars.LEAD_CONTEXT ?? ""}\n\n` +
+    `SELLER CONTEXT:\n${fx.vars.SELLER_CONTEXT ?? ""}\n\n` +
+    `SIGNALS:\n${fx.vars.SIGNALS ?? ""}\n\n` +
+    `KNOWLEDGE CONTEXT:\n${fx.vars.KNOWLEDGE_CONTEXT ?? ""}`;
+
+  const emails: string[] = [];
   const qualities: Record<string, unknown>[] = [];
-  let grounding: Record<string, unknown> = {};
+  const groundings: Record<string, unknown>[] = [];
+  const perRunChecks: ReturnType<typeof deterministicChecks>[] = [];
   for (let i = 0; i < Math.max(1, runs); i++) {
-    email = await callModel(system, user);
-    const q = await scoreJson(
-      QUALITY_SCORER_PROMPT,
-      `EMAIL:\n${email}\n\nLEAD CONTEXT:\n${fx.vars.LEAD_CONTEXT}\n\nSELLER CONTEXT:\n${fx.vars.SELLER_CONTEXT}\n\nSIGNALS:\n${fx.vars.SIGNALS}`,
-    );
-    qualities.push(q);
-    grounding = await scoreJson(
-      GROUNDING_VALIDATOR_PROMPT,
-      `GENERATED EMAIL:\n${email}\n\nLEAD CONTEXT:\n${fx.vars.LEAD_CONTEXT}\n\nSELLER CONTEXT:\n${fx.vars.SELLER_CONTEXT}\n\nSIGNALS:\n${fx.vars.SIGNALS}`,
-    );
+    const email = await callModel(system, user);
+    emails.push(email);
+    perRunChecks.push(deterministicChecks(email));
+    qualities.push(await scoreJson(QUALITY_SCORER_PROMPT, `EMAIL:\n${email}\n\n${evidence}`));
+    groundings.push(await scoreJson(GROUNDING_VALIDATOR_PROMPT, `GENERATED EMAIL:\n${email}\n\n${evidence}`));
   }
-  // Average the numeric quality dims across runs.
+  // Average the numeric quality dims; grounding_violation = true if ANY run flagged.
   const avg: Record<string, unknown> = {};
   for (const dim of ["curiosity", "human_tone", "spam_risk", "reply_likelihood"]) {
     const vals = qualities.map((q) => Number(q[dim])).filter((n) => !Number.isNaN(n));
     avg[dim] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }
   avg.grounding_violation = qualities.some((q) => q.grounding_violation === true);
-  return { fixture: fx.name, email, quality: avg, grounding, checks: deterministicChecks(email) };
+
+  // Aggregate WORST-CASE deterministic checks + grounding across ALL runs, so a
+  // banned phrase / placeholder / over-limit / validator failure in any earlier
+  // generation can't be masked by a clean final sample under RUNS>1.
+  const aggChecks = {
+    bannedHits: [...new Set(perRunChecks.flatMap((c) => c.bannedHits))],
+    bracketPlaceholderLeak: perRunChecks.some((c) => c.bracketPlaceholderLeak),
+    wordCount: Math.max(...perRunChecks.map((c) => c.wordCount)),
+    overWordLimit: perRunChecks.some((c) => c.overWordLimit),
+  };
+  const aggGrounding: Record<string, unknown> = {
+    pass: groundings.every((g) => g.pass !== false),
+    runs_failed: groundings.filter((g) => g.pass === false).length,
+  };
+  // Representative email: surface a failing generation if any, else the last.
+  const failIdx = perRunChecks.findIndex(
+    (c) => c.bannedHits.length > 0 || c.bracketPlaceholderLeak || c.overWordLimit,
+  );
+  const email = emails[failIdx >= 0 ? failIdx : emails.length - 1];
+  return { fixture: fx.name, email, quality: avg, grounding: aggGrounding, checks: aggChecks };
 }
 
 function qualityComposite(q: Record<string, unknown>): number {
