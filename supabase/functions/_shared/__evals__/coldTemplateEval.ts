@@ -85,14 +85,20 @@ const BANNED_PHRASES = [
   "color matching",
   "seasonal demand",
   "tight margins",
+  "print quality",
   "operational efficiency",
+  "streamlining operations",
+  "keeping up with demand",
+  "competitive landscape",
 ];
 const BANNED_REGEXES = BANNED_PHRASES.map(
   (p) => new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"),
 );
 
-// Word-count ceiling enforced for a cold intro (matches the LENGTH guidance).
-const WORD_LIMIT = 90;
+// Word-count ceiling — mirrors the fixtures' LENGTH_OVERRIDE instruction
+// ("under 75 words") so the gate actually catches a candidate that ignores the
+// length rule (an 80-word draft is a real regression, not a pass).
+const WORD_LIMIT = 75;
 
 interface Fixture {
   name: string;
