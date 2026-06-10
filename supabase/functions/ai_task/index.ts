@@ -1087,6 +1087,31 @@ async function getKnowledgeContext(
   return { formatted: formatKBContext(result.grouped, charLimit), grouped: result.grouped, chunkIds: result.chunkIds };
 }
 
+// Count the authoring user's workspaces. The doc-less campaign KB fallback only
+// fires for single-workspace users — KB is keyed by owner_user_id with no
+// workspace column, so only then is resolvedUserId's KB unambiguously one
+// workspace's (and the resolver already verified membership in the campaign's
+// workspace). Fails closed to false on any error / 0 / >1 — never a
+// cross-workspace fallback.
+async function authorBelongsToExactlyOneWorkspace(
+  supabaseUrl: string, supabaseServiceKey: string, userId: string,
+): Promise<boolean> {
+  if (!userId || userId === "service-role") return false;
+  try {
+    const client = createClient(supabaseUrl, supabaseServiceKey);
+    const { data, error } = await client
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", userId);
+    if (error || !data) return false;
+    const distinct = new Set((data as { workspace_id: string }[]).map((r) => r.workspace_id));
+    return distinct.size === 1;
+  } catch (err) {
+    console.error("[ai_task] [CAMPAIGN-AUTHORING] workspace-count check failed:", err);
+    return false; // fail closed — no cross-workspace fallback on error
+  }
+}
+
 // ============================================
 // CORS & UTILS
 // ============================================
@@ -1657,14 +1682,22 @@ serve(async (req) => {
       const hasSearchableQuery = searchQuery.length > 50;
       if (campaignAuthoring) {
         // Route owner + document filter through the shared fail-closed scope
-        // decision so the three-way branch is unit-testable in isolation.
+        // decision so the three-way branch is unit-testable in isolation. The
+        // doc-less fallback is gated on single-workspace membership (KB is keyed
+        // by owner_user_id with no workspace column) to stay workspace-isolated;
+        // only query the membership count when that gate can actually matter.
+        const hasValidatedDoc = !!(campaignKnowledgeDocId && campaignKbOwnerId);
+        const authorIsSingleWorkspace = (hasSearchableQuery && !hasValidatedDoc)
+          ? await authorBelongsToExactlyOneWorkspace(supabaseUrl, supabaseServiceKey, resolvedUserId)
+          : false;
         const kbScope = resolveCampaignKbScope({
           hasSearchableQuery,
           campaignKnowledgeDocId,
           campaignKbOwnerId,
           resolvedUserId,
+          authorIsSingleWorkspace,
         });
-        console.log(`[ai_task] [CAMPAIGN-AUTHORING] KB scope: ${kbScope.scope} (doc=${kbScope.documentFilter ?? "none"}, owner=${kbScope.kbOwnerId ?? "n/a"})`);
+        console.log(`[ai_task] [CAMPAIGN-AUTHORING] KB scope: ${kbScope.scope}${kbScope.scope === "none" ? `:${kbScope.reason}` : ""} (doc=${kbScope.documentFilter ?? "none"}, owner=${kbScope.kbOwnerId ?? "n/a"})`);
         if (kbScope.scope !== "none") {
           const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
           console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}, campaign_doc: ${kbScope.documentFilter ?? "none"}`);
