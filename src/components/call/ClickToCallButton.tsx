@@ -6,8 +6,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { useBrowserCall } from "./BrowserCallProvider";
+import { fetchRepCallerNumber } from "@/lib/repCallerNumber";
 
 interface ClickToCallButtonProps {
   leadId: string;
@@ -28,34 +28,7 @@ export function ClickToCallButton({ leadId, leadName, leadPhone }: ClickToCallBu
   async function handleCallClick() {
     setIsLoading(true);
     try {
-      // Fetch rep's Twilio number
-      const { data: repProfile } = await supabase
-        .from("rep_profiles")
-        .select("twilio_phone_number")
-        .limit(1)
-        .maybeSingle();
-
-      let repNumber = (repProfile as any)?.twilio_phone_number;
-
-      // Fallback to workspace default
-      if (!repNumber) {
-        const { data: membership } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
-          .limit(1)
-          .maybeSingle();
-
-        if (membership?.workspace_id) {
-          const { data: callSettings } = await supabase
-            .from("call_settings")
-            .select("default_twilio_number")
-            .eq("workspace_id", membership.workspace_id)
-            .maybeSingle();
-
-          repNumber = (callSettings as any)?.default_twilio_number;
-        }
-      }
+      const repNumber = await fetchRepCallerNumber();
 
       if (!repNumber) {
         toast.error("No Twilio caller ID configured", {

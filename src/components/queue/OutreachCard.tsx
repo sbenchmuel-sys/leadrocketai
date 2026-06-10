@@ -10,7 +10,7 @@
 // only — no channel jargon on screen.
 // ============================================================================
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -18,11 +18,18 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Phone, MessageSquare, Send, Loader2, Linkedin } from "lucide-react";
 import { toast } from "sonner";
 import type { OutreachTouch } from "@/lib/outreachQueue";
 import { sendReviewEmail, markTouchSent, skipTouch, setCallOutcome } from "@/lib/outreachQueue";
 import { telLink, smsLink, whatsappLink, copyToClipboard } from "@/lib/outreachDeepLinks";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useBrowserCall } from "@/components/call/BrowserCallProvider";
+import { fetchRepCallerNumber } from "@/lib/repCallerNumber";
 
 interface OutreachCardProps {
   touch: OutreachTouch;
@@ -38,6 +45,32 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [subject, setSubject] = useState(touch.subject || "");
   const [body, setBody] = useState(touch.body || "");
+
+  // Device-aware calling: on a computer the Call button dials in the browser
+  // (reusing the same Twilio browser-call engine as Lead Detail); on a phone it
+  // opens the native dialer (tel:), exactly as before. The Queue already sits
+  // inside <BrowserCallProvider> (App.tsx), so no extra wiring is needed.
+  const isMobile = useIsMobile();
+  const { makeCall, status: callStatus, leadId: activeCallLeadId, activeCall } = useBrowserCall();
+  const [callPrep, setCallPrep] = useState(false);       // resolving caller ID
+  const [callConfirmOpen, setCallConfirmOpen] = useState(false);
+  const [callerId, setCallerId] = useState<string | null>(null);
+  const callInProgress = callStatus === "connecting" || callStatus === "on-call";
+
+  // Reveal the outcome buttons only once a real call OBJECT exists for THIS lead.
+  // The provider sets `activeCall` ONLY after `device.connect()` resolves (i.e.
+  // the call is actually placed/ringing), and nulls it on every failure path.
+  // Gating on the object — not on `status === "connecting"` — is what makes this
+  // correct: makeCall sets "connecting" BEFORE awaiting connect(), so an invalid
+  // number, an unready device, or a rejected connection never produces a call
+  // object and therefore never reveals the outcome controls (no marking a
+  // non-existent call as done). A dial that rings-but-isn't-answered DOES create
+  // the object first, so the "No answer" path still works. Latch-only, so the
+  // buttons persist after the call ends for outcome capture.
+  const callPlacedForThisLead = !!activeCall && activeCallLeadId === touch.leadId;
+  useEffect(() => {
+    if (callPlacedForThisLead) setOpened(true);
+  }, [callPlacedForThisLead]);
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
@@ -86,11 +119,58 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     toast.success("Sent");
   }
 
+  // ── Calling (device-aware) ──
+  // Desktop → browser call (with a quick confirm); mobile → native dialer.
+  // Either way, the same "Got them / No answer / Sent it" buttons appear next,
+  // so outcome capture and cadence advance are identical across devices.
+  async function prepareDesktopCall() {
+    const phone = touch.phone;
+    if (!phone) return;
+    setCallPrep(true);
+    const from = await fetchRepCallerNumber().catch(() => null);
+    setCallPrep(false);
+    if (from) {
+      setCallerId(from);
+      setCallConfirmOpen(true);
+      return;
+    }
+    // Calling-in-the-app isn't set up for this rep/workspace → fall back to the
+    // phone dialer so the rep is never blocked. Plain wording, no "browser/dialer".
+    toast.info("Opening your phone to make the call.");
+    setOpened(true);
+    window.location.href = telLink(phone);
+  }
+
+  async function startDesktopCall() {
+    setCallConfirmOpen(false);
+    const phone = touch.phone;
+    if (!callerId || !phone) return;
+    try {
+      // Don't reveal the outcome state here — the effect above flips it only once
+      // the call actually reaches "connecting" for this lead, so a number that
+      // never dials can't leave the rep marking a non-existent call as done.
+      await makeCall({
+        toNumber: phone,
+        fromNumber: callerId,
+        leadId: touch.leadId,
+        leadName: touch.leadName,
+      });
+    } catch {
+      toast.error("Couldn't start the call");
+    }
+  }
+
   // ── Primary action per channel ──
   function openChannelApp() {
+    // Voice on a computer takes the browser-call path (confirm dialog first), so
+    // don't flip `opened` yet — a cancelled confirm must leave the Call button.
+    if (touch.channel === "voice" && touch.phone && !isMobile) {
+      void prepareDesktopCall();
+      return;
+    }
     setOpened(true);
     if (touch.channel === "voice" && touch.phone) {
-      window.location.href = telLink(touch.phone);
+      window.location.href = telLink(touch.phone); // mobile → native dialer
     } else if (touch.channel === "sms" && touch.phone) {
       window.location.href = smsLink(touch.phone, touch.smsText || touch.body || "");
     } else if (touch.channel === "whatsapp" && (touch.whatsappNumber || touch.phone)) {
@@ -138,10 +218,25 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
               <Send className="mr-1.5 h-4 w-4" /> Send
             </Button>
           ) : !opened ? (
-            <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={openChannelApp}>
-              {channelMeta[touch.channel]?.icon}
-              {channelMeta[touch.channel]?.label}
-            </Button>
+            // Only the voice button reflects browser-call state; callInProgress is
+            // app-wide, so it must NOT disable SMS/WhatsApp/LinkedIn actions.
+            (() => {
+              const voiceBusy = touch.channel === "voice" && (callPrep || callInProgress);
+              return (
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={busy || voiceBusy}
+                  onClick={openChannelApp}
+                >
+                  {voiceBusy ? (
+                    <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />{callInProgress ? "In call" : "Connecting…"}</>
+                  ) : (
+                    <>{channelMeta[touch.channel]?.icon}{channelMeta[touch.channel]?.label}</>
+                  )}
+                </Button>
+              );
+            })()
           ) : (
             <div className="flex flex-col items-end gap-1.5">
               {touch.channel === "voice" && (
@@ -180,6 +275,28 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Desktop browser-call confirm (mic + caller ID). Mobile skips this and
+          dials the native phone app directly. */}
+      <AlertDialog open={callConfirmOpen} onOpenChange={setCallConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Call {first}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your browser will connect to <strong>{touch.phone}</strong>
+              {callerId ? <> using caller ID <strong>{callerId}</strong></> : null}.
+              <br />
+              Make sure your microphone is on.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={startDesktopCall}>
+              <Phone className="mr-1.5 h-4 w-4" /> Start call
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
