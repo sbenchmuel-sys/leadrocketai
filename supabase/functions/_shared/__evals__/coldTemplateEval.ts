@@ -52,18 +52,25 @@ const GROUNDING_VALIDATOR_PROMPT = promptsMod.GROUNDING_VALIDATOR_PROMPT as stri
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const MODEL = "google/gemini-2.5-flash-lite";
 
-// Representative slice of the canonical banned list — these must NEVER appear in
-// output regardless of which prompt version produced it (deterministic check).
-const BANNED_SUBSTRINGS = [
+// The COMPLETE canonical banned list (mirrors SYSTEM_GLOBAL_PROMPT's BANNED
+// PHRASES + the STRICT KB generic-pain-points) — these must NEVER appear in output
+// regardless of which prompt version produced it. Matched on word boundaries so
+// "I hear" does not false-positive on "I heard". ("What if" is banned only as an
+// OPENER and is checked separately below.)
+const BANNED_PHRASES = [
   "i hope this finds you well",
   "hope you're well",
   "i wanted to reach out",
+  "i hope you had a good week",
   "i ask because",
   "just checking in",
+  "i hear",
   "given your work in",
   "noticed your company",
+  "are you exploring",
   "many businesses",
   "many companies in your space",
+  "many printing businesses",
   "in today's competitive landscape",
   "with advancements in",
   "color matching",
@@ -71,6 +78,9 @@ const BANNED_SUBSTRINGS = [
   "tight margins",
   "operational efficiency",
 ];
+const BANNED_REGEXES = BANNED_PHRASES.map(
+  (p) => new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"),
+);
 
 // Word-count ceiling enforced for a cold intro (matches the LENGTH guidance).
 const WORD_LIMIT = 90;
@@ -208,8 +218,13 @@ async function scoreJson(prompt: string, payload: string): Promise<Record<string
 }
 
 function deterministicChecks(email: string) {
-  const lower = email.toLowerCase();
-  const bannedHits = BANNED_SUBSTRINGS.filter((b) => lower.includes(b));
+  const bannedHits = BANNED_PHRASES.filter((_p, i) => BANNED_REGEXES[i].test(email));
+  // "What if" is banned specifically as an OPENER — flag only when the body opens
+  // with it (strip a leading "Subject:" line and greeting first).
+  const body = email
+    .replace(/^\s*(?:subject:[^\n]*\n+)?(?:hi|hey|hello|dear)[^\n]*\n+/i, "")
+    .trimStart();
+  if (/^what if\b/i.test(body)) bannedHits.push("what if (opener)");
   const bracketPlaceholders = /\[[^\]]+\]|\{[A-Za-z]/.test(email); // [Name] or {FirstName} leakage
   const wordCount = email.trim().split(/\s+/).filter(Boolean).length;
   return {
@@ -268,9 +283,13 @@ async function runOne(fx: Fixture, runs: number): Promise<FixtureResult> {
     wordCount: Math.max(...perRunChecks.map((c) => c.wordCount)),
     overWordLimit: perRunChecks.some((c) => c.overWordLimit),
   };
+  // The validator fails a run when EITHER pass===false OR safe_to_send===false
+  // (mirrors the production grounding gate). aggGrounding.pass is true only if
+  // every run is both passing AND safe.
+  const runUnsafe = (g: Record<string, unknown>) => g.pass === false || g.safe_to_send === false;
   const aggGrounding: Record<string, unknown> = {
-    pass: groundings.every((g) => g.pass !== false),
-    runs_failed: groundings.filter((g) => g.pass === false).length,
+    pass: !groundings.some(runUnsafe),
+    runs_failed: groundings.filter(runUnsafe).length,
   };
   // Representative email: surface a failing generation if any, else the last.
   const failIdx = perRunChecks.findIndex(
