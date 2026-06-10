@@ -11,16 +11,21 @@
 // This harness CANNOT be meaningfully run without a model — it needs the Lovable
 // AI gateway (LOVABLE_API_KEY). It is the gate to run BEFORE merging Unit C.
 //
-// ── HOW TO RUN (produces baseline.json on main, candidate.json on the branch) ──
-//   # 1. Baseline (pre-change prompts):
-//   git stash || true
-//   git worktree add /tmp/dp-main origin/main && cd /tmp/dp-main
-//   LOVABLE_API_KEY=... deno run --allow-net --allow-env \
+// ── HOW TO RUN ────────────────────────────────────────────────────────────────
+// The harness only exists on THIS branch, so it evaluates BOTH versions by
+// pointing PROMPTS_MODULE at whichever prompts.ts you want (the harness itself is
+// always run from this branch — no need for it to exist on main).
+//
+//   # 0. Check out main's prompts beside this worktree (for the baseline source):
+//   git worktree add /tmp/dp-main origin/main
+//
+//   # 1. Baseline (main's prompts.ts, harness from THIS branch):
+//   PROMPTS_MODULE="file:///tmp/dp-main/supabase/functions/_shared/prompts.ts" \
+//   LOVABLE_API_KEY=... deno run --allow-net --allow-env --allow-read \
 //     supabase/functions/_shared/__evals__/coldTemplateEval.ts run > /tmp/baseline.json
 //
-//   # 2. Candidate (this branch):
-//   cd <this worktree>
-//   LOVABLE_API_KEY=... deno run --allow-net --allow-env \
+//   # 2. Candidate (this branch's prompts.ts — the default source):
+//   LOVABLE_API_KEY=... deno run --allow-net --allow-env --allow-read \
 //     supabase/functions/_shared/__evals__/coldTemplateEval.ts run > /tmp/candidate.json
 //
 //   # 3. Gate:
@@ -32,12 +37,17 @@
 // nondeterminism). Default 1.
 // ============================================================================
 
-import {
-  SYSTEM_GLOBAL_PROMPT,
-  PROMPTS,
-  QUALITY_SCORER_PROMPT,
-  GROUNDING_VALIDATOR_PROMPT,
-} from "../prompts.ts";
+// The prompts source is PARAMETERIZED so the SAME harness (which only exists on
+// this branch) can evaluate BOTH the candidate (this branch's prompts.ts) and the
+// baseline (main's prompts.ts) — point PROMPTS_MODULE at a main worktree's
+// prompts.ts for the baseline run. Defaults to this branch's prompts.ts.
+const PROMPTS_MODULE = Deno.env.get("PROMPTS_MODULE") ??
+  new URL("../prompts.ts", import.meta.url).href;
+const promptsMod = await import(PROMPTS_MODULE);
+const SYSTEM_GLOBAL_PROMPT = promptsMod.SYSTEM_GLOBAL_PROMPT as string;
+const PROMPTS = promptsMod.PROMPTS as Record<string, string>;
+const QUALITY_SCORER_PROMPT = promptsMod.QUALITY_SCORER_PROMPT as string;
+const GROUNDING_VALIDATOR_PROMPT = promptsMod.GROUNDING_VALIDATOR_PROMPT as string;
 
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const MODEL = "google/gemini-2.5-flash-lite";
@@ -67,7 +77,11 @@ const WORD_LIMIT = 90;
 
 interface Fixture {
   name: string;
-  kind: "strong_intel" | "low_intel" | "prior_relationship" | "commercial_context";
+  kind: "strong_intel" | "low_intel" | "prior_relationship" | "commercial_context" | "followup";
+  // Which cold template this fixture exercises. Every template Unit C changed
+  // (pre_email_1_intro, pre_email_2_followup, pre_email_3_followup) must be
+  // covered so a regression in any of them can fail the gate.
+  template: "pre_email_1_intro" | "pre_email_2_followup" | "pre_email_3_followup";
   vars: Record<string, string>;
 }
 
@@ -85,6 +99,7 @@ const FIXTURES: Fixture[] = [
   {
     name: "strong_intel",
     kind: "strong_intel",
+    template: "pre_email_1_intro",
     vars: {
       ...COMMON,
       SELLER_CONTEXT: "We sell wide-format sublimation ink and transfer paper to apparel decorators.",
@@ -96,6 +111,7 @@ const FIXTURES: Fixture[] = [
   {
     name: "low_intel",
     kind: "low_intel",
+    template: "pre_email_1_intro",
     vars: {
       ...COMMON,
       SELLER_CONTEXT: "We sell wide-format sublimation ink and transfer paper to apparel decorators.",
@@ -107,6 +123,7 @@ const FIXTURES: Fixture[] = [
   {
     name: "prior_relationship",
     kind: "prior_relationship",
+    template: "pre_email_1_intro",
     vars: {
       ...COMMON,
       SELLER_CONTEXT: "We sell wide-format sublimation ink and transfer paper to apparel decorators.",
@@ -119,6 +136,7 @@ const FIXTURES: Fixture[] = [
   {
     name: "commercial_context",
     kind: "commercial_context",
+    template: "pre_email_1_intro",
     vars: {
       ...COMMON,
       SELLER_CONTEXT: "We sell wide-format sublimation ink and transfer paper to apparel decorators.",
@@ -126,6 +144,30 @@ const FIXTURES: Fixture[] = [
         "Name: Jack Liu\nCompany: Comtix\nRole: Owner\nIndustry: Print shop\nCOMMERCIAL CONTEXT: Opportunity Size: 700 units/mo; Product interest: bulk transfer paper\nKNOWN FACTS: Connect wk-of 03/30",
       SIGNALS: "",
       LEAD_INTELLIGENCE: "",
+    },
+  },
+  {
+    name: "followup_2",
+    kind: "followup",
+    template: "pre_email_2_followup",
+    vars: {
+      ...COMMON,
+      LEAD_CONTEXT: "Name: Jack Liu\nCompany: Comtix\nRole: Owner\nIndustry: Print shop",
+      PREVIOUS_EMAIL_SUMMARY: "Asked whether reprints were their biggest margin drain heading into peak season.",
+      LAST_OUTBOUND_BODY: "Hi Jack,\n\nSaw Comtix runs a busy print shop. Quick one — are reprints still the biggest margin killer for shops your size?\n\nBest,\nMike",
+      KNOWLEDGE_CONTEXT: "Case: print shops using digital proofing cut reprint costs ~20%.",
+    },
+  },
+  {
+    name: "followup_3",
+    kind: "followup",
+    template: "pre_email_3_followup",
+    vars: {
+      ...COMMON,
+      LEAD_CONTEXT: "Name: Jack Liu\nCompany: Comtix\nRole: Owner\nIndustry: Print shop",
+      PREVIOUS_EMAIL_SUMMARY: "Two prior notes: peak-season reprints, then a question on in-house vs outsourced decoration.",
+      LAST_OUTBOUND_BODY: "Hi Jack,\n\nDropped you a line about reprint costs. Curious — are you handling proofing in-house or outsourcing?\n\nBest,\nMike",
+      KNOWLEDGE_CONTEXT: "Case: print shops using digital proofing cut reprint costs ~20%.",
     },
   },
 ];
@@ -188,7 +230,7 @@ interface FixtureResult {
 
 async function runOne(fx: Fixture, runs: number): Promise<FixtureResult> {
   const system = SYSTEM_GLOBAL_PROMPT;
-  const user = fill(PROMPTS["pre_email_1_intro"], fx.vars);
+  const user = fill(PROMPTS[fx.template], fx.vars);
   // Use the last of N generations (or 1). Averaging numeric scores below.
   let email = "";
   const qualities: Record<string, unknown>[] = [];
