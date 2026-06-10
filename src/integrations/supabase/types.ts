@@ -532,6 +532,13 @@ export type Database = {
       }
       campaign_collateral: {
         Row: {
+          asset_filename: string | null
+          asset_mime: string | null
+          asset_path: string | null
+          asset_size_bytes: number | null
+          asset_uploaded_at: string | null
+          asset_uploaded_by: string | null
+          asset_url: string | null
           attached_step_number: number | null
           body: string | null
           campaign_id: string
@@ -544,6 +551,13 @@ export type Database = {
           variant_group: string | null
         }
         Insert: {
+          asset_filename?: string | null
+          asset_mime?: string | null
+          asset_path?: string | null
+          asset_size_bytes?: number | null
+          asset_uploaded_at?: string | null
+          asset_uploaded_by?: string | null
+          asset_url?: string | null
           attached_step_number?: number | null
           body?: string | null
           campaign_id: string
@@ -556,6 +570,13 @@ export type Database = {
           variant_group?: string | null
         }
         Update: {
+          asset_filename?: string | null
+          asset_mime?: string | null
+          asset_path?: string | null
+          asset_size_bytes?: number | null
+          asset_uploaded_at?: string | null
+          asset_uploaded_by?: string | null
+          asset_url?: string | null
           attached_step_number?: number | null
           body?: string | null
           campaign_id?: string
