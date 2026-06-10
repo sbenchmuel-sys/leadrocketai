@@ -51,10 +51,12 @@ function step(
 function nineStepCampaign(): LoadedCampaign {
   return {
     id: "camp-9",
+    workspace_id: "ws-test",
     motion: "outbound_prospecting",
     default_channel: "email",
     include_meeting_cta: false,
     global_instructions: null,
+    knowledge_document_id: null,
     steps: [
       step(1, "intro", "question"),
       step(2, "followup", "question"),
