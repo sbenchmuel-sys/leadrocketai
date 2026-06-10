@@ -42,10 +42,18 @@ export interface StructuredCampaignStep {
 
 export interface LoadedCampaign {
   id: string;
+  /** Owning workspace — used to validate the campaign's knowledge document (fail-closed). */
+  workspace_id: string;
   motion: string;
   default_channel: string;
   include_meeting_cta: boolean;
   global_instructions: string | null;
+  /**
+   * The campaign's uploaded knowledge document (kb_chunks.document_id), or null.
+   * Member-writable, so it MUST be validated (validateCampaignKnowledgeDoc) before
+   * it is trusted to scope KB retrieval — never use it raw.
+   */
+  knowledge_document_id: string | null;
   steps: StructuredCampaignStep[];
 }
 
