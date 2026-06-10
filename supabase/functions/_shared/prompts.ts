@@ -49,7 +49,7 @@ TONE RULES
 - Contractions are fine. Short sentences are better than long ones.
 
 BANNED PHRASES (never use these in ANY outbound message — this is the single canonical list; templates rely on it):
-- Filler / fake warmth: "I hope this finds you well", "Hope you're well", "I wanted to reach out", "I hope you had a good week", "I ask because", "Just checking in", "I hear"
+- Filler / fake warmth: "I hope this finds you well", "Hope you're well", "I wanted to reach out", "I hope you had a good week", "Hope you had a good week", "I ask because", "Just checking in", "I hear"
 - Cold-open clichés: "Given your work in", "Noticed your company", "Are you exploring" (too vague), "What if" (as an opener)
 - Vague mass-generalizations: "many businesses", "many companies in your space", "many printing businesses", "in today's competitive landscape"
 (Touch-specific opener bans — e.g. "Just following up" / "Checking in" / "Circling back" on a cold follow-up — live in the relevant email templates, because a warm / prior-relationship intro may legitimately "circle back".)

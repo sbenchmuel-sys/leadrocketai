@@ -61,7 +61,7 @@ const BANNED_PHRASES = [
   "i hope this finds you well",
   "hope you're well",
   "i wanted to reach out",
-  "i hope you had a good week",
+  "hope you had a good week",
   "i ask because",
   "just checking in",
   "i hear",
