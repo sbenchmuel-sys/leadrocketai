@@ -1672,7 +1672,20 @@ serve(async (req) => {
     //     so this can never resolve to an unvalidated foreign owner or doc id.
     //   • none               — no searchable query (too short / nothing to embed).
     // Non-authoring tasks are UNCHANGED: resolvedUserId owner, no document filter.
-    if (KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) {
+    // Live-send campaign KB (Unit B): a TRUSTED backend call (service role —
+    // automation-executor) may carry a campaign knowledge document already
+    // validated against the campaign's workspace. Compute the scope up front so
+    // it applies to ALL campaign send tasks — including follow-up steps
+    // (pre_email_2/3/4_*) that are NOT in TASK_KB_CONFIG and would otherwise skip
+    // KB search entirely, leaving live follow-up copy ungrounded in the campaign
+    // doc. Gated on isServiceRole so an untrusted user JWT can never supply a KB
+    // owner and read another tenant's KB.
+    const liveCampaignKbScope = resolveLiveSendCampaignKbScope({
+      isServiceRole,
+      campaignKnowledgeDocId: payload?.campaign_knowledge_document_id,
+      campaignKbOwnerId: payload?.campaign_kb_owner_id,
+    });
+    if (KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring || liveCampaignKbScope) {
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
@@ -1704,29 +1717,23 @@ serve(async (req) => {
           console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}, campaign_doc: ${kbScope.documentFilter ?? "none"}`);
           kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, kbScope.kbOwnerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, kbScope.documentFilter);
         }
-      } else if (hasSearchableQuery) {
+      } else if (liveCampaignKbScope && hasSearchableQuery) {
+        // Live campaign send with a validated doc → scope to the campaign doc +
+        // validated owner (the document filter restricts retrieval to that doc's
+        // chunks), mirroring authoring so automated and previewed copy ground on
+        // the same curated KB. Applies to EVERY campaign send task, including
+        // follow-up steps not present in TASK_KB_CONFIG.
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        // Live-send campaign KB (Unit B): when a TRUSTED backend call (service
-        // role — i.e. automation-executor) carries a campaign knowledge document
-        // already validated against the campaign's workspace, scope retrieval to
-        // that doc + its validated owner, mirroring the authoring branch so
-        // automated and previewed copy ground on the same curated KB. Gated on
-        // isServiceRole so an untrusted user JWT can never supply a KB owner and
-        // read another tenant's KB. Both id AND owner required (fail closed);
-        // otherwise behavior is byte-identical to before (resolvedUserId, no filter).
-        const liveScope = resolveLiveSendCampaignKbScope({
-          isServiceRole,
-          campaignKnowledgeDocId: payload?.campaign_knowledge_document_id,
-          campaignKbOwnerId: payload?.campaign_kb_owner_id,
-        });
-        if (liveScope) {
-          console.log(`[ai_task] [LIVE-SEND] KB scoped to campaign doc ${liveScope.documentFilter} (owner=${liveScope.ownerId}), lead_id: ${leadId || 'global'}`);
-          kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKey, liveScope.ownerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, liveScope.documentFilter);
-        } else {
-          // Non-authoring (unchanged): owner-scoped to the resolved user, no doc filter.
-          console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-          kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, undefined);
-        }
+        console.log(`[ai_task] [LIVE-SEND] KB scoped to campaign doc ${liveCampaignKbScope.documentFilter} (owner=${liveCampaignKbScope.ownerId}), task=${task}, lead_id: ${leadId || 'global'}`);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKey, liveCampaignKbScope.ownerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, liveCampaignKbScope.documentFilter);
+      } else if (KNOWLEDGE_SEARCH_TASKS.includes(task) && hasSearchableQuery) {
+        // Non-authoring, no campaign doc (UNCHANGED): owner-scoped to the resolved
+        // user, no document filter. Restricted to TASK_KB_CONFIG tasks so a
+        // doc-less non-config task (the outer gate may have been opened by
+        // liveCampaignKbScope for a campaign send) never starts a fresh KB search.
+        const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, undefined);
       }
     }
 

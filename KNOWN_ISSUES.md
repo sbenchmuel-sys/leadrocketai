@@ -519,3 +519,35 @@ not a migration) to re-arm the lead and delete the spurious "Lead requested to
 unsubscribe…" system note. Requires DB access — hand to Lovable or run in the
 Supabase SQL editor. Needs ai_task/sync edge functions redeployed for the code
 fix to take effect.
+
+---
+
+## KB is user-scoped, not workspace-scoped (Outreach KB grounding)
+
+**Status: deferred (founder-approved 2026-06-10).** Tracked here so it doesn't
+drop. Surfaced by Codex P1 on PR #75 (Unit A) and underlies PR #78 (Unit B).
+
+`kb_chunks` is keyed by `owner_user_id` only — there is **no `workspace_id`
+column** on `kb_chunks` and **no workspace parameter** on the canonical
+`match_knowledge_chunks_v2` RPC. A campaign belongs to a workspace, but KB
+belongs to a *user*, and a user can be a member of more than one workspace. So
+"all of a user's KB" can span workspaces.
+
+Consequences in the shipped Outreach KB work:
+- **Unit A (PR #75, doc-less authoring fallback):** the `workspace_fallback`
+  (draft from the rep's own KB when a campaign has no uploaded doc) is gated to
+  fire **only when the authoring user belongs to exactly one workspace** — then
+  their KB is unambiguously that single workspace's. **Multi-workspace authors
+  fail closed to no KB search** (the prior thin-copy behavior). They get no
+  grounded fallback today.
+- **Unit B (PR #78, live-send campaign doc):** scoping to a validated campaign
+  document is exact (the document filter restricts to that doc's chunks, and the
+  doc owner is verified a member of the campaign's workspace), so it is not
+  affected. Only the *doc-less* fallback inherits the limitation above.
+
+**Proper fix (deferred — separate unit, migration/RLS blast radius):** add a
+`workspace_id` to the knowledge store (`kb_chunks`) + backfill + a workspace
+filter on `match_knowledge_chunks_v2`, then scope all KB retrieval (authoring,
+live send, **and** cold outbound — which has the same user-scoped behavior
+today) by workspace. This would let multi-workspace reps also get a grounded
+doc-less fallback and make every KB read workspace-exact. Not scheduled.
