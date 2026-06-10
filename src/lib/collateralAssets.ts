@@ -142,10 +142,12 @@ export async function uploadCollateralAsset(params: {
  * Leaves any AI text draft on the same row untouched.
  */
 export async function removeCollateralAsset(collateralId: string, assetPath: string): Promise<void> {
-  const { error: rmErr } = await supabase.storage.from(BUCKET).remove([assetPath]);
-  if (rmErr) throw new Error(rmErr.message || "Couldn't remove the brief");
-
-  const { error: updateErr } = await supabase
+  // Clear the row FIRST, scoped to id AND the asset_path the caller is looking
+  // at. If another tab/user has already replaced the brief, asset_path no longer
+  // matches → zero rows update → this is a STALE remove: no-op, and crucially we
+  // do NOT delete storage (that object now belongs to the newer asset). Clearing
+  // before deleting means we only ever remove an object we authoritatively own.
+  const { data: cleared, error: updateErr } = await supabase
     .from("campaign_collateral" as any)
     .update({
       asset_path: null,
@@ -156,6 +158,15 @@ export async function removeCollateralAsset(collateralId: string, assetPath: str
       asset_uploaded_at: null,
       asset_uploaded_by: null,
     } as any)
-    .eq("id", collateralId);
+    .eq("id", collateralId)
+    .eq("asset_path", assetPath)
+    .select("id")
+    .maybeSingle();
   if (updateErr) throw new Error(updateErr.message || "Couldn't clear the brief from the campaign");
+  if (!cleared) return; // already changed elsewhere — leave the current asset alone
+
+  // We authoritatively cleared the current asset → remove its object. Best-effort:
+  // the row is the source of truth, so a lingering object is a harmless orphan, not
+  // a dangling reference — don't fail the whole removal on a transient storage error.
+  await supabase.storage.from(BUCKET).remove([assetPath]).catch(() => {});
 }
