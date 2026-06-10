@@ -10,7 +10,7 @@
 // only — no channel jargon on screen.
 // ============================================================================
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -51,11 +51,24 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   // opens the native dialer (tel:), exactly as before. The Queue already sits
   // inside <BrowserCallProvider> (App.tsx), so no extra wiring is needed.
   const isMobile = useIsMobile();
-  const { makeCall, status: callStatus } = useBrowserCall();
+  const { makeCall, status: callStatus, leadId: activeCallLeadId } = useBrowserCall();
   const [callPrep, setCallPrep] = useState(false);       // resolving caller ID
   const [callConfirmOpen, setCallConfirmOpen] = useState(false);
   const [callerId, setCallerId] = useState<string | null>(null);
   const callInProgress = callStatus === "connecting" || callStatus === "on-call";
+  // A browser call is live for THIS lead (not one the rep started elsewhere).
+  const callActiveForThisLead = callInProgress && activeCallLeadId === touch.leadId;
+
+  // Reveal the outcome buttons only once a browser call has ACTUALLY started for
+  // this lead — never optimistically on click. makeCall early-returns (without
+  // throwing) for an invalid number or an unready device, in which case status
+  // never reaches "connecting"; latching here keeps the card on its Call button
+  // so the rep can't mark an outcome / advance a cadence with no call placed. A
+  // dial that rings but isn't answered DOES pass through "connecting", so the
+  // "No answer" path still works. Latch-only so the buttons persist post-call.
+  useEffect(() => {
+    if (callActiveForThisLead) setOpened(true);
+  }, [callActiveForThisLead]);
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
@@ -128,10 +141,12 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
 
   async function startDesktopCall() {
     setCallConfirmOpen(false);
-    setOpened(true); // reveal talking points + outcome buttons
     const phone = touch.phone;
     if (!callerId || !phone) return;
     try {
+      // Don't reveal the outcome state here — the effect above flips it only once
+      // the call actually reaches "connecting" for this lead, so a number that
+      // never dials can't leave the rep marking a non-existent call as done.
       await makeCall({
         toNumber: phone,
         fromNumber: callerId,
