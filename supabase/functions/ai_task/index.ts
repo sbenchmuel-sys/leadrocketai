@@ -5,6 +5,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_PROMPT, GROUNDING_VALIDATOR_PROMPT, EXTRACT_STYLE_FEATURES_PROMPT } from "../_shared/prompts.ts";
 import { validateDraft, kindFromTask } from "../_shared/draftValidator.ts";
 import { resolveCampaignAuthoringInstruction } from "../_shared/aiCampaignResolver.ts";
+import { resolveCampaignKbScope } from "../_shared/campaignKbScope.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
@@ -1632,13 +1633,20 @@ serve(async (req) => {
     }
 
     let kbSearchPromise: Promise<{ formatted: string; grouped: KBChunksGrouped; chunkIds: string[] }> = Promise.resolve({ formatted: "", grouped: {}, chunkIds: [] });
-    // Campaign authoring searches the KB scoped to the campaign's OWN document.
-    // If the campaign has no validated knowledge document (none uploaded, or the
-    // stored id was rejected by the resolver), do NOT search — generate from the
-    // campaign instructions alone — rather than leaking the owner's unscoped KB
-    // into campaign copy. Non-authoring tasks are unchanged.
-    const authoringWithoutDoc = campaignAuthoring && !campaignKnowledgeDocId;
-    if ((KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) && !authoringWithoutDoc) {
+    // Campaign-authoring KB scope (fail-closed, workspace-isolated):
+    //   • campaign_doc       — the campaign carries a VALIDATED knowledge document
+    //     (resolver confirmed the doc's owner is a member of the campaign's
+    //     workspace) → scope retrieval to that document + its owner so any
+    //     workspace member authoring gets the campaign's own curated KB.
+    //   • workspace_fallback — no validated doc (none uploaded, or the stored id was
+    //     rejected as foreign) → fall back to the SAME owner-scoped retrieval the
+    //     cold-outbound tasks use, scoped to the authoring user's OWN workspace KB
+    //     (kbOwnerId = resolvedUserId, no document filter). The resolver nulls
+    //     campaignKbOwnerId and campaignKnowledgeDocId together for a foreign doc,
+    //     so this can never resolve to an unvalidated foreign owner or doc id.
+    //   • none               — no searchable query (too short / nothing to embed).
+    // Non-authoring tasks are UNCHANGED: resolvedUserId owner, no document filter.
+    if (KNOWLEDGE_SEARCH_TASKS.includes(task) || campaignAuthoring) {
       const queryParts: string[] = [];
       if (payload?.email_text) queryParts.push(String(payload.email_text));
       if (payload?.questions_list) queryParts.push(String(payload.questions_list));
@@ -1646,13 +1654,27 @@ serve(async (req) => {
       if (payload?.meeting_summary) queryParts.push(String(payload.meeting_summary).slice(0, 500));
       if (campaignAuthoring && payload?.offer_summary) queryParts.push(String(payload.offer_summary).slice(0, 800));
       const searchQuery = queryParts.join("\n").slice(0, 2000);
-      if (searchQuery.length > 50) {
+      const hasSearchableQuery = searchQuery.length > 50;
+      if (campaignAuthoring) {
+        // Route owner + document filter through the shared fail-closed scope
+        // decision so the three-way branch is unit-testable in isolation.
+        const kbScope = resolveCampaignKbScope({
+          hasSearchableQuery,
+          campaignKnowledgeDocId,
+          campaignKbOwnerId,
+          resolvedUserId,
+        });
+        console.log(`[ai_task] [CAMPAIGN-AUTHORING] KB scope: ${kbScope.scope} (doc=${kbScope.documentFilter ?? "none"}, owner=${kbScope.kbOwnerId ?? "n/a"})`);
+        if (kbScope.scope !== "none") {
+          const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
+          console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}, campaign_doc: ${kbScope.documentFilter ?? "none"}`);
+          kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, kbScope.kbOwnerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, kbScope.documentFilter);
+        }
+      } else if (hasSearchableQuery) {
+        // Non-authoring (unchanged): owner-scoped to the resolved user, no doc filter.
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        // For authoring, scope the KB to the campaign's uploaded document and use
-        // that document's owner so retrieval works for any workspace member.
-        const kbOwnerId = campaignAuthoring && campaignKbOwnerId ? campaignKbOwnerId : resolvedUserId;
-        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}${campaignAuthoring ? `, campaign_doc: ${campaignKnowledgeDocId ?? "none"}` : ""}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, kbOwnerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, campaignKnowledgeDocId || undefined);
+        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
+        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, undefined);
       }
     }
 
