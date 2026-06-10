@@ -73,6 +73,20 @@ export async function uploadCollateralAsset(params: {
   const filename = sanitizeFilename(file.name);
   const path = `${workspaceId}/${campaignId}/${collateralId}/${filename}`;
 
+  // Read the target row FIRST. This (a) fails fast before we waste an upload if
+  // the collateral slot is gone or RLS-hidden, and (b) gives us the previous
+  // asset_path so we can clean up the old object after a successful replace.
+  const { data: existing, error: readErr } = await supabase
+    .from("campaign_collateral" as any)
+    .select("asset_path")
+    .eq("id", collateralId)
+    .maybeSingle();
+  if (readErr) throw new Error(readErr.message || "Couldn't load the campaign brief slot");
+  if (!existing) throw new Error("That campaign brief slot no longer exists.");
+  const previousPath = (existing as any).asset_path as string | null;
+
+  const userId = (await supabase.auth.getUser()).data.user?.id ?? null;
+
   const { error: uploadErr } = await supabase.storage
     .from(BUCKET)
     .upload(path, file, { contentType: file.type, upsert: true });
@@ -83,7 +97,10 @@ export async function uploadCollateralAsset(params: {
 
   // Record the link on the collateral row. New columns aren't in the generated
   // types yet (Lovable regenerates after the migration applies) → cast.
-  const { error: updateErr } = await supabase
+  // `.select().maybeSingle()` so a zero-row match (stale/deleted/RLS-hidden row)
+  // is a HARD FAILURE — otherwise we'd return a public URL for a brief that was
+  // never recorded (an orphaned, un-sendable upload reported as "saved").
+  const { data: updated, error: updateErr } = await supabase
     .from("campaign_collateral" as any)
     .update({
       asset_path: path,
@@ -92,13 +109,23 @@ export async function uploadCollateralAsset(params: {
       asset_filename: filename,
       asset_size_bytes: file.size,
       asset_uploaded_at: new Date().toISOString(),
-      asset_uploaded_by: (await supabase.auth.getUser()).data.user?.id ?? null,
+      asset_uploaded_by: userId,
     } as any)
-    .eq("id", collateralId);
-  if (updateErr) {
+    .eq("id", collateralId)
+    .select("id")
+    .maybeSingle();
+  if (updateErr || !updated) {
     // Best-effort cleanup so a failed record-write doesn't orphan the object.
     await supabase.storage.from(BUCKET).remove([path]).catch(() => {});
-    throw new Error(updateErr.message || "Uploaded the file but couldn't save it to the campaign");
+    throw new Error(updateErr?.message || "Uploaded the file but couldn't save it to the campaign");
+  }
+
+  // Replace cleanup: a new filename produces a new path, so the prior object is
+  // now unreferenced. The bucket is public-read, so a lingering old object stays
+  // reachable forever (and removeCollateralAsset can't reach it once the row's
+  // asset_path is overwritten). Remove it, best-effort, only when it differs.
+  if (previousPath && previousPath !== path) {
+    await supabase.storage.from(BUCKET).remove([previousPath]).catch(() => {});
   }
 
   return {
