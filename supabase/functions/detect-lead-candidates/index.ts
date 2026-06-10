@@ -206,10 +206,28 @@ async function upsertCandidate(serviceSupabase: any, {
 }): Promise<"inserted" | "updated" | "skipped"> {
   const normalized = normalizeEmail(contactEmail);
 
+  // A bare send to a brand-new recipient usually carries no real display name —
+  // Graph/Gmail return the address itself as the "name". Treat name==address (or
+  // empty) as "no name" so deriveName() falls back to the formatted local-part
+  // instead of showing a raw email address as the lead's name.
+  const local = contactEmail.split("@")[0]?.toLowerCase() ?? "";
+  // True when a name is really just the email address or the local-part guess
+  // (e.g. "rfrankel" / "Rfrankel" from rfrankel@…) — i.e. not a real display name.
+  const isEmailishName = (n: string | null | undefined): boolean => {
+    const t = (n ?? "").trim().toLowerCase();
+    return !t
+      || t === normalized
+      || t === contactEmail.trim().toLowerCase()
+      || t === local
+      || t === local.replace(/[._-]+/g, " ").trim();
+  };
+  const trimmedName = contactName?.trim() ?? "";
+  const cleanName = trimmedName && !isEmailishName(trimmedName) ? trimmedName : null;
+
   // Check for any existing candidate for this email in this workspace (all statuses)
   const { data: existing } = await serviceSupabase
     .from("lead_candidates")
-    .select("id, status, resolved_at, email_count")
+    .select("id, status, resolved_at, email_count, contact_name")
     .eq("workspace_id", workspaceId)
     .eq("contact_email", normalized)
     .order("created_at", { ascending: false })
@@ -228,6 +246,12 @@ async function upsertCandidate(serviceSupabase: any, {
           email_count: (existing.email_count ?? 1) + 1,
           subject_snippet: subjectSnippet,
           body_snippet: bodySnippet,
+          // Backfill the display name once a real one appears (e.g. the recipient
+          // we cold-emailed finally replies, carrying "Ryan Frankel" in the From
+          // header). Fill when the stored name is empty OR is just an email-as-name
+          // placeholder (covers rows created before this change) — but never
+          // overwrite a real display name we already captured.
+          ...(cleanName && isEmailishName(existing.contact_name) ? { contact_name: cleanName } : {}),
         })
         .eq("id", existing.id);
       return "updated";
@@ -247,7 +271,7 @@ async function upsertCandidate(serviceSupabase: any, {
     workspace_id: workspaceId,
     owner_user_id: ownerUserId,
     contact_email: normalized,
-    contact_name: contactName,
+    contact_name: cleanName,
     company_domain: companyDomain,
     source,
     first_seen_at: emailDate.toISOString(),
