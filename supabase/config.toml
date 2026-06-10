@@ -1,5 +1,8 @@
 project_id = "ntzeiflqqluwgdfmatjh"
 
+[functions.extract-lead-profile]
+verify_jwt = true
+
 [functions.outlook-auth]
 verify_jwt = false
 
