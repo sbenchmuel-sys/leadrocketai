@@ -268,7 +268,12 @@ async function runOne(fx: Fixture, runs: number): Promise<FixtureResult> {
     `LEAD CONTEXT:\n${fx.vars.LEAD_CONTEXT ?? ""}\n\n` +
     `SELLER CONTEXT:\n${fx.vars.SELLER_CONTEXT ?? ""}\n\n` +
     `SIGNALS:\n${fx.vars.SIGNALS ?? ""}\n\n` +
-    `KNOWLEDGE CONTEXT:\n${fx.vars.KNOWLEDGE_CONTEXT ?? ""}`;
+    `KNOWLEDGE CONTEXT:\n${fx.vars.KNOWLEDGE_CONTEXT ?? ""}\n\n` +
+    // Prior-email context so the scorer/validator knows a follow-up legitimately
+    // references previous outreach (otherwise it's flagged as a first-touch /
+    // fake-prior-outreach failure). Empty for first-touch fixtures.
+    `PREVIOUS OUTREACH SUMMARY:\n${fx.vars.PREVIOUS_EMAIL_SUMMARY ?? ""}\n\n` +
+    `LAST OUTBOUND BODY:\n${fx.vars.LAST_OUTBOUND_BODY ?? ""}`;
 
   const emails: string[] = [];
   const qualities: Record<string, unknown>[] = [];
