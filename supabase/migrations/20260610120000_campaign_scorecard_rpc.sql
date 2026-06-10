@@ -93,5 +93,8 @@ BEGIN
 END;
 $$;
 
--- Callable by signed-in users; the function gates per-call (admin vs member).
+-- Least privilege: revoke the default PUBLIC execute (so anon can't even call
+-- it), then grant only to signed-in users. The in-function gate already
+-- fail-closes for a null auth.uid(), but don't rely on that alone.
+REVOKE EXECUTE ON FUNCTION public.get_campaign_scorecard(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_campaign_scorecard(uuid, uuid) TO authenticated;
