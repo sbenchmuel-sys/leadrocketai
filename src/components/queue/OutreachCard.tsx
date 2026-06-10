@@ -51,24 +51,26 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   // opens the native dialer (tel:), exactly as before. The Queue already sits
   // inside <BrowserCallProvider> (App.tsx), so no extra wiring is needed.
   const isMobile = useIsMobile();
-  const { makeCall, status: callStatus, leadId: activeCallLeadId } = useBrowserCall();
+  const { makeCall, status: callStatus, leadId: activeCallLeadId, activeCall } = useBrowserCall();
   const [callPrep, setCallPrep] = useState(false);       // resolving caller ID
   const [callConfirmOpen, setCallConfirmOpen] = useState(false);
   const [callerId, setCallerId] = useState<string | null>(null);
   const callInProgress = callStatus === "connecting" || callStatus === "on-call";
-  // A browser call is live for THIS lead (not one the rep started elsewhere).
-  const callActiveForThisLead = callInProgress && activeCallLeadId === touch.leadId;
 
-  // Reveal the outcome buttons only once a browser call has ACTUALLY started for
-  // this lead — never optimistically on click. makeCall early-returns (without
-  // throwing) for an invalid number or an unready device, in which case status
-  // never reaches "connecting"; latching here keeps the card on its Call button
-  // so the rep can't mark an outcome / advance a cadence with no call placed. A
-  // dial that rings but isn't answered DOES pass through "connecting", so the
-  // "No answer" path still works. Latch-only so the buttons persist post-call.
+  // Reveal the outcome buttons only once a real call OBJECT exists for THIS lead.
+  // The provider sets `activeCall` ONLY after `device.connect()` resolves (i.e.
+  // the call is actually placed/ringing), and nulls it on every failure path.
+  // Gating on the object — not on `status === "connecting"` — is what makes this
+  // correct: makeCall sets "connecting" BEFORE awaiting connect(), so an invalid
+  // number, an unready device, or a rejected connection never produces a call
+  // object and therefore never reveals the outcome controls (no marking a
+  // non-existent call as done). A dial that rings-but-isn't-answered DOES create
+  // the object first, so the "No answer" path still works. Latch-only, so the
+  // buttons persist after the call ends for outcome capture.
+  const callPlacedForThisLead = !!activeCall && activeCallLeadId === touch.leadId;
   useEffect(() => {
-    if (callActiveForThisLead) setOpened(true);
-  }, [callActiveForThisLead]);
+    if (callPlacedForThisLead) setOpened(true);
+  }, [callPlacedForThisLead]);
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
