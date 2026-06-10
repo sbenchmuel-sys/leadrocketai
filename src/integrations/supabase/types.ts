@@ -4336,6 +4336,17 @@ export type Database = {
           messages_purged: number
         }[]
       }
+      get_campaign_scorecard: {
+        Args: { _campaign_id?: string; _workspace_id: string }
+        Returns: {
+          campaign_id: string
+          campaign_name: string
+          enrolled: number
+          meetings: number
+          replied: number
+          sent: number
+        }[]
+      }
       get_latest_intents_for_leads: {
         Args: { p_lead_ids: string[] }
         Returns: {
