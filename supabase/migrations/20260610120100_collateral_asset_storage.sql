@@ -43,11 +43,22 @@ ALTER TABLE public.campaign_collateral
   CHECK (asset_mime IS NULL OR asset_mime IN ('application/pdf', 'image/png', 'image/jpeg'));
 
 -- ── 2. Storage bucket for collateral briefs (PUBLIC read) ────────────
--- public=true so the emailed link opens without auth. Idempotent insert so
--- re-running the migration is safe (matches the codify-cron re-run promise).
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('campaign-collateral', 'campaign-collateral', true)
-ON CONFLICT (id) DO NOTHING;
+-- public=true so the emailed link opens without auth. Bucket-level
+-- file_size_limit + allowed_mime_types enforce the PDF/PNG/JPEG ≤10 MB
+-- guarantee at the STORAGE BOUNDARY, so a member can't bypass the client
+-- helper and push an arbitrary or oversized object straight through the
+-- Storage API (the asset_mime CHECK only fires if a row is later recorded).
+-- ON CONFLICT DO UPDATE so re-running converges the limits (idempotent).
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'campaign-collateral', 'campaign-collateral', true,
+  10485760,  -- 10 MB, mirrors MAX_COLLATERAL_BYTES in src/lib/collateralAssets.ts
+  ARRAY['application/pdf', 'image/png', 'image/jpeg']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public             = EXCLUDED.public,
+  file_size_limit    = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
 
 -- DROP-then-CREATE each policy so re-applying this migration is safe (CREATE
 -- POLICY has no IF NOT EXISTS). Policy names are bucket-specific, so this never
@@ -58,9 +69,14 @@ DROP POLICY IF EXISTS "Members can upload collateral storage"      ON storage.ob
 DROP POLICY IF EXISTS "Members can update collateral storage"      ON storage.objects;
 DROP POLICY IF EXISTS "Members can delete collateral storage"      ON storage.objects;
 
--- service_role: full access (any future server-side processing).
+-- service_role: full access (any future server-side processing). TO service_role
+-- is LOAD-BEARING: without it this permissive FOR ALL policy applies to PUBLIC and,
+-- being gated only on bucket_id, would OR away the member-scoped write isolation
+-- below — letting any authenticated user write/delete ANY workspace's objects.
+-- Matches the corrected call-recordings policy in 20260525201531.
 CREATE POLICY "Service role can manage collateral storage"
   ON storage.objects FOR ALL
+  TO service_role
   USING (bucket_id = 'campaign-collateral')
   WITH CHECK (bucket_id = 'campaign-collateral');
 
