@@ -41,13 +41,22 @@
 // this branch) can evaluate BOTH the candidate (this branch's prompts.ts) and the
 // baseline (main's prompts.ts) — point PROMPTS_MODULE at a main worktree's
 // prompts.ts for the baseline run. Defaults to this branch's prompts.ts.
-const PROMPTS_MODULE = Deno.env.get("PROMPTS_MODULE") ??
-  new URL("../prompts.ts", import.meta.url).href;
-const promptsMod = await import(PROMPTS_MODULE);
-const SYSTEM_GLOBAL_PROMPT = promptsMod.SYSTEM_GLOBAL_PROMPT as string;
-const PROMPTS = promptsMod.PROMPTS as Record<string, string>;
-const QUALITY_SCORER_PROMPT = promptsMod.QUALITY_SCORER_PROMPT as string;
-const GROUNDING_VALIDATOR_PROMPT = promptsMod.GROUNDING_VALIDATOR_PROMPT as string;
+//
+// Loaded LAZILY (only in `run` mode) so `compare` needs neither --allow-env nor
+// the prompts module — it runs with just --allow-read.
+let SYSTEM_GLOBAL_PROMPT: string;
+let PROMPTS: Record<string, string>;
+let QUALITY_SCORER_PROMPT: string;
+let GROUNDING_VALIDATOR_PROMPT: string;
+
+async function loadPrompts(): Promise<void> {
+  const src = Deno.env.get("PROMPTS_MODULE") ?? new URL("../prompts.ts", import.meta.url).href;
+  const m = await import(src);
+  SYSTEM_GLOBAL_PROMPT = m.SYSTEM_GLOBAL_PROMPT;
+  PROMPTS = m.PROMPTS;
+  QUALITY_SCORER_PROMPT = m.QUALITY_SCORER_PROMPT;
+  GROUNDING_VALIDATOR_PROMPT = m.GROUNDING_VALIDATOR_PROMPT;
+}
 
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const MODEL = "google/gemini-2.5-flash-lite";
@@ -354,6 +363,7 @@ if (import.meta.main) {
     }
     compare(a, b);
   } else if (mode === "run") {
+    await loadPrompts(); // needs --allow-env (PROMPTS_MODULE) + --allow-net (model)
     const runs = Number(Deno.env.get("RUNS") ?? "1");
     const results: FixtureResult[] = [];
     for (const fx of FIXTURES) {
