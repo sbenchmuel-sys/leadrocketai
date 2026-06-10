@@ -5,7 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertTriangle, FileText, Handshake, ShoppingCart,
-  Brain, StickyNote, Plus, ChevronDown, ChevronUp,
+  Brain, StickyNote, Plus, ChevronDown, ChevronUp, Sparkles, Loader2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -138,10 +138,13 @@ export default function LeadContextPanel({ leadId, workspaceId, onUpdate }: Prop
           <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
             <FileText className="h-4 w-4" /> Lead Context
           </h3>
-          <AddContextDialog leadId={leadId} workspaceId={workspaceId} onAdded={() => { loadItems(); onUpdate?.(); }} />
+          <div className="flex items-center gap-1">
+            <EnrichFromEmailButton leadId={leadId} onDone={() => { loadItems(); onUpdate?.(); }} />
+            <AddContextDialog leadId={leadId} workspaceId={workspaceId} onAdded={() => { loadItems(); onUpdate?.(); }} />
+          </div>
         </div>
         <p className="text-xs text-muted-foreground mt-2">
-          No imported context for this lead. Context is captured automatically during import or can be added manually.
+          No imported context for this lead. Pull the name, company, title and key details straight from this lead's emails with "Enrich from email", or add context manually.
         </p>
       </div>
     );
@@ -178,7 +181,10 @@ export default function LeadContextPanel({ leadId, workspaceId, onUpdate }: Prop
                 Show deactivated
               </label>
             )}
-            <AddContextDialog leadId={leadId} workspaceId={workspaceId} onAdded={() => { loadItems(); onUpdate?.(); }} />
+            <div className="flex items-center gap-1 ml-auto">
+              <EnrichFromEmailButton leadId={leadId} onDone={() => { loadItems(); onUpdate?.(); }} />
+              <AddContextDialog leadId={leadId} workspaceId={workspaceId} onAdded={() => { loadItems(); onUpdate?.(); }} />
+            </div>
           </div>
 
           <Separator />
@@ -270,6 +276,62 @@ function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (
         )}
       </Button>
     </div>
+  );
+}
+
+// ── Enrich From Email Button ───────────────────────────────────────────
+// Reads this lead's email thread and fills in the prospect's name, company,
+// title, and a few context notes — so a sparse lead (e.g. promoted from
+// Pending Leads) doesn't need manual profile entry. Works for any provider;
+// safe to re-run (only fills empty fields, never overwrites your edits).
+
+function EnrichFromEmailButton({ leadId, onDone }: { leadId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const handleEnrich = async () => {
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("extract-lead-profile", {
+        body: { lead_id: leadId },
+      });
+      if (error || !data?.ok) {
+        toast.error(data?.error || "Couldn't read this lead's emails");
+        return;
+      }
+      if (!data.extracted) {
+        toast.info("No emails to read yet — sync this lead's inbox first.");
+        return;
+      }
+      const fieldCount = data.applied?.fields ? Object.keys(data.applied.fields).length : 0;
+      const noteCount = data.applied?.notes_inserted ?? 0;
+      if (fieldCount === 0 && noteCount === 0) {
+        toast.info("No new details found in the emails.");
+      } else {
+        const parts: string[] = [];
+        if (fieldCount) parts.push(`${fieldCount} profile field${fieldCount > 1 ? "s" : ""}`);
+        if (noteCount) parts.push(`${noteCount} note${noteCount > 1 ? "s" : ""}`);
+        toast.success(`Filled ${parts.join(" and ")} from email.`);
+      }
+      onDone();
+    } catch {
+      toast.error("Enrichment failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-6 text-[10px] gap-1 px-2"
+      onClick={handleEnrich}
+      disabled={busy}
+      title="Read this lead's emails and fill in name, company, title, and key context"
+    >
+      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+      {busy ? "Reading…" : "Enrich from email"}
+    </Button>
   );
 }
 
