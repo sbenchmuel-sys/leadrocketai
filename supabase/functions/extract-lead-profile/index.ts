@@ -100,6 +100,10 @@ serve(async (req) => {
       .select("type, direction, subject, from_email, body_text, ai_summary, occurred_at")
       .eq("lead_id", lead_id)
       .in("type", ["email_inbound", "email_outbound"])
+      // Respect rep intent: never read emails the rep hid from the timeline.
+      // (Service-role bypasses RLS, so this filter must be explicit — the
+      // canonical thread/timeline readers exclude hidden rows too.)
+      .eq("hidden", false)
       .order("occurred_at", { ascending: true })
       .limit(20);
 
