@@ -1612,6 +1612,8 @@ export interface EmailThreadItem {
   occurred_at: string;
   gmail_thread_id: string | null;
   gmail_message_id: string | null;
+  /** Durable paraphrase (classify-inbound). Used as a body fallback once the raw body purges. */
+  ai_summary?: string | null;
 }
 
 /**
@@ -1657,8 +1659,15 @@ export async function getLeadEmailThread(
         subject: t.subject,
         body_text: t.snippet_text ?? '',
         occurred_at: t.occurred_at,
-        gmail_thread_id: (meta.gmail_thread_id as string | null) ?? null,
-        gmail_message_id: (meta.gmail_message_id as string | null) ?? null,
+        // Outlook stores the conversation id under conversation_id; Gmail under gmail_thread_id.
+        gmail_thread_id: (meta.gmail_thread_id as string | null) ?? (meta.conversation_id as string | null) ?? null,
+        // Provider-agnostic message id. Outlook-sync writes the Graph message id to
+        // metadata_json.provider_message_id (and to interactions.gmail_message_id), so
+        // without this fallback the body-enrichment join below never matches Outlook rows
+        // and the drafter only ever sees the ≤500-char snippet.
+        gmail_message_id: (meta.gmail_message_id as string | null) ?? (meta.provider_message_id as string | null) ?? null,
+        // Durable paraphrase written by classify-inbound; survives the raw-body purge.
+        ai_summary: (meta.ai_summary as string | null) ?? null,
       };
     });
 
@@ -1666,7 +1675,10 @@ export async function getLeadEmailThread(
   const seen = new Set<string>();
   for (const t of timelineRows) {
     if (t.source_id) seen.add(`sid:${t.source_id}`);
-    const gid = (t.metadata_json as Record<string, unknown> | null)?.gmail_message_id;
+    const tMeta = (t.metadata_json as Record<string, unknown> | null) ?? {};
+    // legacy interactions store the provider message id (Gmail or Outlook) in the
+    // gmail_message_id column, so key on either metadata field to dedupe both providers.
+    const gid = (tMeta.gmail_message_id as string | null) ?? (tMeta.provider_message_id as string | null);
     if (gid) seen.add(`gmail:${gid}`);
     if (t.snippet_text) {
       const ts = new Date(t.occurred_at).toISOString().slice(0, 19);
@@ -1757,6 +1769,17 @@ export async function getLeadEmailThread(
       }
     } catch (err) {
       console.warn('[getLeadEmailThread] body_text enrichment failed', err);
+    }
+  }
+
+  // Final fallback: when neither the snippet nor the full body survived (inbound
+  // bodies purge at intent-set or the 7-day cap), fall back to the durable
+  // ai_summary so the drafter still has the gist instead of an empty message.
+  // Marked as a paraphrase so the model doesn't quote it as the prospect's
+  // verbatim words.
+  for (const e of emails) {
+    if ((!e.body_text || e.body_text.trim().length === 0) && e.ai_summary && e.ai_summary.trim().length > 0) {
+      e.body_text = `(summary — original message no longer retained) ${e.ai_summary.trim()}`;
     }
   }
 
