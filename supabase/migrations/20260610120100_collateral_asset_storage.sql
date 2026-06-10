@@ -49,6 +49,15 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('campaign-collateral', 'campaign-collateral', true)
 ON CONFLICT (id) DO NOTHING;
 
+-- DROP-then-CREATE each policy so re-applying this migration is safe (CREATE
+-- POLICY has no IF NOT EXISTS). Policy names are bucket-specific, so this never
+-- touches the call-recordings (or any other bucket's) policies.
+DROP POLICY IF EXISTS "Service role can manage collateral storage" ON storage.objects;
+DROP POLICY IF EXISTS "Members can read collateral storage"        ON storage.objects;
+DROP POLICY IF EXISTS "Members can upload collateral storage"      ON storage.objects;
+DROP POLICY IF EXISTS "Members can update collateral storage"      ON storage.objects;
+DROP POLICY IF EXISTS "Members can delete collateral storage"      ON storage.objects;
+
 -- service_role: full access (any future server-side processing).
 CREATE POLICY "Service role can manage collateral storage"
   ON storage.objects FOR ALL
