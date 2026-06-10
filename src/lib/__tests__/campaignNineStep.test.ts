@@ -51,10 +51,12 @@ function step(
 function nineStepCampaign(): LoadedCampaign {
   return {
     id: "camp-9",
+    workspace_id: "ws-test",
     motion: "outbound_prospecting",
     default_channel: "email",
     include_meeting_cta: false,
     global_instructions: null,
+    knowledge_document_id: null,
     steps: [
       step(1, "intro", "question"),
       step(2, "followup", "question"),
@@ -128,10 +130,12 @@ describe("getStructuredStepConfig — ≤4-step campaigns use ordinal tiers (unc
   it("a value_add at step 2 of a 4-step campaign still resolves with the ordinal-2 tier", () => {
     const camp: LoadedCampaign = {
       id: "camp-4b",
+      workspace_id: "ws-test",
       motion: "outbound_prospecting",
       default_channel: "email",
       include_meeting_cta: false,
       global_instructions: null,
+      knowledge_document_id: null,
       steps: [
         step(1, "intro", "question"),
         step(2, "value_add", "soft_offer"), // unusual: value_add at ordinal 2
@@ -178,10 +182,12 @@ describe("resolveCampaignInstruction — total_steps reflects real count only wh
   it("4-step structured campaign still shows 'of 4' (no live-send change)", () => {
     const camp: LoadedCampaign = {
       id: "camp-4",
+      workspace_id: "ws-test",
       motion: "outbound_prospecting",
       default_channel: "email",
       include_meeting_cta: false,
       global_instructions: null,
+      knowledge_document_id: null,
       steps: [
         step(1, "intro", "question"),
         step(2, "followup", "question"),
