@@ -6,6 +6,7 @@ import { SYSTEM_GLOBAL_PROMPT, PROMPTS, QUALITY_SCORER_PROMPT, CLASSIFY_MESSAGE_
 import { validateDraft, kindFromTask } from "../_shared/draftValidator.ts";
 import { resolveCampaignAuthoringInstruction } from "../_shared/aiCampaignResolver.ts";
 import { resolveCampaignKbScope } from "../_shared/campaignKbScope.ts";
+import { resolveLiveSendCampaignKbScope } from "../_shared/campaignKnowledgeDoc.ts";
 import {
   CHANNEL_FRAMEWORKS, CHANNEL_FRAMEWORK_EXEMPT_TASKS,
   resolveSequenceStep, getSequenceFramework, resolveChannel, getChannelFramework,
@@ -1704,10 +1705,28 @@ serve(async (req) => {
           kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, kbScope.kbOwnerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, kbScope.documentFilter);
         }
       } else if (hasSearchableQuery) {
-        // Non-authoring (unchanged): owner-scoped to the resolved user, no doc filter.
         const leadId = payload?.lead_id ? String(payload.lead_id) : undefined;
-        console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
-        kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, undefined);
+        // Live-send campaign KB (Unit B): when a TRUSTED backend call (service
+        // role — i.e. automation-executor) carries a campaign knowledge document
+        // already validated against the campaign's workspace, scope retrieval to
+        // that doc + its validated owner, mirroring the authoring branch so
+        // automated and previewed copy ground on the same curated KB. Gated on
+        // isServiceRole so an untrusted user JWT can never supply a KB owner and
+        // read another tenant's KB. Both id AND owner required (fail closed);
+        // otherwise behavior is byte-identical to before (resolvedUserId, no filter).
+        const liveScope = resolveLiveSendCampaignKbScope({
+          isServiceRole,
+          campaignKnowledgeDocId: payload?.campaign_knowledge_document_id,
+          campaignKbOwnerId: payload?.campaign_kb_owner_id,
+        });
+        if (liveScope) {
+          console.log(`[ai_task] [LIVE-SEND] KB scoped to campaign doc ${liveScope.documentFilter} (owner=${liveScope.ownerId}), lead_id: ${leadId || 'global'}`);
+          kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, supabaseServiceKey, liveScope.ownerId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, liveScope.documentFilter);
+        } else {
+          // Non-authoring (unchanged): owner-scoped to the resolved user, no doc filter.
+          console.log(`[ai_task] Searching knowledge base. Query length: ${searchQuery.length}, lead_id: ${leadId || 'global'}`);
+          kbSearchPromise = getKnowledgeContext(searchQuery, supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, resolvedUserId, leadId, task, latestInbound, commercialDecision, resolvedStagePolicy, undefined);
+        }
       }
     }
 

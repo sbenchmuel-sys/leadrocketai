@@ -26,6 +26,7 @@ import { loadCampaignById } from "./campaignStepLoader.ts";
 import type { LoadedCampaign, StructuredCampaignStep } from "./campaignStepConfig.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt } from "./campaignResolver.ts";
 import type { CanonicalChannel } from "./campaignTypes.ts";
+import { isWorkspaceMember, validateCampaignKnowledgeDoc } from "./campaignKnowledgeDoc.ts";
 
 type ServiceClient = ReturnType<typeof createClient>;
 
@@ -80,26 +81,9 @@ function selectVariant(campaign: LoadedCampaign, industry: string | null): Loade
   return { ...campaign, steps: chosen };
 }
 
-// ── Workspace membership gate ───────────────────────────────────────────────
-async function userIsWorkspaceMember(
-  client: ServiceClient,
-  workspaceId: string,
-  userId: string,
-): Promise<boolean> {
-  // Service-role internal callers (no real end-user identity) are trusted infra.
-  if (!userId || userId === "service-role") return true;
-  const { data, error } = await client
-    .from("workspace_members")
-    .select("user_id")
-    .eq("workspace_id", workspaceId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error) {
-    console.error("[aiCampaignResolver] membership check failed:", error);
-    return false; // fail closed
-  }
-  return !!data;
-}
+// Workspace membership gate + knowledge-document validation now live in the
+// shared _shared/campaignKnowledgeDoc.ts (isWorkspaceMember / validateCampaignKnowledgeDoc)
+// so the authoring path and the live send path use ONE fail-closed implementation.
 
 // Campaign-LEVEL instruction block (no specific step) — used by collateral
 // generation (Unit D). It carries the campaign's own global instructions and
@@ -150,7 +134,7 @@ export async function resolveCampaignAuthoringInstruction(
 
   // Fail-closed workspace-membership gate — identical for per-step and
   // campaign-level. A rep can only author against their own workspace's campaign.
-  if (!(await userIsWorkspaceMember(client, workspaceId, requestingUserId))) {
+  if (!(await isWorkspaceMember(client, workspaceId, requestingUserId))) {
     console.warn(
       `[aiCampaignResolver] user ${requestingUserId} is not a member of workspace ${workspaceId} — refusing campaign ${campaignId}`,
     );
@@ -161,29 +145,14 @@ export async function resolveCampaignAuthoringInstruction(
   if (!campaign) return null;
 
   // Validate the campaign's knowledge document before trusting it to scope KB
-  // retrieval (shared by both paths). knowledge_document_id is member-writable,
-  // so confirm the chunks' owner is a member of THIS workspace; otherwise ignore
-  // it (fail closed) so a crafted id can't surface another tenant's KB.
-  let knowledgeDocumentId =
+  // retrieval, via the shared fail-closed helper (same code the live send path
+  // uses). knowledge_document_id is member-writable, so a crafted id pointing at
+  // another tenant's document is rejected here and returned as null.
+  const storedDocId =
     (meta as { knowledge_document_id?: string | null } | null)?.knowledge_document_id ?? null;
-  let knowledgeDocOwnerId: string | null = null;
-  if (knowledgeDocumentId) {
-    const { data: docChunk } = await client
-      .from("kb_chunks")
-      .select("owner_user_id")
-      .eq("document_id", knowledgeDocumentId)
-      .limit(1)
-      .maybeSingle();
-    const ownerId = (docChunk as { owner_user_id?: string } | null)?.owner_user_id ?? null;
-    if (ownerId && (await userIsWorkspaceMember(client, workspaceId, ownerId))) {
-      knowledgeDocOwnerId = ownerId;
-    } else {
-      console.warn(
-        `[aiCampaignResolver] knowledge_document_id ${knowledgeDocumentId} on campaign ${campaignId} is not owned by a member of workspace ${workspaceId} — ignoring it`,
-      );
-      knowledgeDocumentId = null; // fail closed — do not scope to a foreign document
-    }
-  }
+  const validatedDoc = await validateCampaignKnowledgeDoc(client, workspaceId, storedDocId);
+  const knowledgeDocumentId = validatedDoc?.documentId ?? null;
+  const knowledgeDocOwnerId = validatedDoc?.ownerId ?? null;
 
   // ── Campaign-level path (collateral) ──────────────────────────────────────
   if (stepNumber == null) {

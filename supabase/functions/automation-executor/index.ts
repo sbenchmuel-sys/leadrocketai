@@ -4,6 +4,7 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { resolveCampaignInstruction, formatInstructionForPrompt, type CampaignResolverInput } from "../_shared/campaignResolver.ts";
 import { loadCampaignForLead } from "../_shared/campaignStepLoader.ts";
+import { validateCampaignKnowledgeDoc } from "../_shared/campaignKnowledgeDoc.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 import {
   loadExecutionSettings,
@@ -999,6 +1000,30 @@ serve(async (req) => {
             console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
           }
 
+          // Campaign KB document for the LIVE send: when the (active) campaign has
+          // a validated uploaded knowledge document, scope the draft's KB
+          // retrieval to it so automated copy grounds on the SAME curated doc the
+          // Outreach authoring preview uses. Validated via the shared fail-closed
+          // helper (foreign / non-member docs return null → unchanged behavior).
+          // Only ACTIVE campaigns reach here (loadCampaignForLead is active-only),
+          // so leads with no/draft/paused campaigns are untouched.
+          let campaignKbDocId: string | null = null;
+          let campaignKbOwnerId: string | null = null;
+          if (structuredCampaign?.knowledge_document_id && structuredCampaign?.workspace_id) {
+            try {
+              const validatedDoc = await validateCampaignKnowledgeDoc(
+                supabase, structuredCampaign.workspace_id, structuredCampaign.knowledge_document_id,
+              );
+              if (validatedDoc) {
+                campaignKbDocId = validatedDoc.documentId;
+                campaignKbOwnerId = validatedDoc.ownerId;
+                console.log(`[automation-executor] ✅ Campaign KB doc validated for lead ${lead.id}: doc=${campaignKbDocId}`);
+              }
+            } catch (err) {
+              console.warn(`[automation-executor] Campaign KB doc validation failed for lead ${lead.id} — falling back to standard KB:`, err);
+            }
+          }
+
           const campaignInput: CampaignResolverInput = {
             lead_id: lead.id,
             action_key: lead.next_action_key,
@@ -1055,6 +1080,11 @@ serve(async (req) => {
                 },
                 last_outbound_body: lastOutboundBody || undefined,
                 previous_email_summary: previousEmailSummary || undefined,
+                // Validated campaign knowledge document (live send). ai_task scopes
+                // KB retrieval to this doc + owner, but ONLY for service-role callers
+                // (this function) — a user JWT can never supply a KB owner.
+                campaign_knowledge_document_id: campaignKbDocId || undefined,
+                campaign_kb_owner_id: campaignKbOwnerId || undefined,
               },
             }),
           });

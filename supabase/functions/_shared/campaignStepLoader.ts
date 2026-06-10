@@ -24,7 +24,7 @@ const STEP_COLUMNS =
   "step_number, step_type, channel, framework, objective, cta_type, max_word_count, hard_rules, generation_hints, custom_instructions, delay_days, active, variant_group";
 
 const CAMPAIGN_COLUMNS =
-  "id, motion, default_channel, include_meeting_cta, global_instructions, status";
+  "id, workspace_id, motion, default_channel, include_meeting_cta, global_instructions, knowledge_document_id, status";
 
 async function loadSteps(
   client: ReturnType<typeof createClient>,
@@ -44,10 +44,12 @@ function toLoadedCampaign(
 ): LoadedCampaign {
   return {
     id: campaign.id as string,
+    workspace_id: campaign.workspace_id as string,
     motion: campaign.motion as string,
     default_channel: campaign.default_channel as string,
     include_meeting_cta: campaign.include_meeting_cta as boolean,
     global_instructions: (campaign.global_instructions as string | null) ?? null,
+    knowledge_document_id: (campaign.knowledge_document_id as string | null) ?? null,
     steps,
   };
 }
