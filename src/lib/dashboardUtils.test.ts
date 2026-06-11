@@ -98,6 +98,9 @@ describe("classifyRevenueState — recent outbound suppression", () => {
 
   it("automation takes priority over action_required", () => {
     const lead = makeLead({
+      // Consent gate (mirrors the executor): a lead is only "in automation"
+      // when automation_mode IS NOT NULL — eligible_at alone is not enough.
+      automation_mode: "full_auto",
       needs_action: true,
       eligible_at: new Date(Date.now() + DAY).toISOString(),
       last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),

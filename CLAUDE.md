@@ -86,11 +86,22 @@ When Lovable applies a migration, it creates its own copy with a `<timestamp>_<u
 - **Lead scoring exists client-side AND server-side** with no sync — `closingPowerUtils.ts` (client) vs `recompute-lead-intelligence` (server). Pick server as canonical.
 - **Email send paths are duplicated 3x** — `ReplyComposer.tsx`, `mailProviders/GmailProvider.ts`, `useMailSync.ts`. Funnel through the provider.
 
+## Running tests
+
+Three independent suites:
+
+- **Frontend / shared-logic tests (Vitest, Node):** `npm test` (one-shot) or `npm run test:watch`. Config: `vitest.config.ts` (jsdom env). Covers `src/**/*.{test,spec}.{ts,tsx}` — including tests that import shared edge-function logic from `supabase/functions/_shared/`. Pure unit tests — no DB / network.
+- **Edge-function tests (Deno):** `npm run test:edge` (= `deno test --allow-read supabase/functions`). The first run downloads the Deno std library it imports. Note: a test that imports `supabase-js` needs `node_modules` present (run `npm install` first) or Deno can't resolve `@types/node`; otherwise pass `--no-check`.
+- **Workspace / RLS isolation tests (integration, live STAGING):** `npm run test:isolation` (= `vitest run -c vitest.integration.config.ts`). Hits the real **staging** Supabase project and is kept OUT of `npm test` (the default unit run excludes `src/test/integration/**`). Requires the gitignored `.env.staging` with staging creds **plus** `TEST_USER_A_EMAIL/ID`, `TEST_USER_B_EMAIL/ID`, `TEST_USER_PASSWORD` (two auto-confirmed staging users). `src/test/integration/setup.ts` hard-aborts unless `SUPABASE_URL` targets the staging ref `jhipmqdpjenojfhfjgzq` (never prod). The harness signs in as each user and proves a rep cannot read another workspace's leads. Gotchas baked in (don't "fix" them away): act as a user via supabase-js's `accessToken` option (a global `Authorization` header gets clobbered); insert fixture rows WITHOUT a chained `.select()` (return=representation re-checks the SELECT policy at insert time and 403s before the creator-membership trigger is visible).
+
+**Toolchain (Windows):** Node + npm + Deno must be on PATH. Node lives at `C:\Program Files\nodejs`; Deno at `C:\Users\<you>\.deno\bin`. Both are on PATH for new shells — if a tool isn't found, open a fresh terminal (PATH is set per-session at launch). Install deps with `npm install` — **use npm, not Bun** (a Bun-installed `node_modules` omits the `.bin` shims Vitest needs).
+
 ## Where to look first
 
 | Need | Look at |
 |---|---|
 | High-level architecture | `README.md` |
+| Running tests | this file, "Running tests" above |
 | Edge function entry points | `supabase/functions/<name>/index.ts` |
 | Reusable backend logic | `supabase/functions/_shared/` |
 | Schema | `supabase/migrations/` (chronological) |
