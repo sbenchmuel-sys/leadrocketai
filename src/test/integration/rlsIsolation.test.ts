@@ -57,11 +57,22 @@ async function signIn(email: string, pw: string): Promise<SupabaseClient> {
   return createClient(URL, ANON, { accessToken: async () => token });
 }
 
-// Tear down any rows from this test (by the two test users / fixture names),
-// in FK-safe order. Uses the service role so it ignores RLS.
+// Tear down ONLY this harness's fixtures, in FK-safe order. Uses the service
+// role so it ignores RLS. Scope everything to the test WORKSPACES (resolved by
+// their fixed, test-only names) rather than by owner_user_id — the test users
+// may legitimately own other staging data, and a broad owner-scoped delete would
+// wipe it (and several lead-related tables cascade from leads). Resolving by name
+// also catches leftovers from a prior crashed run, whose random UUIDs differ.
 async function cleanup() {
-  await admin.from("leads").delete().in("owner_user_id", [A.id, B.id]);
-  await admin.from("workspace_members").delete().in("user_id", [A.id, B.id]);
+  const { data: ws } = await admin
+    .from("workspaces")
+    .select("id")
+    .in("name", [WS_NAME_A, WS_NAME_B]);
+  const wsIds = (ws ?? []).map((w) => (w as { id: string }).id);
+  if (wsIds.length > 0) {
+    await admin.from("leads").delete().in("workspace_id", wsIds);
+    await admin.from("workspace_members").delete().in("workspace_id", wsIds);
+  }
   await admin.from("workspaces").delete().in("name", [WS_NAME_A, WS_NAME_B]);
 }
 
