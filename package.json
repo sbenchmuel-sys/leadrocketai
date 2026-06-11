@@ -8,7 +8,11 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:edge": "deno test --allow-read supabase/functions",
+    "test:isolation": "vitest run -c vitest.integration.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
