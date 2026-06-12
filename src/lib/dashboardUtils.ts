@@ -232,8 +232,7 @@ export function classifyRevenueState(
   // opted in (automation_mode IS NOT NULL). Scheduling fields like eligible_at
   // can be set by upstream processes for non-automated leads — those must not
   // appear here. Mirrors the executor consent gate.
-  const automationMode = (lead as any).automation_mode as string | null | undefined;
-  const hasConsent = !!automationMode;
+  const hasConsent = !!lead.automation_mode;
   const hasSequenceAutomation = hasConsent && !!lead.eligible_at && lead.needs_action;
   const hasNurtureAutomation = hasConsent && lead.nurture_mode === "auto" && lead.nurture_status === "active";
   if (hasSequenceAutomation || hasNurtureAutomation) return "automation";
@@ -325,6 +324,9 @@ export interface EnrichedLead extends LeadListItem {
   nurture_mode?: string;
   nurture_status?: string;
   eligible_at?: string | null;
+  // Automation consent gate (mirrors the executor): non-null means the user
+  // explicitly opted this lead into automation.
+  automation_mode?: string | null;
   revenueState?: RevenueState;
   // Group membership — used by stakeholder visibility logic. Null = solo lead.
   group_id?: string | null;
