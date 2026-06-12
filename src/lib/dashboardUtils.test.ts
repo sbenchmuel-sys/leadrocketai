@@ -151,12 +151,12 @@ describe("classifyRevenueState — intent hide-list (PR C)", () => {
 
   it("automation still wins over intent-hidden (action_required gate is lower priority)", () => {
     const lead = makeLead({
+      automation_mode: "full_auto",
       needs_action: true,
       eligible_at: new Date(Date.now() + DAY).toISOString(),
       last_outbound_at: new Date(Date.now() - 10 * DAY).toISOString(),
       last_inbound_at: new Date(Date.now() - 1 * DAY).toISOString(),
     });
-    (lead as any).automation_mode = "full_auto";
     const hidden = new Set([lead.id]);
     expect(classifyRevenueState(lead, new Set(), new Set(), hidden)).toBe("automation");
   });
