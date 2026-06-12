@@ -26,6 +26,7 @@ import {
   advanceColdEnrollment,
   endColdEnrollment,
   buildUnsubscribeUrl,
+  repliedSinceEnrollment,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
@@ -1639,7 +1640,7 @@ serve(async (req) => {
           if (!freshTouch.eligible_at || new Date(freshTouch.eligible_at) > new Date()) continue;
 
           const { data: enr } = await supabase.from("campaign_enrollment")
-            .select("id, status, current_step_number, started_at").eq("id", touch.enrollment_id).maybeSingle();
+            .select("id, status, current_step_number, started_at, enrolled_at").eq("id", touch.enrollment_id).maybeSingle();
           if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
           if (touch.step_number !== (enr.current_step_number ?? 0) + 1) continue; // not next-in-line
 
@@ -1672,9 +1673,12 @@ serve(async (req) => {
           if (!lead.email) continue;
           if (!["active", "new"].includes(lead.status)) continue;
 
-          // Reply bridge: a reply since starting pulls the lead out of the cold cadence
-          // (and clears its pending touches so they don't linger in the cold due query).
-          if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {
+          // Reply bridge: a reply since being committed to the cadence (enrolled_at, NOT
+          // the possibly-future staggered started_at) pulls the lead out of the cold
+          // cadence (and clears its pending touches so they don't linger in the cold due
+          // query). Anchoring to started_at let a reply during the pre-start staggered
+          // wait slip through and still get the first cold touch.
+          if (repliedSinceEnrollment(lead.last_inbound_at, enr.enrolled_at)) {
             await endColdEnrollment(supabase, enr.id, "replied");
             continue;
           }

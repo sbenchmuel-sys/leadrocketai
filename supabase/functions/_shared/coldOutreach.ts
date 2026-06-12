@@ -388,3 +388,8 @@ export async function endColdEnrollment(
 export function buildUnsubscribeUrl(supabaseUrl: string, token: string): string {
   return `${supabaseUrl}/functions/v1/outreach-unsubscribe?token=${encodeURIComponent(token)}`;
 }
+
+// The reply-stop rule lives in a zero-dependency leaf module so the Node/vitest suite
+// can unit-test it without pulling in this file's Deno/supabase-js imports. Re-exported
+// here so every cold send path keeps importing it from coldOutreach.
+export { repliedSinceEnrollment } from "./coldReplyStop.ts";

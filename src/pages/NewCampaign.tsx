@@ -222,6 +222,7 @@ export default function NewCampaign() {
           if (s.suppressed) skipLines.push(`${s.suppressed} on your do-not-contact list`);
           if (s.alreadyEnrolled) skipLines.push(`${s.alreadyEnrolled} already in another outreach`);
           if (s.missingEmail) skipLines.push(`${s.missingEmail} have no email address`);
+          if (s.activeOrCustomer) skipLines.push(`${s.activeOrCustomer} skipped — already a customer, have a meeting booked, or recently replied`);
         } catch (enrollErr) {
           await deleteCampaign(campaignId).catch(() => {
             /* best-effort cleanup; surface the ORIGINAL enrollment error below */

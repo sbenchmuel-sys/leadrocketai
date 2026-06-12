@@ -123,6 +123,7 @@ export function AddLeadsDialog({
     if (s.suppressed) lines.push(`${s.suppressed} on your do-not-contact list`);
     if (s.alreadyEnrolled) lines.push(`${s.alreadyEnrolled} already in another outreach`);
     if (s.missingEmail) lines.push(`${s.missingEmail} have no email address`);
+    if (s.activeOrCustomer) lines.push(`${s.activeOrCustomer} skipped — already a customer, have a meeting booked, or recently replied`);
     return lines;
   }, [preview]);
 
