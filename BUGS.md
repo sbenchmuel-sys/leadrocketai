@@ -47,7 +47,7 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 
 ## BUG-009 — `automation_mode` missing from EnrichedLead/LeadListItem types
 - **Severity:** P3 (type-level only; runtime behavior correct, tests pass)
-- **Status:** open
+- **Status:** fixed (2026-06-12, PR #85) — `automation_mode?: string | null` declared on `EnrichedLead`, `as any` casts removed in `classifyRevenueState` + test. `tsc -p tsconfig.app.json` clean.
 - **Found:** 2026-06-11, test-suite run (`tsc` project check)
 - **What happens:** `classifyRevenueState` in `src/lib/dashboardUtils.ts` reads the consent gate via `(lead as any).automation_mode` — the field exists at runtime but was never declared on the type, producing 1 tsc error in `dashboardUtils.test.ts` and an `as any` cast in production code.
 - **Claude Code prompt:** "Add `automation_mode` to the `EnrichedLead`/`LeadListItem` type(s), remove the `as any` cast in `classifyRevenueState` (src/lib/dashboardUtils.ts), and confirm `npx tsc -p tsconfig.app.json` is clean and the dashboardUtils tests still pass."
