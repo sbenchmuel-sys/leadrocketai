@@ -75,16 +75,9 @@ async function refreshTokenIfNeeded(
     const tokens = await response.json();
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     
-    // Encrypt the new access token before storage
-    let encryptedNewAccessToken = tokens.access_token;
-    try {
-      const hasEncryptionKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
-      if (hasEncryptionKey) {
-        encryptedNewAccessToken = await encryptToken(tokens.access_token);
-      }
-    } catch (encryptError) {
-      console.error("[gmail-send] Token encryption failed, storing in plaintext:", encryptError);
-    }
+    // Fail closed: a missing TOKEN_ENCRYPTION_KEY or crypto error fails the
+    // send's token refresh rather than persisting a plaintext token.
+    const encryptedNewAccessToken = await encryptToken(tokens.access_token);
     
     await supabase
       .from("gmail_connections")

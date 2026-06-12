@@ -96,8 +96,8 @@ async function gmailRefreshToken(serviceSupabase: any, conn: {
 
   const tokens = await resp.json();
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-  const hasKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
-  const encryptedAccess = hasKey ? await encryptToken(tokens.access_token) : tokens.access_token;
+  // Fail closed: never persist a plaintext token.
+  const encryptedAccess = await encryptToken(tokens.access_token);
 
   await serviceSupabase
     .from("gmail_connections")

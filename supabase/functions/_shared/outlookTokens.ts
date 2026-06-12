@@ -8,7 +8,7 @@
 // ============================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { encryptToken, safeDecryptToken } from "./encryption.ts";
+import { assertEncryptionConfigured, encryptToken, safeDecryptToken } from "./encryption.ts";
 import { logger } from "./logger.ts";
 import { OutlookGraphClient, MicrosoftCredentialsMissingError } from "./outlookGraphClient.ts";
 import {
@@ -68,6 +68,11 @@ export async function getFreshOutlookToken(
   }
 
   // --- Refresh path ---
+  // Fail closed BEFORE the try/catch below: a missing TOKEN_ENCRYPTION_KEY is
+  // a config error, not an auth failure — it must not mark the account
+  // expired, and plaintext tokens are never stored.
+  assertEncryptionConfigured();
+
   logger.info("mail.outlook.token_refresh_attempt", { mail_account_id: mailAccountId });
 
   try {
@@ -83,11 +88,10 @@ export async function getFreshOutlookToken(
     const newRefreshToken: string = tokens.refresh_token ?? refreshTokenValue;
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-    // Encrypt and persist
-    const hasKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+    // Encrypt and persist — never plaintext (key presence asserted above)
     const [encAccess, encRefresh] = await Promise.all([
-      hasKey ? encryptToken(newAccessToken) : Promise.resolve(newAccessToken),
-      hasKey ? encryptToken(newRefreshToken) : Promise.resolve(newRefreshToken),
+      encryptToken(newAccessToken),
+      encryptToken(newRefreshToken),
     ]);
 
     // Backfill tenant_id for accounts connected before the column existed —
