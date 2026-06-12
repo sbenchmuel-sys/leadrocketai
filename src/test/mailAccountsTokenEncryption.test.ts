@@ -64,20 +64,66 @@ function extractWritePayloads(source: string, table: string): string[] {
   return payloads;
 }
 
-/** Finds EVERY declaration of `identifier` in the file and returns the start
- *  of each right-hand side (300 chars), handling array destructuring like
- *  `const [encAccess, encRefresh] = await Promise.all([...])`. The guard has
- *  no scope analysis, so a name declared in several functions is checked
- *  conservatively: all declarations must be safe. */
+/** Splits the first top-level `[ ... ]` in `rhs` into its top-level elements
+ *  (commas inside nested brackets/parens don't split). Returns null when no
+ *  complete array literal is found within the window. */
+function splitArrayElements(rhs: string): string[] | null {
+  const start = rhs.indexOf("[");
+  if (start === -1) return null;
+  const elems: string[] = [];
+  let depth = 1;
+  let cur = "";
+  for (let i = start + 1; i < rhs.length; i++) {
+    const c = rhs[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) {
+      depth--;
+      if (depth === 0) {
+        if (cur.trim()) elems.push(cur.trim());
+        return elems;
+      }
+    }
+    if (depth === 1 && c === ",") {
+      elems.push(cur.trim());
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  return null; // unbalanced / truncated within the capture window
+}
+
+/** Finds EVERY declaration of `identifier` in the file and returns the
+ *  right-hand side that initializes IT specifically. For array destructuring
+ *  (`const [encAccess, encRefresh] = await Promise.all([...])`) the
+ *  identifier is mapped to its positional element of the initializer array,
+ *  so `Promise.all([encryptToken(a), b])` does NOT vouch for the second
+ *  name. If the element can't be isolated, a marker that fails the
+ *  encryptToken check is returned — the guard errs toward flagging. The
+ *  guard has no scope analysis, so a name declared in several functions is
+ *  checked conservatively: all declarations must be safe. */
 function declarationRhs(source: string, identifier: string): string[] {
   const declRe = new RegExp(
-    String.raw`(?:const|let|var)\s+(?:\[[^\]]*\b${identifier}\b[^\]]*\]|${identifier}\b)\s*(?::[^=\n]+)?=\s*`,
+    String.raw`(?:const|let|var)\s+(\[[^\]]*\b${identifier}\b[^\]]*\]|${identifier}\b)\s*(?::[^=\n]+)?=\s*`,
     "g",
   );
   const out: string[] = [];
   let m: RegExpExecArray | null;
   while ((m = declRe.exec(source))) {
-    out.push(source.slice(m.index + m[0].length, m.index + m[0].length + 300));
+    const pattern = m[1];
+    const rhs = source.slice(m.index + m[0].length, m.index + m[0].length + 300);
+    if (!pattern.startsWith("[")) {
+      out.push(rhs);
+      continue;
+    }
+    const names = pattern.slice(1, -1).split(",").map((s) => s.trim());
+    const idx = names.indexOf(identifier);
+    const elems = splitArrayElements(rhs);
+    if (idx >= 0 && elems !== null && idx < elems.length) {
+      out.push(elems[idx]);
+    } else {
+      out.push("<unparseable destructuring — cannot prove encryption>");
+    }
   }
   return out;
 }
