@@ -109,8 +109,18 @@ function findTokenWrites(): { writes: TokenWrite[]; violations: string[] } {
 
             if (ALLOWED_NON_ENCRYPTED_VALUES.has(value)) continue;
 
-            // Inline call is fine: access_token: await encryptToken(x)
-            if (value.includes("encryptToken(")) continue;
+            // Inline call is fine — access_token: await encryptToken(x) — but
+            // only when unconditional: an inline ternary / Promise.resolve /
+            // safeDecryptToken is the fail-open pattern in expression form
+            // (e.g. `hasKey ? await encryptToken(x) : x`).
+            if (value.includes("encryptToken(")) {
+              if (/[?]/.test(value) || value.includes("Promise.resolve") || value.includes("safeDecryptToken")) {
+                violations.push(
+                  `${rel}: ${table}.${column} inline expression "${value}" is only conditionally encrypted (fail-open pattern) — encryption must be unconditional`,
+                );
+              }
+              continue;
+            }
 
             // Otherwise the value must be an identifier whose declaration is an
             // unconditional encryptToken() result.
