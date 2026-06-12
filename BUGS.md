@@ -18,7 +18,7 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 
 ## BUG-002 — Staging's scheduled job points at a different Supabase project
 - **Severity:** P1 (staging only, but it may be quietly calling another live system)
-- **Status:** open
+- **Status:** fixed (2026-06-12, applied directly to staging via MCP — no repo migration on purpose: a committed migration with staging's URL/key would repoint PROD's crons at staging if ever applied there) — deleted `gmail-background-sync-job` (foreign project `umqhdxjtgarwkdpwsxrm`); created the full production cron set (12 jobs from the codify migrations) pointed at staging's URL + staging anon key. **`dispatch-automation-executor` is deliberately DISABLED on staging** (production sender; enable only for supervised send tests — note Eligible Ed now has full-auto consent per BUG-007). Caveat: staging has NO edge functions deployed yet, so these jobs 404 until the function suite is deployed there.
 - **Found:** 2026-06-11, staging data-safety run
 - **What happens:** The single pg_cron job on staging (email sync) targets `umqhdxjtgarwkdpwsxrm`, not staging's own URL (`jhipmqdpjenojfhfjgzq`). Likely copied setup. Side effect: nothing scheduled actually runs against staging, and an unknown project gets poked hourly.
 - **Repro:** `SELECT jobname, command FROM cron.job;` on staging — the URL in the command doesn't match the staging project ref.
@@ -32,7 +32,7 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 
 ## BUG-007 — Test personas can't prove a positive "Ed sends" case
 - **Severity:** P2 (test-data gap on staging — the AE skip-list test passes *vacuously*)
-- **Status:** open
+- **Status:** fixed (2026-06-12, staging data) — Eligible Ed: `automation_mode='full_auto'`, `needs_action=true`, `next_action_key='send_pre_1'` (first cold-sequence step), `eligible_at` in the past, `manual_mode=false`. Verified with the executor's exact candidate filter (automation-executor/index.ts:260-271): returns exactly one row (Ed); the other five personas stay excluded. Safe because the staging executor cron is disabled (BUG-002) and no mailbox is connected.
 - **Found:** 2026-06-11, staging regression sweep (check C)
 - **What happens:** All six personas have `automation_mode = NULL` and `next_action_key = NULL`, so the automation-executor filter excludes *everyone* — including Eligible Ed. "Only Ed comes back" passes because nobody comes back; the test never proves Ed *would* be emailed when he should be.
 - **Repro:** Run the executor's candidate filter on staging — empty result even after granting Ed `automation_mode='full_auto'`, because `next_action_key <> 'ooo_return_followup'` is NULL-valued for him.
@@ -40,7 +40,7 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 
 ## BUG-008 — Staging migration ledger 175 migrations behind the repo
 - **Severity:** P2 (audit/tracking drift, schema itself looks current)
-- **Status:** open
+- **Status:** fixed (2026-06-12, staging data) — back-filled 175 version rows into `supabase_migrations.schema_migrations` (now 208/208, newest = repo newest) with marker name `ledger-backfill 2026-06-12: objects verified present on staging, NOT re-executed`. Pre-verified 9 signature objects across the migration timeline (timeline_followup_state, campaign_enrollment/touch, lead_timeline_items, calendar_events, recent lead columns, match_knowledge_chunks_v2, set_timeline_followup_state, expire_old_messages) before asserting "applied". CLAUDE.md note about Lovable bypassing the ledger still pending (file was locked by an open editor) — drift checks must compare actual schema objects, not ledger rows.
 - **Found:** 2026-06-11, staging regression sweep (check F)
 - **What happens:** Repo has 208 migration files; staging's `schema_migrations` records only 33 (newest Feb 11). The live schema *does* contain the newer objects — Lovable applies SQL without recording it — so the ledger can't be trusted to answer "what's applied," and IaC replay/audit on staging is ambiguous.
 - **Claude Code prompt:** "Reconcile staging's `supabase_migrations.schema_migrations` ledger: back-fill version rows for the repo migrations whose objects already exist on staging (do NOT re-execute them), or alternatively add a documented marker migration. Then add a note to CLAUDE.md that Lovable-applied SQL bypasses the ledger, so future drift checks compare actual schema objects, not ledger rows."
