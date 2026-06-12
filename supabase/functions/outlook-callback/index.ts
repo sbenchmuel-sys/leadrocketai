@@ -218,11 +218,11 @@ serve(async (req) => {
 
     const tokenExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
 
-    // --- Encrypt tokens ---
-    const hasKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+    // --- Encrypt tokens — fail closed: a missing TOKEN_ENCRYPTION_KEY aborts
+    // the connect flow rather than storing plaintext ---
     const [encAccess, encRefresh] = await Promise.all([
-      hasKey ? encryptToken(access_token) : Promise.resolve(access_token),
-      hasKey ? encryptToken(refresh_token) : Promise.resolve(refresh_token),
+      encryptToken(access_token),
+      encryptToken(refresh_token),
     ]);
 
     // --- Check if this is the first Outlook account in the workspace ---

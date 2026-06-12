@@ -264,10 +264,9 @@ async function refreshGmailToken(supabase: any, userId: string): Promise<string 
   if (!resp.ok) return null;
   const tokens = await resp.json();
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-  let enc = tokens.access_token;
-  try {
-    if (Deno.env.get("TOKEN_ENCRYPTION_KEY")) enc = await encryptToken(tokens.access_token);
-  } catch { /* keep plaintext on failure */ }
+  // Fail closed: a missing TOKEN_ENCRYPTION_KEY or crypto error fails the
+  // backfill rather than persisting a plaintext token.
+  const enc = await encryptToken(tokens.access_token);
   await supabase
     .from("gmail_connections")
     .update({ access_token_encrypted: enc, token_expires_at: newExpiresAt })

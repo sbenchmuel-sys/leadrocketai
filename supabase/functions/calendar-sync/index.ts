@@ -129,8 +129,9 @@ async function refreshGoogleToken(
   const tokens = await resp.json();
   const newAccess: string = tokens.access_token;
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-  const hasKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
-  const encAccess = hasKey ? await encryptToken(newAccess) : newAccess;
+  // Fail closed: a missing TOKEN_ENCRYPTION_KEY fails this account's sync
+  // rather than persisting a plaintext token.
+  const encAccess = await encryptToken(newAccess);
 
   await supabase
     .from("gmail_connections")
@@ -260,10 +261,11 @@ async function refreshOutlookToken(
   const newAccess: string = tokens.access_token;
   const newRefresh: string = tokens.refresh_token ?? decryptedRefresh;
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-  const hasKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
+  // Fail closed: a missing TOKEN_ENCRYPTION_KEY fails this account's sync
+  // rather than persisting plaintext tokens.
   const [encAccess, encRefresh] = await Promise.all([
-    hasKey ? encryptToken(newAccess) : Promise.resolve(newAccess),
-    hasKey ? encryptToken(newRefresh) : Promise.resolve(newRefresh),
+    encryptToken(newAccess),
+    encryptToken(newRefresh),
   ]);
 
   await supabase

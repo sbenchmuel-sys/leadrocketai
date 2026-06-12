@@ -30,6 +30,18 @@ async function getEncryptionKey(): Promise<CryptoKey> {
 }
 
 /**
+ * Throws if TOKEN_ENCRYPTION_KEY is not configured.
+ * Call before flows that must fail closed on a config error rather than
+ * misclassify it (e.g. token refresh, where a generic failure marks the
+ * account expired and forces the user to reconnect).
+ */
+export function assertEncryptionConfigured(): void {
+  if (!Deno.env.get("TOKEN_ENCRYPTION_KEY")) {
+    throw new Error("TOKEN_ENCRYPTION_KEY is not configured — refusing to store plaintext tokens");
+  }
+}
+
+/**
  * Encrypts a plaintext string and returns base64-encoded ciphertext
  * Format: base64(iv + ciphertext + authTag)
  */

@@ -169,23 +169,10 @@ serve(async (req) => {
     // Calculate token expiry
     const tokenExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
 
-    // Encrypt tokens before storage (if TOKEN_ENCRYPTION_KEY is configured)
-    let encryptedAccessToken = access_token;
-    let encryptedRefreshToken = refresh_token;
-    
-    try {
-      const hasEncryptionKey = !!Deno.env.get("TOKEN_ENCRYPTION_KEY");
-      if (hasEncryptionKey) {
-        console.log("[gmail-callback] Encrypting tokens before storage");
-        encryptedAccessToken = await encryptToken(access_token);
-        encryptedRefreshToken = await encryptToken(refresh_token);
-      } else {
-        console.warn("[gmail-callback] TOKEN_ENCRYPTION_KEY not configured, storing tokens in plaintext");
-      }
-    } catch (encryptError) {
-      console.error("[gmail-callback] Token encryption failed, storing in plaintext:", encryptError);
-      // Fall back to plaintext if encryption fails
-    }
+    // Encrypt tokens before storage — fail closed. A missing TOKEN_ENCRYPTION_KEY
+    // or crypto error aborts the connect flow; plaintext tokens are never stored.
+    const encryptedAccessToken = await encryptToken(access_token);
+    const encryptedRefreshToken = await encryptToken(refresh_token);
 
     // Store connection using service role key (bypasses RLS for upsert)
     const { error: upsertError } = await supabase
