@@ -40,9 +40,24 @@ describe("repliedSinceEnrollment — staggered enrollment reply-stop", () => {
     expect(repliedSinceEnrollment(laterReply, sameAnchor)).toBe(true);
   });
 
-  it("fails closed on missing data (never treats absent timestamps as 'replied')", () => {
+  // ── Fail-safe direction: when uncertain, suppress the touch, never send ──
+  // A `true` result stops the touch; `false` lets it send. So uncertainty must lean true.
+
+  it("no inbound on record → proceeds (genuinely never replied — the normal cold case, not uncertainty)", () => {
+    // last_inbound_at is null until a real inbound lands; suppressing here would stop
+    // every never-replied lead (i.e. all of cold outreach).
     expect(repliedSinceEnrollment(null, enrolledAt)).toBe(false);
-    expect(repliedSinceEnrollment(replyDuringWait, null)).toBe(false);
-    expect(repliedSinceEnrollment(undefined, undefined)).toBe(false);
+    expect(repliedSinceEnrollment(undefined, enrolledAt)).toBe(false);
+    expect(repliedSinceEnrollment("", enrolledAt)).toBe(false);
+  });
+
+  it("inbound PRESENT but unparseable → suppresses (we know they wrote in, can't prove when)", () => {
+    expect(repliedSinceEnrollment("not-a-real-date", enrolledAt)).toBe(true);
+  });
+
+  it("inbound present but enrollment baseline missing/unparseable → suppresses (can't compare → don't send)", () => {
+    expect(repliedSinceEnrollment(replyDuringWait, null)).toBe(true);
+    expect(repliedSinceEnrollment(replyDuringWait, undefined)).toBe(true);
+    expect(repliedSinceEnrollment(replyDuringWait, "garbage")).toBe(true);
   });
 });
