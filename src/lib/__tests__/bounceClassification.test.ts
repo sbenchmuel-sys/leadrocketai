@@ -47,6 +47,16 @@ describe("classifyBounce — soft vs hard gate", () => {
     expect(classifyBounce({ body: "Status: 4.4.7\nStatus: 5.1.1" }).severity).toBe("hard");
   });
 
+  it("bare 3-digit SMTP reply code (no enhanced code) is honored by class", () => {
+    // 5yz = permanent, 4yz = transient, when no X.Y.Z enhanced code is present.
+    expect(
+      classifyBounce({ body: "Diagnostic-Code: smtp; 550 mailbox unavailable" }).severity,
+    ).toBe("hard");
+    expect(
+      classifyBounce({ body: "Diagnostic-Code: smtp; 451 try again later" }).severity,
+    ).toBe("soft");
+  });
+
   it("multi-recipient DSN: a soft recipient is NOT burned by another recipient's hard code", () => {
     // One report, two recipients: ben hard (5.1.1), gina soft (4.4.7). Scoped to
     // the lead's own per-recipient block so gina survives. (Codex P2 on PR #89.)

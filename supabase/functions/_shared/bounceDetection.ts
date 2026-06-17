@@ -153,6 +153,29 @@ function findEnhancedStatusClass(text: string): { code: string; cls: 4 | 5 } | n
 }
 
 /**
+ * Fallback for DSNs that carry only a basic 3-digit SMTP reply code and no
+ * enhanced status code, e.g. `Diagnostic-Code: smtp; 550 mailbox unavailable`.
+ * SMTP class is decisive: 5yz = permanent (hard), 4yz = transient (soft).
+ *
+ * Scanned per line and gated by a DSN-specific marker (Diagnostic-Code / smtp /
+ * remote-server phrasing) so an ordinary number elsewhere in the report
+ * ("reported 550 leads") can't be mistaken for a reply code. Most severe wins.
+ */
+function findReplyCodeClass(text: string): { code: string; cls: 4 | 5 } | null {
+  const marker = /(diagnostic-code|\bsmtp\b|remote server|the response (?:from|was)|server (?:returned|said|responded))/i;
+  const codeRe = /(?:^|[^\d.])([45]\d{2})(?:[ \t).;:'"\]-]|$)/;
+  let best: { code: string; cls: 4 | 5 } | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    if (!marker.test(line)) continue;
+    const m = codeRe.exec(line);
+    if (!m) continue;
+    const cls = Number(m[1][0]) as 4 | 5;
+    if (!best || cls > best.cls) best = { code: m[1], cls };
+  }
+  return best;
+}
+
+/**
  * A single DSN (RFC 3464) can report MANY failed recipients, each in its own
  * per-recipient group that starts with a `Final-Recipient:` (or
  * `Original-Recipient:`) line and carries its own `Action:` / `Status:`. If a
@@ -224,8 +247,10 @@ function blockNamesRecipient(block: string, targetLower: string): boolean {
  * Decision order:
  *   1. An RFC 3463 enhanced status code wins when present: 5.x.x → hard,
  *      4.x.x → soft. (Prefer the code over keywords.)
- *   2. No code → a clear permanent-failure phrase → hard.
- *   3. Otherwise → soft (fail-safe: don't burn a possibly-good lead).
+ *   2. Else a bare 3-digit SMTP reply code in a DSN context: 5yz → hard,
+ *      4yz → soft.
+ *   3. No code → a clear permanent-failure phrase → hard.
+ *   4. Otherwise → soft (fail-safe: don't burn a possibly-good lead).
  *
  * Pass `recipientEmail` (the lead being attributed) so a multi-recipient DSN is
  * classified from THIS recipient's block only — never another recipient's code.
@@ -246,11 +271,13 @@ export function classifyBounce(input: {
   const body = (recipient && scopeToRecipientBlocks(fullBody, recipient)) || fullBody;
   const haystack = `${subject}\n${body}`;
 
-  const enhanced = findEnhancedStatusClass(haystack);
-  if (enhanced) {
+  // Prefer the enhanced RFC 3463 code; otherwise fall back to a bare 3-digit
+  // SMTP reply code (5yz permanent / 4yz transient) found in a DSN context.
+  const codeClass = findEnhancedStatusClass(haystack) ?? findReplyCodeClass(haystack);
+  if (codeClass) {
     return {
-      severity: enhanced.cls === 5 ? "hard" : "soft",
-      statusCode: enhanced.code,
+      severity: codeClass.cls === 5 ? "hard" : "soft",
+      statusCode: codeClass.code,
       basis: "code",
     };
   }

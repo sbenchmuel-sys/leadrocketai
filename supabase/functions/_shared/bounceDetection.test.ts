@@ -120,6 +120,27 @@ Deno.test("realistic Outlook permanent NDR → hard", () => {
   assertEquals(severityOf({ subject: "Undeliverable: Quick question", body }), "hard");
 });
 
+// ── Bare 3-digit SMTP reply code (no enhanced code) ─────────────────────────
+Deno.test("bare 5xx in Diagnostic-Code (no enhanced code) → hard", () => {
+  assertEquals(
+    severityOf({ body: "Diagnostic-Code: smtp; 550 Requested action not taken: mailbox unavailable" }),
+    "hard",
+  );
+});
+
+Deno.test("bare 4xx in Diagnostic-Code (no enhanced code) → soft", () => {
+  assertEquals(severityOf({ body: "Diagnostic-Code: smtp; 451 Temporary local problem, try later" }), "soft");
+});
+
+Deno.test("bare 5xx quoted by the remote server (no enhanced code) → hard", () => {
+  assertEquals(severityOf({ body: "Remote Server returned '550 mailbox unavailable'" }), "hard");
+});
+
+Deno.test("a 3-digit number with NO DSN marker is not treated as a reply code", () => {
+  // No Diagnostic-Code/smtp/remote-server context → not a reply code → soft.
+  assertEquals(severityOf({ body: "Your campaign reached 550 leads this week." }), "soft");
+});
+
 // ── Multi-recipient DSN: classify only THIS recipient's block ───────────────
 // A single report can list several failed recipients with different severities.
 // Without scoping, a global "5 outranks 4" scan would burn a recoverable lead
