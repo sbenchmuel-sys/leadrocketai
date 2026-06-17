@@ -1,68 +1,71 @@
-## Problem
+# Binah.ai — CEO Briefing DOCX
 
-In `PendingLeadsTab`, `deriveLeadDefaults` assigns motion based on the candidate's `source`. The `lookback_seed` source (mail SENT-folder scan) is **unconditionally** mapped to `motion: "outbound_prospecting"`. The scan picks up *any* historical thread where the rep sent at least one message — including threads the lead originally started, cold sends with no reply, and two-way warm conversations. All three end up in the cold-outbound prospecting bucket.
+A one-off, polished Word document for the new CEO. Re-runnable on demand. No new app surface.
 
-There are three bugs feeding the user's complaint:
+## Scope
 
-1. **Misclassification (both providers)** — `lookback_seed` is treated as cold outbound regardless of real thread direction.
-2. **Misleading "paused" badge (Gmail path only today)** — After approval, fire-and-forget `gmail-sync` populates `last_inbound_at`, which trips the blocker at `AutomationPreviewCard.tsx:135` (`"Lead has replied"`) → the card renders **"Lead has replied — automation paused"** on a lead the user never enrolled in automation.
-3. **Outlook approval has no backfill at all** — `lookback-seed-candidates` correctly scans Outlook SENT (and seeds candidates), but `backfillLeadHistory` in `PendingLeadsTab.tsx` only invokes `gmail-sync`. There is no `outlook-sync` invocation, even though that function exists with an identical `{ leadId, leadEmail, maxResults }` API. Consequence for Outlook-mailbox workspaces: approved leads have **zero prior history synced** — no timeline, no `last_inbound_at`, no intent — and stay parked in cold `outbound_prospecting` even when they're warm historical contacts. The "paused due to reply" badge doesn't fire (no inbound was synced), but the underlying state is even worse: the lead looks brand new and is queued for cold cadence.
+- Workspace: **Binah.ai Workspace** (20 leads with at least one meeting summary).
+- Per lead, pull together:
+  - Company + what they do (from `leads.industry`, `leads.website`, `lead_context_items` of category `company_info`, and inference from meeting summaries).
+  - Use case for Binah (extracted from meeting summaries + emails).
+  - Opportunity size (AI-extracted $ range with confidence + source quote; "TBD" when no signal).
+  - Milestones (merge `meeting_ai_summaries.milestones` + `lead_intelligence.milestones_json`).
+  - Open topics (merge `meeting_ai_summaries.open_questions` + `lead_intelligence.objections_json` + `deal_memory.unresolved_objections` + `unanswered_questions`).
 
-## Fix
+## Approach
 
-### 1. Provider-aware backfill on approve
+1. **Data pull** (single SQL): for each of the 20 leads, fetch lead row, every `meeting_ai_summaries` row, latest `lead_intelligence`, `deal_memory`, and key `lead_context_items` (company_info, use_case, pain_point, decision_criteria). Compact into one JSON blob per lead.
+2. **AI pass 1 — per-lead enrichment** (Lovable AI, Gemini Flash, parallel, ~20 calls): for each lead emit structured JSON `{ company, what_they_do, use_case_for_binah, segment_candidate, opportunity: {amount_usd, range, confidence, evidence_quote}, milestones[], open_topics[] }`. Strict schema, citations required, "Unknown" allowed.
+3. **AI pass 2 — segment clustering** (1 call): feed all 20 `segment_candidate` strings + use-case summaries, get back 4–7 named market segments with a 1-line thesis each and lead → segment mapping. Reviewable in the doc so the team can debate naming.
+4. **DOCX generation** via the `docx` skill (docx-js). Re-uses Binah brand cues if found in `public/`; otherwise clean editorial styling (Arial, navy accent, US Letter).
+5. **QA**: render every page to image, scan for clipping/overflow, fix, re-emit.
 
-In `src/components/leads/PendingLeadsTab.tsx → backfillLeadHistory`:
+## Document structure
 
-- Detect which mail provider(s) the lead's owner has connected (look up `mail_accounts.provider` and/or `gmail_connections` for `owner_user_id`).
-- Invoke `gmail-sync` for Gmail owners, `outlook-sync` for Outlook owners. If both exist (rare), invoke both. Pass `{ leadId, leadEmail, maxResults: 50 }` as today.
-- Keep `recompute-lead-intelligence` afterwards.
+```text
+Cover
+  Binah.ai — Pipeline Briefing for the CEO
+  As of <date> · 20 accounts in active dialogue
 
-This is the prerequisite for any motion reclassification — without it, Outlook leads have no signal to classify on.
+Executive Summary (1 page)
+  - Pipeline at a glance: # accounts, # post-meeting, # closing, est. TAM of named opps
+  - 4–7 market segments with one-line thesis + account count + summed opportunity
+  - Top 5 accounts by opportunity size
 
-### 2. Classify lookback_seed by real thread direction (primary)
+Segment Sections (one per segment, repeated)
+  ## <Segment Name>
+  Thesis: <one line>
+  Accounts: N · Estimated opportunity: $X
+  Per account, a compact card:
+     Company · what they do · use case for Binah
+     Opportunity: $ range (confidence) — "quoted evidence"
+     Milestones: bullets
+     Open topics: bullets
 
-In `createLeadFromCandidate`:
+Appendix
+  - Methodology + data sources + freshness
+  - Accounts excluded (engaged-only, no meeting summary yet) for transparency
+```
 
-- For `lookback_seed` candidates, default the insert to the **warm** bucket: `motion: "inbound_response"`, `source_type: "gmail_inbound"` (or `"outlook_inbound"` if/when that source_type exists; otherwise keep `gmail_inbound` as the generic "synced mail history" marker — fine for now), `stage: "engaged"`. This guarantees no lookback lead lands in the cold prospecting playbook even if the backfill fails.
-- **Await** `backfillLeadHistory` for `lookback_seed` (single + bulk paths; bulk capped at ~4 in parallel for responsiveness).
-- After backfill, re-read `last_inbound_at` and `first_outbound_at` for the new lead:
-  - `last_inbound_at IS NOT NULL` → keep `motion: "inbound_response"`, `stage: "engaged"` (truly warm — lead replied at some point).
-  - `last_inbound_at IS NULL AND first_outbound_at IS NOT NULL` → demote to `motion: "outbound_prospecting"`, `stage: "engaged"` (rep sent, lead never replied — historical cold contact).
-  - Neither set (backfill returned nothing) → leave at the warm default; safer than mis-cold-prospecting.
+## Visual treatment (CEO-friendly, not generic)
 
-Executor-consent gate still applies (`automation_mode` stays `NULL` on approval, per the existing memory rule), so no auto-sends regardless.
+- Cover: full-bleed navy block, large serif-free title, small metadata strip.
+- Segment headers: colored sidebar + segment number, content count chip.
+- Account cards: 2-column table — left = identity + opportunity badge, right = milestones / open topics.
+- Opportunity badge: pill with $ range and confidence (High / Medium / Low / TBD).
+- No clipart, no purple gradients. Black + one accent color sampled from any Binah brand asset in the repo (fallback: deep teal `#0F766E`).
+- Page footer: "Confidential · Binah.ai · generated <date>".
 
-### 3. Suppress "paused" badge when automation was never enabled (defensive)
+## Deliverable
 
-In `src/components/lead/AutomationPreviewCard.tsx`:
+- `/mnt/documents/binah_ceo_briefing.docx` — surfaced inline via `presentation-artifact`.
+- Also drop `/mnt/documents/binah_ceo_briefing_data.json` so the team can re-style or re-export without re-running AI.
 
-- Gate `safetyPaused` on "automation has ever been enabled" — `automation_mode IS NOT NULL` OR `eligible_at` was ever set OR an active `next_action_key` from a real sequence. When the lead has never been enrolled, blockers are not relevant; show the normal "Enable automation" CTA. We can optionally disable the Enable button with a tooltip ("Lead has already replied — review thread before enrolling") when `last_inbound_at` exists, but no "paused" framing.
-- Belt-and-braces: even if classification (step 2) misses an edge case, the user no longer sees the misleading badge.
+## Out of scope (for this pass)
 
-### 4. One-off backfill for already-approved misclassified leads
+- No in-app report page, no schema change for deal value, no editable opportunity in UI. Each is a follow-up if useful.
+- No re-write of `lead_intelligence`; AI output stays in the doc only.
 
-Migration to fix pilot data the broken path already produced. Conservative scope:
+## Open question I'll proceed with a default on unless you say otherwise
 
-- For leads where `source = 'lookback_seed'` (or `source_type = 'outbound_prospecting'` AND created via approval — joinable via `lead_candidates.resolved_lead_id`), AND `automation_mode IS NULL` AND `eligible_at IS NULL`, AND `created_at > now() - interval '60 days'`:
-  - If `last_inbound_at IS NOT NULL` → set `motion = 'inbound_response'`, `stage = 'engaged'`.
-  - Leave others alone (could be intentional cold sequences).
-- For Outlook-owner leads in that same approved-from-lookback set with no timeline rows: log them in a one-off audit table or just note in the migration that a manual "re-run backfill" action will be added (separate UI affordance), since synchronously re-syncing dozens of mailboxes inside a migration isn't appropriate.
-
-## Technical details
-
-Files changed:
-- `src/components/leads/PendingLeadsTab.tsx` — provider-aware `backfillLeadHistory`; warm-by-default insert for `lookback_seed`; awaited backfill + post-backfill motion reconciliation; bulk path concurrency cap.
-- `src/components/lead/AutomationPreviewCard.tsx` — `safetyPaused` only when automation has been enabled.
-- New migration `supabase/migrations/<ts>_reclassify_lookback_inbound_leads.sql` — one-time UPDATE for the affected historical rows (Gmail path; Outlook path documented for follow-up).
-
-Not changed:
-- `lookback-seed-candidates` edge function — scan logic stays SENT-only for both providers.
-- `gmail-sync` / `outlook-sync` — already have the right per-lead API.
-- Executor / sender consent logic — untouched.
-
-## Out of scope
-
-- Reworking lookback to inspect threads bidirectionally at scan time.
-- Renaming motion semantics or introducing a new "historical_contact" motion.
-- Building an admin "re-run mail backfill for these leads" UI for Outlook (called out as follow-up).
+- **Segments count**: I'll let the AI choose between 4 and 7 segments. If you already have a Binah taxonomy in mind (e.g. Telehealth, RPM, Insurance, Fitness/Wearables, Clinical Trials, Workforce Wellness), reply with the list and I'll pin to it.
