@@ -406,6 +406,32 @@ export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): Plann
   return touches;
 }
 
+// ── Live-relationship exclusion (don't cold-blast an active relationship) ─────
+
+/**
+ * True when a lead is in a live/active relationship and must NOT be cold-enrolled:
+ *  - a CLOSED DEAL — stage 'closed_won' (a customer) OR 'closed_lost' (a closed deal).
+ *    Customer/closed state lives on leads.STAGE, not leads.status (status is never
+ *    'customer'); this matches how every other automation gate treats closed deals.
+ *  - a booked FUTURE MEETING (has_future_meeting).
+ *  - a RECENT inbound reply — a warm conversation whose last reply predates this
+ *    enrollment, which the send-time reply bridge (anchored at enrolled_at) wouldn't
+ *    catch.
+ * Pure + deterministic (takes nowMs) → unit-testable, so the gate can't silently
+ * regress to a no-op.
+ */
+export function isLiveRelationship(
+  lead: { stage?: string | null; has_future_meeting?: boolean | null; last_inbound_at?: string | null },
+  nowMs: number,
+): boolean {
+  const stage = (lead.stage || "").trim().toLowerCase();
+  const closedDeal = stage === "closed_won" || stage === "closed_lost";
+  const hasMeeting = lead.has_future_meeting === true;
+  const recentlyReplied = !!lead.last_inbound_at &&
+    (nowMs - new Date(lead.last_inbound_at).getTime()) < WARM_INBOUND_WINDOW_MS;
+  return closedDeal || hasMeeting || recentlyReplied;
+}
+
 // ── The enrollment mutation ───────────────────────────────────────────────────
 
 export interface EnrollmentSkips {
@@ -436,7 +462,7 @@ interface EnrollCandidateLead extends LeadContactInfo {
   campaign_id: string | null;
   automation_mode: string | null;
   needs_action: boolean | null;
-  status: string | null;
+  stage: string | null;
   has_future_meeting: boolean | null;
   last_inbound_at: string | null;
 }
@@ -481,7 +507,7 @@ async function gatherEnrollmentContext(
 
   const { data: leadRows } = await supabase
     .from("leads")
-    .select("id, email, phone, linkedin_url, whatsapp_number, unsubscribed, campaign_id, automation_mode, needs_action, status, has_future_meeting, last_inbound_at")
+    .select("id, email, phone, linkedin_url, whatsapp_number, unsubscribed, campaign_id, automation_mode, needs_action, stage, has_future_meeting, last_inbound_at")
     .in("id", leadIds)
     .eq("workspace_id", workspaceId);
   const leads = (leadRows || []) as unknown as EnrollCandidateLead[];
@@ -535,17 +561,9 @@ async function gatherEnrollmentContext(
     // lead's automation first.
     const activeLegacy = lead.campaign_id == null && lead.automation_mode != null;
     if (inOtherCampaign || activeLegacy) { skips.alreadyEnrolled++; continue; }
-    // Never cold-blast a LIVE relationship (uses existing lead fields only):
-    //  - an existing customer (status 'customer');
-    //  - a lead with a booked future meeting;
-    //  - anyone we've heard back from recently — a warm conversation whose last reply
-    //    predates this enrollment, which the send-time reply bridge (anchored at
-    //    enrolled_at) would NOT catch.
-    const isCustomer = (lead.status || "").trim().toLowerCase() === "customer";
-    const hasMeeting = lead.has_future_meeting === true;
-    const recentlyReplied = !!lead.last_inbound_at &&
-      (nowMs - new Date(lead.last_inbound_at).getTime()) < WARM_INBOUND_WINDOW_MS;
-    if (isCustomer || hasMeeting || recentlyReplied) { skips.activeOrCustomer++; continue; }
+    // Never cold-blast a LIVE relationship (see isLiveRelationship): a closed deal
+    // (won/lost), a booked future meeting, or a recent inbound reply.
+    if (isLiveRelationship(lead, nowMs)) { skips.activeOrCustomer++; continue; }
     // Enrollable: unassigned (will be stamped) OR already a member of this campaign.
     enrollable.push(lead);
   }
