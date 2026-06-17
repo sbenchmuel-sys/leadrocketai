@@ -153,6 +153,41 @@ Deno.test("single-recipient DSN is unchanged by scoping (no false narrowing)", (
   );
 });
 
+// Aliased recipient: Original-Recipient (what we addressed) + Final-Recipient
+// (after forwarding) live in the SAME group, ahead of the Status. Scoping must
+// keep them together so the lead's 5.x.x isn't lost. (Codex P2 round 2 #89.)
+const ALIASED_MULTI_DSN = [
+  "Final-Recipient: rfc822; bystander@other.com",
+  "Action: delayed",
+  "Status: 4.4.7",
+  "",
+  "Original-Recipient: rfc822; lead@acme.com",
+  "Final-Recipient: rfc822; lead-alias@forwarder.net",
+  "Action: failed",
+  "Status: 5.1.1",
+].join("\n");
+
+Deno.test("aliased recipient: Original+Final stay in one group → lead's 5.x.x is HARD", () => {
+  assertEquals(classifyBounce({ body: ALIASED_MULTI_DSN, recipientEmail: "lead@acme.com" }).severity, "hard");
+});
+
+Deno.test("aliased report: the unrelated transient recipient is still SOFT", () => {
+  assertEquals(classifyBounce({ body: ALIASED_MULTI_DSN, recipientEmail: "bystander@other.com" }).severity, "soft");
+});
+
+Deno.test("canonical Status: code is honored when the human text carries no inline code (P1 contract)", () => {
+  // Mirrors what the gmail caller now passes: human preamble (no code) + the
+  // machine delivery-status part. The Status: field must drive the decision.
+  const body = [
+    "Your message couldn't be delivered to the recipient. See details below.",
+    "",
+    "Final-Recipient: rfc822; dead@acme.com",
+    "Action: failed",
+    "Status: 5.2.1",
+  ].join("\n");
+  assertEquals(classifyBounce({ body, recipientEmail: "dead@acme.com" }).severity, "hard");
+});
+
 Deno.test("multi-recipient where lead is only in the preamble → falls back to whole body", () => {
   // No structured block names 'lead@acme.com'; scoping returns null and we
   // classify the whole body (best effort). Here the only code is 4.x.x → soft.

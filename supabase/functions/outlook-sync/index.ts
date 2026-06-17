@@ -348,6 +348,10 @@ serve(async (req) => {
           // and let the cadence retry. Only hard (5.x.x / clearly-permanent)
           // bounces suppress the lead and feed the bounce circuit breaker.
           // Unclassifiable → transient (fail-safe: don't burn a good lead).
+          // Exchange NDRs inline the diagnostic ("Remote Server returned
+          // '550 5.1.1 …'") and the recipient/Status fields directly in the body
+          // that getGraphMessageBody returns, so the RFC 3463 code is already
+          // present here (no separate delivery-status part to fetch, unlike Gmail).
           const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText, recipientEmail: leadEmailNorm });
           if (bounceClass.severity !== "hard") {
             console.log(

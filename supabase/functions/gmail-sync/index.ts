@@ -28,6 +28,12 @@ import {
   buildLeadUpdate,
 } from "../_shared/syncEngine.ts";
 
+interface GmailPart {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailPart[];
+}
+
 interface GmailMessage {
   id: string;
   threadId: string;
@@ -36,7 +42,7 @@ interface GmailMessage {
   payload: {
     headers: Array<{ name: string; value: string }>;
     body?: { data?: string };
-    parts?: Array<{ mimeType: string; body?: { data?: string } }>;
+    parts?: GmailPart[];
   };
   internalDate: string;
 }
@@ -102,6 +108,26 @@ function getMessageBody(message: GmailMessage): string {
     }
   }
   return message.snippet || "";
+}
+
+// A bounce/DSN is multipart/report: the human-readable text part sits next to a
+// `message/delivery-status` part that carries the machine fields — Final-Recipient,
+// Action and the RFC 3463 `Status:` code. getMessageBody() only returns the
+// human text, which doesn't always echo the code, so for the bounce path we also
+// pull the delivery-status part(s). Without this a hard 5.x.x bounce whose human
+// text merely says "couldn't be delivered" would be misread as transient and the
+// dead address would keep being emailed. (Codex P1 on PR #89.)
+function getDeliveryStatusText(message: GmailMessage): string {
+  const out: string[] = [];
+  const walk = (part: GmailPart) => {
+    const mime = (part.mimeType || "").toLowerCase();
+    if (part.body?.data && mime.includes("delivery-status")) {
+      out.push(decodeBase64Url(part.body.data));
+    }
+    if (part.parts) for (const p of part.parts) walk(p);
+  };
+  if (message.payload.parts) for (const p of message.payload.parts) walk(p);
+  return out.join("\n\n");
 }
 
 // deno-lint-ignore no-explicit-any
@@ -494,7 +520,10 @@ serve(async (req) => {
           // cadence retry. Only hard (5.x.x / clearly-permanent) bounces suppress
           // the lead and feed the bounce circuit breaker. Unclassifiable → treated
           // as transient by classifyBounce (fail-safe: don't burn a good lead).
-          const bounceClass = classifyBounce({ fromEmail: from, subject, body: bodyText, recipientEmail: leadEmailNorm });
+          // Include the machine delivery-status part so the RFC 3463 code is seen
+          // even when the human text doesn't echo it (Codex P1).
+          const dsnText = `${bodyText}\n\n${getDeliveryStatusText(message)}`;
+          const bounceClass = classifyBounce({ fromEmail: from, subject, body: dsnText, recipientEmail: leadEmailNorm });
           if (bounceClass.severity !== "hard") {
             console.log(
               `[gmail-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,

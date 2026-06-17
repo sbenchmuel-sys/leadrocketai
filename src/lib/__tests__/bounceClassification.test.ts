@@ -62,4 +62,27 @@ describe("classifyBounce — soft vs hard gate", () => {
     expect(classifyBounce({ body: dsn, recipientEmail: "ben@acme.com" }).severity).toBe("hard");
     expect(classifyBounce({ body: dsn, recipientEmail: "gina@acme.com" }).severity).toBe("soft");
   });
+
+  it("aliased recipient: Original-Recipient + Final-Recipient stay in one group", () => {
+    // The lead was addressed as lead@acme.com but forwarding rewrote the Final-
+    // Recipient; the 5.1.1 Status sits after Final-Recipient in the SAME group.
+    // Scoping must keep them together so the hard bounce isn't lost. (Codex P2 r2.)
+    const dsn = [
+      "Final-Recipient: rfc822; bystander@other.com",
+      "Action: delayed",
+      "Status: 4.4.7",
+      "",
+      "Original-Recipient: rfc822; lead@acme.com",
+      "Final-Recipient: rfc822; lead-alias@forwarder.net",
+      "Action: failed",
+      "Status: 5.1.1",
+    ].join("\n");
+    expect(classifyBounce({ body: dsn, recipientEmail: "lead@acme.com" }).severity).toBe("hard");
+    expect(classifyBounce({ body: dsn, recipientEmail: "bystander@other.com" }).severity).toBe("soft");
+  });
+
+  it("honors a canonical Status: code when the human text has no inline code (P1 contract)", () => {
+    const body = "Your message couldn't be delivered.\n\nFinal-Recipient: rfc822; dead@acme.com\nStatus: 5.2.1";
+    expect(classifyBounce({ body, recipientEmail: "dead@acme.com" }).severity).toBe("hard");
+  });
 });

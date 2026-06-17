@@ -170,10 +170,33 @@ function findEnhancedStatusClass(text: string): { code: string; cls: 4 | 5 } | n
  */
 function scopeToRecipientBlocks(body: string, recipientEmail: string): string | null {
   if (!body || !recipientEmail) return null;
-  const boundary = /^[ \t>]*(?:Final-Recipient|Original-Recipient):/gim;
-  const starts: number[] = [];
+
+  // Per RFC 3464 a per-recipient group is `[Original-Recipient] Final-Recipient
+  // Action Status …`: Original-Recipient (the address the sender used) is
+  // OPTIONAL and, when present, comes immediately before Final-Recipient (the
+  // address after forwarding/aliasing) IN THE SAME GROUP. So a group begins at:
+  //   - any Original-Recipient line, or
+  //   - a Final-Recipient line that does NOT directly follow an Original-Recipient
+  //     (i.e. a standalone Final-Recipient).
+  // Splitting naively on every recipient line would orphan an aliased group's
+  // Status onto the Final-Recipient half and lose it for the Original address.
+  const re = /^[ \t>]*(Final-Recipient|Original-Recipient):/gim;
+  const fields: Array<{ index: number; type: string }> = [];
   let m: RegExpExecArray | null;
-  while ((m = boundary.exec(body)) !== null) starts.push(m.index);
+  while ((m = re.exec(body)) !== null) {
+    fields.push({ index: m.index, type: m[1].toLowerCase() });
+  }
+  if (fields.length === 0) return null;
+
+  const starts: number[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const cur = fields[i];
+    if (cur.type === "original-recipient") {
+      starts.push(cur.index);
+    } else if (!(fields[i - 1] && fields[i - 1].type === "original-recipient")) {
+      starts.push(cur.index);
+    }
+  }
   if (starts.length < 2) return null;
 
   const target = recipientEmail.toLowerCase();
