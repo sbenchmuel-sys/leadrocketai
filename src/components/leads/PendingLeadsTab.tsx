@@ -448,19 +448,28 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       const uid = await getCurrentUserId();
       let ok = 0;
       let fail = 0;
-      for (const c of items) {
-        try {
-          const leadId = await createLeadFromCandidate(c, uid);
-          const { error } = await supabase
-            .from("lead_candidates")
-            .update({ status: "approved", resolved_at: new Date().toISOString(), resolved_lead_id: leadId })
-            .eq("id", c.id);
-          if (error) throw error;
-          ok++;
-        } catch {
-          fail++;
+      // Process with bounded concurrency so lookback_seed approvals (which await
+      // mail backfill per lead) don't serialise to a crawl on large batches.
+      const CONCURRENCY = 4;
+      const queue = [...items];
+      const worker = async () => {
+        while (queue.length > 0) {
+          const c = queue.shift();
+          if (!c) break;
+          try {
+            const leadId = await createLeadFromCandidate(c, uid);
+            const { error } = await supabase
+              .from("lead_candidates")
+              .update({ status: "approved", resolved_at: new Date().toISOString(), resolved_lead_id: leadId })
+              .eq("id", c.id);
+            if (error) throw error;
+            ok++;
+          } catch {
+            fail++;
+          }
         }
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
       if (fail === 0) {
         toast.success(successMsg || `Approved ${ok} candidate${ok === 1 ? "" : "s"}`);
       } else {
