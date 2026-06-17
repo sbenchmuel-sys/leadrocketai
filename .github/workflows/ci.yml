@@ -1,0 +1,80 @@
+name: CI
+
+# Runs the test suite, type-check, and build on every pull request and on every
+# push to a non-main branch, so pass/fail shows up on the PR with no manual step.
+#
+# main is deliberately EXCLUDED from the push trigger: Lovable Cloud pushes directly
+# to main, and this workflow must not gate or interfere with that flow. It only
+# *reports* status — it does not enable branch protection (which would break Lovable).
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+# A newer push to the same ref cancels the in-flight run for that ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the checks only need to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Node — vitest, tsc, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No "engines" in package.json and no .nvmrc, so pin Node 20 (current LTS).
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Unit suite. vitest.config.ts already excludes src/test/integration/** (the
+      # live-staging isolation tests that need .env.staging), so CI never reaches a
+      # real Supabase project.
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      # Dummy Supabase env so a build-time read of import.meta.env can't fail the
+      # build. These are placeholders, never used to reach a real project.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: http://localhost:54321
+          VITE_SUPABASE_PUBLISHABLE_KEY: ci-placeholder-anon-key
+
+  deno:
+    name: Deno — _shared edge-function tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The shared edge-function tests run under Deno, not vitest.
+      #  --allow-read / --allow-env: encryption.test.ts reads & sets TOKEN_ENCRYPTION_KEY
+      #      (matches the command documented in that file's header).
+      #  --no-check: campaignKnowledgeDoc.ts imports supabase-js, whose @types/node
+      #      resolution would otherwise fail type-checking without node_modules; the
+      #      Node job's tsc owns type-checking, this job owns runtime behavior.
+      #  No --allow-net: the tests are granted NO network permission, so they cannot
+      #      reach any live service (the live Supabase project included).
+      - name: Edge-function tests
+        run: deno test --no-check --allow-read --allow-env supabase/functions/_shared
