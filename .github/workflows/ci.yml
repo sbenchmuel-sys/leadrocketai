@@ -36,8 +36,11 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # npm install (not npm ci): Lovable Cloud manages dependencies and does not keep
+      # the committed package-lock.json in sync, so npm ci's strict in-sync requirement
+      # would fail on legitimate PRs. install tolerates that drift.
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       # Unit suite. vitest.config.ts already excludes src/test/integration/** (the
       # live-staging isolation tests that need .env.staging), so CI never reaches a
