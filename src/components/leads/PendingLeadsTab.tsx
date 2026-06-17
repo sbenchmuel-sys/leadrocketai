@@ -133,9 +133,10 @@ export function usePendingCandidatesCount() {
 
 // Map a candidate's detected source to the proper lead motion / source_type / stage.
 // Inbound-detected candidates (mentioned us / referral) are warm — they must NOT
-// land in the cold outbound prospecting playbook. Lookback-seeded candidates already
-// have prior email exchanges, so we mark them as `engaged` so the resolver doesn't
-// restart at "Step 1 of 4".
+// land in the cold outbound prospecting playbook. Lookback-seeded candidates are
+// historical mail-history matches whose true direction is unknown until we sync
+// the thread: default to the warm bucket and demote to outbound_prospecting only
+// after backfill proves the rep sent first and the lead never replied.
 function deriveLeadDefaults(c: Candidate): {
   motion: "outbound_prospecting" | "inbound_response";
   source_type: "outbound_prospecting" | "gmail_inbound" | "referral" | "manual_entry";
@@ -147,8 +148,9 @@ function deriveLeadDefaults(c: Candidate): {
     case "inbound_referral":
       return { motion: "inbound_response", source_type: "referral", stage: "engaged" };
     case "lookback_seed":
-      // Historical outbound thread — already had contact, treat as engaged.
-      return { motion: "outbound_prospecting", source_type: "gmail_inbound", stage: "engaged" };
+      // Warm-by-default: never land a historical contact in cold prospecting.
+      // Real direction is reconciled after backfill (see reconcileLookbackMotion).
+      return { motion: "inbound_response", source_type: "gmail_inbound", stage: "engaged" };
     case "outbound":
     case "outbound_detection":
     default:
@@ -156,24 +158,91 @@ function deriveLeadDefaults(c: Candidate): {
   }
 }
 
-// Backfill the new lead with prior Gmail history (interactions + lead_timeline_items)
+// Detect which mail provider(s) the lead's owner has connected. Returns the
+// providers we should hit for per-lead history backfill.
+async function getOwnerMailProviders(ownerUserId: string): Promise<Array<"gmail" | "outlook">> {
+  const providers = new Set<"gmail" | "outlook">();
+  try {
+    const { data } = await supabase
+      .from("mail_accounts")
+      .select("provider")
+      .eq("user_id", ownerUserId)
+      .eq("status", "active");
+    for (const row of data ?? []) {
+      const p = (row as any).provider;
+      if (p === "gmail" || p === "google") providers.add("gmail");
+      else if (p === "outlook" || p === "microsoft") providers.add("outlook");
+    }
+  } catch (e) {
+    console.warn("[PendingLeads] mail_accounts lookup failed", e);
+  }
+  // Legacy gmail_connections fallback for older workspaces.
+  if (providers.size === 0) {
+    try {
+      const { data } = await supabase
+        .from("gmail_connections")
+        .select("id")
+        .eq("user_id", ownerUserId)
+        .limit(1);
+      if ((data ?? []).length > 0) providers.add("gmail");
+    } catch {
+      /* ignore */
+    }
+  }
+  return Array.from(providers);
+}
+
+// Backfill the new lead with prior mail history (interactions + lead_timeline_items)
 // and recompute lead intelligence so motion / next_action_key / signals reflect the
 // real conversation. Best-effort — failure here must not block approval.
-async function backfillLeadHistory(leadId: string, leadEmail: string) {
-  try {
-    const { error: syncErr } = await supabase.functions.invoke("gmail-sync", {
-      body: { leadId, leadEmail, maxResults: 50 },
-    });
-    if (syncErr) console.warn("[PendingLeads] gmail-sync backfill failed", syncErr);
-  } catch (e) {
-    console.warn("[PendingLeads] gmail-sync backfill threw", e);
-  }
+async function backfillLeadHistory(leadId: string, leadEmail: string, ownerUserId: string) {
+  const providers = await getOwnerMailProviders(ownerUserId);
+  // If we couldn't detect a provider, fall back to gmail (historical default).
+  const targets: Array<"gmail" | "outlook"> = providers.length > 0 ? providers : ["gmail"];
+  await Promise.all(
+    targets.map(async (p) => {
+      const fn = p === "outlook" ? "outlook-sync" : "gmail-sync";
+      try {
+        const { error } = await supabase.functions.invoke(fn, {
+          body: { leadId, leadEmail, maxResults: 50 },
+        });
+        if (error) console.warn(`[PendingLeads] ${fn} backfill failed`, error);
+      } catch (e) {
+        console.warn(`[PendingLeads] ${fn} backfill threw`, e);
+      }
+    })
+  );
   try {
     await supabase.functions.invoke("recompute-lead-intelligence", {
       body: { lead_id: leadId, force: true },
     });
   } catch (e) {
     console.warn("[PendingLeads] recompute-lead-intelligence failed", e);
+  }
+}
+
+// After lookback backfill, look at real thread direction and demote to cold
+// outbound_prospecting only when the rep sent first and the lead never replied.
+// If neither timestamp exists (backfill found nothing), leave the warm default —
+// safer than mis-cold-prospecting a contact we know nothing about yet.
+async function reconcileLookbackMotion(leadId: string) {
+  try {
+    const { data } = await supabase
+      .from("leads")
+      .select("last_inbound_at, first_outbound_at")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (!data) return;
+    const hasInbound = !!(data as any).last_inbound_at;
+    const hasOutbound = !!(data as any).first_outbound_at;
+    if (!hasInbound && hasOutbound) {
+      await supabase
+        .from("leads")
+        .update({ motion: "outbound_prospecting", stage: "engaged" })
+        .eq("id", leadId);
+    }
+  } catch (e) {
+    console.warn("[PendingLeads] reconcileLookbackMotion failed", e);
   }
 }
 
@@ -197,9 +266,16 @@ async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extr
   const { data, error } = await supabase.from("leads").insert(payload).select("id").single();
   if (error) throw error;
   const leadId = data.id as string;
-  // Fire-and-forget backfill so the UI stays responsive. Awaited callers (single
-  // approve) get a quicker toast; bulk paths don't block on each lead.
-  void backfillLeadHistory(leadId, c.contact_email.toLowerCase());
+  const email = c.contact_email.toLowerCase();
+  if (c.source === "lookback_seed") {
+    // Await backfill so we can reconcile real thread direction before the user
+    // sees the lead in (potentially) the wrong playbook.
+    await backfillLeadHistory(leadId, email, ownerUserId);
+    await reconcileLookbackMotion(leadId);
+  } else {
+    // Other sources keep responsive UI — backfill is supplementary.
+    void backfillLeadHistory(leadId, email, ownerUserId);
+  }
   return leadId;
 }
 
@@ -372,19 +448,28 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       const uid = await getCurrentUserId();
       let ok = 0;
       let fail = 0;
-      for (const c of items) {
-        try {
-          const leadId = await createLeadFromCandidate(c, uid);
-          const { error } = await supabase
-            .from("lead_candidates")
-            .update({ status: "approved", resolved_at: new Date().toISOString(), resolved_lead_id: leadId })
-            .eq("id", c.id);
-          if (error) throw error;
-          ok++;
-        } catch {
-          fail++;
+      // Process with bounded concurrency so lookback_seed approvals (which await
+      // mail backfill per lead) don't serialise to a crawl on large batches.
+      const CONCURRENCY = 4;
+      const queue = [...items];
+      const worker = async () => {
+        while (queue.length > 0) {
+          const c = queue.shift();
+          if (!c) break;
+          try {
+            const leadId = await createLeadFromCandidate(c, uid);
+            const { error } = await supabase
+              .from("lead_candidates")
+              .update({ status: "approved", resolved_at: new Date().toISOString(), resolved_lead_id: leadId })
+              .eq("id", c.id);
+            if (error) throw error;
+            ok++;
+          } catch {
+            fail++;
+          }
         }
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
       if (fail === 0) {
         toast.success(successMsg || `Approved ${ok} candidate${ok === 1 ? "" : "s"}`);
       } else {

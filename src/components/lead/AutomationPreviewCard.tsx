@@ -151,8 +151,15 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const isUnsubscribed = (lead as any).unsubscribed === true;
 
   const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
+  // "Has automation ever been enabled" — gates the safetyPaused badge so we don't
+  // show "Lead has replied — automation paused" on leads the user never enrolled
+  // (e.g. lookback-seeded leads whose backfill populated last_inbound_at).
+  const automationEverEnabled =
+    (lead as any).automation_mode != null ||
+    !!(lead as any).eligible_at ||
+    !!lead.next_action_key;
   const blockers = useMemo(() => getAutomationBlockers(lead), [lead]);
-  const safetyPaused = blockers.length > 0;
+  const safetyPaused = blockers.length > 0 && automationEverEnabled;
   const userPaused = !hasAutomationEnabled && !!lead.next_action_key;
   const isPaused = safetyPaused || userPaused;
   const steps = useMemo(() => getNextTwoSteps(lead), [lead]);
