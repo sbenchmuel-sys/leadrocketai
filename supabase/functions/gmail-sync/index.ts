@@ -8,6 +8,7 @@ import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscr
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
+import { classifyBounce } from "../_shared/bounceDetection.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import {
   type CadenceSettingsV1,
@@ -486,7 +487,25 @@ serve(async (req) => {
             console.log(`[gmail-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
             continue;
           }
-          console.log(`[gmail-sync] Lead ${leadId}: Bounce detected (subject: "${subject}", from: "${from}") — stopping automation`);
+
+          // Soft (transient) vs hard (permanent) bounce. A 4.x.x DSN — mailbox
+          // full, greylisting, a temporary defer — must NOT permanently kill a
+          // good lead: leave unsubscribed/enrollment untouched and let the normal
+          // cadence retry. Only hard (5.x.x / clearly-permanent) bounces suppress
+          // the lead and feed the bounce circuit breaker. Unclassifiable → treated
+          // as transient by classifyBounce (fail-safe: don't burn a good lead).
+          const bounceClass = classifyBounce({ fromEmail: from, subject, body: bodyText });
+          if (bounceClass.severity !== "hard") {
+            console.log(
+              `[gmail-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,
+            );
+            // Record the DSN as seen so it isn't re-stored as a fake outbound, but
+            // do NOT suppress the lead, end the enrollment, or count the breaker.
+            existingMessageIds.add(gmailMessageId);
+            continue;
+          }
+
+          console.log(`[gmail-sync] Lead ${leadId}: Hard bounce detected (code: ${bounceClass.statusCode ?? "keyword/none"}, subject: "${subject}", from: "${from}") — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true,
             needs_action: false,

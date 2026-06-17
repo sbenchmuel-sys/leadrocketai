@@ -1,0 +1,128 @@
+// Run: deno test supabase/functions/_shared/bounceDetection.test.ts
+//
+// Guards the soft-vs-hard bounce gate. A SOFT (transient) bounce must NOT cause
+// the caller to suppress the lead / end the cadence; a HARD (permanent) bounce
+// must. These pure-function tests pin the classification so the gate in
+// gmail-sync / outlook-sync can't silently regress.
+import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
+import {
+  classifyBounce,
+  detectBounce,
+  type BounceSeverity,
+} from "./bounceDetection.ts";
+
+function severityOf(opts: { subject?: string; body?: string; fromEmail?: string }): BounceSeverity {
+  return classifyBounce(opts).severity;
+}
+
+// ── 4.x.x transient → soft (do NOT burn the lead) ──────────────────────────
+Deno.test("4.x.x via canonical Status: field → soft", () => {
+  assertEquals(severityOf({ subject: "Delivery delayed", body: "Action: delayed\nStatus: 4.4.7\n" }), "soft");
+});
+
+Deno.test("4.x.x inline after SMTP reply code → soft", () => {
+  const body = "The response from the remote server was:\n450 4.2.1 Mailbox is full, try again later";
+  assertEquals(severityOf({ body }), "soft");
+});
+
+Deno.test("greylisting 4.7.x → soft", () => {
+  assertEquals(severityOf({ body: "421 4.7.0 Greylisted, please try again in 5 minutes" }), "soft");
+});
+
+// ── 5.x.x permanent → hard (suppress + end + count breaker) ─────────────────
+Deno.test("5.x.x via canonical Status: field → hard", () => {
+  assertEquals(severityOf({ subject: "Undeliverable", body: "Action: failed\nStatus: 5.1.1\n" }), "hard");
+});
+
+Deno.test("5.x.x inline after SMTP reply code → hard", () => {
+  const body = "The response was:\n550 5.1.1 The email account that you tried to reach does not exist.";
+  assertEquals(severityOf({ body }), "hard");
+});
+
+Deno.test("5.x.x with `#` separator (Outlook style) → hard", () => {
+  assertEquals(severityOf({ body: "Remote Server returned '550 #5.1.10 RESOLVER.ADR.RecipNotFound'" }), "hard");
+});
+
+// ── No status code → keyword fallback ───────────────────────────────────────
+Deno.test("no code but a clearly-permanent phrase → hard (keyword fallback)", () => {
+  const r = classifyBounce({ subject: "Mail delivery failed", body: "Sorry, no such user here." });
+  assertEquals(r.severity, "hard");
+  assertEquals(r.basis, "keyword");
+  assertEquals(r.statusCode, null);
+});
+
+Deno.test("no code, only generic DSN wording → soft (fail-safe, ambiguous)", () => {
+  // "Undeliverable" / "delivery status notification" alone is NOT enough to
+  // permanently kill a lead — when in doubt, keep the lead.
+  const r = classifyBounce({
+    subject: "Delivery Status Notification (Failure)",
+    body: "This is an automatically generated Delivery Status Notification.",
+  });
+  assertEquals(r.severity, "soft");
+  assertEquals(r.basis, "fallback");
+});
+
+// ── Code wins over keyword, most-severe wins across multiple codes ──────────
+Deno.test("4.x.x code present even with scary 'failed' wording → soft (code beats keyword)", () => {
+  assertEquals(severityOf({ subject: "failure notice", body: "Action: delayed\nStatus: 4.3.0" }), "soft");
+});
+
+Deno.test("both 4.x.x and 5.x.x present → hard (5 outranks 4)", () => {
+  const body = "Status: 4.4.7\n--- next recipient ---\nStatus: 5.1.1";
+  assertEquals(severityOf({ body }), "hard");
+});
+
+Deno.test("2.x.x success line ignored; 5.x.x decides → hard", () => {
+  const body = "Status: 2.1.5 (delivered)\nStatus: 5.2.1 (mailbox disabled)";
+  assertEquals(severityOf({ body }), "hard");
+});
+
+// ── False-positive guards ───────────────────────────────────────────────────
+Deno.test("a version-like token not adjacent to a reply code is NOT a status code", () => {
+  // "5.1.1" here is a product version, not a DSN code, and there's no permanent
+  // phrase → fail-safe soft.
+  assertEquals(severityOf({ body: "Mailer version 5.1.1 deferred your message temporarily." }), "soft");
+});
+
+Deno.test("empty / missing input → soft", () => {
+  assertEquals(severityOf({}), "soft");
+  assertEquals(severityOf({ subject: "", body: "" }), "soft");
+});
+
+// ── Realistic provider DSN bodies ───────────────────────────────────────────
+Deno.test("realistic Gmail permanent NDR → hard", () => {
+  const body = [
+    "** Address not found **",
+    "",
+    "Your message wasn't delivered to nope@example.com because the address couldn't be found.",
+    "",
+    "The response from the remote server was:",
+    "550 5.1.1 The email account that you tried to reach does not exist.",
+  ].join("\n");
+  assertEquals(severityOf({ subject: "Delivery Status Notification (Failure)", body }), "hard");
+});
+
+Deno.test("realistic Gmail delayed (transient) warning → soft", () => {
+  const body = [
+    "** Message delayed **",
+    "",
+    "Your message to busy@example.com has been delayed. Gmail will keep trying.",
+    "",
+    "The response from the remote server was:",
+    "452 4.2.2 The recipient's mailbox is over its storage limit.",
+  ].join("\n");
+  assertEquals(severityOf({ subject: "Delivery Status Notification (Delay)", body }), "soft");
+});
+
+Deno.test("realistic Outlook permanent NDR → hard", () => {
+  const body = "Your message to gone@contoso.com couldn't be delivered.\n" +
+    "Remote Server returned '550 5.1.1 RESOLVER.ADR.RecipNotFound; Recipient not found'";
+  assertEquals(severityOf({ subject: "Undeliverable: Quick question", body }), "hard");
+});
+
+// ── Existing detector still works (regression) ──────────────────────────────
+Deno.test("detectBounce still flags postmaster sender / DSN subject", () => {
+  assertEquals(detectBounce("mailer-daemon@googlemail.com", "hi").isBounce, true);
+  assertEquals(detectBounce("rep@dealer.com", "Undeliverable: Quick question").isBounce, true);
+  assertEquals(detectBounce("lead@acme.com", "Re: Quick question").isBounce, false);
+});
