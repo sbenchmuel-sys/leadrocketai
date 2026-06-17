@@ -8,7 +8,7 @@ import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscr
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
-import { classifyBounce } from "../_shared/bounceDetection.ts";
+import { classifyBounce, dsnNamesRecipient } from "../_shared/bounceDetection.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import {
   type CadenceSettingsV1,
@@ -503,12 +503,23 @@ serve(async (req) => {
         );
 
         if (isBounce) {
+          // Build the full DSN text (human part + machine delivery-status part)
+          // ONCE, and use it for BOTH attribution and classification. A standards-
+          // shaped multipart/report DSN may name the failed address only in the
+          // delivery-status `Final-Recipient`, not the human text — so attributing
+          // off bodyText alone would skip it before we ever classify, missing a
+          // hard 5.x.x. (Codex P1 + P2 round 5.)
+          const deliveryStatus = getDeliveryStatusText(message);
+          const dsnText = `${bodyText}\n\n${deliveryStatus}`;
+
           // Attribute a bounce to THIS lead only if it's actually named in it —
-          // in the headers (direct) or the DSN body (the failed recipient). The
-          // broadened search can return DSNs, so this prevents mis-attributing a
-          // bounce for a different recipient to this lead.
+          // in the headers (direct), the human body, or the delivery-status part's
+          // Final-Recipient (exact email match, so "ann@x" ≠ "joann@x"). This
+          // prevents mis-attributing a bounce for a different recipient to this lead.
           const aboutThisLead =
-            messageInvolvesLead(headers, leadEmailNorm) || bodyText.toLowerCase().includes(leadEmailNorm);
+            messageInvolvesLead(headers, leadEmailNorm) ||
+            bodyText.toLowerCase().includes(leadEmailNorm) ||
+            dsnNamesRecipient(deliveryStatus, leadEmailNorm);
           if (!aboutThisLead) {
             console.log(`[gmail-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
             continue;
@@ -520,9 +531,6 @@ serve(async (req) => {
           // cadence retry. Only hard (5.x.x / clearly-permanent) bounces suppress
           // the lead and feed the bounce circuit breaker. Unclassifiable → treated
           // as transient by classifyBounce (fail-safe: don't burn a good lead).
-          // Include the machine delivery-status part so the RFC 3463 code is seen
-          // even when the human text doesn't echo it (Codex P1).
-          const dsnText = `${bodyText}\n\n${getDeliveryStatusText(message)}`;
           const bounceClass = classifyBounce({ fromEmail: from, subject, body: dsnText, recipientEmail: leadEmailNorm });
           if (bounceClass.severity !== "hard") {
             console.log(

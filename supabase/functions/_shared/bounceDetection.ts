@@ -242,6 +242,18 @@ function blockNamesRecipient(block: string, targetLower: string): boolean {
 }
 
 /**
+ * Exact (whole-address) test for whether a DSN text names a recipient. Use for
+ * attribution against the machine delivery-status part so "ann@x.com" is not
+ * matched inside "joann@x.com". Mirrors the matching used to scope per-recipient
+ * blocks.
+ */
+export function dsnNamesRecipient(text: string, recipientEmail: string): boolean {
+  const target = (recipientEmail || "").toLowerCase().trim();
+  if (!text || !target) return false;
+  return blockNamesRecipient(text, target);
+}
+
+/**
  * Classify a bounce as hard (permanent) or soft (transient).
  *
  * Decision order:

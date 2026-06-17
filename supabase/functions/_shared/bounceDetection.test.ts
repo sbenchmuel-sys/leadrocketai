@@ -8,6 +8,7 @@ import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import {
   classifyBounce,
   detectBounce,
+  dsnNamesRecipient,
   type BounceSeverity,
 } from "./bounceDetection.ts";
 
@@ -231,6 +232,26 @@ Deno.test("multi-recipient where lead is only in the preamble → falls back to 
   const body = "Delivery to lead@acme.com and others delayed.\n" +
     "Final-Recipient: rfc822; other@acme.com\nStatus: 4.2.2";
   assertEquals(classifyBounce({ body, recipientEmail: "lead@acme.com" }).severity, "soft");
+});
+
+// ── dsnNamesRecipient: exact attribution against delivery-status text ────────
+Deno.test("dsnNamesRecipient matches the Final-Recipient address exactly", () => {
+  const ds = "Final-Recipient: rfc822; dead@acme.com\nAction: failed\nStatus: 5.1.1";
+  assertEquals(dsnNamesRecipient(ds, "dead@acme.com"), true);
+  // The human text omitted the address but the delivery-status part names it →
+  // attribution must still succeed (Codex P2 round 5).
+  assertEquals(dsnNamesRecipient(ds, "DEAD@ACME.COM"), true);
+});
+
+Deno.test("dsnNamesRecipient does NOT match a suffix address", () => {
+  const ds = "Final-Recipient: rfc822; joann@example.com\nStatus: 5.1.1";
+  assertEquals(dsnNamesRecipient(ds, "ann@example.com"), false);
+  assertEquals(dsnNamesRecipient(ds, "joann@example.com"), true);
+});
+
+Deno.test("dsnNamesRecipient is false on empty input", () => {
+  assertEquals(dsnNamesRecipient("", "x@y.com"), false);
+  assertEquals(dsnNamesRecipient("Final-Recipient: rfc822; a@b.com", ""), false);
 });
 
 // ── Existing detector still works (regression) ──────────────────────────────
