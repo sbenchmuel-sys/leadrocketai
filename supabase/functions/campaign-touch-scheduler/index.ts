@@ -25,7 +25,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import { loadExecutionSettings, type ExecutionSettings } from "../_shared/executionSettings.ts";
-import { advanceColdEnrollment, endColdEnrollment } from "../_shared/coldOutreach.ts";
+import { advanceColdEnrollment, endColdEnrollment, repliedSinceEnrollment } from "../_shared/coldOutreach.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
   const leadIds = [...new Set(touches.map((t) => t.lead_id))];
 
   const [{ data: enrollments }, { data: campaigns }, { data: leads }] = await Promise.all([
-    supabase.from("campaign_enrollment").select("id, status, current_step_number, started_at").in("id", enrollmentIds),
+    supabase.from("campaign_enrollment").select("id, status, current_step_number, started_at, enrolled_at").in("id", enrollmentIds),
     supabase.from("campaigns").select("id, status, send_mode, workspace_id").in("id", campaignIds),
     supabase.from("leads").select("id, owner_user_id, phone, linkedin_url, whatsapp_number, last_inbound_at, unsubscribed").in("id", leadIds),
   ]);
@@ -181,9 +181,10 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    // Reply bridge: a reply since starting pulls the lead out of the cold cadence
-    // (and clears its pending touches so they don't linger in the due queue).
-    if (lead.last_inbound_at && enr.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at)) {
+    // Reply bridge: a reply since being committed to the cadence (enrolled_at, NOT the
+    // possibly-future staggered started_at) pulls the lead out of the cold cadence and
+    // clears its pending touches so they don't linger in the due queue.
+    if (repliedSinceEnrollment(lead.last_inbound_at, enr.enrolled_at)) {
       if (!markEnrollmentReplied.has(t.enrollment_id)) {
         await endColdEnrollment(supabase, t.enrollment_id, "replied");
         markEnrollmentReplied.add(t.enrollment_id);
@@ -262,7 +263,7 @@ Deno.serve(async (req) => {
     .limit(BATCH)).data;
   for (const t of (staleQueued || [])) {
     const { data: enr } = await supabase.from("campaign_enrollment")
-      .select("current_step_number, status, started_at").eq("id", t.enrollment_id).maybeSingle();
+      .select("current_step_number, status, started_at, enrolled_at").eq("id", t.enrollment_id).maybeSingle();
     if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
     if (t.step_number !== (enr.current_step_number ?? 0) + 1) continue; // only the live touch
     const { data: ld } = await supabase.from("leads")
@@ -274,7 +275,7 @@ Deno.serve(async (req) => {
     // never reaches it. Without this check the max-age cleanup would auto-skip the card
     // and arm the next step — continuing the cold cadence AFTER an inbound reply. Pull
     // the lead out instead (and clear the stranded card).
-    if (ld.last_inbound_at && enr.started_at && new Date(ld.last_inbound_at) > new Date(enr.started_at)) {
+    if (repliedSinceEnrollment(ld.last_inbound_at, enr.enrolled_at)) {
       await endColdEnrollment(supabase, t.enrollment_id, "replied");
       counters.replied++;
       continue;

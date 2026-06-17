@@ -26,6 +26,7 @@ import {
   sendColdEmailTouch,
   advanceColdEnrollment,
   buildUnsubscribeUrl,
+  repliedSinceEnrollment,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 
@@ -118,17 +119,18 @@ Deno.serve(async (req) => {
   // REPLY BRIDGE (backstop): a lead can reply AFTER a touch is already queued —
   // the scheduler's reply bridge only runs while touches are 'scheduled'. So
   // re-check reply state here before sending/advancing: if the enrollment is
-  // already 'replied', or a fresh inbound landed after the lead started, pull the
+  // already 'replied', or a fresh inbound landed after the lead was committed to the
+  // cadence (enrolled_at — NOT the possibly-future staggered started_at), pull the
   // lead out of the cold cadence instead of sending/advancing. The reply is
   // handled in the normal Queue (Follow up) via the existing pause-on-inbound path.
   const { data: enr } = await admin
     .from("campaign_enrollment")
-    .select("id, status, started_at")
+    .select("id, status, started_at, enrolled_at")
     .eq("id", touch.enrollment_id)
     .maybeSingle();
   const replied =
     enr?.status === "replied" ||
-    (!!lead.last_inbound_at && !!enr?.started_at && new Date(lead.last_inbound_at) > new Date(enr.started_at));
+    repliedSinceEnrollment(lead.last_inbound_at, enr?.enrolled_at);
   if (replied) {
     if (enr && enr.status !== "replied") {
       await admin.from("campaign_enrollment").update({ status: "replied" }).eq("id", enr.id);

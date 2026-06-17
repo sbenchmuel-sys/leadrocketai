@@ -10,6 +10,7 @@ import {
   summarizeChannelSkips,
   buildTouchSchedule,
   canReceiveChannel,
+  isLiveRelationship,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -263,5 +264,53 @@ describe("buildTouchSchedule", () => {
     // eligible Wed the 3rd; +1 business day = Thu the 4th.
     expect(new Date(call.eligible_at).getUTCDate()).toBe(3);
     expect(new Date(call.max_age_at as string).getUTCDate()).toBe(4);
+  });
+});
+
+describe("isLiveRelationship — don't cold-enroll an active relationship", () => {
+  // Fixed "now" so the recent-vs-old reply cases are deterministic.
+  const NOW = new Date("2026-06-17T12:00:00Z").getTime();
+  const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
+
+  // Regression for the Codex P1 on #87: closed deals live on leads.STAGE, not
+  // leads.status (which is never 'customer'). Both closed_won and closed_lost must be
+  // excluded, so this gate can't silently revert to a no-op.
+  it("excludes a closed_won lead (a customer)", () => {
+    expect(isLiveRelationship({ stage: "closed_won" }, NOW)).toBe(true);
+  });
+
+  it("excludes a closed_lost lead (a closed deal)", () => {
+    expect(isLiveRelationship({ stage: "closed_lost" }, NOW)).toBe(true);
+  });
+
+  it("is case-insensitive on stage", () => {
+    expect(isLiveRelationship({ stage: "Closed_Won" }, NOW)).toBe(true);
+  });
+
+  it("does NOT exclude an open-pipeline lead on stage alone", () => {
+    for (const stage of ["new", "contacted", "engaged", "post_meeting", "closing"]) {
+      expect(isLiveRelationship({ stage }, NOW)).toBe(false);
+    }
+  });
+
+  it("excludes a lead with a booked future meeting", () => {
+    expect(isLiveRelationship({ stage: "engaged", has_future_meeting: true }, NOW)).toBe(true);
+  });
+
+  it("excludes a lead with a recent inbound reply (inside the 30-day window)", () => {
+    expect(isLiveRelationship({ stage: "new", last_inbound_at: daysAgo(5) }, NOW)).toBe(true);
+  });
+
+  it("does NOT exclude a lead whose last reply predates the 30-day window", () => {
+    expect(isLiveRelationship({ stage: "new", last_inbound_at: daysAgo(45) }, NOW)).toBe(false);
+  });
+
+  it("does NOT exclude a plain open lead (no close, no meeting, no recent reply)", () => {
+    expect(isLiveRelationship({ stage: "engaged", has_future_meeting: false, last_inbound_at: null }, NOW)).toBe(false);
+  });
+
+  it("a missing/unknown stage is not treated as a closed deal", () => {
+    expect(isLiveRelationship({ stage: null }, NOW)).toBe(false);
+    expect(isLiveRelationship({}, NOW)).toBe(false);
   });
 });

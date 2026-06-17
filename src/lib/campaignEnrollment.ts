@@ -43,6 +43,14 @@ export const DEFAULT_DAILY_CAP = 40;
 // schedule — warn the rep (and the scheduler ties this to the volume tripwire).
 const CAPACITY_WARN_BUSINESS_DAYS = 20;
 
+// A lead we've heard back from within this window is treated as a live/warm
+// conversation and excluded from COLD enrollment. The send-time reply bridge only
+// catches replies that land AFTER enrolled_at, so a recent reply that PREDATES this
+// enrollment needs its own guard here — otherwise a mid-conversation lead would get
+// cold-blasted on day 0.
+const WARM_INBOUND_WINDOW_DAYS = 30;
+const WARM_INBOUND_WINDOW_MS = WARM_INBOUND_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
 // ── Business-day helpers (client-side; server uses _shared/executionSettings) ─
 
 function isWeekend(d: Date): boolean {
@@ -398,6 +406,32 @@ export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): Plann
   return touches;
 }
 
+// ── Live-relationship exclusion (don't cold-blast an active relationship) ─────
+
+/**
+ * True when a lead is in a live/active relationship and must NOT be cold-enrolled:
+ *  - a CLOSED DEAL — stage 'closed_won' (a customer) OR 'closed_lost' (a closed deal).
+ *    Customer/closed state lives on leads.STAGE, not leads.status (status is never
+ *    'customer'); this matches how every other automation gate treats closed deals.
+ *  - a booked FUTURE MEETING (has_future_meeting).
+ *  - a RECENT inbound reply — a warm conversation whose last reply predates this
+ *    enrollment, which the send-time reply bridge (anchored at enrolled_at) wouldn't
+ *    catch.
+ * Pure + deterministic (takes nowMs) → unit-testable, so the gate can't silently
+ * regress to a no-op.
+ */
+export function isLiveRelationship(
+  lead: { stage?: string | null; has_future_meeting?: boolean | null; last_inbound_at?: string | null },
+  nowMs: number,
+): boolean {
+  const stage = (lead.stage || "").trim().toLowerCase();
+  const closedDeal = stage === "closed_won" || stage === "closed_lost";
+  const hasMeeting = lead.has_future_meeting === true;
+  const recentlyReplied = !!lead.last_inbound_at &&
+    (nowMs - new Date(lead.last_inbound_at).getTime()) < WARM_INBOUND_WINDOW_MS;
+  return closedDeal || hasMeeting || recentlyReplied;
+}
+
 // ── The enrollment mutation ───────────────────────────────────────────────────
 
 export interface EnrollmentSkips {
@@ -405,6 +439,7 @@ export interface EnrollmentSkips {
   suppressed: number;
   alreadyEnrolled: number; // already in a campaign / active sequence
   missingEmail: number;
+  activeOrCustomer: number; // existing customer, booked meeting, or recent inbound reply (live relationship)
 }
 
 export interface EnrollmentResult {
@@ -427,6 +462,9 @@ interface EnrollCandidateLead extends LeadContactInfo {
   campaign_id: string | null;
   automation_mode: string | null;
   needs_action: boolean | null;
+  stage: string | null;
+  has_future_meeting: boolean | null;
+  last_inbound_at: string | null;
 }
 
 interface EnrollmentContext {
@@ -469,7 +507,7 @@ async function gatherEnrollmentContext(
 
   const { data: leadRows } = await supabase
     .from("leads")
-    .select("id, email, phone, linkedin_url, whatsapp_number, unsubscribed, campaign_id, automation_mode, needs_action")
+    .select("id, email, phone, linkedin_url, whatsapp_number, unsubscribed, campaign_id, automation_mode, needs_action, stage, has_future_meeting, last_inbound_at")
     .in("id", leadIds)
     .eq("workspace_id", workspaceId);
   const leads = (leadRows || []) as unknown as EnrollCandidateLead[];
@@ -505,7 +543,8 @@ async function gatherEnrollmentContext(
     .in("lead_id", leadIds);
   const alreadyEnrolledIds = new Set(((existingEnr || []) as any[]).map((r) => r.lead_id));
 
-  const skips: EnrollmentSkips = { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0 };
+  const skips: EnrollmentSkips = { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0, activeOrCustomer: 0 };
+  const nowMs = Date.now();
   const enrollable: EnrollCandidateLead[] = [];
   for (const lead of leads) {
     if (!isValidEmail(lead.email)) { skips.missingEmail++; continue; } // missing OR malformed — never schedule
@@ -522,6 +561,9 @@ async function gatherEnrollmentContext(
     // lead's automation first.
     const activeLegacy = lead.campaign_id == null && lead.automation_mode != null;
     if (inOtherCampaign || activeLegacy) { skips.alreadyEnrolled++; continue; }
+    // Never cold-blast a LIVE relationship (see isLiveRelationship): a closed deal
+    // (won/lost), a booked future meeting, or a recent inbound reply.
+    if (isLiveRelationship(lead, nowMs)) { skips.activeOrCustomer++; continue; }
     // Enrollable: unassigned (will be stamped) OR already a member of this campaign.
     enrollable.push(lead);
   }
@@ -546,7 +588,7 @@ export async function previewEnrollment(
   if (leadIds.length === 0) {
     return {
       enrollableCount: 0,
-      skips: { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0 },
+      skips: { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0, activeOrCustomer: 0 },
       channelSkips: { byChannel: {}, lines: [] },
       capacity: computeCapacityPlan({ leadCount: 0, emailTouchesPerLead: 0, dailyCap: DEFAULT_DAILY_CAP }),
     };
@@ -600,7 +642,7 @@ export async function enrollLeadsInCampaign(
   leadIds: string[],
   opts?: { dailyCap?: number; anchor?: Date },
 ): Promise<EnrollmentResult> {
-  const emptySkips: EnrollmentSkips = { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0 };
+  const emptySkips: EnrollmentSkips = { unsubscribed: 0, suppressed: 0, alreadyEnrolled: 0, missingEmail: 0, activeOrCustomer: 0 };
   if (leadIds.length === 0) {
     return {
       enrolled: 0, skips: emptySkips,
