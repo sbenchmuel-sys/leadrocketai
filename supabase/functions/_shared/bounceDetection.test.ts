@@ -175,6 +175,22 @@ Deno.test("aliased report: the unrelated transient recipient is still SOFT", () 
   assertEquals(classifyBounce({ body: ALIASED_MULTI_DSN, recipientEmail: "bystander@other.com" }).severity, "soft");
 });
 
+Deno.test("substring-collision recipients are matched exactly, not by includes (P2 round 3)", () => {
+  // ann@example.com is a suffix of joann@example.com — a substring match would
+  // pull joann's 5.x.x into ann's scope and burn a recoverable lead.
+  const dsn = [
+    "Final-Recipient: rfc822; joann@example.com",
+    "Action: failed",
+    "Status: 5.1.1",
+    "",
+    "Final-Recipient: rfc822; ann@example.com",
+    "Action: delayed",
+    "Status: 4.4.7",
+  ].join("\n");
+  assertEquals(classifyBounce({ body: dsn, recipientEmail: "ann@example.com" }).severity, "soft");
+  assertEquals(classifyBounce({ body: dsn, recipientEmail: "joann@example.com" }).severity, "hard");
+});
+
 Deno.test("canonical Status: code is honored when the human text carries no inline code (P1 contract)", () => {
   // Mirrors what the gmail caller now passes: human preamble (no code) + the
   // machine delivery-status part. The Status: field must drive the decision.

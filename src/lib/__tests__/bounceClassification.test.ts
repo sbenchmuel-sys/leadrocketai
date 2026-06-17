@@ -81,6 +81,20 @@ describe("classifyBounce — soft vs hard gate", () => {
     expect(classifyBounce({ body: dsn, recipientEmail: "bystander@other.com" }).severity).toBe("soft");
   });
 
+  it("matches recipients exactly so a suffix address isn't burned by another's code", () => {
+    // ann@example.com is a suffix of joann@example.com; exact matching keeps
+    // ann's 4.x.x from being upgraded to joann's 5.x.x. (Codex P2 round 3.)
+    const dsn = [
+      "Final-Recipient: rfc822; joann@example.com",
+      "Status: 5.1.1",
+      "",
+      "Final-Recipient: rfc822; ann@example.com",
+      "Status: 4.4.7",
+    ].join("\n");
+    expect(classifyBounce({ body: dsn, recipientEmail: "ann@example.com" }).severity).toBe("soft");
+    expect(classifyBounce({ body: dsn, recipientEmail: "joann@example.com" }).severity).toBe("hard");
+  });
+
   it("honors a canonical Status: code when the human text has no inline code (P1 contract)", () => {
     const body = "Your message couldn't be delivered.\n\nFinal-Recipient: rfc822; dead@acme.com\nStatus: 5.2.1";
     expect(classifyBounce({ body, recipientEmail: "dead@acme.com" }).severity).toBe("hard");

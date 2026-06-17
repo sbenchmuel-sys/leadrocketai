@@ -204,9 +204,18 @@ function scopeToRecipientBlocks(body: string, recipientEmail: string): string | 
   for (let i = 0; i < starts.length; i++) {
     const end = i + 1 < starts.length ? starts[i + 1] : body.length;
     const block = body.slice(starts[i], end);
-    if (block.toLowerCase().includes(target)) matched.push(block);
+    if (blockNamesRecipient(block, target)) matched.push(block);
   }
   return matched.length > 0 ? matched.join("\n") : null;
+}
+
+// Whole-email comparison, NOT substring: a naive `block.includes("ann@x.com")`
+// also matches "joann@x.com", so scoping `ann@x.com` could absorb joann's block
+// and let his 5.x.x burn ann. Extract full address tokens and compare exactly.
+const EMAIL_TOKEN_RE = /[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi;
+function blockNamesRecipient(block: string, targetLower: string): boolean {
+  const emails = block.toLowerCase().match(EMAIL_TOKEN_RE);
+  return emails !== null && emails.includes(targetLower);
 }
 
 /**
