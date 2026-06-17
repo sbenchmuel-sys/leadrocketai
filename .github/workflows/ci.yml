@@ -48,8 +48,12 @@ jobs:
       - name: Unit tests
         run: npx vitest run
 
+      # The root tsconfig.json is a solution file ("files": [] + project references),
+      # so a plain `tsc --noEmit` checks ZERO files and passes vacuously. Build mode
+      # (`-b`) follows the references and actually type-checks tsconfig.app.json +
+      # tsconfig.node.json. (Codex P2 on PR #86.)
       - name: Type-check
-        run: npx tsc --noEmit
+        run: npx tsc -b --noEmit
 
       # Dummy Supabase env so a build-time read of import.meta.env can't fail the
       # build. These are placeholders, never used to reach a real project.
