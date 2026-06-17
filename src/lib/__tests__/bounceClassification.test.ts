@@ -46,4 +46,20 @@ describe("classifyBounce — soft vs hard gate", () => {
   it("most-severe code wins when several are present (5 outranks 4)", () => {
     expect(classifyBounce({ body: "Status: 4.4.7\nStatus: 5.1.1" }).severity).toBe("hard");
   });
+
+  it("multi-recipient DSN: a soft recipient is NOT burned by another recipient's hard code", () => {
+    // One report, two recipients: ben hard (5.1.1), gina soft (4.4.7). Scoped to
+    // the lead's own per-recipient block so gina survives. (Codex P2 on PR #89.)
+    const dsn = [
+      "Final-Recipient: rfc822; ben@acme.com",
+      "Action: failed",
+      "Status: 5.1.1",
+      "",
+      "Final-Recipient: rfc822; gina@acme.com",
+      "Action: delayed",
+      "Status: 4.4.7",
+    ].join("\n");
+    expect(classifyBounce({ body: dsn, recipientEmail: "ben@acme.com" }).severity).toBe("hard");
+    expect(classifyBounce({ body: dsn, recipientEmail: "gina@acme.com" }).severity).toBe("soft");
+  });
 });

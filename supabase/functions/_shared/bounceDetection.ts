@@ -153,6 +153,40 @@ function findEnhancedStatusClass(text: string): { code: string; cls: 4 | 5 } | n
 }
 
 /**
+ * A single DSN (RFC 3464) can report MANY failed recipients, each in its own
+ * per-recipient group that starts with a `Final-Recipient:` (or
+ * `Original-Recipient:`) line and carries its own `Action:` / `Status:`. If a
+ * report lists recipient A as 5.x.x (permanent) and recipient B as 4.x.x
+ * (transient), a whole-body "5 outranks 4" scan would mark B hard off A's code
+ * — wrongly burning a recoverable lead. Since the callers only check that the
+ * lead's address appears SOMEWHERE in the body before attributing, we isolate
+ * the block(s) that actually name this recipient and classify only those.
+ *
+ * Returns the matching block(s) joined, or null when:
+ *   - the body has fewer than two recipient groups (single-recipient DSN — the
+ *     whole body already is this recipient's, so nothing to scope), or
+ *   - no structured group names this recipient (e.g. only the human-readable
+ *     preamble mentions them) — caller falls back to whole-body classification.
+ */
+function scopeToRecipientBlocks(body: string, recipientEmail: string): string | null {
+  if (!body || !recipientEmail) return null;
+  const boundary = /^[ \t>]*(?:Final-Recipient|Original-Recipient):/gim;
+  const starts: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = boundary.exec(body)) !== null) starts.push(m.index);
+  if (starts.length < 2) return null;
+
+  const target = recipientEmail.toLowerCase();
+  const matched: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1] : body.length;
+    const block = body.slice(starts[i], end);
+    if (block.toLowerCase().includes(target)) matched.push(block);
+  }
+  return matched.length > 0 ? matched.join("\n") : null;
+}
+
+/**
  * Classify a bounce as hard (permanent) or soft (transient).
  *
  * Decision order:
@@ -161,15 +195,23 @@ function findEnhancedStatusClass(text: string): { code: string; cls: 4 | 5 } | n
  *   2. No code → a clear permanent-failure phrase → hard.
  *   3. Otherwise → soft (fail-safe: don't burn a possibly-good lead).
  *
+ * Pass `recipientEmail` (the lead being attributed) so a multi-recipient DSN is
+ * classified from THIS recipient's block only — never another recipient's code.
+ *
  * Call this ONLY after the message is already known to be a bounce/DSN.
  */
 export function classifyBounce(input: {
   fromEmail?: string;
   subject?: string;
   body?: string;
+  recipientEmail?: string;
 }): BounceClassification {
   const subject = input.subject || "";
-  const body = input.body || "";
+  const fullBody = input.body || "";
+  const recipient = (input.recipientEmail || "").toLowerCase().trim();
+  // Narrow to this recipient's per-recipient block in a multi-recipient report;
+  // single-recipient bodies (the common case) are unchanged.
+  const body = (recipient && scopeToRecipientBlocks(fullBody, recipient)) || fullBody;
   const haystack = `${subject}\n${body}`;
 
   const enhanced = findEnhancedStatusClass(haystack);

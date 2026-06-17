@@ -494,7 +494,7 @@ serve(async (req) => {
           // cadence retry. Only hard (5.x.x / clearly-permanent) bounces suppress
           // the lead and feed the bounce circuit breaker. Unclassifiable → treated
           // as transient by classifyBounce (fail-safe: don't burn a good lead).
-          const bounceClass = classifyBounce({ fromEmail: from, subject, body: bodyText });
+          const bounceClass = classifyBounce({ fromEmail: from, subject, body: bodyText, recipientEmail: leadEmailNorm });
           if (bounceClass.severity !== "hard") {
             console.log(
               `[gmail-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,

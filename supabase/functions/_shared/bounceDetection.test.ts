@@ -120,6 +120,47 @@ Deno.test("realistic Outlook permanent NDR → hard", () => {
   assertEquals(severityOf({ subject: "Undeliverable: Quick question", body }), "hard");
 });
 
+// ── Multi-recipient DSN: classify only THIS recipient's block ───────────────
+// A single report can list several failed recipients with different severities.
+// Without scoping, a global "5 outranks 4" scan would burn a recoverable lead
+// whose own failure was transient, just because another recipient hard-failed.
+const MULTI_RECIPIENT_DSN = [
+  "Final-Recipient: rfc822; ben@acme.com",
+  "Action: failed",
+  "Status: 5.1.1",
+  "Diagnostic-Code: smtp; 550 5.1.1 User unknown",
+  "",
+  "Final-Recipient: rfc822; gina@acme.com",
+  "Action: delayed",
+  "Status: 4.4.7",
+  "Diagnostic-Code: smtp; 452 4.4.7 Mailbox is full",
+].join("\n");
+
+Deno.test("multi-recipient DSN: this lead's 5.x.x block → HARD", () => {
+  assertEquals(classifyBounce({ body: MULTI_RECIPIENT_DSN, recipientEmail: "ben@acme.com" }).severity, "hard");
+});
+
+Deno.test("multi-recipient DSN: soft recipient stays SOFT despite another recipient's 5.x.x", () => {
+  // gina is 4.4.7; ben in the SAME report is 5.1.1. Scoped to gina → soft.
+  assertEquals(classifyBounce({ body: MULTI_RECIPIENT_DSN, recipientEmail: "gina@acme.com" }).severity, "soft");
+});
+
+Deno.test("single-recipient DSN is unchanged by scoping (no false narrowing)", () => {
+  assertEquals(
+    classifyBounce({ body: "Final-Recipient: rfc822; solo@acme.com\nStatus: 5.2.1", recipientEmail: "solo@acme.com" })
+      .severity,
+    "hard",
+  );
+});
+
+Deno.test("multi-recipient where lead is only in the preamble → falls back to whole body", () => {
+  // No structured block names 'lead@acme.com'; scoping returns null and we
+  // classify the whole body (best effort). Here the only code is 4.x.x → soft.
+  const body = "Delivery to lead@acme.com and others delayed.\n" +
+    "Final-Recipient: rfc822; other@acme.com\nStatus: 4.2.2";
+  assertEquals(classifyBounce({ body, recipientEmail: "lead@acme.com" }).severity, "soft");
+});
+
 // ── Existing detector still works (regression) ──────────────────────────────
 Deno.test("detectBounce still flags postmaster sender / DSN subject", () => {
   assertEquals(detectBounce("mailer-daemon@googlemail.com", "hi").isBounce, true);

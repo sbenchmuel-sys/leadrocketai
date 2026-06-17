@@ -348,7 +348,7 @@ serve(async (req) => {
           // and let the cadence retry. Only hard (5.x.x / clearly-permanent)
           // bounces suppress the lead and feed the bounce circuit breaker.
           // Unclassifiable → transient (fail-safe: don't burn a good lead).
-          const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText });
+          const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText, recipientEmail: leadEmailNorm });
           if (bounceClass.severity !== "hard") {
             console.log(
               `[outlook-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,
