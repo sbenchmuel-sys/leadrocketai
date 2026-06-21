@@ -52,6 +52,15 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **What happens:** `classifyRevenueState` in `src/lib/dashboardUtils.ts` reads the consent gate via `(lead as any).automation_mode` — the field exists at runtime but was never declared on the type, producing 1 tsc error in `dashboardUtils.test.ts` and an `as any` cast in production code.
 - **Claude Code prompt:** "Add `automation_mode` to the `EnrichedLead`/`LeadListItem` type(s), remove the `as any` cast in `classifyRevenueState` (src/lib/dashboardUtils.ts), and confirm `npx tsc -p tsconfig.app.json` is clean and the dashboardUtils tests still pass."
 
+## BUG-010 — automation-executor system notes written only to legacy `interactions`
+- **Severity:** P3 (migration hygiene during the `interactions` → `lead_timeline_items` cutover — NOT a leak, wrong-send, or broken public promise)
+- **Status:** fixed (2026-06-21) — both `automation-executor` system-note writes now go through `createCanonicalInteraction` (`_shared/canonicalInteraction.ts`), which inserts into `interactions` AND projects into the canonical `lead_timeline_items` ledger, so the notes survive once `interactions` is retired. Existing `dedupe_key` formats preserved. `workspace_id` added to the OOO query (~162) and candidate query (~262) selects so the projection actually fires.
+- **Found:** 2026-06-18, nightly run (re-confirmed 2026-06-19).
+- **Scope correction:** the nightly listed 4 orphan sites, but only 2 are real — `automation-executor/index.ts:193` (OOO-return note) and `:688` (unsubscribe-stop note). The other two it named (`call-analyze:503`, `whatsapp-send:193`) already project to `lead_timeline_items` via `projectTimelineItem`, as do all other cross-channel comms writes (gmail/outlook/sms/voice). Verified site-by-site against authoritative files.
+- **What happens:** the two automation system notes did a bare `.insert()` into `interactions` with no timeline projection. When `interactions` is dropped, those rows (notably the unsubscribe audit note "Lead requested to unsubscribe — automation stopped permanently") would vanish from the lead timeline.
+- **Repro:** grep edge functions for `from("interactions").insert` that has no adjacent `projectTimelineItem`/`createCanonicalInteraction` → the two automation-executor sites.
+- **Claude Code prompt:** "Route the two automation-executor system-note inserts (lines ~193 OOO-return and ~688 unsubscribe) through `createCanonicalInteraction` so they also land in `lead_timeline_items`; preserve dedupe_key; add `workspace_id` to the source queries so projection fires."
+
 ---
 
 ## Deferred — do not fix without a plan

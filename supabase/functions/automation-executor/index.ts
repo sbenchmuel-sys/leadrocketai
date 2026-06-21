@@ -30,6 +30,7 @@ import {
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
+import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
 // Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
 // Must run before the real signature block is appended to avoid duplication.
@@ -160,7 +161,7 @@ serve(async (req) => {
     // -------------------------------------------------------
     let oooQuery = supabase
       .from("leads")
-      .select("id, name, company, owner_user_id, ooo_until, eligible_at")
+      .select("id, name, company, owner_user_id, workspace_id, ooo_until, eligible_at")
       .not("ooo_until", "is", null)
       .lte("ooo_until", now)          // OOO period has ended
       .not("eligible_at", "is", null)
@@ -189,9 +190,12 @@ serve(async (req) => {
           ooo_until: null, // clear OOO flag now that we've surfaced it
         }).eq("id", lead.id);
 
-        // Log a system note in the timeline
-        await supabase.from("interactions").insert({
+        // Log a system note — canonical helper writes interactions + projects
+        // it into lead_timeline_items (the canonical ledger) so the note
+        // survives once `interactions` is retired.
+        await createCanonicalInteraction(supabase, {
           lead_id: lead.id,
+          workspace_id: lead.workspace_id,
           type: "system_note",
           source: "automation",
           body_text: `${lead.name} is back in the office. Follow-up action surfaced.`,
@@ -260,7 +264,7 @@ serve(async (req) => {
     // BulkAutomationDialog / AutomationPreviewCard which sets automation_mode.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode, campaign_id, created_at")
+      .select("id, name, email, company, workspace_id, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode, campaign_id, created_at")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .not("automation_mode", "is", null) // ← explicit consent required
@@ -685,8 +689,12 @@ serve(async (req) => {
                 nurture_status: "inactive",
               }).eq("id", lead.id);
 
-              await supabase.from("interactions").insert({
+              // Canonical helper writes interactions + projects into
+              // lead_timeline_items so this unsubscribe audit note survives
+              // once `interactions` is retired.
+              await createCanonicalInteraction(supabase, {
                 lead_id: lead.id,
+                workspace_id: lead.workspace_id,
                 type: "system_note",
                 source: "automation",
                 body_text: "Lead requested to unsubscribe — automation stopped permanently.",
