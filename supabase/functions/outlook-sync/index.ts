@@ -20,6 +20,7 @@ import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
+import { classifyBounce } from "../_shared/bounceDetection.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -340,7 +341,27 @@ serve(async (req) => {
             console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
             continue;
           }
-          console.log(`[outlook-sync] Lead ${leadId}: Bounce detected — stopping automation`);
+
+          // Soft (transient) vs hard (permanent) bounce — mirror of gmail-sync.
+          // A 4.x.x DSN (mailbox full, greylisting, temporary defer) must NOT
+          // permanently kill a good lead: leave unsubscribed/enrollment untouched
+          // and let the cadence retry. Only hard (5.x.x / clearly-permanent)
+          // bounces suppress the lead and feed the bounce circuit breaker.
+          // Unclassifiable → transient (fail-safe: don't burn a good lead).
+          // Exchange NDRs inline the diagnostic ("Remote Server returned
+          // '550 5.1.1 …'") and the recipient/Status fields directly in the body
+          // that getGraphMessageBody returns, so the RFC 3463 code is already
+          // present here (no separate delivery-status part to fetch, unlike Gmail).
+          const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText, recipientEmail: leadEmailNorm });
+          if (bounceClass.severity !== "hard") {
+            console.log(
+              `[outlook-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,
+            );
+            existingMessageIds.add(messageId);
+            continue;
+          }
+
+          console.log(`[outlook-sync] Lead ${leadId}: Hard bounce detected (code: ${bounceClass.statusCode ?? "keyword/none"}) — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true, needs_action: false, eligible_at: null,
             next_action_key: null, next_action_label: null, action_reason_code: null,
