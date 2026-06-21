@@ -48,7 +48,7 @@ vi.mock("@/lib/generateCampaignContent", () => ({
   ingestCampaignKnowledge: (...args: any[]) => ingestCampaignKnowledge(...args),
 }));
 
-const getLeadsList = vi.fn(async (): Promise<any[]> => []);
+const getLeadsList = vi.fn(async (..._args: any[]): Promise<any[]> => []);
 vi.mock("@/lib/supabaseQueries", () => ({
   getLeadsList: (...args: any[]) => getLeadsList(...args),
 }));
