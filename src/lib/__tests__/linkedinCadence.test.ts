@@ -15,7 +15,7 @@ import {
   providerToCanonical,
   type CanonicalChannel,
 } from "@/lib/channels";
-import { buildDefaultPlan, touchVerb } from "@/lib/campaignDefaults";
+import { buildDefaultPlan, touchVerb, touchLabel } from "@/lib/campaignDefaults";
 import { primaryTaskForChannel } from "@/lib/generateCampaignContent";
 import type { CampaignStep } from "@/lib/campaignQueries";
 
@@ -53,8 +53,10 @@ describe("buildDefaultPlan — three LinkedIn touches when linkedin is selected"
     expect(touchVerb("linkedin")).toBe("LinkedIn");
   });
 
-  it("includes exactly three linkedin touches: connect (intro), react (value_add), follow-up (followup)", () => {
+  it("is a 9-touch plan with exactly three linkedin touches: connect (intro), react (value_add), follow-up (followup)", () => {
     const plan = buildDefaultPlan(["linkedin"]);
+    // Three LinkedIn touches are woven INTO a 9-touch plan, not bolted on.
+    expect(plan).toHaveLength(9);
     const li = plan.filter((s) => s.channel === "linkedin");
     expect(li).toHaveLength(3);
     // Ordered earliest→latest: connection request, reaction, follow-up message.
@@ -63,16 +65,41 @@ describe("buildDefaultPlan — three LinkedIn touches when linkedin is selected"
     for (const t of li) expect(t.delay_days).toBeGreaterThan(0);
   });
 
-  it("falls back to email (full plan, zero linkedin touches) when linkedin is NOT selected", () => {
-    const withLi = buildDefaultPlan(["linkedin"]);
+  it("falls back to email — an email-only outreach is still exactly 9 touches", () => {
     const without = buildDefaultPlan([]);
-    // Same number of touches either way — fallback never drops a touch.
-    expect(without).toHaveLength(withLi.length);
+    expect(without).toHaveLength(9);
     expect(without.some((s) => s.channel === "linkedin")).toBe(false);
-    // The would-be linkedin touches are now email, step_types preserved.
-    expect(without.filter((s) => s.channel === "email").length).toBeGreaterThan(
-      withLi.filter((s) => s.channel === "email").length,
+    // The three would-be LinkedIn touches are now email; the plan never shrinks.
+    expect(without.filter((s) => s.channel === "email")).toHaveLength(
+      buildDefaultPlan(["linkedin"]).filter((s) => s.channel === "email").length + 3,
     );
+  });
+});
+
+// ── Plan-review labels: three distinct LinkedIn rows ────────────────────────
+
+describe("touchLabel — LinkedIn touches read distinctly by step_type", () => {
+  it("labels the three LinkedIn touch types in plain English", () => {
+    expect(touchLabel("linkedin", "intro")).toBe("Connect on LinkedIn");
+    expect(touchLabel("linkedin", "value_add")).toBe("React to their post");
+    expect(touchLabel("linkedin", "followup")).toBe("LinkedIn message");
+  });
+
+  it("the three labels are all different (no identical 'LinkedIn' rows)", () => {
+    const labels = new Set([
+      touchLabel("linkedin", "intro"),
+      touchLabel("linkedin", "value_add"),
+      touchLabel("linkedin", "followup"),
+    ]);
+    expect(labels.size).toBe(3);
+  });
+
+  it("leaves every other channel's label unchanged (falls back to the channel verb)", () => {
+    expect(touchLabel("email", "intro")).toBe("Email");
+    expect(touchLabel("voice", "followup")).toBe("Call");
+    expect(touchLabel("sms", "followup")).toBe("Text");
+    // LinkedIn with no step_type degrades to the generic message label.
+    expect(touchLabel("linkedin")).toBe("LinkedIn message");
   });
 });
 

@@ -33,12 +33,13 @@ export interface DraftStep {
   active: boolean;
 }
 
-// ── The recommended touch plan, presented as FINISHED ───────────────
-// `preferredChannel` says which channel this touch wants; if the rep
-// didn't pick that channel it falls back to email so the plan always
-// stays a full set of touches and never stalls. The custom_instructions
-// are written goal-first (not channel-mechanic-first) so a LinkedIn touch
-// that falls back to email still reads as a sensible email.
+// ── The recommended 9-touch plan, presented as FINISHED ─────────────
+// Three of the nine touches are manual LinkedIn touches (connection request,
+// react-to-their-post, follow-up message) woven INTO the plan — not bolted on.
+// `preferredChannel` says which channel this touch wants; if the rep didn't pick
+// that channel it falls back to email so the plan always stays 9 touches and never
+// stalls. The custom_instructions are written goal-first (not channel-mechanic-
+// first) so a LinkedIn touch that falls back to email still reads as a sensible email.
 interface TouchTemplate {
   step_type: StepType;
   preferredChannel: CanonicalChannel;
@@ -49,6 +50,7 @@ interface TouchTemplate {
 
 const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
   {
+    // 1 · Email — first message (day 0)
     step_type: "intro",
     preferredChannel: "email",
     delay_days: 0,
@@ -57,7 +59,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "First email. Open with one line that shows you know who they are, then 2–3 lines on the offer from the knowledge file. End with a soft question. No attachments.",
   },
   {
-    // LinkedIn connection request — short, no-pressure note. Manual touch.
+    // 2 · LinkedIn — connection request (short, no-pressure note). Manual touch.
     step_type: "intro",
     preferredChannel: "linkedin",
     delay_days: 1,
@@ -66,6 +68,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Open a relationship with a short, no-pressure note that gives a genuine reason to connect. No pitch, no offer — just a real human reason to be in touch.",
   },
   {
+    // 3 · Email — follow-up
     step_type: "followup",
     preferredChannel: "email",
     delay_days: 2,
@@ -74,6 +77,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Follow-up. Reference the first email in one line, then a fresh angle. One question only. Don't say \"just checking in.\"",
   },
   {
+    // 4 · Call
     step_type: "followup",
     preferredChannel: "voice",
     delay_days: 2,
@@ -82,7 +86,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Quick call. 2–3 talking points, nothing scripted. If no one answers, leave a short voicemail and the next email will follow up on it.",
   },
   {
-    // LinkedIn "react to their post" — engage with something they recently shared. Manual touch.
+    // 5 · LinkedIn — react to their post (engage with something they recently shared). Manual touch.
     step_type: "value_add",
     preferredChannel: "linkedin",
     delay_days: 2,
@@ -91,14 +95,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Engage with something the prospect recently shared — react to their latest post or update with a short, specific, genuine comment. No pitch.",
   },
   {
-    step_type: "value_add",
-    preferredChannel: "email",
-    delay_days: 2,
-    cta_type: "soft_offer",
-    custom_instructions:
-      "Value email. Offer to send a one-pager relevant to their industry and suggest a quick meeting. Keep it generous, not pushy.",
-  },
-  {
+    // 6 · Text — only because they haven't replied yet
     step_type: "followup",
     preferredChannel: "sms",
     delay_days: 2,
@@ -107,23 +104,16 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Short text, only because they haven't replied yet. One sentence, under 160 characters, no greeting beyond their first name.",
   },
   {
-    step_type: "value_add",
-    preferredChannel: "email",
-    delay_days: 3,
-    cta_type: "soft_offer",
-    custom_instructions:
-      "Second value email. Lead with one concrete result or proof point relevant to their industry, then suggest a quick meeting.",
-  },
-  {
-    // LinkedIn follow-up message — friendly nudge with one light question. Manual touch.
+    // 7 · LinkedIn — follow-up message (friendly nudge, one light question). Manual touch.
     step_type: "followup",
     preferredChannel: "linkedin",
-    delay_days: 2,
+    delay_days: 3,
     cta_type: "question",
     custom_instructions:
       "Friendly follow-up that adds one relevant insight and ends with a single light question. No hard pitch.",
   },
   {
+    // 8 · Call — second attempt
     step_type: "followup",
     preferredChannel: "voice",
     delay_days: 3,
@@ -132,14 +122,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Second call attempt. Brief — reference the value you've already shared. Voicemail if there's no answer.",
   },
   {
-    step_type: "followup",
-    preferredChannel: "email",
-    delay_days: 3,
-    cta_type: "question",
-    custom_instructions:
-      "Light check-in. A new angle, human tone, one question. No pressure.",
-  },
-  {
+    // 9 · Email — breakup
     step_type: "breakup",
     preferredChannel: "email",
     delay_days: 4,
@@ -185,6 +168,26 @@ const STEP_VERB: Record<CanonicalChannel, string> = {
 /** "Email", "Call", "Text" — the word a rep understands. */
 export function touchVerb(channel: CanonicalChannel): string {
   return STEP_VERB[channel] ?? "Email";
+}
+
+/**
+ * Plain-English row label for the plan review. LinkedIn is the one channel that
+ * carries three distinct manual touches, so it reads by its step_type — "Connect
+ * on LinkedIn" / "React to their post" / "LinkedIn message" — instead of three
+ * identical "LinkedIn" rows. Every other channel keeps its plain channel verb.
+ */
+export function touchLabel(channel: CanonicalChannel, stepType?: StepType): string {
+  if (channel === "linkedin") {
+    switch (stepType) {
+      case "intro":
+        return "Connect on LinkedIn";
+      case "value_add":
+        return "React to their post";
+      default:
+        return "LinkedIn message"; // followup / anything else
+    }
+  }
+  return touchVerb(channel);
 }
 
 /** Cumulative day each touch lands on, from the per-touch gaps. */
