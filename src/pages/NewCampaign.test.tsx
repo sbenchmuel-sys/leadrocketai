@@ -48,11 +48,12 @@ vi.mock("@/lib/generateCampaignContent", () => ({
   ingestCampaignKnowledge: (...args: any[]) => ingestCampaignKnowledge(...args),
 }));
 
+const getLeadsList = vi.fn(async (): Promise<any[]> => []);
 vi.mock("@/lib/supabaseQueries", () => ({
-  getLeadsList: vi.fn(async () => []),
+  getLeadsList: (...args: any[]) => getLeadsList(...args),
 }));
 
-import NewCampaign from "./NewCampaign";
+import NewCampaign, { filterLeads } from "./NewCampaign";
 import { toast } from "sonner";
 
 function renderWizard() {
@@ -143,5 +144,90 @@ describe("NewCampaign — flyer upload", () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/app/automations/camp-1"));
     expect(ingestCampaignKnowledge).not.toHaveBeenCalled();
     expect(container).toBeTruthy();
+  });
+});
+
+// ── filterLeads (pure) ────────────────────────────────────────────────────────
+describe("filterLeads", () => {
+  const leads: any[] = [
+    { id: "1", name: "Ada Lovelace", company: "Analytical Engines", email: "ada@ae.com" },
+    { id: "2", name: "Grace Hopper", company: "Navy", email: "grace@navy.mil" },
+    { id: "3", name: "Alan Turing", company: "Bletchley", email: "alan@bp.uk" },
+  ];
+
+  it("returns the full list for an empty/whitespace query", () => {
+    expect(filterLeads(leads, "")).toHaveLength(3);
+    expect(filterLeads(leads, "   ")).toHaveLength(3);
+  });
+
+  it("matches on name, company, or email, case-insensitively", () => {
+    expect(filterLeads(leads, "grace").map((l) => l.id)).toEqual(["2"]);
+    expect(filterLeads(leads, "bletchley").map((l) => l.id)).toEqual(["3"]);
+    expect(filterLeads(leads, "AE.COM").map((l) => l.id)).toEqual(["1"]);
+  });
+
+  it("tolerates null fields", () => {
+    const withNulls: any[] = [{ id: "9", name: null, company: null, email: null }];
+    expect(filterLeads(withNulls, "anything")).toHaveLength(0);
+  });
+});
+
+// ── Step 3: recipient search + select-all ─────────────────────────────────────
+describe("NewCampaign — recipient search & select all", () => {
+  const sampleLeads: any[] = [
+    { id: "1", name: "Ada Lovelace", company: "Analytical Engines", email: "ada@ae.com" },
+    { id: "2", name: "Grace Hopper", company: "Navy", email: "grace@navy.mil" },
+    { id: "3", name: "Alan Turing", company: "Bletchley", email: "alan@bp.uk" },
+  ];
+
+  async function reachRecipients() {
+    getLeadsList.mockResolvedValue(sampleLeads);
+    renderWizard();
+    fireEvent.change(screen.getByLabelText(/What's this outreach called/i), {
+      target: { value: "Outreach" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Build my outreach/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Looks good/i }));
+    // Wait for the (mocked) leads to render on Step 3.
+    await screen.findByText("Ada Lovelace");
+  }
+
+  it("narrows the visible list as the rep types in the search box", async () => {
+    await reachRecipients();
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.getByText("Alan Turing")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search people"), {
+      target: { value: "grace" },
+    });
+
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alan Turing")).not.toBeInTheDocument();
+  });
+
+  it("'Select all' selects only the filtered set, not hidden leads", async () => {
+    await reachRecipients();
+
+    // Filter down to a single person, then select all visible.
+    fireEvent.change(screen.getByPlaceholderText("Search people"), {
+      target: { value: "grace" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Select all/i }));
+
+    // Only the one filtered lead is selected — the summary reflects 1 person.
+    expect(screen.getByText(/to 1 person/i)).toBeInTheDocument();
+    // The control flips to "Clear" once everything visible is selected.
+    expect(screen.getByRole("button", { name: /Clear/i })).toBeInTheDocument();
+
+    // Clearing the search reveals the other (still-unselected) leads, and since
+    // not all visible are selected anymore the control returns to "Select all".
+    fireEvent.change(screen.getByPlaceholderText("Search people"), {
+      target: { value: "" },
+    });
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Select all/i })).toBeInTheDocument();
+    // Still just the one selection — hidden leads were never touched.
+    expect(screen.getByText(/to 1 person/i)).toBeInTheDocument();
   });
 });
