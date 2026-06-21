@@ -1,4 +1,4 @@
-import { Mail, Phone, PhoneCall, MessageSquare, Calendar, Minus, Plus, X, type LucideIcon } from "lucide-react";
+import { Mail, Phone, PhoneCall, MessageSquare, Calendar, Linkedin, Minus, Plus, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { CanonicalChannel } from "@/lib/channels";
 import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
@@ -16,6 +16,7 @@ const ICONS: Record<CanonicalChannel, LucideIcon> = {
   sms: Phone,
   whatsapp: MessageSquare,
   meeting: Calendar,
+  linkedin: Linkedin,
 };
 
 interface CampaignScriptProps {
