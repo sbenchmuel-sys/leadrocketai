@@ -19,6 +19,7 @@
 import { computeNextEligibleAt, type ExecutionSettings } from "./executionSettings.ts";
 import { buildColdEmailFooter } from "./coldEmailFooter.ts";
 import { plainTextToHtml } from "./emailUtils.ts";
+import { isSendableColdEmail, isColdSuppressed } from "./coldSendFloorRules.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -83,35 +84,10 @@ export interface FloorResult {
   reason?: string;
 }
 
-// Mirrors src/lib/emailValidation.ts isValidEmail — the validator import + enrollment
-// use to admit a lead. Deno can't import the frontend module, so this is the
-// established frontend/_shared duplication; KEEP IN SYNC. The floor is the LAST guard
-// before an automatic or review cold send, so it must be no weaker than the gate that
-// let the address in — otherwise invalid data edited in afterward (person@-example.com,
-// person@example-.com, an over-long local part) would slip past every check and send.
-const COLD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// RFC 1123 DNS label: alphanumeric ends, only alphanumerics + hyphen between.
-const COLD_DNS_LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i;
-function isSendableColdEmail(raw: string): boolean {
-  const e = (raw || "").trim();
-  if (!e || e.length > 254) return false;
-  if (!COLD_EMAIL_RE.test(e)) return false;
-  if (e.includes("..")) return false; // consecutive dots
-  const [local, domain] = e.split("@");
-  if (!local || local.length > 64) return false;
-  if (local.startsWith(".") || local.endsWith(".")) return false; // dot can't bound the local part
-  if (!domain) return false;
-  // Validate EVERY domain label against DNS hostname syntax. Checking only the WHOLE
-  // domain's first/last char misses an invalid intermediate label (foo-.example.com),
-  // and the loose regex above admits non-DNS chars (exa_mple.com, foo!.com) — both
-  // would pass the fail-closed floor. The label regex also rejects empty labels.
-  const labels = domain.split(".");
-  if (labels.length < 2) return false;
-  for (const label of labels) {
-    if (label.length > 63 || !COLD_DNS_LABEL_RE.test(label)) return false;
-  }
-  return true;
-}
+// The pure floor rules (isSendableColdEmail = email-sendability backstop;
+// isColdSuppressed = exact email/domain suppression match) live in the
+// zero-dependency leaf ./coldSendFloorRules.ts so they're unit-testable under
+// vitest. Imported above; the behavior is unchanged.
 
 /**
  * The mandatory floor: never send to an opted-out or suppressed lead. Re-reads
@@ -147,11 +123,9 @@ export async function coldSendFloor(
     .eq("workspace_id", workspaceId)
     .in("value", [email, domain]);
   if (supErr) return { ok: false, reason: "suppression check failed" }; // fail closed
-  const hit = (sup || []).some(
-    (r: { kind: string; value: string }) =>
-      (r.kind === "email" && r.value === email) || (r.kind === "domain" && r.value === domain),
-  );
-  if (hit) return { ok: false, reason: "suppressed" };
+  if (isColdSuppressed(email, domain, (sup || []) as Array<{ kind: string; value: string }>)) {
+    return { ok: false, reason: "suppressed" };
+  }
 
   return { ok: true };
 }
