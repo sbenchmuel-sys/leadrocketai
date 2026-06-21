@@ -36,6 +36,7 @@ import {
   type CampaignType,
 } from "@/lib/campaignQueries";
 import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
+import { ingestCampaignKnowledge } from "@/lib/generateCampaignContent";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { getLeadsList, type LeadListItem } from "@/lib/supabaseQueries";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -64,7 +65,9 @@ export default function NewCampaign() {
   const [campaignType, setCampaignType] = useState<CampaignType>("general");
   const [channels, setChannels] = useState<Set<CanonicalChannel>>(new Set(["email"]));
   const [offer, setOffer] = useState("");
-  const [fileName, setFileName] = useState<string | null>(null);
+  // Keep the actual File so we can read its text and ingest it as campaign
+  // knowledge on save — not just its name. Optional; never blocks saving.
+  const [file, setFile] = useState<File | null>(null);
   const [instructions, setInstructions] = useState(DEFAULT_GLOBAL_INSTRUCTIONS);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -188,7 +191,10 @@ export default function NewCampaign() {
         default_channel: defaultChannel,
         include_meeting_cta: false,
         global_instructions: composedInstructions,
-        knowledge_ref: fileName,
+        // The flyer (if any) is ingested below via ingestCampaignKnowledge,
+        // which sets knowledge_ref + knowledge_document_id only on success.
+        // Leave it null here so a file we couldn't read never shows as attached.
+        knowledge_ref: null,
         steps: plan.map((s, i) => ({
           step_number: s.step_number,
           step_type: s.step_type,
@@ -231,7 +237,26 @@ export default function NewCampaign() {
         }
       }
 
+      // Flyer ingest — best-effort, AFTER the campaign exists. Uses the SAME
+      // text-extraction + ingest path as the campaign page's "Add knowledge
+      // file" button (CampaignContentReview.handleUpload). The flyer is
+      // optional: if it can't be read (e.g. a scanned/image-only PDF, which
+      // ingestCampaignKnowledge rejects with a friendly message), we save the
+      // outreach anyway and just flag it — it must never roll back or block.
+      let flyerFailed = false;
+      if (file) {
+        try {
+          const text = await file.text();
+          await ingestCampaignKnowledge(campaignId, text, file.name);
+        } catch {
+          flyerFailed = true;
+        }
+      }
+
       toast.success("Outreach saved as a draft");
+      if (flyerFailed) {
+        toast.info("Saved — but we couldn't read that file. Add a text-based one on the next page.");
+      }
       if (skipLines.length > 0) {
         toast.info(`Some people weren't added — ${skipLines.join("; ")}.`);
       }
@@ -301,7 +326,7 @@ export default function NewCampaign() {
               >
                 <span className="text-sm font-medium text-foreground">By industry</span>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Tailored messages per industry. We'll set this up next.
+                  Tailored messages per industry. You'll set this up on the next page after saving.
                 </p>
               </button>
             </div>
@@ -364,15 +389,16 @@ export default function NewCampaign() {
             <Label>Have a flyer or one-pager? (optional)</Label>
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent">
               <Paperclip className="h-4 w-4" />
-              {fileName ? (
-                <span className="text-foreground">{fileName}</span>
+              {file ? (
+                <span className="text-foreground">{file.name}</span>
               ) : (
                 <span>Attach a file — we'll use it to write your messages.</span>
               )}
               <input
                 type="file"
+                accept=".txt,.md,.csv,.text"
                 className="hidden"
-                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
             </label>
           </div>
@@ -413,7 +439,7 @@ export default function NewCampaign() {
             </h2>
             <p className="text-sm text-muted-foreground">
               Read it top to bottom. Nudge the spacing or drop a message if you want —
-              the wording gets written in the next step.
+              you'll review and edit the actual wording after you save.
             </p>
           </div>
 
