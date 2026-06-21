@@ -79,6 +79,7 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
     automation_enabled: false,
     max_messages_before_pause: 3,
   },
+  timezone: null,
 };
 
 // ── Loader (cached per-owner within a single executor run) ─────────
@@ -111,7 +112,9 @@ export async function loadExecutionSettings(
       .maybeSingle(),
   ]);
 
-  const raw = (profileRes.data?.cadence_settings as Record<string, unknown>) ?? {};
+  // `as any`: workspace_profiles isn't in the Deno-side generated types, so the
+  // query builder infers `data` as `never`. Same pattern as the wsRes access below.
+  const raw = ((profileRes.data as any)?.cadence_settings as Record<string, unknown>) ?? {};
   const timezone =
     ((wsRes.data as any)?.workspaces?.timezone as string | null | undefined) ?? null;
 

@@ -69,7 +69,10 @@ export async function verifyUnsubscribeToken(token: string, secret: string): Pro
     const payloadBytes = bytesFromB64url(token.slice(0, dot));
     const sigBytes = bytesFromB64url(token.slice(dot + 1));
     const key = await importHmacKey(secret);
-    const valid = await crypto.subtle.verify("HMAC", key, sigBytes, payloadBytes);
+    // Cast to BufferSource: these are freshly-built ArrayBuffer-backed byte
+    // arrays; the assertion only resolves the Uint8Array<ArrayBufferLike> vs
+    // BufferSource friction in newer TS/Deno libs — no runtime change.
+    const valid = await crypto.subtle.verify("HMAC", key, sigBytes as BufferSource, payloadBytes as BufferSource);
     if (!valid) return null;
     const obj = JSON.parse(new TextDecoder().decode(payloadBytes));
     if (!obj || typeof obj.lid !== "string" || typeof obj.wid !== "string") return null;
