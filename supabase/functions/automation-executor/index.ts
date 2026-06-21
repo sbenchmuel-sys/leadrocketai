@@ -29,6 +29,7 @@ import {
   repliedSinceEnrollment,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
+import { coldTouchClaimKey, coldTouchClaimAcquired } from "../_shared/coldTouchClaim.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
@@ -1785,7 +1786,7 @@ serve(async (req) => {
           const unsubscribeUrl = buildUnsubscribeUrl(supabaseUrl, token);
 
           // Per-touch CLAIM — the single double-send guard.
-          const actionKey = `cold_touch_${touch.id}`;
+          const actionKey = coldTouchClaimKey(touch.id);
 
           // LIFETIME double-send guard. action_key embeds the globally-unique touch.id,
           // but automation_log_claim_unique is (lead_id, action_key, claim_date) — so
@@ -1819,7 +1820,7 @@ serve(async (req) => {
             mail_account_id: mailAcct.id,
           };
           const { data: claim, error: claimErr } = await supabase.from("automation_log").insert(claimRow).select("id").single();
-          if (claimErr || !claim) continue; // 23505 → already claimed by a concurrent run; no double-send
+          if (!coldTouchClaimAcquired(claimErr, claim)) continue; // 23505 → already claimed by a concurrent run; no double-send
 
           // LATE opt-out guard (closes the unsubscribe race). A recipient can POST the
           // unsubscribe form — or a bounce / admin / keyword path can set unsubscribed —
