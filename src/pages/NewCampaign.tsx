@@ -54,6 +54,19 @@ const OPTIONAL_CHANNELS: OptionalChannel[] = [
   { channel: "sms", label: "Texts", icon: Phone },
 ];
 
+// Client-side filter over the already-loaded lead list — no new query. Matches
+// the typed text against name, company, and email (case-insensitive, trimmed).
+// An empty/whitespace query returns the list unchanged.
+export function filterLeads(leads: LeadListItem[], query: string): LeadListItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return leads;
+  return leads.filter((l) =>
+    [l.name, l.company, l.email].some((field) =>
+      (field ?? "").toLowerCase().includes(q),
+    ),
+  );
+}
+
 export default function NewCampaign() {
   const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
@@ -83,6 +96,7 @@ export default function NewCampaign() {
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
+  const [leadSearch, setLeadSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -155,6 +169,28 @@ export default function NewCampaign() {
   const toggleLead = (id: string) => {
     const next = new Set(selectedLeads);
     next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedLeads(next);
+  };
+
+  // The list the rep is actually looking at after typing in the search box.
+  const visibleLeads = useMemo(
+    () => filterLeads(leads, leadSearch),
+    [leads, leadSearch],
+  );
+
+  // "Select all" is in the cleared state until every VISIBLE lead is selected.
+  const allVisibleSelected =
+    visibleLeads.length > 0 && visibleLeads.every((l) => selectedLeads.has(l.id));
+
+  // Only ever touches what's on screen — selecting adds the visible leads,
+  // clearing removes only them, leaving any off-screen selections intact.
+  const toggleSelectAllVisible = () => {
+    const next = new Set(selectedLeads);
+    if (allVisibleSelected) {
+      visibleLeads.forEach((l) => next.delete(l.id));
+    } else {
+      visibleLeads.forEach((l) => next.add(l.id));
+    }
     setSelectedLeads(next);
   };
 
@@ -471,6 +507,29 @@ export default function NewCampaign() {
             </p>
           </div>
 
+          {!leadsLoading && leads.length > 0 && (
+            <div className="space-y-2">
+              <Input
+                placeholder="Search people"
+                value={leadSearch}
+                onChange={(e) => setLeadSearch(e.target.value)}
+              />
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs text-muted-foreground">
+                  {visibleLeads.length} {visibleLeads.length === 1 ? "person" : "people"}
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleSelectAllVisible}
+                  disabled={visibleLeads.length === 0}
+                  className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
+                >
+                  {allVisibleSelected ? "Clear" : "Select all"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <Card>
             <CardContent className="max-h-72 overflow-y-auto p-2">
               {leadsLoading ? (
@@ -484,9 +543,16 @@ export default function NewCampaign() {
                     No people yet — you can add them after saving.
                   </p>
                 </div>
+              ) : visibleLeads.length === 0 ? (
+                <div className="flex flex-col items-center gap-1 py-10 text-center">
+                  <Users className="h-5 w-5 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">
+                    No one matches "{leadSearch.trim()}".
+                  </p>
+                </div>
               ) : (
                 <ul className="divide-y divide-border">
-                  {leads.map((l) => (
+                  {visibleLeads.map((l) => (
                     <li key={l.id}>
                       <label className="flex cursor-pointer items-center gap-3 px-2 py-2.5 hover:bg-accent">
                         <Checkbox
