@@ -222,7 +222,7 @@ function buildAIPayload(
   const hasLatestInbound = !!ctx.last_inbound_email;
 
   // LinkedIn tasks use a different payload shape
-  if (taskType === "linkedin_connect" || taskType === "linkedin_followup") {
+  if (taskType === "linkedin_connect" || taskType === "linkedin_followup" || taskType === "linkedin_reaction") {
     return {
       prospect_name: lead.name,
       title: lead.job_title || "",

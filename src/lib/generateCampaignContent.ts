@@ -63,7 +63,21 @@ function emailTaskForStep(step: CampaignStep): string {
   }
 }
 
-function primaryTaskForChannel(step: CampaignStep): string {
+// LinkedIn touches REUSE the existing short-form LinkedIn prompts, keyed by
+// step_type: intro = connection request, value_add = react-to-their-post comment,
+// everything else = a follow-up message. LinkedIn is always a MANUAL touch.
+function linkedinTaskForStep(step: CampaignStep): string {
+  switch (step.step_type) {
+    case "intro":
+      return "linkedin_connect";
+    case "value_add":
+      return "linkedin_reaction";
+    default:
+      return "linkedin_followup";
+  }
+}
+
+export function primaryTaskForChannel(step: CampaignStep): string {
   switch (step.channel) {
     case "email":
       return emailTaskForStep(step);
@@ -73,6 +87,8 @@ function primaryTaskForChannel(step: CampaignStep): string {
       return "sms_message";
     case "whatsapp":
       return "whatsapp_message";
+    case "linkedin":
+      return linkedinTaskForStep(step);
     default:
       return emailTaskForStep(step);
   }
@@ -116,6 +132,32 @@ function subjectInstructions(industry: string | null): string {
   return industry ? `Tailor the subject to the ${industry} industry.` : "";
 }
 
+// The LinkedIn prompts (linkedin_connect / linkedin_reaction / linkedin_followup)
+// address a prospect directly via {{CONTEXT}} — they do NOT read custom_instructions.
+// For a REUSABLE template we feed placeholder tokens ({FirstName}) instead of a real
+// name and pack the authoring intent + offer into the context. The reaction variant
+// is the only genuinely new instruction: a short suggested comment for the rep to
+// adapt to the prospect's recent post (plain language — never "reaction intent").
+function linkedinAuthoringContext(step: CampaignStep, industry: string | null, offer: string): string {
+  const audience = industry ? ` Audience: ${industry} prospects.` : "";
+  let intent: string;
+  switch (step.step_type) {
+    case "intro":
+      intent = "This is a LinkedIn connection request — a short, no-pressure note with a genuine reason to connect, no pitch.";
+      break;
+    case "value_add":
+      intent = "This is a suggested comment the rep will adapt to react to the prospect's most recent LinkedIn post — short, specific, genuine, no pitch.";
+      break;
+    default:
+      intent = "This is a LinkedIn follow-up message — friendly, one light question, no hard pitch.";
+  }
+  return [
+    intent + audience,
+    offer ? `Offer context: ${offer}` : "",
+    "Reusable template for many recipients — use {FirstName} for the prospect's first name; never invent a name.",
+  ].filter(Boolean).join(" ");
+}
+
 interface AuthoringPayload {
   campaign_id: string;
   step_number: number;
@@ -126,6 +168,14 @@ interface AuthoringPayload {
   lead_context: string;
   offer_summary: string;
   custom_instructions: string;
+  // LinkedIn template vars — only set for linkedin touches (the LinkedIn prompts
+  // read these instead of custom_instructions). Harmless on other channels: the
+  // edge function strips any unreferenced {{VAR}} placeholder.
+  prospect_name?: string;
+  title?: string;
+  company?: string;
+  context?: string;
+  knowledge_context?: string;
 }
 
 function authoringPayload(
@@ -133,6 +183,7 @@ function authoringPayload(
   step: CampaignStep,
   industry: string | null,
 ): AuthoringPayload {
+  const isLinkedIn = step.channel === "linkedin";
   return {
     campaign_id: campaign.id,
     step_number: step.step_number,
@@ -143,6 +194,15 @@ function authoringPayload(
     lead_context: buildLeadContext(industry),
     offer_summary: campaign.global_instructions || "",
     custom_instructions: authoringInstructions(step.channel, industry),
+    ...(isLinkedIn
+      ? {
+          prospect_name: "{FirstName}",
+          title: "",
+          company: "{Company}",
+          context: linkedinAuthoringContext(step, industry, campaign.global_instructions || ""),
+          knowledge_context: campaign.global_instructions || "",
+        }
+      : {}),
   };
 }
 
@@ -222,15 +282,18 @@ async function generateOptionsForTouch(
   let spamRisk: number | null = null;
 
   // Two SEQUENTIAL calls — a couple of distinct options for the rep to pick from.
+  const isLinkedIn = channel === "linkedin";
   for (let i = 0; i < OPTIONS_PER_TOUCH; i++) {
     const variantNote =
       i === 0
         ? ""
         : " Give a meaningfully DIFFERENT option from a typical first attempt — fresh angle and a different opening line.";
-    const { content, spamRisk: sr } = await callAiTask(primaryTask, {
-      ...base,
-      custom_instructions: base.custom_instructions + variantNote,
-    });
+    // LinkedIn prompts read {{CONTEXT}}, not {{CUSTOM_INSTRUCTIONS}}, so the
+    // "make it different" nudge for option 2 has to ride on context there.
+    const overrides = isLinkedIn
+      ? { context: (base.context ?? "") + variantNote }
+      : { custom_instructions: base.custom_instructions + variantNote };
+    const { content, spamRisk: sr } = await callAiTask(primaryTask, { ...base, ...overrides });
     if (i === 0) spamRisk = sr;
     options.push(optionFromContent(channel, content));
   }

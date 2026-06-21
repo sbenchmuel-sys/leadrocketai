@@ -1,9 +1,13 @@
 // ============================================
 // CAMPAIGN DEFAULTS (Outreach Unit A)
-// The finished-by-default 9-touch plan and the editable instruction
+// The finished-by-default touch plan and the editable instruction
 // prompt that pre-fills a new outreach so it works out of the box.
 // Content here is the SKELETON only — AI message generation lands in
 // Unit B. These are the defaults a rep sees, never a blank builder.
+//
+// The plan interleaves email / call / SMS with three manual LinkedIn touches
+// (a connection request, a react-to-their-post nudge, and a follow-up message).
+// LinkedIn touches are ALWAYS manual — authored here, run by hand from the Queue.
 // ============================================
 
 import type { CanonicalChannel } from "@/lib/channels";
@@ -29,10 +33,12 @@ export interface DraftStep {
   active: boolean;
 }
 
-// ── The recommended 9-touch plan, presented as FINISHED ─────────────
+// ── The recommended touch plan, presented as FINISHED ───────────────
 // `preferredChannel` says which channel this touch wants; if the rep
 // didn't pick that channel it falls back to email so the plan always
-// stays 9 touches and never stalls.
+// stays a full set of touches and never stalls. The custom_instructions
+// are written goal-first (not channel-mechanic-first) so a LinkedIn touch
+// that falls back to email still reads as a sensible email.
 interface TouchTemplate {
   step_type: StepType;
   preferredChannel: CanonicalChannel;
@@ -51,9 +57,18 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "First email. Open with one line that shows you know who they are, then 2–3 lines on the offer from the knowledge file. End with a soft question. No attachments.",
   },
   {
+    // LinkedIn connection request — short, no-pressure note. Manual touch.
+    step_type: "intro",
+    preferredChannel: "linkedin",
+    delay_days: 1,
+    cta_type: "question",
+    custom_instructions:
+      "Open a relationship with a short, no-pressure note that gives a genuine reason to connect. No pitch, no offer — just a real human reason to be in touch.",
+  },
+  {
     step_type: "followup",
     preferredChannel: "email",
-    delay_days: 3,
+    delay_days: 2,
     cta_type: "question",
     custom_instructions:
       "Follow-up. Reference the first email in one line, then a fresh angle. One question only. Don't say \"just checking in.\"",
@@ -67,9 +82,18 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
       "Quick call. 2–3 talking points, nothing scripted. If no one answers, leave a short voicemail and the next email will follow up on it.",
   },
   {
+    // LinkedIn "react to their post" — engage with something they recently shared. Manual touch.
+    step_type: "value_add",
+    preferredChannel: "linkedin",
+    delay_days: 2,
+    cta_type: "soft_offer",
+    custom_instructions:
+      "Engage with something the prospect recently shared — react to their latest post or update with a short, specific, genuine comment. No pitch.",
+  },
+  {
     step_type: "value_add",
     preferredChannel: "email",
-    delay_days: 3,
+    delay_days: 2,
     cta_type: "soft_offer",
     custom_instructions:
       "Value email. Offer to send a one-pager relevant to their industry and suggest a quick meeting. Keep it generous, not pushy.",
@@ -85,10 +109,19 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
   {
     step_type: "value_add",
     preferredChannel: "email",
-    delay_days: 4,
+    delay_days: 3,
     cta_type: "soft_offer",
     custom_instructions:
       "Second value email. Lead with one concrete result or proof point relevant to their industry, then suggest a quick meeting.",
+  },
+  {
+    // LinkedIn follow-up message — friendly nudge with one light question. Manual touch.
+    step_type: "followup",
+    preferredChannel: "linkedin",
+    delay_days: 2,
+    cta_type: "question",
+    custom_instructions:
+      "Friendly follow-up that adds one relevant insight and ends with a single light question. No hard pitch.",
   },
   {
     step_type: "followup",
@@ -101,7 +134,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
   {
     step_type: "followup",
     preferredChannel: "email",
-    delay_days: 4,
+    delay_days: 3,
     cta_type: "question",
     custom_instructions:
       "Light check-in. A new angle, human tone, one question. No pressure.",
@@ -109,7 +142,7 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
   {
     step_type: "breakup",
     preferredChannel: "email",
-    delay_days: 5,
+    delay_days: 4,
     cta_type: "breakup_close",
     custom_instructions:
       "Last email. No guilt, no fake urgency. Ask a direct yes/no question and leave the door open in one sentence.",
@@ -117,9 +150,10 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
 ];
 
 /**
- * Build the default 9-touch draft plan for the channels the rep selected.
+ * Build the default draft plan for the channels the rep selected.
  * Email is always available; any touch whose preferred channel wasn't
- * selected falls back to email so the plan is always a full 9 touches.
+ * selected (e.g. LinkedIn) falls back to email so the plan is always a
+ * full set of touches.
  */
 export function buildDefaultPlan(selectedChannels: CanonicalChannel[]): DraftStep[] {
   const enabled = new Set<CanonicalChannel>(["email", ...selectedChannels]);
@@ -145,6 +179,7 @@ const STEP_VERB: Record<CanonicalChannel, string> = {
   sms: "Text",
   whatsapp: "WhatsApp",
   meeting: "Meeting",
+  linkedin: "LinkedIn",
 };
 
 /** "Email", "Call", "Text" — the word a rep understands. */
