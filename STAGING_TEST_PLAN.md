@@ -173,6 +173,20 @@ Mail/OAuth tokens must be encrypted; invisible from the UI so needs explicit che
   - How: Disconnect a test mailbox.
   - Pass when: Token no longer present/usable.
 
+### Outreach wizard guardrails (flyer ingest + LinkedIn manual)
+
+Covers the New-outreach wizard's two newest promises — flyer→knowledge ingest (PR #93) and LinkedIn as a cadence channel (PR #94). All Tier 1: they touch automated sends, retention, and isolation.
+
+- **OW-LI-G1** (Tier 1) — LinkedIn touches never auto-send.
+  - How: As Dealership A, create an outreach with LinkedIn selected; enroll one lead; let a LinkedIn touch fall due; run the executor in supervised/review mode.
+  - Pass when: the automatic sender picks up only the email touches; it never sends, claims (`cold_touch_<id>`), or marks-sent any LinkedIn touch — the LinkedIn touch stays a manual Queue task. Zero automated activity on any LinkedIn touch.
+- **OW-FLY-G1** (Tier 1, retention) — A flyer can't smuggle customer text past retention.
+  - How: Audit every path that can reach `ingestCampaignKnowledge` from the wizard. Confirm the only input is a file the rep attaches (→ `process-knowledge-document`, `source = campaign:<id>`, `allowed_customer_facing:true`); no customer email/message body is ever fed in.
+  - Pass when: only rep-attached collateral lands in `kb_chunks` under `source = campaign:<id>`; re-uploading REPLACES the prior chunks (stable source) rather than piling up; no customer-body path exists. (Wizard-specific instance of KB-4 / OD-2 — `kb_chunks` persists indefinitely, so a customer-body leak here would dodge the 72h/7-day purge.)
+- **OW-LI-G2** (Tier 1, isolation) — Wizard output is workspace-isolated.
+  - How: Create the outreach (LinkedIn selected + a flyer attached) as Dealership A; sign in as Dealership B (`repb@drivepilot-test.com`).
+  - Pass when: B sees none of A's outreach, its LinkedIn touches, or any flyer / `kb_chunks` content. Fully isolated.
+
 
 ---
 
@@ -671,6 +685,27 @@ Generated 2026-06-11 from `git log --first-parent main --since=2026-03-01` (436 
 - Scenarios:
   - MISC-1 (Tier 1): No `{{placeholder}}` tokens ever reach a sent email (substitution + validation).
   - MISC-2: Authoring requests can't bypass the campaign membership gate (`6facafe` regression).
+
+### Outreach wizard — flyer upload to campaign knowledge (PR #93)
+- What it does: The New-outreach wizard's optional flyer/one-pager attachment now actually uploads. The wizard keeps the real `File`; after the campaign is created in Step 3 it extracts the file text and routes it through `ingestCampaignKnowledge` — the SAME path as the campaign page's "Add knowledge file" button (`process-knowledge-document`, `source = campaign:<id>`, company-collateral guardrail). Best-effort: a file it can't read never rolls back the save (`knowledge_ref` set only on success). Also fixes two over-promising copy lines ("By industry … set this up next" → after saving; Step 2 "wording written in the next step" → reviewed/edited after saving). NOTE: the shared ingest path is **plain-text only** (`file.text()`, `accept=".txt,.md,.csv,.text"`) — there is NO PDF/Word text extraction, so non-text files fall through to the "couldn't read that file" path by design.
+- Where: `/app/automations/new` Step 1 (attach) + Step 3 confirm (`src/pages/NewCampaign.tsx`); `ingestCampaignKnowledge` (`src/lib/generateCampaignContent.ts`); `process-knowledge-document` edge fn.
+- PRs/commits: PR #93 (`6871e87`).
+- Existing tests: `src/pages/NewCampaign.test.tsx` (ingest invoked with the extracted text; a failed flyer does not roll back; no-flyer leaves the knowledge path untouched).
+- Scenarios:
+  - OW-FLY-1 (happy): Rep A creates an outreach, attaches a text-based flyer (`.txt`/`.md`/`.csv` — see note), saves. Pass when: saved as draft; the flyer shows as attached on the campaign page (`knowledge_ref` + `knowledge_document_id` set); generated messages reference the flyer's actual wording.
+  - OW-FLY-2 (unreadable file): attach a scanned/image-only PDF, a Word doc, or any file with <50 readable chars. Pass when: the outreach still saves; a non-blocking "Saved — but we couldn't read that file…" toast appears; `knowledge_ref` stays null (nothing recorded); the campaign is NOT rolled back.
+  - OW-FLY-3 (no flyer): save with no file attached. Pass when: saves normally; `ingestCampaignKnowledge` is never called; the knowledge store is untouched.
+
+### Outreach wizard — LinkedIn as a manual cadence channel (PR #94)
+- What it does: LinkedIn becomes a first-class MANUAL cadence channel. `linkedin` added to `CanonicalChannel`; the default 9-touch plan interleaves 3 manual LinkedIn touches (connection request, react-to-their-post, follow-up message) WITHOUT growing past 9; plan rows get distinct labels via `touchLabel(channel, step_type)`; AI authoring generates LinkedIn copy (`linkedin_connect` / `linkedin_reaction` / `linkedin_followup`); the Queue runs LinkedIn touches by hand (copy message + open profile), and a touch with no profile URL is Skip-only. LinkedIn is ALWAYS manual — never auto-sent, never scraped.
+- Where: wizard channel picker + Step 2 plan (`src/lib/campaignDefaults.ts` — `buildDefaultPlan`, `touchLabel`); `src/lib/generateCampaignContent.ts` (authoring); `OutreachCard` / `src/components/lead/LinkedInMessageButton.tsx` (Queue); `src/prompts/linkedinPrompts.ts`.
+- PRs/commits: PR #94 — `b22ff5b`, `6acd182`, `5107c30`, `9c480a8`.
+- Existing tests: `src/lib/__tests__/linkedinCadence.test.ts` (9-touch count, 3 LinkedIn touches, distinct labels, step_type→task mapping).
+- Scenarios:
+  - OW-LI-1 (happy, has profile): outreach with LinkedIn selected; enroll a lead with a LinkedIn URL (give Eligible Ed one). In the Queue, the LinkedIn touch copies the prepared message and opens the profile; "Mark done" advances the plan. Pass when: copy + open both work; the touch completes and the cadence advances.
+  - OW-LI-2 (no profile): enroll a lead with no LinkedIn URL. Pass when: the Queue shows "No profile", the touch is skip-only, and it can't be marked sent (`5107c30`).
+  - OW-LI-3 (plan length — REGRESSION): an email-only outreach builds exactly 9 touches; one with LinkedIn selected still builds exactly 9 touches, including 3 LinkedIn. Pass when: never 12. Named regression for the 12→9 fix (`9c480a8`) — the plan must never silently grow back to 12.
+  - OW-LI-4 (distinct labels): in Step 2, the three LinkedIn touches read as "Connect on LinkedIn", "React to their post", and "LinkedIn message" — not three identical "LinkedIn" rows.
 
 ---
 
