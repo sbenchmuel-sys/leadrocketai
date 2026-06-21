@@ -482,6 +482,13 @@ Prospect: {{PROSPECT_NAME}}, {{TITLE}} at {{COMPANY}}
 Context: {{CONTEXT}}
 Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`,
 
+  linkedin_reaction: `Write a SHORT suggested comment (max 250 characters) the rep can leave on this prospect's most recent LinkedIn post.
+Genuine and specific, like a real person reacting to the post — no selling, no pitch, no links.
+Return TEXT ONLY.
+
+Prospect: {{PROSPECT_NAME}}, {{TITLE}} at {{COMPANY}}
+Context: {{CONTEXT}}`,
+
   inbound_intro: `ROLE
 You are writing the first response email to an inbound lead who has expressed interest via a website form, referral, or inbound inquiry.
 

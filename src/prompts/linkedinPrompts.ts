@@ -24,6 +24,18 @@ Context: {{CONTEXT}}
 Knowledge Context (optional): {{KNOWLEDGE_CONTEXT}}`;
 
 // ============================================
+// LINKEDIN REACTION COMMENT (<=250 chars)
+// A short suggested comment the rep adapts when engaging with the lead's
+// recent post. Plain language on screen: "React to their post".
+// ============================================
+export const LINKEDIN_REACTION_COMMENT_PROMPT = `Write a SHORT suggested comment (max 250 characters) the rep can leave on this prospect's most recent LinkedIn post.
+Genuine and specific, like a real person reacting to the post — no selling, no pitch, no links.
+Return TEXT ONLY.
+
+Prospect: {{PROSPECT_NAME}}, {{TITLE}} at {{COMPANY}}
+Context: {{CONTEXT}}`;
+
+// ============================================
 // TypeScript Types
 // ============================================
 
@@ -44,16 +56,22 @@ export interface LinkedInFollowUpInput {
   knowledgeContext?: string;
 }
 
+export interface LinkedInReactionInput {
+  prospect: LinkedInProspect;
+  context: string;
+}
+
 // Character limits for validation
 export const LINKEDIN_CHAR_LIMITS = {
   connectionNote: 300,
   followUpMessage: 600,
+  reactionComment: 250,
 } as const;
 
 // Validation helper
 export function validateLinkedInLength(
   text: string,
-  type: 'connectionNote' | 'followUpMessage'
+  type: 'connectionNote' | 'followUpMessage' | 'reactionComment'
 ): { valid: boolean; length: number; limit: number } {
   const limit = LINKEDIN_CHAR_LIMITS[type];
   return {

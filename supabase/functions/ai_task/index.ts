@@ -314,7 +314,7 @@ const OUTREACH_TASKS = new Set([
   "pre_email_3_followup", "pre_email_4_breakup", "inbound_intro",
   "inbound_followup_1", "inbound_followup_2", "re_engagement_intro",
   "nurture_email_single", "post_meeting_followup_email", "reply_to_thread",
-  "whatsapp_message", "linkedin_connect", "linkedin_followup",
+  "whatsapp_message", "linkedin_connect", "linkedin_followup", "linkedin_reaction",
 ]);
 
 // Email tasks that must start with "Hi {FirstName},". Used by the greeting

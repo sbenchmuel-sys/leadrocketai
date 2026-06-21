@@ -15,6 +15,7 @@ export type AITaskType =
   | "lead_deep_analysis"
   | "linkedin_connect"
   | "linkedin_followup"
+  | "linkedin_reaction"
   | "inbound_intro"
   | "inbound_followup_1"
   | "inbound_followup_2"

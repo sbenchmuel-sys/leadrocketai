@@ -1,13 +1,17 @@
-import { Mail, Phone, PhoneCall, MessageSquare, Calendar, Minus, Plus, X, type LucideIcon } from "lucide-react";
+import { Mail, Phone, PhoneCall, MessageSquare, Calendar, Linkedin, Minus, Plus, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { CanonicalChannel } from "@/lib/channels";
-import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
+import type { StepType } from "@/lib/campaignTypes";
+import { touchLabel, cumulativeDays } from "@/lib/campaignDefaults";
 
 // Minimal shape shared by draft steps and DB steps.
 export interface ScriptStep {
   channel: CanonicalChannel;
   delay_days: number;
   custom_instructions: string | null;
+  // Lets LinkedIn touches read distinctly (connect / react / message) in the
+  // review. Optional so callers without step_type still render the channel verb.
+  step_type?: StepType;
 }
 
 const ICONS: Record<CanonicalChannel, LucideIcon> = {
@@ -16,6 +20,7 @@ const ICONS: Record<CanonicalChannel, LucideIcon> = {
   sms: Phone,
   whatsapp: MessageSquare,
   meeting: Calendar,
+  linkedin: Linkedin,
 };
 
 interface CampaignScriptProps {
@@ -51,7 +56,7 @@ export function CampaignScript({ steps, editable, onChangeDelay, onRemove }: Cam
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="text-sm font-medium text-foreground">
-                  {touchVerb(step.channel)}
+                  {touchLabel(step.channel, step.step_type)}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {days[i] === 0 ? "Day 1 — right away" : `Day ${days[i] + 1}`}

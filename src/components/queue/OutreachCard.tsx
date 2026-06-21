@@ -83,6 +83,13 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     touch.subject || touch.body || touch.smsText || touch.talkingPoints || touch.voicemailScript
   );
 
+  // A manual LinkedIn touch also needs the lead's profile URL: the rep opens the
+  // profile to paste the prepared message. With content but no linkedin_url there's
+  // nowhere to send it, so the touch is Skip-only (never mark-sent-able). Other
+  // channels don't have a profile-URL dependency, so this only narrows LinkedIn.
+  const linkedinNeedsUrl = touch.channel === "linkedin" && !touch.linkedinUrl;
+  const actionable = hasContent && !linkedinNeedsUrl;
+
   // ── Action runners (optimistic: parent removes the card) ──
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>, successMsg: string) {
     setBusy(true);
@@ -206,12 +213,15 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          {!hasContent ? (
-            // No content resolved for this lead's industry (and no General variant) — the
-            // sender would refuse it, so no channel is actionable; the rep can Skip.
+          {!actionable ? (
+            // Not actionable — either no content resolved for this lead's industry (the
+            // sender would refuse it) or, for LinkedIn, the lead has no profile URL to
+            // open. Either way no channel can be marked sent; the rep can Skip.
             <Button size="sm" variant="outline" className="h-8 text-xs" disabled
-              title="No content for this lead's industry yet — add a General variant or this industry's copy in the campaign.">
-              No content
+              title={linkedinNeedsUrl
+                ? "No LinkedIn profile on this lead yet — add their LinkedIn URL to use this touch."
+                : "No content for this lead's industry yet — add a General variant or this industry's copy in the campaign."}>
+              {linkedinNeedsUrl ? "No profile" : "No content"}
             </Button>
           ) : touch.channel === "email" ? (
             <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>

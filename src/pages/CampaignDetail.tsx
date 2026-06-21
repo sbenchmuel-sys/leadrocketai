@@ -340,6 +340,7 @@ export default function CampaignDetail() {
               channel: s.channel,
               delay_days: s.delay_days,
               custom_instructions: s.custom_instructions,
+              step_type: s.step_type,
             }))}
           />
         )}

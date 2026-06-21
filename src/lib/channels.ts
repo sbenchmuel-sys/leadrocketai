@@ -1,4 +1,4 @@
-import { Mail, MessageSquare, Phone, PhoneCall, Calendar, type LucideIcon } from "lucide-react";
+import { Mail, MessageSquare, Phone, PhoneCall, Calendar, Linkedin, type LucideIcon } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -9,9 +9,10 @@ export type ProviderChannel =
   | "sms"
   | "voice"
   | "meeting"
+  | "linkedin"
   | (string & {});
 
-export type CanonicalChannel = "email" | "whatsapp" | "sms" | "voice" | "meeting";
+export type CanonicalChannel = "email" | "whatsapp" | "sms" | "voice" | "meeting" | "linkedin";
 
 // ── Mappers ────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ const PROVIDER_MAP: Record<string, CanonicalChannel> = {
   sms: "sms",
   voice: "voice",
   meeting: "meeting",
+  linkedin: "linkedin",
 };
 
 export function providerToCanonical(provider: ProviderChannel | null | undefined): CanonicalChannel {
@@ -35,6 +37,7 @@ const LABELS: Record<CanonicalChannel, string> = {
   sms: "SMS",
   voice: "Voice",
   meeting: "Meeting",
+  linkedin: "LinkedIn",
 };
 
 export function canonicalLabel(ch: CanonicalChannel): string {
@@ -47,6 +50,7 @@ const ICONS: Record<CanonicalChannel, LucideIcon> = {
   sms: Phone,
   voice: PhoneCall,
   meeting: Calendar,
+  linkedin: Linkedin,
 };
 
 export function canonicalIcon(ch: CanonicalChannel): LucideIcon {
@@ -61,6 +65,8 @@ const CHANNEL_COLORS: Record<CanonicalChannel, { bg: string; fg: string }> = {
   sms:      { bg: "hsl(var(--warning)/0.1)", fg: "hsl(var(--warning))" },
   voice:    { bg: "hsl(var(--accent))",      fg: "hsl(var(--accent-foreground))" },
   meeting:  { bg: "hsl(var(--muted))",       fg: "hsl(var(--muted-foreground))" },
+  // LinkedIn brand blue, expressed through the info token so it tracks the theme.
+  linkedin: { bg: "hsl(var(--info)/0.12)",   fg: "hsl(var(--info))" },
 };
 
 export function channelColors(ch: CanonicalChannel) {
@@ -112,6 +118,10 @@ export function getAvailableChannelsForLead({
   const smsOk = !!workspace.sms_enabled && !!lead.sms_opted_in && !!lead.phone;
   const voiceOk = !!workspace.voice_enabled && !!lead.phone;
   const meetingOk = !!workspace.meetings_enabled;
+  // LinkedIn is a planned-cadence / manual channel, not a reactive next-best-action.
+  // It is authored inside a campaign plan and run by hand from the Queue — never
+  // surfaced here as a recommended reply channel — so it is always false in this map.
+  const linkedinOk = false;
 
   const map: Record<CanonicalChannel, boolean> = {
     email: emailOk,
@@ -119,6 +129,7 @@ export function getAvailableChannelsForLead({
     sms: smsOk,
     voice: voiceOk,
     meeting: meetingOk,
+    linkedin: linkedinOk,
   };
 
   // Build priority order
