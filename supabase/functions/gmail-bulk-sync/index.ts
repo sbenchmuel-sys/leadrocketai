@@ -915,13 +915,31 @@ async function resolveWorkspaceId(serviceSupabase: any, userId: string): Promise
   return data.workspace_id;
 }
 
-// Per-run safety cap: at most this many leads synced per connection, to keep each
-// cron invocation inside cron-dispatcher's 55s forward timeout. syncLeadEmails is
-// idempotent (dedup by gmail_message_id), so a capped run simply resumes next tick.
-// Leads are ordered by last_activity_at desc so the freshest conversations stay
-// current; at pilot scale a workspace won't hit this cap.
-const CRON_LEADS_PER_CONNECTION_CAP = 150;
+// Coverage + bounding constants for the scheduled sweep.
+//
+// RUN_BUDGET_MS: a single run-wide wall-clock budget, checked between connections
+// AND between leads, so total work is bounded regardless of how many accounts /
+// leads exist. Kept under cron-dispatcher's 55s forward timeout so the dispatcher
+// doesn't record every tick as a 504.
+//
+// LEADS_PER_PAGE: the per-connection lead window for ONE tick. To guarantee every
+// lead is eventually synced (not just the same freshest page each tick), leads are
+// ordered by a STABLE key (`id`) and the window is a rotating page selected by a
+// monotonic tick index — over ceil(total/LEADS_PER_PAGE) ticks the whole workspace
+// is covered. Connections are likewise rotated so a long-running early account
+// can't starve later ones every tick. syncLeadEmails is idempotent (dedup by
+// gmail_message_id), so overlap across ticks is harmless.
+const RUN_BUDGET_MS = 45_000;
+const LEADS_PER_PAGE = 150;
 const CRON_MAX_RESULTS = 10;
+
+// Monotonic, ~per-tick rotation seed. The sweep cron fires every 20 min; bucketing
+// wall-clock into 20-min slots gives a different starting offset each run without
+// any persisted cursor. Two runs in the same slot (e.g. a manual re-trigger) reuse
+// the same page — harmless, since the sync is idempotent.
+function currentTickIndex(): number {
+  return Math.floor(Date.now() / (20 * 60 * 1000));
+}
 
 // Scheduled (cron-dispatcher / service-role) entry path. There is no user JWT
 // and the cron payload carries no leadIds, so this self-discovers every connected
@@ -945,10 +963,27 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
 
   let connectionsProcessed = 0;
   let connectionsSkipped = 0;
+  let connectionsDeferred = 0;
   let leadsProcessed = 0;
+  let leadsDeferred = 0;
   let totalSynced = 0;
+  let budgetExhausted = false;
 
-  for (const conn of connections ?? []) {
+  // Rotate the connection start position each tick so a long-running early account
+  // can't permanently starve later ones when the run-wide budget is tight.
+  const allConns = connections ?? [];
+  const tick = currentTickIndex();
+  const startIdx = allConns.length > 0 ? tick % allConns.length : 0;
+  const rotatedConns = [...allConns.slice(startIdx), ...allConns.slice(0, startIdx)];
+
+  for (const conn of rotatedConns) {
+    // Run-wide budget: stop cleanly and report what was deferred to the next tick.
+    if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      budgetExhausted = true;
+      connectionsDeferred++;
+      continue;
+    }
+
     if (conn.needs_reconnect) {
       connectionsSkipped++;
       console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (needs_reconnect)`);
@@ -974,15 +1009,39 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    // Service role + explicit workspace_id filter reproduces the isolation the
-    // user path gets from RLS — leads never cross workspace boundaries.
+    // Total leads in this workspace — drives the rotating page so coverage is
+    // guaranteed across ticks rather than re-scanning the same freshest rows.
+    const { count: totalLeads, error: countErr } = await serviceSupabase
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", workspaceId)
+      .not("email", "is", null);
+
+    if (countErr) {
+      connectionsSkipped++;
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} lead count failed:`, countErr.message);
+      continue;
+    }
+    if (!totalLeads || totalLeads === 0) {
+      connectionsProcessed++;
+      continue;
+    }
+
+    const pageCount = Math.ceil(totalLeads / LEADS_PER_PAGE);
+    const page = tick % pageCount;
+    const from = page * LEADS_PER_PAGE;
+    const to = from + LEADS_PER_PAGE - 1;
+
+    // Service role + explicit workspace_id filter reproduces the isolation the user
+    // path gets from RLS — leads never cross workspace boundaries. Stable `id` order
+    // makes the rotating page deterministic so every lead is eventually covered.
     const { data: leads, error: leadsErr } = await serviceSupabase
       .from("leads")
       .select("id, email, stage, strategy, workspace_id")
       .eq("workspace_id", workspaceId)
       .not("email", "is", null)
-      .order("last_activity_at", { ascending: false, nullsFirst: false })
-      .limit(CRON_LEADS_PER_CONNECTION_CAP + 1);
+      .order("id", { ascending: true })
+      .range(from, to);
 
     if (leadsErr) {
       connectionsSkipped++;
@@ -990,16 +1049,20 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    const leadList = leads ?? [];
-    if (leadList.length > CRON_LEADS_PER_CONNECTION_CAP) {
-      console.warn(
-        `[gmail-bulk-sync] cron: workspace=${workspaceId} has >${CRON_LEADS_PER_CONNECTION_CAP} leads — ` +
-          `syncing the ${CRON_LEADS_PER_CONNECTION_CAP} most recently active this run; the rest resume next tick.`,
+    if (pageCount > 1) {
+      console.log(
+        `[gmail-bulk-sync] cron: workspace=${workspaceId} ${totalLeads} leads — ` +
+          `page ${page + 1}/${pageCount} this tick (rows ${from}-${to}); full coverage over ${pageCount} ticks.`,
       );
-      leadList.length = CRON_LEADS_PER_CONNECTION_CAP;
     }
 
-    for (const lead of leadList) {
+    for (const lead of leads ?? []) {
+      // Budget check between leads too — a single workspace shouldn't blow the run.
+      if (Date.now() - startedAt > RUN_BUDGET_MS) {
+        budgetExhausted = true;
+        leadsDeferred++;
+        continue;
+      }
       try {
         const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
         totalSynced += result.synced;
@@ -1020,13 +1083,23 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     connectionsProcessed++;
   }
 
+  if (budgetExhausted) {
+    console.warn(
+      `[gmail-bulk-sync] cron: run budget (${RUN_BUDGET_MS}ms) reached — ` +
+        `${connectionsDeferred} connection(s) + ${leadsDeferred} lead(s) deferred to next tick (rotation resumes there).`,
+    );
+  }
+
   const summary = {
     ok: true,
     mode: "scheduled" as const,
     duration_ms: Date.now() - startedAt,
+    budget_exhausted: budgetExhausted,
     connectionsProcessed,
     connectionsSkipped,
+    connectionsDeferred,
     leadsProcessed,
+    leadsDeferred,
     totalSynced,
   };
   console.log("[gmail-bulk-sync] cron done", JSON.stringify(summary));
