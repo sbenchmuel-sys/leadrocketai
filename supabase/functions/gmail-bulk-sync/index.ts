@@ -8,6 +8,7 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
+import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -898,12 +899,165 @@ async function syncLeadEmails(
   return { synced, errors, stage: newStage };
 }
 
+// Resolve the connection owner's workspace. Mirrors calendar-sync's
+// resolveGmailWorkspaceId — gmail_connections has no workspace_id column, so
+// we join through workspace_members. Used only by the scheduled branch to scope
+// the lead fetch.
+// deno-lint-ignore no-explicit-any
+async function resolveWorkspaceId(serviceSupabase: any, userId: string): Promise<string | null> {
+  const { data, error } = await serviceSupabase
+    .from("workspace_members")
+    .select("workspace_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+  if (error || !data?.workspace_id) return null;
+  return data.workspace_id;
+}
+
+// Per-run safety cap: at most this many leads synced per connection, to keep each
+// cron invocation inside cron-dispatcher's 55s forward timeout. syncLeadEmails is
+// idempotent (dedup by gmail_message_id), so a capped run simply resumes next tick.
+// Leads are ordered by last_activity_at desc so the freshest conversations stay
+// current; at pilot scale a workspace won't hit this cap.
+const CRON_LEADS_PER_CONNECTION_CAP = 150;
+const CRON_MAX_RESULTS = 10;
+
+// Scheduled (cron-dispatcher / service-role) entry path. There is no user JWT
+// and the cron payload carries no leadIds, so this self-discovers every connected
+// Gmail account and syncs its workspace's leads. Per-connection try/catch keeps a
+// single bad account (e.g. revoked token) from aborting the whole run.
+// deno-lint-ignore no-explicit-any
+async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
+  const startedAt = Date.now();
+
+  const { data: connections, error: connErr } = await serviceSupabase
+    .from("gmail_connections")
+    .select("user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect");
+
+  if (connErr) {
+    console.error("[gmail-bulk-sync] cron: failed to load gmail_connections:", connErr.message);
+    return new Response(JSON.stringify({ ok: false, error: connErr.message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  let connectionsProcessed = 0;
+  let connectionsSkipped = 0;
+  let leadsProcessed = 0;
+  let totalSynced = 0;
+
+  for (const conn of connections ?? []) {
+    if (conn.needs_reconnect) {
+      connectionsSkipped++;
+      console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (needs_reconnect)`);
+      continue;
+    }
+
+    const workspaceId = await resolveWorkspaceId(serviceSupabase, conn.user_id);
+    if (!workspaceId) {
+      connectionsSkipped++;
+      console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (no_workspace)`);
+      continue;
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await refreshTokenIfNeeded(serviceSupabase, conn);
+    } catch (err) {
+      connectionsSkipped++;
+      console.error(
+        `[gmail-bulk-sync] cron: user=${conn.user_id} token refresh failed:`,
+        err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+
+    // Service role + explicit workspace_id filter reproduces the isolation the
+    // user path gets from RLS — leads never cross workspace boundaries.
+    const { data: leads, error: leadsErr } = await serviceSupabase
+      .from("leads")
+      .select("id, email, stage, strategy, workspace_id")
+      .eq("workspace_id", workspaceId)
+      .not("email", "is", null)
+      .order("last_activity_at", { ascending: false, nullsFirst: false })
+      .limit(CRON_LEADS_PER_CONNECTION_CAP + 1);
+
+    if (leadsErr) {
+      connectionsSkipped++;
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} lead fetch failed:`, leadsErr.message);
+      continue;
+    }
+
+    const leadList = leads ?? [];
+    if (leadList.length > CRON_LEADS_PER_CONNECTION_CAP) {
+      console.warn(
+        `[gmail-bulk-sync] cron: workspace=${workspaceId} has >${CRON_LEADS_PER_CONNECTION_CAP} leads — ` +
+          `syncing the ${CRON_LEADS_PER_CONNECTION_CAP} most recently active this run; the rest resume next tick.`,
+      );
+      leadList.length = CRON_LEADS_PER_CONNECTION_CAP;
+    }
+
+    for (const lead of leadList) {
+      try {
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
+        totalSynced += result.synced;
+      } catch (err) {
+        console.error(
+          `[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      leadsProcessed++;
+    }
+
+    await serviceSupabase
+      .from("gmail_connections")
+      .update({ last_sync_at: new Date().toISOString() })
+      .eq("user_id", conn.user_id);
+
+    connectionsProcessed++;
+  }
+
+  const summary = {
+    ok: true,
+    mode: "scheduled" as const,
+    duration_ms: Date.now() - startedAt,
+    connectionsProcessed,
+    connectionsSkipped,
+    leadsProcessed,
+    totalSynced,
+  };
+  console.log("[gmail-bulk-sync] cron done", JSON.stringify(summary));
+  return new Response(JSON.stringify(summary), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // ── Scheduled / internal branch (cron-dispatcher or service-role) ──
+    // cron-dispatcher forwards with X-Internal-Secret only (no Bearer token), so
+    // config.toml MUST set verify_jwt = false or the gateway 401s before we run.
+    // This is the in-code auth gate; user JWTs fall through to the user path below.
+    if (isInternalCaller(req) || isServiceRoleToken(req)) {
+      const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
+      return await runScheduledBulkSync(serviceSupabase);
+    }
+
+    // ── User-facing branch (UI "Sync now" / per-lead sync) ──
+    // With verify_jwt = false the gateway no longer enforces a JWT, so this branch
+    // authenticates the user itself via getUser() below — an absent/invalid token
+    // is rejected with 401, keeping the endpoint user-scoped.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(JSON.stringify({ ok: false, error: "Missing authorization header" }), {
@@ -912,10 +1066,6 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
