@@ -4,20 +4,15 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Trash2, Zap, Pause, CheckCircle2, TrendingUp, Calendar, PenLine, Plane, AlertTriangle, Handshake, ShoppingCart } from "lucide-react";
+import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import LinkedInMessageButton from "@/components/lead/LinkedInMessageButton";
-import { cn } from "@/lib/utils";
-import {
-  MOTION_LABELS, MOTION_COLORS,
-  SourceType, Motion, getDisplayPhase, DealStage, getOriginCategory,
-} from "@/lib/dashboardUtils";
 import type { LeadDetail } from "@/lib/supabaseQueries";
+import { getLeadStatusLine } from "@/lib/leadStatusLine";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
-import { useMemo, useEffect, useState } from "react";
-import { calculateClosingPower, getMomentum } from "@/lib/closingPowerUtils";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 type OriginContext = "dashboard" | "leads" | "inbox";
@@ -30,64 +25,9 @@ interface LeadDetailHeaderProps {
   onDelete: () => void;
   onUpdate: () => void;
   onSyncComplete: () => void;
-  onCompose?: () => void;
-  onAddMeeting?: () => void;
+  /** One-tap: generate the recommended draft and open it for review-and-send. */
+  onDraftIt?: () => void;
 }
-
-function getAutomationLabel(lead: LeadDetail): { label: string; color: string } {
-  const stage = lead.stage as DealStage;
-  const motion = (lead.motion as Motion) || "outbound_prospecting";
-
-  if (stage === "closed_won" || stage === "closed_lost") {
-    return { label: "Completed", color: "text-muted-foreground" };
-  }
-  // Nurture-specific labels
-  if (motion === "nurture") {
-    const nurtureStatus = (lead as any).nurture_status || "inactive";
-    const nurtureMode = (lead as any).nurture_mode || "review";
-    if (nurtureStatus === "paused" || lead.last_inbound_at || lead.has_future_meeting) {
-      return { label: "Nurture Paused", color: "text-amber-600 dark:text-amber-400" };
-    }
-    if (nurtureStatus === "active") {
-      return { label: nurtureMode === "automatic" ? "Nurture Auto" : "Nurture Review", color: "text-emerald-600 dark:text-emerald-400" };
-    }
-    return { label: "Nurture", color: "text-muted-foreground" };
-  }
-
-  const automationAllowed = motion === "outbound_prospecting" || motion === "inbound_response";
-  if (!automationAllowed) {
-    return { label: "Manual", color: "text-muted-foreground" };
-  }
-
-  // Check actual automation state from DB fields
-  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
-
-  if (!hasAutomationEnabled) {
-    // No automation running — check if it's off entirely or just not enabled
-    if (lead.next_action_key) {
-      return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
-    }
-    return { label: "Off", color: "text-muted-foreground" };
-  }
-
-  // Automation is enabled — check safety blockers
-  if (lead.last_inbound_at) {
-    return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
-  }
-  if (lead.has_future_meeting) {
-    return { label: "Paused", color: "text-amber-600 dark:text-amber-400" };
-  }
-  return { label: "Active", color: "text-emerald-600 dark:text-emerald-400" };
-}
-
-const PHASE_COLORS: Record<string, string> = {
-  Prospecting: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200",
-  Engaged: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
-  "Post-Meeting": "bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-200",
-  Closing: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200",
-  Nurture: "bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-200",
-  Closed: "bg-muted text-muted-foreground",
-};
 
 const BACK_ROUTES: Record<OriginContext, string> = {
   dashboard: "/app",
@@ -96,20 +36,10 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onCompose, onAddMeeting,
+  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
-  const motion = (lead.motion as Motion) || "outbound_prospecting";
-  const stage = (lead.stage as DealStage) || "new";
-  const phase = getDisplayPhase(stage, motion);
-  const origin = getOriginCategory((lead.source_type as SourceType) || "manual_entry");
-  const automation = getAutomationLabel(lead);
-
-  const closingPower = useMemo(() => calculateClosingPower(lead), [lead]);
-  const momentum = useMemo(() => getMomentum(lead), [lead]);
-  const MomentumIcon = momentum.icon;
-
-  const originLabel = origin === "inbound" ? "Inbound" : "Outbound";
+  const statusLine = getLeadStatusLine(lead);
 
   // Lightweight context badge counts
   const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
@@ -235,92 +165,31 @@ export default function LeadDetailHeader({
             {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}{lead.country ? ` · ${lead.country}` : ""}
           </p>
           <p className="text-xs text-muted-foreground/70 mt-0.5 truncate">{lead.email}</p>
-        </div>
 
-        {/* CENTER — Unified Status Strip */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
-          {/* Phase pill — gets color */}
-          <span className={cn(
-            "px-2.5 py-1 rounded-full font-medium text-[11px]",
-            PHASE_COLORS[phase] || "bg-muted text-muted-foreground",
-          )}>
-            {phase}
-          </span>
-          <span className="text-border">·</span>
-          <span>{originLabel}</span>
-          <span className="text-border">·</span>
-          <span className={cn("font-medium", automation.color)}>
-            Automation {automation.label}
-          </span>
-        </div>
-
-        {/* RIGHT — Closing Power */}
-        <div className="flex-shrink-0 text-right">
-          <div className="flex items-end gap-2 justify-end">
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground block leading-none mb-1">Closing Power</span>
-              <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className={cn("h-full rounded-full transition-all duration-500",
-                    closingPower.total >= 60 ? "bg-emerald-500" : closingPower.total >= 30 ? "bg-amber-500" : "bg-red-500"
-                  )}
-                  style={{ width: `${closingPower.total}%` }}
-                />
-              </div>
-            </div>
-            <span className={cn("text-2xl font-bold tabular-nums leading-none",
-              closingPower.total >= 60 ? "text-emerald-600 dark:text-emerald-400" : closingPower.total >= 30 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"
-            )}>
-              {closingPower.total}
-            </span>
-          </div>
-          <div className={cn("flex items-center gap-1 justify-end mt-1 text-[11px]", momentum.color)}>
-            <MomentumIcon className="h-3 w-3" />
-            <span>{momentum.label}</span>
-          </div>
+          {/* Plain-English status line — replaces the phase/closing-power cluster */}
+          <p className="text-sm font-medium text-foreground mt-1.5">{statusLine}</p>
         </div>
       </div>
 
-      {/* Mobile status strip (visible only on small screens) */}
-      <div className="flex md:hidden items-center gap-1.5 text-[11px] text-muted-foreground pb-2 flex-wrap">
-        <span className={cn(
-          "px-2 py-0.5 rounded-full font-medium",
-          PHASE_COLORS[phase] || "bg-muted text-muted-foreground",
-        )}>
-          {phase}
-        </span>
-        <span className="text-border">·</span>
-        <span className={cn("font-medium", automation.color)}>
-          {automation.label}
-        </span>
+      {/* ROW 2 — Next move + one-tap Draft it (never a dead card) */}
+      <div className="border-t border-border/40" />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 py-3">
+        <div className="flex-1 min-w-0">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Next move</span>
+          <p className="text-sm font-medium text-foreground">
+            {lead.next_step || "Send a quick check-in to keep this moving"}
+          </p>
+          {lead.next_step_reason && (
+            <p className="text-xs text-muted-foreground mt-0.5">{lead.next_step_reason}</p>
+          )}
+        </div>
+        {onDraftIt && (
+          <Button onClick={onDraftIt} className="w-full sm:w-auto shrink-0 gap-1.5">
+            <PenLine className="h-4 w-4" />
+            Draft it
+          </Button>
+        )}
       </div>
-
-      {/* ROW 2 — Recommended Action Strip */}
-      {lead.next_step && (
-        <>
-          <div className="border-t border-border/40" />
-          <div className="flex items-center gap-3 py-2.5">
-            <div className="flex-1 min-w-0">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mr-2">Recommended</span>
-              <span className="text-sm font-medium text-foreground">{lead.next_step}</span>
-            </div>
-            <div className="flex gap-1.5 flex-shrink-0">
-              {onCompose && (
-                <Button size="sm" className="h-7 text-xs px-3" onClick={onCompose}>
-                  <PenLine className="h-3 w-3 mr-1" />
-                  Compose
-                </Button>
-              )}
-              {onAddMeeting && (
-                <Button variant="outline" size="sm" className="h-7 text-xs px-3" onClick={onAddMeeting}>
-                  <Calendar className="h-3 w-3 mr-1" />
-                  Add Meeting
-                </Button>
-              )}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }

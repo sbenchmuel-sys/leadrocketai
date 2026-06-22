@@ -5,7 +5,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
-import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import MeetingsTab from "@/components/lead/MeetingsTab";
@@ -16,6 +15,7 @@ import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
 import StakeholdersPartnersPanel from "@/components/lead/StakeholdersPartnersPanel";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
+import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export default function LeadDetail() {
@@ -26,6 +26,8 @@ export default function LeadDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
   const [activeTab, setActiveTab] = useState("timeline");
+  const [showDraftDialog, setShowDraftDialog] = useState(false);
+  const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -33,10 +35,12 @@ export default function LeadDetail() {
 
   const backRoute = originContext === "leads" ? "/app/leads" : originContext === "inbox" ? "/app/inbox" : "/app";
 
-  const handleActionComplete = async () => {
-    await loadLead();
-    setRefreshKey(prev => prev + 1);
-    navigate(backRoute);
+  const handleDraftIt = () => {
+    // Open the recommended draft in the review-and-send composer. The dialog
+    // auto-generates from the lead's next_action_key (or its own sensible
+    // default when there's no recommendation) and always ends in manual Send.
+    setDraftActionKey(lead?.next_action_key ?? undefined);
+    setShowDraftDialog(true);
   };
 
   const handleDelete = async () => {
@@ -109,8 +113,7 @@ export default function LeadDetail() {
         onDelete={handleDelete}
         onUpdate={handleUpdate}
         onSyncComplete={loadLead}
-        onCompose={() => setActiveTab("drafts")}
-        onAddMeeting={() => setActiveTab("meetings")}
+        onDraftIt={handleDraftIt}
       />
 
       {/* Split layout: Main content + Side panel */}
@@ -123,7 +126,6 @@ export default function LeadDetail() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="w-full justify-start">
               <TabsTrigger value="timeline">Timeline</TabsTrigger>
-              <TabsTrigger value="drafts">Drafts</TabsTrigger>
               <TabsTrigger value="meetings">Meetings</TabsTrigger>
               <TabsTrigger value="upload">Upload</TabsTrigger>
               <TabsTrigger value="analysis">Deep Analysis</TabsTrigger>
@@ -145,9 +147,6 @@ export default function LeadDetail() {
                   unsubscribed: (lead as any).unsubscribed === true,
                 }}
               />
-            </TabsContent>
-            <TabsContent value="drafts" className="mt-6">
-              <DraftsTab lead={lead} onUpdate={handleUpdate} onActionComplete={handleActionComplete} />
             </TabsContent>
             <TabsContent value="meetings" className="mt-6">
               <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
@@ -186,6 +185,15 @@ export default function LeadDetail() {
           )}
         </div>
       </div>
+
+      {/* One-tap "Draft it" — review-and-send composer (manual send only) */}
+      <EmailActionDialog
+        lead={lead}
+        actionKey={draftActionKey}
+        open={showDraftDialog}
+        onOpenChange={setShowDraftDialog}
+        onSuccess={handleUpdate}
+      />
     </div>
   );
 }
