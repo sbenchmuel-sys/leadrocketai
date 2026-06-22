@@ -66,6 +66,7 @@ import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import PendingLeadsTab, { usePendingCandidatesCount } from "@/components/leads/PendingLeadsTab";
 import { AddToAutomationDialog } from "@/components/leads/AddToAutomationDialog";
+import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 
 type ViewMode = "todo" | "all";
@@ -422,12 +423,7 @@ export default function Leads() {
       </div>
 
       {view === "todo" ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
-          <p className="text-sm font-medium text-foreground">To-do is coming soon</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your prioritized task list lands in the next update.
-          </p>
-        </div>
+        <TodoView />
       ) : (
         <Tabs value={subTab} onValueChange={(v) => setSubTab(v as "leads" | "pending")} className="space-y-4">
           <TabsList>
