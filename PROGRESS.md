@@ -11,7 +11,7 @@ When a phase fully ships, move it to a `## Completed` section at the bottom of t
 ## Merge Dashboard + Leads (Unit A, started 2026-06-22)
 
 - 🚧 Unit A — `/app/dashboard` ("Revenue Engine") merged into `/app/leads` behind a To-do / All-leads toggle (To-do is a placeholder this unit). Sidebar "Dashboard" item removed; `/app/dashboard` redirects to `/app/leads`. The page now reads one source (`getDashboardMetrics`) with a non-admin owner filter.
-  - **Release note:** lead counts shift on day one because both views now use one source with the owner filter — non-admin reps see only their own leads (admins unchanged).
+  - **Release note:** lead counts shift on day one because both views now use one source with role-based scoping — reps see only their own leads, managers see their whole workspace (the same "team" definition Manager Analytics uses), admins see everything.
 - ⬜ Unit B — To-do view = flat list of the Queue's items with an Email / Call filter and "Open → Queue" buttons.
 - ⬜ Unit C — short plain-English "why now" reason line on each To-do item.
 

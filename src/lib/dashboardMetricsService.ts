@@ -76,24 +76,50 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   } = await supabase.auth.getUser();
   if (!user) return [];
 
-  // Non-admin owner scoping (mirrors getLeadsList in supabaseQueries.ts): reps
-  // see only their own leads, admins see the whole workspace. This is the
-  // intended day-one behaviour change from merging Dashboard + Leads onto one
-  // source — counts on the (former) dashboard shrink for reps accordingly.
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
+  // Lead-visibility scoping WITHIN a workspace. The cross-company wall is RLS
+  // (is_workspace_member) and is untouched here — this only narrows which leads
+  // a member sees inside their own workspace, and never widens beyond it.
+  //
+  //   • admin   → everything RLS permits (UNCHANGED — still gated on profiles.role).
+  //   • manager → their whole workspace's leads. "A manager's team" reuses the
+  //               exact definition the Manager Analytics page uses: every member
+  //               of the manager's workspace. fetchManagerMetrics() scopes solely
+  //               by workspace_id (managerAnalyticsQueries.ts) — there is no finer
+  //               team model in the schema, so workspace == team.
+  //   • rep     → own leads only (UNCHANGED).
+  //
+  // Fail-safe: if the role or workspace can't be read for any reason, fall back
+  // to the most restrictive scope (own leads only). Silence never widens access.
   let query = supabase
     .from("leads")
     .select(DASHBOARD_LEAD_COLUMNS)
     .order("last_activity_at", { ascending: false })
     .limit(1000);
 
-  if ((profile as { role?: string } | null)?.role !== "admin") {
-    query = query.eq("owner_user_id", user.id);
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const isAdmin = (profile as { role?: string } | null)?.role === "admin";
+
+  if (!isAdmin) {
+    // Resolve the workspace role the same way Manager Analytics does
+    // (workspace_members.role). Managers get the whole workspace; everyone else
+    // — reps, unknown roles, or an unreadable membership — falls back to own.
+    const { data: membership } = await supabase
+      .from("workspace_members")
+      .select("role, workspace_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const wsRole = (membership as { role?: string } | null)?.role;
+    const wsId = (membership as { workspace_id?: string } | null)?.workspace_id;
+
+    if (wsRole === "manager" && wsId) {
+      query = query.eq("workspace_id", wsId);
+    } else {
+      query = query.eq("owner_user_id", user.id);
+    }
   }
 
   const { data, error } = await query;
