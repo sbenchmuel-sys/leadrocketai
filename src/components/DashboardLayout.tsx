@@ -33,10 +33,11 @@ type NavItem = {
 // PR D — Queue is the new default landing page (`/app` redirects to
 // `/app/queue`). Dashboard stays in the nav as the one-click escape
 // hatch since Phase 1.7's kill switch is deferred. Order matters:
-// Queue first (default), Dashboard second.
+// Queue first (default). Unit A: the Dashboard ("Revenue Engine") is merged
+// into Leads, so it no longer has its own sidebar item — /app/dashboard
+// redirects to /app/leads.
 const navItems: NavItem[] = [
 { to: "/app/queue", icon: ListChecks, label: "Queue" },
-{ to: "/app/dashboard", icon: LayoutDashboard, label: "Dashboard" },
 { to: "/app/leads", icon: Users, label: "Leads" },
 { to: "/app/automations", icon: Megaphone, label: "Outreach" },
 { to: "/app/inbox", icon: Inbox, label: "Inbox" },

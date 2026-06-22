@@ -14,7 +14,6 @@ import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
 import DashboardLayout from "@/components/DashboardLayout";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
-import Dashboard from "./pages/Dashboard";
 import Queue from "./pages/Queue";
 import Inbox from "./pages/Inbox";
 import Leads from "./pages/Leads";
@@ -76,12 +75,12 @@ const App = () => (
                   </ProtectedRoute>
                 }
               >
-                {/* PR D: /app/queue is the new default landing page.
-                    Dashboard moves to /app/dashboard — kept fully
-                    functional as the launch escape hatch. */}
+                {/* PR D: /app/queue is the new default landing page. */}
                 <Route index element={<Navigate to="/app/queue" replace />} />
                 <Route path="queue" element={<Queue />} />
-                <Route path="dashboard" element={<Dashboard />} />
+                {/* Unit A: Dashboard merged into Leads. Old link redirects so
+                    bookmarks / deep links don't 404. */}
+                <Route path="dashboard" element={<Navigate to="/app/leads" replace />} />
                 <Route path="inbox" element={<Inbox />} />
                 <Route path="leads" element={<Leads />} />
                 <Route path="automations" element={<Automations />} />

@@ -67,7 +67,7 @@ const DASHBOARD_LEAD_COLUMNS = `
   nurture_cadence, auto_nurture_eligible, source_type, motion,
   nurture_mode, nurture_status, eligible_at, automation_mode,
   has_future_meeting, milestones_json, risks_json, ooo_until, action_dismissed_at,
-  action_permanently_dismissed, group_id
+  action_permanently_dismissed, group_id, campaign_id
 `;
 
 async function fetchLeads(): Promise<EnrichedLead[]> {
@@ -76,11 +76,27 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   } = await supabase.auth.getUser();
   if (!user) return [];
 
-  const { data, error } = await supabase
+  // Non-admin owner scoping (mirrors getLeadsList in supabaseQueries.ts): reps
+  // see only their own leads, admins see the whole workspace. This is the
+  // intended day-one behaviour change from merging Dashboard + Leads onto one
+  // source — counts on the (former) dashboard shrink for reps accordingly.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  let query = supabase
     .from("leads")
     .select(DASHBOARD_LEAD_COLUMNS)
     .order("last_activity_at", { ascending: false })
     .limit(1000);
+
+  if ((profile as { role?: string } | null)?.role !== "admin") {
+    query = query.eq("owner_user_id", user.id);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     console.error("[dashboardMetrics] fetch error:", error);
