@@ -19,11 +19,34 @@ export interface LeadStatusDisplay {
 }
 
 /**
- * True when the lead is enrolled in automation: either an outreach campaign
- * (campaign_id) or a consented legacy sequence/nurture (automation_mode). This
- * mirrors the consent signals the executor and enrollment gate use.
+ * True when the lead has an unanswered customer reply — its most recent inbound
+ * is strictly newer than its most recent outbound. A reply auto-pauses
+ * automation (the executor's instant-pause-on-inbound guardrail), so while this
+ * is true the lead is effectively waiting on the rep, not on automation.
+ * Mirrors the `hasUnansweredInbound` rule used on the dashboard.
+ */
+function hasUnansweredReply(lead: EnrichedLead): boolean {
+  if (!lead.last_inbound_at) return false;
+  const inbound = new Date(lead.last_inbound_at).getTime();
+  const outbound = lead.last_outbound_at ? new Date(lead.last_outbound_at).getTime() : 0;
+  return inbound > outbound;
+}
+
+/**
+ * True when the lead is enrolled in automation AND not currently paused by a
+ * reply: either an outreach campaign (campaign_id) or a consented legacy
+ * sequence/nurture (automation_mode). This mirrors the consent signals the
+ * executor and enrollment gate use.
+ *
+ * Display-only refinement (replied leads leave Automation): when the customer
+ * has replied and nobody has responded yet, automation is paused, so we report
+ * the lead as NOT in automation — it drops off the "Auto: On" column and the
+ * "In automation" count even though its campaign_id / automation_mode are still
+ * set. This does NOT touch the executor or un-enroll anything; the lead's
+ * enrollment is intact and the engine's own pause-on-inbound is unchanged.
  */
 export function isInAutomation(lead: EnrichedLead): boolean {
+  if (hasUnansweredReply(lead)) return false;
   return !!lead.campaign_id || !!lead.automation_mode || lead.revenueState === "automation";
 }
 
