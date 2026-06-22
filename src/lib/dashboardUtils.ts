@@ -330,6 +330,9 @@ export interface EnrichedLead extends LeadListItem {
   revenueState?: RevenueState;
   // Group membership — used by stakeholder visibility logic. Null = solo lead.
   group_id?: string | null;
+  // Campaign enrollment — non-null means the lead is in an outreach campaign.
+  // Used by the merged Leads page for the "Auto" column / "In automation" chip.
+  campaign_id?: string | null;
   // Extra fields for Closing Power Score (carried through from query)
   has_future_meeting?: boolean;
   milestones_json?: any;
@@ -355,6 +358,7 @@ export function enrichLead(lead: LeadListItem & {
   milestones_json?: any;
   risks_json?: any;
   group_id?: string | null;
+  campaign_id?: string | null;
 }): EnrichedLead {
   const stage = (lead.stage as DealStage) || "new";
   const sourceType = (lead.source_type as SourceType) || "manual_entry";
@@ -377,6 +381,7 @@ export function enrichLead(lead: LeadListItem & {
     nurture_status: lead.nurture_status,
     eligible_at: lead.eligible_at,
     group_id: lead.group_id ?? null,
+    campaign_id: lead.campaign_id ?? null,
   };
 }
 

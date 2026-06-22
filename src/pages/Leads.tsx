@@ -1,11 +1,37 @@
-import { useEffect, useState } from "react";
+// ============================================================================
+// /app/leads — merged Leads page (Unit A).
+//
+// One page, two views toggled by a pill at the top:
+//   • All leads — the full lead table (this PR).
+//   • To-do     — placeholder; built in Unit B.
+//
+// Data comes from ONE source: getDashboardMetrics() (enriched leads, with the
+// non-admin owner filter applied in the service). The old standalone Leads
+// fetch (getLeadsList) is no longer used here. Counts therefore match whatever
+// the To-do view will show off the same source.
+//
+// Guardrail: "Draft emails" generates drafts the rep reviews + sends manually
+// (EmailActionDialog). Generated drafts are NEVER handed to the automated
+// sender.
+// ============================================================================
+
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getLeadsList, createLead, deleteLead, LeadListItem, CreateLeadInput } from "@/lib/supabaseQueries";
+import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
+import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
+import type { EnrichedLead } from "@/lib/dashboardUtils";
+import { leadStatus, isInAutomation, isNewLead } from "@/lib/leadStatus";
+import { updateMotionFromTable, updateSourceFromTable, type SourcePresetKey } from "@/lib/motionUpdater";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,43 +46,55 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { toast } from "sonner";
-import { Plus, Search, MoreHorizontal, Pencil, Trash2, RefreshCw, AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { supabase } from "@/integrations/supabase/client";
-import { format } from "date-fns";
-import { SOURCE_TYPE_LABELS, SourceType } from "@/lib/dashboardUtils";
-import { SourceDropdown } from "@/components/dashboard/SourceDropdown";
-import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
-import { useGmailConnection } from "@/hooks/useGmailConnection";
-import { useMailSync } from "@/hooks/useMailSync";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import { Plus, Search, Trash2, ChevronDown, Loader2 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import PendingLeadsTab, { usePendingCandidatesCount } from "@/components/leads/PendingLeadsTab";
+import { AddToAutomationDialog } from "@/components/leads/AddToAutomationDialog";
+import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
+
+type ViewMode = "todo" | "all";
+type Chip = "all" | "new" | "automation";
+
+const SOURCE_PRESETS: { key: SourcePresetKey; label: string }[] = [
+  { key: "outbound", label: "Outbound Prospect" },
+  { key: "inbound_website", label: "Inbound – Website" },
+  { key: "event", label: "Event Lead" },
+  { key: "referral", label: "Referral" },
+  { key: "other", label: "Manual" },
+];
 
 export default function Leads() {
   const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
-  const { connectGmail, isConnected: isGmailConnected, isLoading: isGmailLoading } = useGmailConnection();
-  const { provider, providerLabel, isConnected: isMailConnected, isLoading: isMailLoading } = useMailSync();
-  const [leads, setLeads] = useState<LeadListItem[]>([]);
+  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+
+  const [view, setView] = useState<ViewMode>("all");
+  const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
+
+  const [leads, setLeads] = useState<EnrichedLead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [chip, setChip] = useState<Chip>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<LeadListItem | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [showReconnectPrompt, setShowReconnectPrompt] = useState(false);
-  const [isReconnecting, setIsReconnecting] = useState(false);
   const [newLead, setNewLead] = useState<CreateLeadInput>({
     name: "",
     company: "",
@@ -64,181 +102,24 @@ export default function Leads() {
     source_type: "manual_entry",
   });
 
-  const handleReconnectMail = async () => {
-    setIsReconnecting(true);
-    try {
-      if (provider === "outlook") {
-        navigate("/app/settings");
-        toast.info("Reconnect Outlook from Settings");
-      } else {
-        await connectGmail("/leads");
-      }
-    } catch (err) {
-      toast.error(`Failed to start ${providerLabel} reconnection`);
-    } finally {
-      setIsReconnecting(false);
-    }
-  };
+  const [deleteTarget, setDeleteTarget] = useState<EnrichedLead | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [addToAutomationOpen, setAddToAutomationOpen] = useState(false);
 
-  const handleDeleteLead = async () => {
-    if (!deleteTarget) return;
-    setIsDeleting(true);
-    try {
-      await deleteLead(deleteTarget.id);
-      toast.success("Lead deleted");
-      setDeleteTarget(null);
-      loadLeads();
-    } catch (err) {
-      toast.error("Failed to delete lead");
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+  // Draft review dialog (opened from a "Draft ready" tag).
+  const [draftLead, setDraftLead] = useState<EnrichedLead | null>(null);
+  const [draftPrefill, setDraftPrefill] = useState<{ subject?: string; body?: string }>({});
+  const [draftDialogOpen, setDraftDialogOpen] = useState(false);
 
-  const handleBulkDelete = async () => {
-    if (selectedIds.size === 0) return;
-    setIsDeleting(true);
-    try {
-      await Promise.all(Array.from(selectedIds).map((id) => deleteLead(id)));
-      toast.success(`${selectedIds.size} lead(s) deleted`);
-      setSelectedIds(new Set());
-      setShowBulkDeleteDialog(false);
-      loadLeads();
-    } catch (err) {
-      toast.error("Failed to delete some leads");
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIds.size === filteredLeads.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filteredLeads.map((l) => l.id)));
-    }
-  };
-
-  const toggleSelect = (id: string) => {
-    const newSet = new Set(selectedIds);
-    if (newSet.has(id)) {
-      newSet.delete(id);
-    } else {
-      newSet.add(id);
-    }
-    setSelectedIds(newSet);
-  };
-
-  // Helper to detect token/auth errors that require Gmail reconnection
-  const isReconnectError = (error: string): boolean => {
-    const reconnectPhrases = [
-      "invalid_grant",
-      "revoked",
-      "reconnect gmail",
-      "refresh token",
-      "token expired",
-      "no refresh token",
-      "gmail not connected",
-    ];
-    const lowerError = error.toLowerCase();
-    return reconnectPhrases.some(phrase => lowerError.includes(phrase));
-  };
-
-  const handleBulkSync = async () => {
-    if (selectedIds.size === 0) return;
-
-    // Check that *some* mail provider is connected
-    if (!isMailConnected) {
-      setShowReconnectPrompt(true);
-      toast.error("Inbox not connected", {
-        description: "Connect Gmail or Outlook to sync emails",
-      });
-      return;
-    }
-
-    setIsSyncing(true);
-    setShowReconnectPrompt(false);
-    const BATCH_SIZE = 15;
-    const leadIds = Array.from(selectedIds);
-    let totalSynced = 0;
-    let totalProcessed = 0;
-    let firstError: string | null = null;
-
-    const fnName = provider === "outlook" ? "outlook-bulk-sync" : "gmail-bulk-sync";
-
-    try {
-      for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
-        const batchIds = leadIds.slice(i, i + BATCH_SIZE);
-        const { data, error } = await supabase.functions.invoke(fnName, {
-          body: { leadIds: batchIds },
-        });
-
-        if (error) {
-          const errorMsg = error.message || "Failed to sync emails";
-          if (isReconnectError(errorMsg)) {
-            setShowReconnectPrompt(true);
-            toast.error(`${providerLabel} needs reconnection`, {
-              description: `Go to Settings to reconnect your ${providerLabel} account`,
-            });
-            return;
-          }
-          firstError ||= errorMsg;
-          continue;
-        }
-
-        if (data?.needsReconnect || isReconnectError(data?.error || "")) {
-          setShowReconnectPrompt(true);
-          toast.error(`${providerLabel} needs reconnection`, {
-            description: `Go to Settings to reconnect your ${providerLabel} account`,
-          });
-          return;
-        }
-
-        if (data?.ok) {
-          totalSynced += Number(data.totalSynced ?? 0);
-          totalProcessed += Number(data.leadsProcessed ?? batchIds.length);
-        } else {
-          firstError ||= data?.error || "Sync failed";
-        }
-      }
-
-      if (firstError && totalProcessed === 0) {
-        toast.error(firstError);
-        return;
-      }
-
-      const processedCount = totalProcessed || leadIds.length;
-      const msg = totalSynced > 0
-        ? `Synced ${totalSynced} new email${totalSynced > 1 ? "s" : ""} for ${processedCount} lead(s)`
-        : `Inbox is up to date for ${processedCount} lead(s)`;
-      toast.success(msg);
-
-      if (firstError) {
-        toast.warning(`Some leads could not be synced: ${firstError}`);
-      }
-
-      setSelectedIds(new Set());
-      loadLeads();
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Failed to sync emails";
-      if (isReconnectError(errorMsg)) {
-        setShowReconnectPrompt(true);
-        toast.error(`${providerLabel} needs reconnection`, {
-          description: `Go to Settings to reconnect your ${providerLabel} account`,
-        });
-      } else {
-        toast.error(errorMsg);
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  const pendingCount = usePendingCandidatesCount();
 
   const loadLeads = async () => {
     try {
-      const data = await getLeadsList();
-      setLeads(data);
-    } catch (err) {
+      const m = await getDashboardMetrics();
+      setLeads(m.leads);
+    } catch {
       toast.error("Failed to load leads");
     } finally {
       setIsLoading(false);
@@ -249,6 +130,56 @@ export default function Leads() {
     loadLeads();
   }, []);
 
+  // ── Filtering ──────────────────────────────────────────────────────────
+  const filteredLeads = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return leads.filter((lead) => {
+      if (chip === "new" && !isNewLead(lead)) return false;
+      if (chip === "automation" && !isInAutomation(lead)) return false;
+      if (!q) return true;
+      return (
+        lead.name.toLowerCase().includes(q) ||
+        (lead.company || "").toLowerCase().includes(q) ||
+        (lead.email || "").toLowerCase().includes(q)
+      );
+    });
+  }, [leads, chip, searchQuery]);
+
+  // Chip counts come off the full set (not the search), so they're stable.
+  const chipCounts = useMemo(
+    () => ({
+      all: leads.length,
+      new: leads.filter(isNewLead).length,
+      automation: leads.filter(isInAutomation).length,
+    }),
+    [leads],
+  );
+
+  // Drop stale selections when the visible list changes.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const visible = new Set(filteredLeads.map((l) => l.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filteredLeads]);
+
+  const allVisibleSelected =
+    filteredLeads.length > 0 && filteredLeads.every((l) => selectedIds.has(l.id));
+
+  const toggleSelectAll = () => {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(filteredLeads.map((l) => l.id)));
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  // ── Add lead ───────────────────────────────────────────────────────────
   const handleAddLead = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -265,28 +196,136 @@ export default function Leads() {
     }
   };
 
-  const filteredLeads = leads.filter(
-    (lead) =>
-      lead.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lead.company.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lead.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const getOutlookColor = (outlook: string | null) => {
-    switch (outlook) {
-      case "positive":
-        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "negative":
-        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      default:
-        return "bg-secondary text-secondary-foreground";
+  // ── Delete ─────────────────────────────────────────────────────────────
+  const handleDeleteLead = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deleteLead(deleteTarget.id);
+      toast.success("Lead deleted");
+      setDeleteTarget(null);
+      loadLeads();
+    } catch {
+      toast.error("Failed to delete lead");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
-  const pendingCount = usePendingCandidatesCount();
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setIsDeleting(true);
+    try {
+      await Promise.all(Array.from(selectedIds).map((id) => deleteLead(id)));
+      toast.success(`${selectedIds.size} lead(s) deleted`);
+      setSelectedIds(new Set());
+      setShowBulkDeleteDialog(false);
+      loadLeads();
+    } catch {
+      toast.error("Failed to delete some leads");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
+  // ── Draft emails (bulk) ────────────────────────────────────────────────
+  const handleDraftEmails = () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    ids.forEach((id) => enqueue(id));
+    toast.success(`Drafting ${ids.length} email${ids.length === 1 ? "" : "s"}…`);
+    setSelectedIds(new Set());
+  };
+
+  const openDraft = (lead: EnrichedLead) => {
+    const entry = consume(lead.id);
+    if (!entry?.result) return;
+    setDraftLead(lead);
+    setDraftPrefill({
+      subject: entry.result.suggested_subject || entry.subject,
+      body: entry.result.draft_text,
+    });
+    setDraftDialogOpen(true);
+  };
+
+  // ── Move to Nurture (bulk) ─────────────────────────────────────────────
+  const handleMoveToNurture = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    const ids = Array.from(selectedIds);
+    try {
+      const results = await Promise.all(ids.map((id) => updateMotionFromTable(id, "Nurture")));
+      const ok = results.filter(Boolean).length;
+      if (ok > 0) toast.success(`Moved ${ok} lead(s) to Nurture`);
+      if (ok < ids.length) toast.warning(`${ids.length - ok} lead(s) couldn't be moved`);
+      setSelectedIds(new Set());
+      loadLeads();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // ── Change source (bulk) ───────────────────────────────────────────────
+  const handleChangeSource = async (preset: SourcePresetKey) => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    const ids = Array.from(selectedIds);
+    try {
+      const results = await Promise.all(ids.map((id) => updateSourceFromTable(id, preset)));
+      const ok = results.filter(Boolean).length;
+      if (ok > 0) toast.success(`Updated source for ${ok} lead(s)`);
+      if (ok < ids.length) toast.warning(`${ids.length - ok} lead(s) couldn't be updated`);
+      setSelectedIds(new Set());
+      loadLeads();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // ── Render helpers ─────────────────────────────────────────────────────
+  const chipClass = (active: boolean) =>
+    cn(
+      "rounded-full px-3 py-1 text-xs font-medium",
+      active
+        ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+        : "border border-border bg-background text-muted-foreground hover:text-foreground",
+    );
+
+  const renderDraftTag = (lead: EnrichedLead) => {
+    const ds = getStatus(lead.id);
+    if (!ds) return null;
+    if (ds.status === "generating") {
+      return <span className="text-xs text-muted-foreground">Drafting…</span>;
+    }
+    if (ds.status === "ready") {
+      return (
+        <button
+          type="button"
+          onClick={() => openDraft(lead)}
+          className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-300"
+        >
+          Draft ready
+        </button>
+      );
+    }
+    if (ds.status === "error") {
+      return (
+        <button
+          type="button"
+          onClick={() => enqueue(lead.id)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Draft failed — retry
+        </button>
+      );
+    }
+    return null;
+  };
+
+  // ── Markup ─────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-foreground">Leads</h1>
         <div className="flex items-center gap-2">
@@ -298,263 +337,303 @@ export default function Leads() {
                 Add Lead
               </Button>
             </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Lead</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleAddLead} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  value={newLead.name}
-                  onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
-                  placeholder="John Smith"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="company">Company</Label>
-                <Input
-                  id="company"
-                  value={newLead.company}
-                  onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
-                  placeholder="Acme Corp"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={newLead.email}
-                  onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
-                  placeholder="john@acme.com"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="source_type">Source</Label>
-                <Select
-                  value={newLead.source_type || "manual_entry"}
-                  onValueChange={(value) =>
-                    setNewLead({ ...newLead, source_type: value as CreateLeadInput["source_type"] })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="manual_entry">Manual Entry</SelectItem>
-                    <SelectItem value="outbound_prospecting">Outbound Prospecting</SelectItem>
-                    <SelectItem value="contact_form">Contact Form</SelectItem>
-                    <SelectItem value="gmail_inbound">Inbound Email</SelectItem>
-                    <SelectItem value="event_lead">Event Lead</SelectItem>
-                    <SelectItem value="referral">Referral</SelectItem>
-                    <SelectItem value="csv_import">CSV Import</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? "Creating..." : "Create Lead"}
-              </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add New Lead</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleAddLead} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Name</Label>
+                  <Input
+                    id="name"
+                    value={newLead.name}
+                    onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
+                    placeholder="John Smith"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="company">Company</Label>
+                  <Input
+                    id="company"
+                    value={newLead.company}
+                    onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
+                    placeholder="Acme Corp"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={newLead.email}
+                    onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                    placeholder="john@acme.com"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="source_type">Source</Label>
+                  <Select
+                    value={newLead.source_type || "manual_entry"}
+                    onValueChange={(value) =>
+                      setNewLead({ ...newLead, source_type: value as CreateLeadInput["source_type"] })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manual_entry">Manual Entry</SelectItem>
+                      <SelectItem value="outbound_prospecting">Outbound Prospecting</SelectItem>
+                      <SelectItem value="contact_form">Contact Form</SelectItem>
+                      <SelectItem value="gmail_inbound">Inbound Email</SelectItem>
+                      <SelectItem value="event_lead">Event Lead</SelectItem>
+                      <SelectItem value="referral">Referral</SelectItem>
+                      <SelectItem value="csv_import">CSV Import</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                  {isSubmitting ? "Creating..." : "Create Lead"}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
-      <Tabs defaultValue="all" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="all">All Leads</TabsTrigger>
-          <TabsTrigger value="pending" className="gap-2">
-            Pending
-            {pendingCount > 0 && (
-              <Badge variant="secondary" className="ml-1">{pendingCount}</Badge>
+      {/* View toggle — white pill on a light gray track */}
+      <div className="inline-flex rounded-lg bg-muted p-0.5">
+        {(["todo", "all"] as ViewMode[]).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setView(v)}
+            className={cn(
+              "rounded-md px-4 py-1.5 text-sm font-medium",
+              view === v ? "bg-background text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
-          </TabsTrigger>
-        </TabsList>
+          >
+            {v === "todo" ? "To-do" : "All leads"}
+          </button>
+        ))}
+      </div>
 
-        <TabsContent value="all">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
+      {view === "todo" ? (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
+          <p className="text-sm font-medium text-foreground">To-do is coming soon</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your prioritized task list lands in the next update.
+          </p>
+        </div>
+      ) : (
+        <Tabs value={subTab} onValueChange={(v) => setSubTab(v as "leads" | "pending")} className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="leads">Leads</TabsTrigger>
+            <TabsTrigger value="pending" className="gap-2">
+              Pending
+              {pendingCount > 0 && (
+                <Badge variant="secondary" className="ml-1">
+                  {pendingCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="leads" className="space-y-4">
+            {/* Search */}
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search leads..."
+                placeholder="Find any lead by name or company"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
               />
             </div>
-            {selectedIds.size > 0 && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleBulkSync}
-                  disabled={isSyncing || isGmailLoading || isMailLoading}
-                  title={!isMailConnected ? "Connect Gmail or Outlook first" : undefined}
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
-                  {isSyncing ? "Syncing..." : `Sync ${providerLabel} (${selectedIds.size})`}
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => setShowBulkDeleteDialog(true)}
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete ({selectedIds.size})
-                </Button>
-              </>
-            )}
-          </div>
-          {showReconnectPrompt && (
-            <Alert variant="destructive" className="mt-4">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription className="flex items-center justify-between">
-                <span>
-                  {isMailConnected
-                    ? `${providerLabel} access has expired. Please reconnect to continue syncing emails.`
-                    : `No inbox is connected. Please connect Gmail or Outlook to sync emails.`}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleReconnectMail}
-                  disabled={isReconnecting}
-                  className="ml-4"
-                >
-                  {isReconnecting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      {isMailConnected ? `Reconnect ${providerLabel}` : `Connect ${providerLabel}`}
-                    </>
-                  )}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <p className="text-muted-foreground">Loading...</p>
-          ) : filteredLeads.length === 0 ? (
-            <p className="text-muted-foreground text-center py-8">
-              {searchQuery ? "No leads match your search" : "No leads yet. Add your first lead!"}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[40px]">
-                      <Checkbox
-                        checked={filteredLeads.length > 0 && selectedIds.size === filteredLeads.length}
-                        onCheckedChange={toggleSelectAll}
-                      />
-                    </TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Country</TableHead>
-                    <TableHead>Company</TableHead>
-                    <TableHead>Source</TableHead>
-                    <TableHead>Sentiment</TableHead>
-                    <TableHead>Last Activity</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredLeads.map((lead) => (
-                    <TableRow key={lead.id} className="cursor-pointer hover:bg-accent">
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedIds.has(lead.id)}
-                          onCheckedChange={() => toggleSelect(lead.id)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Link
-                          to={`/app/leads/${lead.id}`}
-                          state={{ originContext: "leads" }}
-                          className="font-medium text-foreground hover:underline"
-                        >
-                          {lead.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{lead.country || "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{lead.company}</TableCell>
-                      <TableCell onClick={(e) => e.stopPropagation()}>
-                        <SourceDropdown
-                          leadId={lead.id}
-                          leadName={lead.name}
-                          currentSourceType={(lead.source_type || "manual_entry") as SourceType}
-                          onUpdated={loadLeads}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {lead.deal_outlook && (
-                          <Badge className={getOutlookColor(lead.deal_outlook)}>
-                            {lead.deal_outlook}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {format(new Date(lead.last_activity_at), "MMM d, yyyy")}
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => navigate(`/app/leads/${lead.id}`, { state: { originContext: "leads" } })}>
-                              <Pencil className="h-4 w-4 mr-2" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => setDeleteTarget(lead)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+
+            {/* Filter chips */}
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setChip("new")} className={chipClass(chip === "new")}>
+                New · {chipCounts.new}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChip("automation")}
+                className={chipClass(chip === "automation")}
+              >
+                In automation · {chipCounts.automation}
+              </button>
+              <button type="button" onClick={() => setChip("all")} className={chipClass(chip === "all")}>
+                All · {chipCounts.all}
+              </button>
             </div>
-          )}
-        </CardContent>
-      </Card>
-        </TabsContent>
 
-        <TabsContent value="pending">
-          <PendingLeadsTab onApproved={loadLeads} />
-        </TabsContent>
-      </Tabs>
+            {/* Selection bar */}
+            {selectedIds.size > 0 && (
+              <div className="flex items-center justify-between gap-3 rounded-md bg-blue-50 px-4 py-2.5 dark:bg-blue-950/40">
+                <span className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                  {selectedIds.size} selected
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" disabled={bulkBusy} onClick={() => setAddToAutomationOpen(true)}>
+                    Add to automation
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={bulkBusy} onClick={handleDraftEmails}>
+                    Draft emails
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" disabled={bulkBusy}>
+                        {bulkBusy && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                        More
+                        <ChevronDown className="h-3.5 w-3.5 ml-1" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handleMoveToNurture}>Move to Nurture</DropdownMenuItem>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>Change source</DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {SOURCE_PRESETS.map((s) => (
+                            <DropdownMenuItem key={s.key} onClick={() => handleChangeSource(s.key)}>
+                              {s.label}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setShowBulkDeleteDialog(true)}
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            )}
 
-      {/* Delete Confirmation Dialog */}
+            {/* Table */}
+            {isLoading ? (
+              <p className="text-muted-foreground py-8 text-center">Loading…</p>
+            ) : filteredLeads.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">
+                {searchQuery || chip !== "all" ? "No leads match this filter" : "No leads yet. Add your first lead!"}
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-md border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead className="w-[40px]">
+                        <Checkbox checked={allVisibleSelected} onCheckedChange={toggleSelectAll} />
+                      </TableHead>
+                      <TableHead>Lead</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Last reply</TableHead>
+                      <TableHead>Auto</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredLeads.map((lead) => {
+                      const status = leadStatus(lead);
+                      const auto = isInAutomation(lead);
+                      return (
+                        <TableRow key={lead.id} className="hover:bg-accent/50">
+                          <TableCell className="py-3">
+                            <Checkbox
+                              checked={selectedIds.has(lead.id)}
+                              onCheckedChange={() => toggleSelect(lead.id)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <Link
+                              to={`/app/leads/${lead.id}`}
+                              state={{ originContext: "leads" }}
+                              className="font-semibold text-foreground hover:underline"
+                            >
+                              {lead.name}
+                            </Link>
+                            <div className="text-xs text-muted-foreground">{lead.company}</div>
+                            <div className="mt-1 empty:hidden">{renderDraftTag(lead)}</div>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <span className={cn("text-sm font-medium", status.className)}>{status.label}</span>
+                          </TableCell>
+                          <TableCell className="py-3 text-sm text-muted-foreground">
+                            {lead.last_inbound_at
+                              ? formatDistanceToNow(new Date(lead.last_inbound_at), { addSuffix: true })
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <span
+                              className={cn(
+                                "text-sm font-medium",
+                                auto ? "text-green-600 dark:text-green-400" : "text-muted-foreground",
+                              )}
+                            >
+                              {auto ? "On" : "Off"}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="pending">
+            <PendingLeadsTab onApproved={loadLeads} />
+          </TabsContent>
+        </Tabs>
+      )}
+
+      {/* Add to automation */}
+      <AddToAutomationDialog
+        open={addToAutomationOpen}
+        onOpenChange={setAddToAutomationOpen}
+        leadIds={Array.from(selectedIds)}
+        onEnrolled={() => {
+          setSelectedIds(new Set());
+          loadLeads();
+        }}
+      />
+
+      {/* Draft review */}
+      {draftLead && (
+        <EmailActionDialog
+          lead={draftLead}
+          open={draftDialogOpen}
+          prefilledSubject={draftPrefill.subject}
+          prefilledBody={draftPrefill.body}
+          onOpenChange={(open) => {
+            setDraftDialogOpen(open);
+            if (!open) {
+              setDraftLead(null);
+              setDraftPrefill({});
+              loadLeads();
+            }
+          }}
+        />
+      )}
+
+      {/* Single delete confirm */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Lead</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteTarget?.name}</strong> from <strong>{deleteTarget?.company}</strong>? 
-              This will permanently remove all associated data. This action cannot be undone.
+              Are you sure you want to delete <strong>{deleteTarget?.name}</strong> from{" "}
+              <strong>{deleteTarget?.company}</strong>? This will permanently remove all associated
+              data. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -570,13 +649,13 @@ export default function Leads() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Bulk Delete Confirmation Dialog */}
+      {/* Bulk delete confirm */}
       <AlertDialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {selectedIds.size} Lead(s)</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{selectedIds.size}</strong> selected lead(s)? 
+              Are you sure you want to delete <strong>{selectedIds.size}</strong> selected lead(s)?
               This will permanently remove all associated data. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
