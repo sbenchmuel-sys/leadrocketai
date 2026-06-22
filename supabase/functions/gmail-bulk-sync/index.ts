@@ -941,6 +941,23 @@ function currentTickIndex(): number {
   return Math.floor(Date.now() / (20 * 60 * 1000));
 }
 
+// An account-wide Gmail auth failure (revoked token, missing read scope, refresh
+// failure) fails identically for EVERY lead on that connection. Detect it so the
+// scheduled sweep can flag the connection for reconnect and stop retrying per-lead.
+// Same heuristic as the user-path handler's `needsReconnect` at the bottom.
+function isAccountWideAuthError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("revoked") ||
+    m.includes("reconnect") ||
+    m.includes("reauthorize") ||
+    m.includes("invalid_grant") ||
+    m.includes("insufficient") ||
+    m.includes("permissions") ||
+    m.includes("no refresh token")
+  );
+}
+
 // Scheduled (cron-dispatcher / service-role) entry path. There is no user JWT
 // and the cron payload carries no leadIds, so this self-discovers every connected
 // Gmail account and syncs its workspace's leads. Per-connection try/catch keeps a
@@ -1002,10 +1019,17 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       accessToken = await refreshTokenIfNeeded(serviceSupabase, conn);
     } catch (err) {
       connectionsSkipped++;
-      console.error(
-        `[gmail-bulk-sync] cron: user=${conn.user_id} token refresh failed:`,
-        err instanceof Error ? err.message : err,
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} token refresh failed:`, msg);
+      // Self-heal: a revoked/refresh-failed token won't recover on its own, so flag
+      // the connection. The needs_reconnect guard above then skips it next tick
+      // instead of attempting a doomed refresh every 20 min.
+      if (isAccountWideAuthError(msg)) {
+        await serviceSupabase
+          .from("gmail_connections")
+          .update({ needs_reconnect: true })
+          .eq("user_id", conn.user_id);
+      }
       continue;
     }
 
@@ -1056,6 +1080,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       );
     }
 
+    let accountAuthFailed = false;
     for (const lead of leads ?? []) {
       // Budget check between leads too — a single workspace shouldn't blow the run.
       if (Date.now() - startedAt > RUN_BUDGET_MS) {
@@ -1067,12 +1092,27 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
         totalSynced += result.synced;
       } catch (err) {
-        console.error(
-          `[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        if (isAccountWideAuthError(msg)) {
+          // This token fails for every lead (e.g. missing read scope). Flag the
+          // connection for reconnect and stop the page — retrying the remaining
+          // leads would only burn the run budget and starve healthy connections.
+          console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect, skipping rest of page:`, msg);
+          await serviceSupabase
+            .from("gmail_connections")
+            .update({ needs_reconnect: true })
+            .eq("user_id", conn.user_id);
+          accountAuthFailed = true;
+          break;
+        }
+        console.error(`[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`, msg);
       }
       leadsProcessed++;
+    }
+
+    if (accountAuthFailed) {
+      connectionsSkipped++;
+      continue; // skip the last_sync_at bump + processed count for a failed account
     }
 
     await serviceSupabase
