@@ -784,9 +784,13 @@ async function syncLeadEmails(
     metrics.last_inbound_at,
   ].filter(Boolean).map(d => new Date(d!).getTime());
   
-  const lastActivityAt = activityDates.length > 0 
+  // Only set last_activity_at from REAL activity. Falling back to now() would make a
+  // lead with no imported email look freshly active on every 20-min scheduled sweep
+  // (codex P1). `undefined` is dropped from the update, leaving the column as-is.
+  const hasActivity = activityDates.length > 0;
+  const lastActivityAt = hasActivity
     ? new Date(Math.max(...activityDates)).toISOString()
-    : new Date().toISOString();
+    : undefined;
 
   // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
@@ -860,6 +864,11 @@ async function syncLeadEmails(
   } else if (hasRecentAutoSend) {
     // CRITICAL: Recently-sent guard -- executor sent an email recently, don't re-arm.
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Recent automation send detected (${recentAutoSendCount} in last 2h) -- suppressing action overwrite`);
+  } else if (!hasActivity && !actionResult.needs_action) {
+    // No interactions on record and nothing to flag — leave existing action fields
+    // untouched rather than clearing flags set elsewhere (manual / candidate) on
+    // every no-op scheduled sweep (codex P1). A lead with real activity, or one
+    // that derives an action, still flows through the normal overwrite below.
   } else {
     // Apply derived action for non-nurture, non-OOO, non-automation-scheduled leads
     updatePayload.needs_action = actionResult.needs_action;
@@ -1033,12 +1042,18 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    // Total leads in this workspace — drives the rotating page so coverage is
+    // Total leads OWNED BY THIS REP — drives the rotating page so coverage is
     // guaranteed across ticks rather than re-scanning the same freshest rows.
+    // Scope by owner_user_id (not the whole workspace): this connection's mailbox
+    // is the canonical source only for leads this rep owns — the same ownership
+    // model the send path uses (automation-executor resolves the Gmail connection
+    // via lead.owner_user_id). Workspace-wide scoping would make rep A's mailbox
+    // import onto rep B's leads and re-sync each lead once per connected user.
     const { count: totalLeads, error: countErr } = await serviceSupabase
       .from("leads")
       .select("id", { count: "exact", head: true })
       .eq("workspace_id", workspaceId)
+      .eq("owner_user_id", conn.user_id)
       .not("email", "is", null);
 
     if (countErr) {
@@ -1056,13 +1071,15 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     const from = page * LEADS_PER_PAGE;
     const to = from + LEADS_PER_PAGE - 1;
 
-    // Service role + explicit workspace_id filter reproduces the isolation the user
-    // path gets from RLS — leads never cross workspace boundaries. Stable `id` order
-    // makes the rotating page deterministic so every lead is eventually covered.
+    // Service role + explicit workspace_id + owner_user_id filters reproduce the
+    // isolation the user path gets from RLS — leads never cross workspace OR rep
+    // boundaries. Stable `id` order makes the rotating page deterministic so every
+    // lead is eventually covered.
     const { data: leads, error: leadsErr } = await serviceSupabase
       .from("leads")
       .select("id, email, stage, strategy, workspace_id")
       .eq("workspace_id", workspaceId)
+      .eq("owner_user_id", conn.user_id)
       .not("email", "is", null)
       .order("id", { ascending: true })
       .range(from, to);
