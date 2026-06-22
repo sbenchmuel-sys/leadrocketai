@@ -931,13 +931,14 @@ async function resolveWorkspaceId(serviceSupabase: any, userId: string): Promise
 // leads exist. Kept under cron-dispatcher's 55s forward timeout so the dispatcher
 // doesn't record every tick as a 504.
 //
-// LEADS_PER_PAGE: the per-connection lead window for ONE tick. To guarantee every
-// lead is eventually synced (not just the same freshest page each tick), leads are
-// ordered by a STABLE key (`id`) and the window is a rotating page selected by a
-// monotonic tick index — over ceil(total/LEADS_PER_PAGE) ticks the whole workspace
-// is covered. Connections are likewise rotated so a long-running early account
-// can't starve later ones every tick. syncLeadEmails is idempotent (dedup by
-// gmail_message_id), so overlap across ticks is harmless.
+// LEADS_PER_PAGE: how many of a connection owner's leads one run pulls into memory.
+// Coverage is guaranteed by a PERSISTED per-connection cursor (gmail_connections
+// .bulk_sync_cursor): each run resumes from the cursor, syncs as many leads as the
+// budget allows, then advances the cursor by the count ACTUALLY processed (mod
+// total) — so a window that doesn't fit the budget resumes exactly where it stopped
+// next run and no tail is ever permanently skipped. Connections are also rotated per
+// tick so a long-running early account can't starve later ones. syncLeadEmails is
+// idempotent (dedup by gmail_message_id), so any overlap is harmless.
 const RUN_BUDGET_MS = 45_000;
 const LEADS_PER_PAGE = 150;
 const CRON_MAX_RESULTS = 10;
@@ -977,7 +978,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
 
   const { data: connections, error: connErr } = await serviceSupabase
     .from("gmail_connections")
-    .select("user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect");
+    .select("user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect, bulk_sync_cursor");
 
   if (connErr) {
     console.error("[gmail-bulk-sync] cron: failed to load gmail_connections:", connErr.message);
@@ -1066,15 +1067,18 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    const pageCount = Math.ceil(totalLeads / LEADS_PER_PAGE);
-    const page = tick % pageCount;
-    const from = page * LEADS_PER_PAGE;
-    const to = from + LEADS_PER_PAGE - 1;
+    // Resume from this connection's persisted cursor — a rotating offset into the
+    // owner's leads (ordered by stable `id`). Advancing the cursor AFTER the loop by
+    // the count actually processed means a window that doesn't fit the run budget
+    // resumes exactly where it stopped next run, instead of restarting the same head
+    // rows and never reaching the tail.
+    const cursor = Number(conn.bulk_sync_cursor) || 0;
+    const start = cursor % totalLeads;
+    const end = start + LEADS_PER_PAGE - 1;
 
     // Service role + explicit workspace_id + owner_user_id filters reproduce the
     // isolation the user path gets from RLS — leads never cross workspace OR rep
-    // boundaries. Stable `id` order makes the rotating page deterministic so every
-    // lead is eventually covered.
+    // boundaries. Stable `id` order keeps the cursor window deterministic.
     const { data: leads, error: leadsErr } = await serviceSupabase
       .from("leads")
       .select("id, email, stage, strategy, workspace_id")
@@ -1082,7 +1086,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       .eq("owner_user_id", conn.user_id)
       .not("email", "is", null)
       .order("id", { ascending: true })
-      .range(from, to);
+      .range(start, end);
 
     if (leadsErr) {
       connectionsSkipped++;
@@ -1090,20 +1094,24 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    if (pageCount > 1) {
+    const windowLeads = leads ?? [];
+    if (totalLeads > LEADS_PER_PAGE) {
       console.log(
-        `[gmail-bulk-sync] cron: workspace=${workspaceId} ${totalLeads} leads — ` +
-          `page ${page + 1}/${pageCount} this tick (rows ${from}-${to}); full coverage over ${pageCount} ticks.`,
+        `[gmail-bulk-sync] cron: user=${conn.user_id} ${totalLeads} owned leads — ` +
+          `window rows ${start}-${start + Math.max(windowLeads.length - 1, 0)} this run (cursor=${cursor}).`,
       );
     }
 
     let accountAuthFailed = false;
-    for (const lead of leads ?? []) {
-      // Budget check between leads too — a single workspace shouldn't blow the run.
+    let processed = 0;
+    for (const lead of windowLeads) {
+      // Budget reached mid-window: STOP (don't skip ahead). The cursor below is set
+      // to start+processed, so the unprocessed tail is the first thing the next run
+      // picks up — no permanent skip.
       if (Date.now() - startedAt > RUN_BUDGET_MS) {
         budgetExhausted = true;
-        leadsDeferred++;
-        continue;
+        leadsDeferred += windowLeads.length - processed;
+        break;
       }
       try {
         const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
@@ -1112,9 +1120,10 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         const msg = err instanceof Error ? err.message : String(err);
         if (isAccountWideAuthError(msg)) {
           // This token fails for every lead (e.g. missing read scope). Flag the
-          // connection for reconnect and stop the page — retrying the remaining
-          // leads would only burn the run budget and starve healthy connections.
-          console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect, skipping rest of page:`, msg);
+          // connection for reconnect and stop the window — retrying the rest would
+          // only burn the run budget and starve healthy connections. Leave the
+          // cursor untouched so it resumes here after the rep re-auths.
+          console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect, skipping rest of window:`, msg);
           await serviceSupabase
             .from("gmail_connections")
             .update({ needs_reconnect: true })
@@ -1122,19 +1131,25 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
           accountAuthFailed = true;
           break;
         }
+        // A non-auth, lead-specific error still counts as processed so the cursor
+        // moves past it (retried on the next full rotation) rather than wedging here.
         console.error(`[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`, msg);
       }
+      processed++;
       leadsProcessed++;
     }
 
     if (accountAuthFailed) {
       connectionsSkipped++;
-      continue; // skip the last_sync_at bump + processed count for a failed account
+      continue; // cursor + last_sync_at left as-is for a flagged-for-reconnect account
     }
 
+    // Advance the cursor by what we actually processed (wraps via modulo) and stamp
+    // the sync time, so the next run resumes at the right offset.
+    const newCursor = (start + processed) % totalLeads;
     await serviceSupabase
       .from("gmail_connections")
-      .update({ last_sync_at: new Date().toISOString() })
+      .update({ bulk_sync_cursor: newCursor, last_sync_at: new Date().toISOString() })
       .eq("user_id", conn.user_id);
 
     connectionsProcessed++;
