@@ -12,15 +12,27 @@
 # Idempotent + resumable: skips packages already present and installs one at a
 # time, so a run killed by the time cap can simply be re-run to continue.
 #
-# Usage (from anywhere):  bash scripts/qa/sandbox-bootstrap.sh [--verify]
-#   --verify  also runs one unit test file end-to-end as proof.
+# Usage (from anywhere):  bash scripts/qa/sandbox-bootstrap.sh [--deno] [--verify]
+#   --deno    also install the Deno binary (for `npm run test:edge`), best-effort.
+#   --verify  also run one unit test file end-to-end as proof.
+#   Tip: if combined downloads risk the 45s cap, run the flags as a SEPARATE
+#   command from the bare run — the script is idempotent, so the second run only
+#   does the new work.
 #
 # NOTE: tsc is pure JS and already runs from the mount — just use
 #       `npx tsc -b --noEmit` (the root tsconfig is a solution file; plain
-#       `tsc --noEmit` checks nothing and passes vacuously). Deno is a separate
-#       binary handled below (best-effort).
+#       `tsc --noEmit` checks nothing and passes vacuously).
 set -u
 cd "$(dirname "$0")/../.." || exit 1   # repo root
+
+WANT_DENO=0; WANT_VERIFY=0
+for a in "$@"; do
+  case "$a" in
+    --deno)   WANT_DENO=1 ;;
+    --verify) WANT_VERIFY=1 ;;
+    *) echo "Unknown flag: $a (use --deno and/or --verify)"; exit 2 ;;
+  esac
+done
 
 if [ "$(uname -s)" != "Linux" ]; then
   echo "Not Linux ($(uname -s)) — native deps are already correct here, nothing to do."
@@ -35,6 +47,49 @@ esac
 # esbuild ships a static (libc-agnostic) linux binary; rollup/swc are libc-specific.
 if ldd --version 2>&1 | grep -qi musl; then LIBC=musl; else LIBC=gnu; fi
 echo "Detected: linux-$ARCH ($LIBC libc)"
+
+# Best-effort Deno install for `npm run test:edge`. Lands at node_modules/.bin/deno
+# so npm scripts find it on PATH automatically (no global install, no repo churn —
+# node_modules is gitignored). Never fails the script: vitest is the priority.
+install_deno() {
+  if command -v deno >/dev/null 2>&1; then
+    echo "  ✓ deno already on PATH ($(deno --version 2>/dev/null | head -1))"; return 0
+  fi
+  if [ -x node_modules/.bin/deno ]; then
+    echo "  ✓ deno already at node_modules/.bin/deno ($(node_modules/.bin/deno --version 2>/dev/null | head -1))"; return 0
+  fi
+  if [ "$LIBC" = "musl" ]; then
+    echo "  ⚠ Deno has no official musl build — skipping; rely on the vitest mirrors."; return 0
+  fi
+  local triple
+  case "$ARCH" in
+    x64)   triple=x86_64-unknown-linux-gnu ;;
+    arm64) triple=aarch64-unknown-linux-gnu ;;
+    *) echo "  ⚠ no Deno build for $ARCH — skipping."; return 0 ;;
+  esac
+  local url="https://github.com/denoland/deno/releases/latest/download/deno-${triple}.zip"
+  local tmp; tmp="$(mktemp -d)"
+  echo "  → downloading $url"
+  if ! curl -fsSL "$url" -o "$tmp/deno.zip"; then
+    echo "  ⚠ download failed — skipping Deno (vitest mirrors still cover the logic)."; rm -rf "$tmp"; return 0
+  fi
+  mkdir -p node_modules/.bin
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -o -j "$tmp/deno.zip" deno -d node_modules/.bin >/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import zipfile; zipfile.ZipFile('$tmp/deno.zip').extract('deno','node_modules/.bin')"
+  else
+    echo "  ⚠ no unzip or python3 to extract — skipping Deno."; rm -rf "$tmp"; return 0
+  fi
+  chmod +x node_modules/.bin/deno
+  rm -rf "$tmp"
+  if node_modules/.bin/deno --version >/dev/null 2>&1; then
+    echo "  ✓ deno → node_modules/.bin/deno ($(node_modules/.bin/deno --version | head -1))"
+    echo "    (npm run test:edge finds it automatically — npm puts node_modules/.bin on PATH)"
+  else
+    echo "  ⚠ deno binary won't run here (libc mismatch?) — skipping."
+  fi
+}
 
 # Read by relative path — a bare specifier (`rollup/package.json`) is blocked by
 # packages' `exports` maps; a file path is not.
@@ -77,13 +132,20 @@ node -e "require('@swc/core').transformSync('const x=1', {}); console.log('  ✓
 [ -d "node_modules/@rollup/rollup-linux-$ARCH-$LIBC" ] \
   && echo "  ✓ rollup native present (loaded on first bundle)"
 
+if [ "$WANT_DENO" = 1 ]; then
+  echo
+  echo "Installing Deno (best-effort)…"
+  install_deno
+fi
+
 echo
 echo "✅ Sandbox ready. Run:"
 echo "     npm test                       # unit suite (vitest)"
 echo "     npx tsc -b --noEmit            # type-check (note: -b, solution file)"
 echo "     npm run test:isolation         # live staging RLS isolation"
+[ "$WANT_DENO" = 1 ] && echo "     npm run test:edge              # Deno edge suite"
 
-if [ "${1:-}" = "--verify" ]; then
+if [ "$WANT_VERIFY" = 1 ]; then
   echo
   echo "End-to-end proof — running one unit test file:"
   npx vitest run src/lib/cleanBodyText.test.ts
