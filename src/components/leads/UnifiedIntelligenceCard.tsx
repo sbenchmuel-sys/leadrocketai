@@ -591,8 +591,9 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
         )}
 
         {/* Footer: Last run + Recompute button — hidden on the lead-detail page
-            (compact). Unit 3 removed the duplicate "Analyzed X ago / Run Analysis"
-            control there; the plain-English Summary above is the kept surface. */}
+            (compact). Unit 3 moved the "Analyzed X ago / Run Analysis" control to
+            the Deep Analysis pane (RecommendationsTab) so reps keep a recompute
+            path; the plain-English Summary above is the kept surface here. */}
         {!isCompact && (
           <>
             <Separator />

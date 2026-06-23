@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { Json } from "@/integrations/supabase/types";
-import { LeadDetail, updateLeadMilestoneStatus, getLeadIntelligence } from "@/lib/supabaseQueries";
+import { LeadDetail, updateLeadMilestoneStatus, getLeadIntelligence, triggerIntelligenceRecompute } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Loader2, CheckCircle, AlertTriangle, Trash2, Sparkles } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { Loader2, CheckCircle, AlertTriangle, Trash2, Sparkles, Brain } from "lucide-react";
 
 
 interface RecommendationsTabProps {
@@ -54,6 +55,7 @@ function extractJsonFromAIContent(content: string): string {
 
 export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTabProps) {
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const { runTask } = useAITask();
 
   // Canonical intelligence source
@@ -61,6 +63,30 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
   useEffect(() => {
     getLeadIntelligence(lead.id).then(setIntelligence).catch(console.error);
   }, [lead.id]);
+
+  // Manual recompute lives here (Deep Analysis) since Unit 3 removed the
+  // duplicate "Run Analysis" control from the compact Intelligence card — this
+  // is the kept, reachable path for a rep to re-run analysis on a stale lead.
+  const lastComputedAt = intelligence?.last_computed_at as string | null | undefined;
+  const handleRecompute = async () => {
+    setIsAnalyzing(true);
+    try {
+      toast.info("Running intelligence recompute...");
+      const result = await triggerIntelligenceRecompute(lead.id);
+      if (!result.ok) {
+        toast.error(result.error || "Recompute failed");
+      } else {
+        toast.success("Intelligence updated!");
+        const updated = await getLeadIntelligence(lead.id);
+        setIntelligence(updated);
+        onUpdate();
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Recompute failed");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const hasCanonical = intelligence !== null;
 
@@ -138,6 +164,25 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
 
   return (
     <div className="space-y-6">
+      {/* Run Analysis — relocated here from the Intelligence card (Unit 3). */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          {lastComputedAt
+            ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
+            : "Never analyzed"}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1"
+          onClick={handleRecompute}
+          disabled={isAnalyzing}
+        >
+          {isAnalyzing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Brain className="h-3 w-3" />}
+          {isAnalyzing ? "Analyzing…" : "Run analysis"}
+        </Button>
+      </div>
+
       {/* Deal Factors (unique to Deep Analysis — not shown elsewhere) */}
       {dealFactors && (
         <Card>
