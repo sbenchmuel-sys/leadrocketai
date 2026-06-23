@@ -54,4 +54,12 @@ describe("isNewLead", () => {
   it("is false for a new-stage lead already in automation", () => {
     expect(isNewLead(lead({ stage: "new", campaign_id: "c1" }))).toBe(false);
   });
+
+  it("stays out of New for an enrolled new-stage lead even when a reply paused it", () => {
+    // Reply-paused → isInAutomation is false, but the lead IS still enrolled, so
+    // it must not be counted as New (Codex P2 on PR #106).
+    const l = lead({ stage: "new", campaign_id: "c1", last_inbound_at: NEWER, last_outbound_at: OLDER });
+    expect(isInAutomation(l)).toBe(false); // display: paused
+    expect(isNewLead(l)).toBe(false); // but not "New" — it's enrolled
+  });
 });

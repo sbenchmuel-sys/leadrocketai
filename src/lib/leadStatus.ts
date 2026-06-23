@@ -45,9 +45,21 @@ function hasUnansweredReply(lead: EnrichedLead): boolean {
  * set. This does NOT touch the executor or un-enroll anything; the lead's
  * enrollment is intact and the engine's own pause-on-inbound is unchanged.
  */
+/**
+ * Raw enrollment signal — true when the lead is in an outreach campaign or a
+ * consented legacy sequence/nurture, REGARDLESS of whether a reply has paused
+ * it. Use this to answer "is this lead already enrolled?" (e.g. keeping enrolled
+ * leads out of the New chip). For the display "in automation right now?"
+ * question (Auto column, In-automation count) use isInAutomation, which also
+ * subtracts reply-paused leads.
+ */
+function isEnrolled(lead: EnrichedLead): boolean {
+  return !!lead.campaign_id || !!lead.automation_mode || lead.revenueState === "automation";
+}
+
 export function isInAutomation(lead: EnrichedLead): boolean {
   if (hasUnansweredReply(lead)) return false;
-  return !!lead.campaign_id || !!lead.automation_mode || lead.revenueState === "automation";
+  return isEnrolled(lead);
 }
 
 /**
@@ -73,5 +85,7 @@ export function leadStatus(lead: EnrichedLead): LeadStatusDisplay {
  * "new lead" notion (stage 'new') and excludes anything already enrolled.
  */
 export function isNewLead(lead: EnrichedLead): boolean {
-  return leadStatus(lead).key === "new" && !isInAutomation(lead);
+  // Exclude ALREADY-ENROLLED leads even when a reply has paused them — use the
+  // raw enrollment predicate, not the reply-paused display one (Codex P2 #106).
+  return leadStatus(lead).key === "new" && !isEnrolled(lead);
 }
