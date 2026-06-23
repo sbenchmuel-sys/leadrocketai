@@ -25,9 +25,12 @@ import {
   leadWasAway,
   type QueueLeadRow,
 } from "@/lib/queueQueries";
+import { ShowMoreFooter } from "@/components/leads/ShowMoreFooter";
 
 type Channel = "email" | "call";
 type ChannelFilter = "all" | Channel;
+
+const TODO_PAGE_SIZE = 25;
 
 /** Forward-compatible channel read. No call signal exists yet → all email. */
 function channelOf(lead: QueueLeadRow): Channel {
@@ -99,6 +102,7 @@ export function TodoView() {
   const [leads, setLeads] = useState<QueueLeadRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState<ChannelFilter>("all");
+  const [visibleCount, setVisibleCount] = useState(TODO_PAGE_SIZE);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,6 +135,13 @@ export function TodoView() {
     () => (filter === "all" ? leads : leads.filter((l) => channelOf(l) === filter)),
     [leads, filter],
   );
+
+  // Reset paging when the channel filter changes.
+  useEffect(() => {
+    setVisibleCount(TODO_PAGE_SIZE);
+  }, [filter]);
+
+  const pageItems = useMemo(() => visible.slice(0, visibleCount), [visible, visibleCount]);
 
   const pillClass = (active: boolean) =>
     cn(
@@ -167,7 +178,7 @@ export function TodoView() {
             {leads.length === 0 ? "You're all caught up." : "Nothing in this filter."}
           </p>
         ) : (
-          visible.map((lead) => {
+          pageItems.map((lead) => {
             const channel = channelOf(lead);
             return (
               <div key={lead.id} className="flex items-center gap-3 px-4 py-3">
@@ -193,6 +204,14 @@ export function TodoView() {
           })
         )}
       </div>
+
+      <ShowMoreFooter
+        shown={pageItems.length}
+        total={visible.length}
+        pageSize={TODO_PAGE_SIZE}
+        onShowMore={() => setVisibleCount((c) => c + TODO_PAGE_SIZE)}
+        onShowAll={() => setVisibleCount(visible.length)}
+      />
     </div>
   );
 }

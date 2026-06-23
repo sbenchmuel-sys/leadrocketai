@@ -66,11 +66,14 @@ import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import { LeadImportDialog } from "@/components/leads/LeadImportDialog";
 import PendingLeadsTab, { usePendingCandidatesCount } from "@/components/leads/PendingLeadsTab";
 import { AddToAutomationDialog } from "@/components/leads/AddToAutomationDialog";
+import { ShowMoreFooter } from "@/components/leads/ShowMoreFooter";
 import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 
 type ViewMode = "todo" | "all";
 type Chip = "all" | "new" | "automation";
+
+const LEADS_PAGE_SIZE = 25;
 
 const SOURCE_PRESETS: { key: SourcePresetKey; label: string }[] = [
   { key: "outbound", label: "Outbound Prospect" },
@@ -92,6 +95,7 @@ export default function Leads() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [chip, setChip] = useState<Chip>("all");
+  const [visibleCount, setVisibleCount] = useState(LEADS_PAGE_SIZE);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -154,6 +158,17 @@ export default function Leads() {
       automation: leads.filter(isInAutomation).length,
     }),
     [leads],
+  );
+
+  // Pagination: render 25 at a time with Show next / Show all. Reset back to
+  // the first page whenever the search or chip narrows the list.
+  useEffect(() => {
+    setVisibleCount(LEADS_PAGE_SIZE);
+  }, [searchQuery, chip]);
+
+  const pageLeads = useMemo(
+    () => filteredLeads.slice(0, visibleCount),
+    [filteredLeads, visibleCount],
   );
 
   // Drop stale selections when the visible list changes.
@@ -536,7 +551,7 @@ export default function Leads() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredLeads.map((lead) => {
+                    {pageLeads.map((lead) => {
                       const status = leadStatus(lead);
                       const auto = isInAutomation(lead);
                       return (
@@ -582,6 +597,13 @@ export default function Leads() {
                     })}
                   </TableBody>
                 </Table>
+                <ShowMoreFooter
+                  shown={pageLeads.length}
+                  total={filteredLeads.length}
+                  pageSize={LEADS_PAGE_SIZE}
+                  onShowMore={() => setVisibleCount((c) => c + LEADS_PAGE_SIZE)}
+                  onShowAll={() => setVisibleCount(filteredLeads.length)}
+                />
               </div>
             )}
           </TabsContent>
