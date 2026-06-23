@@ -131,7 +131,7 @@ export function TodoView() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Shared background draft queue (same one All-leads + the Queue use).
-  const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+  const { enqueue, getStatus, consume, queue } = useBackgroundDraftQueue();
 
   // Composer dialog state.
   const [composerLead, setComposerLead] = useState<QueueLeadRow | null>(null);
@@ -205,11 +205,19 @@ export function TodoView() {
   const handleBulkDraft = () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    // The background draft queue caps active drafts. Draft up to that many now
-    // and KEEP the overflow selected for a second batch, rather than clearing
-    // the selection and silently dropping them (Codex P2 on PR #108).
-    const batch = ids.slice(0, MAX_BULK_DRAFT);
-    const rest = ids.slice(MAX_BULK_DRAFT);
+    // The background draft queue caps the number of ACTIVE drafts. Only enqueue
+    // what there's room for right now — accounting for drafts already generating
+    // — and KEEP everything else selected for a second batch, rather than firing
+    // enqueues the queue will reject and clearing them from the selection
+    // (Codex P2 on PR #108).
+    const generating = Array.from(queue.values()).filter((q) => q.status === "generating").length;
+    const slots = Math.max(0, MAX_BULK_DRAFT - generating);
+    if (slots === 0) {
+      toast.error(`Already drafting the maximum of ${MAX_BULK_DRAFT}. Try again once some finish.`);
+      return;
+    }
+    const batch = ids.slice(0, slots);
+    const rest = ids.slice(slots);
     batch.forEach((id) => enqueue(id));
     setSelectedIds(new Set(rest));
     toast.success(
