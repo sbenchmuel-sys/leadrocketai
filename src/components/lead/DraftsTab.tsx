@@ -29,6 +29,12 @@ interface DraftsTabProps {
   lead: LeadDetail;
   onUpdate: () => void;
   onActionComplete?: () => void;
+  /**
+   * "full" (default) = composer + saved drafts. "review" = saved drafts only,
+   * no composer — used by the lead-detail More menu so "Draft it" stays the
+   * single compose entry point (Unit 3).
+   */
+  variant?: "full" | "review";
 }
 
 interface Draft {
@@ -192,7 +198,8 @@ function deriveWhatsAppIntent(lead: LeadDetail): IntentSuggestion {
 // Main Component
 // ============================================
 
-export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTabProps) {
+export default function DraftsTab({ lead, onUpdate, onActionComplete, variant = "full" }: DraftsTabProps) {
+  const reviewOnly = variant === "review";
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [channel, setChannel] = useState<Channel>("email");
@@ -456,6 +463,8 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
 
   return (
     <div className="space-y-6">
+      {!reviewOnly && (
+      <>
       {/* Composer Panel */}
       <Card>
         <CardHeader className="pb-3">
@@ -695,6 +704,9 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         </Card>
       )}
 
+      </>
+      )}
+
       {/* Saved Drafts */}
       <Card>
         <CardHeader>
@@ -710,7 +722,7 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
               drafts={drafts}
               lead={lead}
               onDraftUpdate={loadDrafts}
-              onEditDraft={(draft) => {
+              onEditDraft={reviewOnly ? undefined : (draft) => {
                 setGeneratedContent(draft.body_text);
                 setGeneratedSubject(draft.subject || "");
                 setSelectedIntent((draft.draft_type || "follow_up") as ComposerIntent);
@@ -721,21 +733,23 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete }: DraftsTa
         </CardContent>
       </Card>
 
-      {/* Email Action Dialog — full composer */}
-      <EmailActionDialog
-        lead={lead}
-        actionKey={emailDialogActionKey}
-        open={showEmailDialog}
-        onOpenChange={(open) => {
-          setShowEmailDialog(open);
-        }}
-        onSuccess={() => {
-          onUpdate();
-          loadDrafts();
-          onActionComplete?.();
-        }}
-        initialInstructions={composerNote}
-      />
+      {/* Email Action Dialog — full composer (compose mode only) */}
+      {!reviewOnly && (
+        <EmailActionDialog
+          lead={lead}
+          actionKey={emailDialogActionKey}
+          open={showEmailDialog}
+          onOpenChange={(open) => {
+            setShowEmailDialog(open);
+          }}
+          onSuccess={() => {
+            onUpdate();
+            loadDrafts();
+            onActionComplete?.();
+          }}
+          initialInstructions={composerNote}
+        />
+      )}
     </div>
   );
 }
@@ -996,7 +1010,8 @@ interface SavedDraftsListProps {
   drafts: Draft[];
   lead: LeadDetail;
   onDraftUpdate: () => void;
-  onEditDraft: (draft: Draft) => void;
+  /** Omit to hide the Edit affordance (review-only mode). */
+  onEditDraft?: (draft: Draft) => void;
 }
 
 function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft }: SavedDraftsListProps) {
@@ -1045,10 +1060,12 @@ function SavedDraftsList({ drafts, lead, onDraftUpdate, onEditDraft }: SavedDraf
               <Copy className="h-3 w-3 mr-1" />
               Copy
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => onEditDraft(draft)}>
-              <Edit2 className="h-3 w-3 mr-1" />
-              Edit
-            </Button>
+            {onEditDraft && (
+              <Button variant="ghost" size="sm" onClick={() => onEditDraft(draft)}>
+                <Edit2 className="h-3 w-3 mr-1" />
+                Edit
+              </Button>
+            )}
             {draft.channel === "email" && draft.status !== "sent" && (
               <SendEmailButton
                 to={lead.email}

@@ -4,17 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
   Calendar, AlertTriangle, CheckCircle2, ArrowRight,
-  Zap, TrendingUp, TrendingDown, ShieldAlert, ChevronDown,
-  Pause, Mail,
+  ChevronDown, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  Motion, DealStage, getDisplayPhase,
+  Motion, DealStage,
 } from "@/lib/dashboardUtils";
 import { getLeadMeetingPacks, MeetingPackItem } from "@/lib/supabaseQueries";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { getLeadActivityFeed } from "@/lib/leadActivity";
-import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
+import AutomationToggleCard from "@/components/lead/AutomationToggleCard";
 import NurturePreviewCard from "@/components/lead/NurturePreviewCard";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
@@ -22,37 +21,6 @@ interface LeadOverviewPanelProps {
   lead: LeadDetail;
   onNavigateToMeetings: () => void;
   onUpdate?: () => void;
-}
-
-interface Milestone {
-  description: string;
-  status: "completed" | "pending";
-  date: string | null;
-}
-
-interface Risk {
-  issue: string;
-  level: "low" | "medium" | "high";
-}
-
-// Known buying signal keywords from milestones
-const BUYING_SIGNAL_KEYWORDS = [
-  { match: /pric/i, label: "Pricing mentioned" },
-  { match: /decision.?maker|dm\b|c-level|ceo|cfo|cto|vp\b/i, label: "Decision maker involved" },
-  { match: /proposal|contract|agreement|sow\b|scope/i, label: "Requested docs / proposal" },
-  { match: /budget|funding|allocated/i, label: "Budget discussed" },
-  { match: /timeline|deadline|launch|go.?live/i, label: "Timeline defined" },
-  { match: /champion|advocate|sponsor/i, label: "Internal champion identified" },
-  { match: /poc|proof.?of.?concept|pilot|trial/i, label: "POC / trial requested" },
-];
-
-function detectBuyingSignals(milestones: Milestone[]): string[] {
-  const signals: string[] = [];
-  const allText = milestones.map(m => m.description).join(" ");
-  for (const kw of BUYING_SIGNAL_KEYWORDS) {
-    if (kw.match.test(allText)) signals.push(kw.label);
-  }
-  return signals;
 }
 
 export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate }: LeadOverviewPanelProps) {
@@ -63,11 +31,6 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
 
   const motion = (lead.motion as Motion) || "outbound_prospecting";
   const stage = (lead.stage as DealStage) || "new";
-
-  const milestones: Milestone[] = lead.milestones_json ? (lead.milestones_json as unknown as Milestone[]) : [];
-  const risks: Risk[] = lead.risks_json ? (lead.risks_json as unknown as Risk[]) : [];
-  const buyingSignals = detectBuyingSignals(milestones);
-  const signalCount = buyingSignals.length + risks.length;
 
   // Auto-collapse logic
   const isNurtureMotion = motion === "nurture";
@@ -82,7 +45,6 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
   // Section open states
   const [automationOpen, setAutomationOpen] = useState(!automationPaused && hasAutomation);
   const [meetingOpen, setMeetingOpen] = useState(isPostMeeting);
-  const [signalsOpen, setSignalsOpen] = useState(false);
 
   useEffect(() => {
     setAutomationOpen(!automationPaused && hasAutomation);
@@ -130,11 +92,10 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
         </>
       )}
 
-      {/* AUTOMATION — Phase 6: hidden by default. AutomationPreviewCard returns null until automation is explicitly enabled. */}
+      {/* AUTOMATION — slim on/off toggle (Unit 3). Full controls live behind its
+          "Details" disclosure. Returns null when automation isn't eligible. */}
       {hasAutomation && !isNurtureMotion && (
-        <>
-          <AutomationPreviewCard lead={lead} onUpdate={onUpdate || (() => {})} />
-        </>
+        <AutomationToggleCard lead={lead} onUpdate={onUpdate || (() => {})} />
       )}
 
       {/* LATEST MEETING — expanded if post_meeting, collapsed if old, hidden if none */}
@@ -149,16 +110,24 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
             </CollapsibleTrigger>
             <CollapsibleContent>
               <div className="pb-3 space-y-2">
-                <div className="flex items-center gap-1.5 text-sm">
-                  <span className="font-medium">
-                    {lastMeeting.meeting_date
-                      ? format(parseISO(lastMeeting.meeting_date), "MMM d, yyyy")
-                      : format(parseISO(lastMeeting.created_at), "MMM d, yyyy")}
-                  </span>
-                  {lastMeeting.title && (
-                    <span className="text-muted-foreground text-xs truncate">— {lastMeeting.title}</span>
-                  )}
-                </div>
+                {(() => {
+                  // Show the date once. Auto-titled packs are "Meeting — <date>",
+                  // so a title that already contains the formatted date would read
+                  // "Jun 17, 2026 — Meeting — Jun 17, 2026" — drop the redundant title.
+                  const dateStr = lastMeeting.meeting_date
+                    ? format(parseISO(lastMeeting.meeting_date), "MMM d, yyyy")
+                    : format(parseISO(lastMeeting.created_at), "MMM d, yyyy");
+                  const title = lastMeeting.title?.trim() || "";
+                  const showTitle = title && !title.includes(dateStr);
+                  return (
+                    <div className="flex items-center gap-1.5 text-sm">
+                      <span className="font-medium">{dateStr}</span>
+                      {showTitle && (
+                        <span className="text-muted-foreground text-xs truncate">— {title}</span>
+                      )}
+                    </div>
+                  );
+                })()}
                 {lastMeeting.internal_recap_bullets.length > 0 && (
                   <ul className="space-y-1 text-xs text-muted-foreground">
                     {lastMeeting.internal_recap_bullets.slice(0, 3).map((b, i) => (
@@ -202,7 +171,7 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
                   </div>
                 )}
                 <Button variant="ghost" size="sm" onClick={onNavigateToMeetings} className="w-full text-primary text-xs h-7">
-                  View all meetings <ArrowRight className="h-3 w-3 ml-1" />
+                  See all meetings <ArrowRight className="h-3 w-3 ml-1" />
                 </Button>
               </div>
             </CollapsibleContent>
@@ -210,54 +179,9 @@ export default function LeadOverviewPanel({ lead, onNavigateToMeetings, onUpdate
           <Separator className="bg-border/40" />
         </>
       )}
-
-      {/* SIGNALS & RISKS — Always collapsed */}
-      {(buyingSignals.length > 0 || risks.length > 0) && (
-        <Collapsible open={signalsOpen} onOpenChange={setSignalsOpen}>
-          <CollapsibleTrigger className="flex items-center justify-between w-full py-2 group">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-              <ShieldAlert className="h-3 w-3" /> Signals & Risks
-              {signalCount > 0 && (
-                <span className="text-[9px] bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{signalCount}</span>
-              )}
-            </span>
-            <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", signalsOpen && "rotate-180")} />
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <div className="pb-3 space-y-3">
-              {buyingSignals.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                    <TrendingUp className="h-3 w-3" /> Buying Signals
-                  </span>
-                  {buyingSignals.map((s, i) => (
-                    <div key={i} className="flex items-center gap-1.5 text-xs text-foreground">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                      {s}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {buyingSignals.length > 0 && risks.length > 0 && <Separator className="bg-border/40" />}
-              {risks.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wider text-red-600 dark:text-red-400 font-medium flex items-center gap-1">
-                    <ShieldAlert className="h-3 w-3" /> Risks
-                  </span>
-                  {risks.slice(0, 5).map((r, i) => (
-                    <div key={i} className="flex items-center gap-1.5 text-xs">
-                      <AlertTriangle className={cn("h-3 w-3",
-                        r.level === "high" ? "text-red-500" : r.level === "medium" ? "text-amber-500" : "text-muted-foreground"
-                      )} />
-                      <span className="text-foreground">{r.issue}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      {/* Signals & Risks intentionally dropped here in Unit 3 — the canonical
+          Risks / Buying Signals live in the Intelligence card above the tabs,
+          so the rail stays to Automation + Latest Meeting only. */}
     </div>
   );
 }

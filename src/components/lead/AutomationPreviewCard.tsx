@@ -15,6 +15,9 @@ import type { LeadDetail } from "@/lib/supabaseQueries";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
+import {
+  getStepLabels, getAutomationBlockers, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
+} from "@/lib/leadAutomationActions";
 import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
 import CampaignStepPreview from "./CampaignStepPreview";
 
@@ -23,34 +26,8 @@ interface AutomationPreviewCardProps {
   onUpdate: () => void;
 }
 
-// Step labels — generic per the product decision (independent of inbound/outbound branch).
-// The cadence type (warm vs cold) is reflected by the underlying ai_task,
-// not by a different display name in the UI.
-const OUTBOUND_STEP_LABELS: Record<string, string> = {
-  send_pre_1: "Step 1 of 4",
-  send_pre_2: "Step 2 of 4",
-  send_pre_3: "Step 3 of 4",
-  send_pre_4: "Step 4 of 4",
-};
-
-const INBOUND_STEP_LABELS: Record<string, string> = {
-  send_pre_1: "Step 1 of 3",
-  send_pre_2: "Step 2 of 3",
-  send_pre_3: "Step 3 of 3",
-};
-
-const NURTURE_STEP_LABELS: Record<string, string> = {
-  nurture_1: "Nurture Email 1",
-  nurture_2: "Nurture Email 2",
-  nurture_3: "Nurture Email 3",
-  nurture_4: "Nurture Email 4",
-};
-
-function getStepLabels(motion: string): Record<string, string> {
-  if (motion === "inbound_response") return INBOUND_STEP_LABELS;
-  if (motion === "nurture") return NURTURE_STEP_LABELS;
-  return OUTBOUND_STEP_LABELS;
-}
+// Step labels + enable/disable field builders live in @/lib/leadAutomationActions
+// so the slim AutomationToggleCard and this full control surface stay in lock-step.
 
 function getMaxSteps(motion: string): number {
   const intervals = getMotionIntervals(motion);
@@ -130,16 +107,6 @@ function getNextTwoSteps(lead: LeadDetail) {
   return steps;
 }
 
-function getAutomationBlockers(lead: LeadDetail): string[] {
-  const blockers: string[] = [];
-  if (lead.last_inbound_at) blockers.push("Lead has replied");
-  if (lead.has_future_meeting) blockers.push("Meeting scheduled");
-  if (lead.motion !== "outbound_prospecting" && lead.motion !== "inbound_response" && lead.motion !== "nurture") blockers.push("Motion changed");
-  const stage = lead.stage;
-  if (stage === "closed_won" || stage === "closed_lost") blockers.push("Deal closed");
-  return blockers;
-}
-
 export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPreviewCardProps) {
   const [isEnabling, setIsEnabling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
@@ -197,14 +164,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
     try {
       await supabase
         .from("leads")
-        .update({
-          needs_action: false,
-          next_action_key: null,
-          next_action_label: null,
-          eligible_at: null,
-          action_reason_code: null,
-          automation_mode: null,
-        })
+        .update(AUTOMATION_DISABLE_FIELDS)
         .eq("id", lead.id);
       toast.success("Sequence stopped permanently");
       onUpdate();
@@ -267,54 +227,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 onClick={async () => {
                   setIsEnabling(true);
                   try {
-                    let updateFields: Record<string, any>;
-
-                    if (motion === "nurture") {
-                      const cadence = (lead as any).nurture_cadence || "biweekly";
-                      const gapDays = getNurtureCadenceDays(cadence);
-                      const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
-                      let eligibleAt = addDays(new Date(), gapDays);
-                      eligibleAt.setHours(9, 30, 0, 0);
-                      if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-
-                      updateFields = {
-                        needs_action: true,
-                        next_action_key: `nurture_${stepNum}`,
-                        next_action_label: `Nurture Email ${stepNum}`,
-                        eligible_at: eligibleAt.toISOString(),
-                        action_reason_code: "NURTURE_DUE",
-                        automation_mode: "full_auto", // explicit consent — required by executor consent gate
-                        nurture_status: "active",
-                        nurture_mode: (lead as any).nurture_mode || "review",
-                      };
-                    } else {
-                      const hasOutbound = !!(lead as any).last_outbound_at;
-                      const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                      const nextLabel = stepLabels[nextKey] || "Step 1 of 4";
-                      const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-                      const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                        ? intervals[stepIdx] - intervals[stepIdx - 1]
-                        : (hasOutbound ? intervals[1] - intervals[0] : 0);
-
-                      let eligibleAt: Date;
-                      if (gapDays === 0) {
-                        eligibleAt = new Date();
-                        eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-                      } else {
-                        eligibleAt = addDays(new Date(), gapDays);
-                        eligibleAt.setHours(9, 30, 0, 0);
-                        if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                      }
-
-                      updateFields = {
-                        needs_action: true,
-                        next_action_key: nextKey,
-                        next_action_label: nextLabel,
-                        eligible_at: eligibleAt.toISOString(),
-                        action_reason_code: "FOLLOWUP_DUE",
-                        automation_mode: "full_auto", // explicit consent — required by executor consent gate
-                      };
-                    }
+                    const updateFields = buildAutomationEnableFields(lead);
 
                     await supabase
                       .from("leads")
@@ -618,14 +531,7 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
             onClick={async () => {
               await supabase
                 .from("leads")
-                .update({
-                  needs_action: false,
-                  next_action_key: null,
-                  next_action_label: null,
-                  eligible_at: null,
-                  action_reason_code: null,
-                  automation_mode: null,
-                })
+                .update(AUTOMATION_DISABLE_FIELDS)
                 .eq("id", lead.id);
               toast.success("Automation disabled");
               onUpdate();

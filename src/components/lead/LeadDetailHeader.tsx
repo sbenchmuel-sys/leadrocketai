@@ -7,6 +7,7 @@ import {
 import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import LinkedInMessageButton from "@/components/lead/LinkedInMessageButton";
+import StakeholderAvatarRow from "@/components/lead/StakeholderAvatarRow";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { getLeadStatusLine } from "@/lib/leadStatusLine";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
@@ -168,6 +169,9 @@ export default function LeadDetailHeader({
 
           {/* Plain-English status line — replaces the phase/closing-power cluster */}
           <p className="text-sm font-medium text-foreground mt-1.5">{statusLine}</p>
+
+          {/* Stakeholder avatars — only when this is a 2+ person deal. */}
+          <StakeholderAvatarRow leadId={lead.id} currentLeadId={lead.id} />
         </div>
       </div>
 
