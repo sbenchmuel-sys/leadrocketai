@@ -5,9 +5,9 @@
 // This function reads INTERNAL_API_SECRET from env and forwards
 // the call to the target function with proper X-Internal-Secret.
 //
-// AUTH: Requires X-Internal-Secret (from the `app.internal_api_secret` DB
-// setting that pg_cron injects) or a service-role Bearer token. Anon key and
-// user JWTs are NOT accepted — this is not a user-facing endpoint.
+// AUTH: Requires X-Internal-Secret (which pg_cron reads from the
+// 'internal_api_secret' Vault secret) or a service-role Bearer token. Anon key
+// and user JWTs are NOT accepted — this is not a user-facing endpoint.
 //
 // Called by pg_cron with header X-Internal-Secret and body
 // { "target": "automation-executor" }.
@@ -58,8 +58,9 @@ Deno.serve(async (req) => {
   // ── Auth gate ──────────────────────────────────────────────
   // The dispatcher relays the real INTERNAL_API_SECRET to allowlisted targets,
   // so it MUST authenticate its own caller first. pg_cron sends X-Internal-Secret
-  // (from the `app.internal_api_secret` DB setting — see the cron-auth migration)
-  // or a service-role Bearer; anon key / user JWTs are not privileged. Without
+  // (read from the 'internal_api_secret' Vault secret — see the cron-auth
+  // migration) or a service-role Bearer; anon key / user JWTs are not privileged.
+  // Without
   // this gate, any unauthenticated caller could POST {"target": ...} and trigger
   // service-role cron work (Codex P1 on PR #109).
   const auth = requireScheduledCaller(req, corsHeaders);
