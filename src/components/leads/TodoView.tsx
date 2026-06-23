@@ -331,7 +331,12 @@ export function TodoView() {
                   </p>
                 </div>
                 {channel === "email" && (
-                  <Button size="sm" className="shrink-0" onClick={() => openComposer(lead)}>
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => openComposer(lead)}
+                    disabled={getStatus(lead.id)?.status === "generating"}
+                  >
                     {ctaLabel(lead)}
                   </Button>
                 )}
