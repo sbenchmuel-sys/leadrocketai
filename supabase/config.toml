@@ -155,3 +155,44 @@ verify_jwt = false
 # enforces workspace membership in code (requireAuth + assertWorkspaceMembership).
 [functions.outreach-touch-action]
 verify_jwt = true
+
+# ── Dispatchable cron targets (auth-gated in code) ──
+# These are reached only via cron-dispatcher, which forwards with X-Internal-Secret
+# and NO Bearer token. Each self-authenticates in code via requireScheduledCaller /
+# requirePrivilegedCaller (internal-secret OR service-role), so verify_jwt MUST be
+# false — otherwise the Supabase gateway 401s the dispatcher's forward before the
+# in-code gate runs and the cron silently never executes. (gmail-bulk-sync is handled
+# in its own PR; these are the remaining dispatch targets that were still defaulting
+# to verify_jwt=true.)
+[functions.promote-winning-interactions]
+verify_jwt = false
+
+[functions.message-cleanup]
+verify_jwt = false
+
+[functions.generate-reply-suggestions]
+verify_jwt = false
+
+[functions.compute-manager-analytics]
+verify_jwt = false
+
+[functions.detect-lead-candidates]
+verify_jwt = false
+
+[functions.score-lead-candidate]
+verify_jwt = false
+
+[functions.lookback-seed-candidates]
+verify_jwt = false
+
+[functions.calendar-sync]
+verify_jwt = false
+
+[functions.transcript-poller]
+verify_jwt = false
+
+[functions.classify-outbound]
+verify_jwt = false
+
+[functions.intelligence-queue-drain]
+verify_jwt = false
