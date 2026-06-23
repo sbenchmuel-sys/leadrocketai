@@ -1115,17 +1115,31 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       );
     }
 
+    // Optimistic cursor: persist the offset PAST each lead BEFORE doing its work.
+    // CRON_MAX_RESULTS only caps the initial Gmail search, not syncLeadEmails' walk
+    // over a lead's existing locked threads — a lead with a long history can blow the
+    // dispatcher's 55s / the platform wall-clock mid-lead. Advancing the cursor first
+    // means such a hard kill can't re-pin the same slow lead and wedge the connection;
+    // it's retried on the next full rotation instead. syncLeadEmails is idempotent.
     let accountAuthFailed = false;
     let processed = 0;
     for (const lead of windowLeads) {
-      // Budget reached mid-window: STOP (don't skip ahead). The cursor below is set
-      // to start+processed, so the unprocessed tail is the first thing the next run
-      // picks up — no permanent skip.
+      // Budget reached mid-window: STOP without advancing for this lead. The cursor
+      // still points at it (last persisted from the previous iteration), so the next
+      // run resumes exactly here — no permanent skip.
       if (Date.now() - startedAt > RUN_BUDGET_MS) {
         budgetExhausted = true;
         leadsDeferred += windowLeads.length - processed;
         break;
       }
+
+      // Move the persisted cursor past this lead before its (potentially slow) work.
+      const nextCursor = (start + processed + 1) % totalLeads;
+      await serviceSupabase
+        .from("gmail_connections")
+        .update({ bulk_sync_cursor: nextCursor })
+        .eq("user_id", conn.user_id);
+
       try {
         const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
         totalSynced += result.synced;
@@ -1134,8 +1148,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         if (isAccountWideAuthError(msg)) {
           // This token fails for every lead (e.g. missing read scope). Flag the
           // connection for reconnect and stop the window — retrying the rest would
-          // only burn the run budget and starve healthy connections. Leave the
-          // cursor untouched so it resumes here after the rep re-auths.
+          // only burn the run budget and starve healthy connections.
           console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect, skipping rest of window:`, msg);
           await serviceSupabase
             .from("gmail_connections")
@@ -1144,8 +1157,8 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
           accountAuthFailed = true;
           break;
         }
-        // A non-auth, lead-specific error still counts as processed so the cursor
-        // moves past it (retried on the next full rotation) rather than wedging here.
+        // A non-auth, lead-specific error is fine — the cursor already moved past it,
+        // so it's retried on the next full rotation rather than wedging here.
         console.error(`[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`, msg);
       }
       processed++;
@@ -1154,15 +1167,13 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
 
     if (accountAuthFailed) {
       connectionsSkipped++;
-      continue; // cursor + last_sync_at left as-is for a flagged-for-reconnect account
+      continue; // last_sync_at left as-is for a flagged-for-reconnect account
     }
 
-    // Advance the cursor by what we actually processed (wraps via modulo) and stamp
-    // the sync time, so the next run resumes at the right offset.
-    const newCursor = (start + processed) % totalLeads;
+    // Cursor is already persisted per-lead; just stamp the sync time.
     await serviceSupabase
       .from("gmail_connections")
-      .update({ bulk_sync_cursor: newCursor, last_sync_at: new Date().toISOString() })
+      .update({ last_sync_at: new Date().toISOString() })
       .eq("user_id", conn.user_id);
 
     connectionsProcessed++;
