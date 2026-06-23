@@ -3,6 +3,7 @@ import type { LeadDetail } from "@/lib/supabaseQueries";
 import {
   getAutomationBlockers,
   getAutomationResumeBlocker,
+  getAutomationToggleState,
   automationEverEnabled,
   buildAutomationEnableFields,
   AUTOMATION_DISABLE_FIELDS,
@@ -136,6 +137,55 @@ describe("getAutomationResumeBlocker — guard resume, allow first-time enable",
   it("allows resume of a previously-enrolled lead with no blockers", () => {
     const lead = makeLead({ next_action_key: "send_pre_3" });
     expect(getAutomationResumeBlocker(lead)).toBeNull();
+  });
+});
+
+describe("getAutomationToggleState — the switch must never misreport sending", () => {
+  it("clean enrolled+running lead → On", () => {
+    const s = getAutomationToggleState(makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2", automation_mode: "full_auto",
+    } as any));
+    expect(s.isOn).toBe(true);
+    expect(s.safetyPaused).toBe(false);
+    expect(s.eligible).toBe(true);
+  });
+
+  it("reply lands before executor clears the flags → shows PAUSED, not On (the Codex window)", () => {
+    // enrolled + still flagged running, but a reply just arrived
+    const s = getAutomationToggleState(makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2",
+      automation_mode: "full_auto", last_inbound_at: "2026-06-25T11:00:00Z",
+    } as any));
+    expect(s.safetyPaused).toBe(true);
+    expect(s.isOn).toBe(false); // must NOT read as "sending"
+    expect(s.primaryBlocker).toBe("Lead has replied");
+  });
+
+  it("booked meeting before flags clear → shows PAUSED, not On", () => {
+    const s = getAutomationToggleState(makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2",
+      automation_mode: "full_auto", has_future_meeting: true,
+    } as any));
+    expect(s.safetyPaused).toBe(true);
+    expect(s.isOn).toBe(false);
+  });
+
+  it("never-enrolled lead → Off (not paused), eligible to turn on", () => {
+    const s = getAutomationToggleState(makeLead({}));
+    expect(s.isOn).toBe(false);
+    expect(s.safetyPaused).toBe(false);
+    expect(s.userPaused).toBe(false);
+  });
+
+  it("manually paused (enrolled, no blocker) → userPaused, Off", () => {
+    const s = getAutomationToggleState(makeLead({ next_action_key: "send_pre_3", automation_mode: "full_auto" } as any));
+    expect(s.isOn).toBe(false);
+    expect(s.userPaused).toBe(true);
+    expect(s.safetyPaused).toBe(false);
+  });
+
+  it("closed deal → not eligible (card hidden)", () => {
+    expect(getAutomationToggleState(makeLead({ stage: "closed_won" })).eligible).toBe(false);
   });
 });
 

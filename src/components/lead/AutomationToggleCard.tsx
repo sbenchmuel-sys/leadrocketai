@@ -28,7 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import {
-  getAutomationBlockers, getAutomationResumeBlocker, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
+  getAutomationToggleState, getAutomationResumeBlocker, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
 } from "@/lib/leadAutomationActions";
 import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 
@@ -43,32 +43,19 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const motion = lead.motion;
-  const stage = lead.stage;
-  const isUnsubscribed = (lead as any).unsubscribed === true;
-
-  const isEligible =
-    (motion === "outbound_prospecting" || motion === "inbound_response" || motion === "nurture") &&
-    stage !== "closed_won" && stage !== "closed_lost";
-  if (!isEligible) return null;
-
-  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
-  const automationEverEnabled =
-    (lead as any).automation_mode != null || !!(lead as any).eligible_at || !!lead.next_action_key;
-  const blockers = getAutomationBlockers(lead);
-  const safetyPaused = blockers.length > 0 && automationEverEnabled;
-  const userPaused = !hasAutomationEnabled && !!lead.next_action_key && !safetyPaused;
-  // ON strictly means "actively sending right now". A paused sequence reads OFF
-  // with the reason in the one-liner — keeping the switch an honest single source
-  // of truth for whether emails are going out.
-  const isOn = hasAutomationEnabled;
+  const { eligible, isUnsubscribed, safetyPaused, userPaused, isOn, primaryBlocker } =
+    getAutomationToggleState(lead);
+  if (!eligible) return null;
 
   let description: string;
   if (isUnsubscribed) {
     description = "This lead unsubscribed — automation stays off.";
+  } else if (safetyPaused) {
+    // Checked BEFORE isOn: during the reply/meeting window the lead can still
+    // look enabled, but it's effectively paused — surface that, don't hide it.
+    description = `Paused — ${(primaryBlocker ?? "on hold").toLowerCase()}. Open Details to manage.`;
   } else if (isOn) {
     description = "On — sending the follow-ups for you. Pauses automatically if they reply or book a meeting.";
-  } else if (safetyPaused) {
-    description = `Paused — ${blockers[0].toLowerCase()}. Open Details to manage.`;
   } else if (userPaused) {
     description = "Paused — turn on to resume the sequence.";
   } else {

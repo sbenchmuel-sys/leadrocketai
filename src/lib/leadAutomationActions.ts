@@ -72,6 +72,49 @@ export function getAutomationResumeBlocker(lead: LeadDetail): string | null {
   return blockers.length > 0 ? blockers[0] : null;
 }
 
+// Derived display state for the slim Automation toggle. Concentrates the tricky
+// boolean logic in one tested place so the switch never misreports whether
+// emails are actually going out.
+export interface AutomationToggleState {
+  /** Whether the toggle card renders at all (motion eligible + not closed). */
+  eligible: boolean;
+  isUnsubscribed: boolean;
+  safetyPaused: boolean;
+  userPaused: boolean;
+  /** Switch checked = automation is actively sending RIGHT NOW. Excludes the
+   *  safety-paused window so a just-replied lead never reads as "sending". */
+  isOn: boolean;
+  /** First safety blocker (for the one-line status), or null. */
+  primaryBlocker: string | null;
+}
+
+export function getAutomationToggleState(lead: LeadDetail): AutomationToggleState {
+  const motion = lead.motion;
+  const stage = lead.stage;
+  const isUnsubscribed = (lead as any).unsubscribed === true;
+  const eligible =
+    (motion === "outbound_prospecting" || motion === "inbound_response" || motion === "nurture") &&
+    stage !== "closed_won" && stage !== "closed_lost";
+
+  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
+  const blockers = getAutomationBlockers(lead);
+  const safetyPaused = blockers.length > 0 && automationEverEnabled(lead);
+  const userPaused = !hasAutomationEnabled && !!lead.next_action_key && !safetyPaused;
+  // ON strictly means actively sending now: enabled AND not in a safety-pause
+  // window. During the reply/meeting window (flags not yet cleared by the
+  // executor) hasAutomationEnabled can still be true, so exclude safetyPaused.
+  const isOn = hasAutomationEnabled && !safetyPaused;
+
+  return {
+    eligible,
+    isUnsubscribed,
+    safetyPaused,
+    userPaused,
+    isOn,
+    primaryBlocker: blockers[0] ?? null,
+  };
+}
+
 // Fields written when automation is fully turned off / stopped (clears the
 // sequence + revokes consent). Used by Disable and Stop Sequence.
 export const AUTOMATION_DISABLE_FIELDS: Record<string, unknown> = {
