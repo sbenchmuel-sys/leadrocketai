@@ -59,6 +59,14 @@ describe("oneLineGist", () => {
   it("keeps a single substantive line", () => {
     expect(oneLineGist("Can we move to Thursday?")).toBe("Can we move to Thursday?");
   });
+  it("keeps a greeting line that also carries the ask (Codex P2)", () => {
+    expect(oneLineGist("Hi Ken, can we meet today?\nThanks")).toBe("Hi Ken, can we meet today?");
+  });
+  it("still skips a greeting-only line with a longer name", () => {
+    expect(oneLineGist("Dear Sir or Madam,\nPlease find the invoice attached.")).toBe(
+      "Please find the invoice attached.",
+    );
+  });
   it("does not over-skip when there is only a greeting", () => {
     expect(oneLineGist("Hi Kenneth,")).toBe("Hi Kenneth,");
   });

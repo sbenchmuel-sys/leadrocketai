@@ -61,19 +61,23 @@ export function relativeTimeShort(date: Date | string): string {
   return asDate();
 }
 
-const GREETING_LINE = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
+// A greeting-ONLY line: the salutation word + an optional 1–3 word name +
+// trailing punctuation, and nothing else. We deliberately do NOT skip a line
+// that merely starts with a greeting but carries the actual message, e.g.
+// "Hi Ken, can we meet today?".
+const GREETING_ONLY_LINE = /^(?:hi+|hey|hiya|hello|dear|greetings|good (?:morning|afternoon|evening))\b[\s,]*(?:[A-Za-z.'’-]+(?:\s+[A-Za-z.'’-]+){0,2})?[\s,.!:-]*$/i;
 
 /**
  * First substantive line of a message, for the collapsed one-line gist.
- * Skips a leading short greeting ("Hi Kenneth,") so the gist carries meaning;
- * never skips more than the greeting. CSS still clamps the final width.
+ * Skips a leading greeting-only line ("Hi Kenneth,") so the gist carries
+ * meaning, but keeps a greeting that also contains the ask. CSS clamps width.
  */
 export function oneLineGist(text: string | null | undefined): string {
   if (!text) return "";
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) return "";
   for (const line of lines) {
-    if (GREETING_LINE.test(line) && line.length < 40) continue;
+    if (GREETING_ONLY_LINE.test(line)) continue;
     return line;
   }
   return lines[0];
