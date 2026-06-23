@@ -919,20 +919,22 @@ async function syncLeadEmails(
   return { synced, errors, stage: newStage };
 }
 
-// Resolve the connection owner's workspace. Mirrors calendar-sync's
-// resolveGmailWorkspaceId — gmail_connections has no workspace_id column, so
-// we join through workspace_members. Used only by the scheduled branch to scope
-// the lead fetch.
+// Resolve ALL of the connection owner's workspace memberships — gmail_connections
+// has no workspace_id column, so we join through workspace_members. A rep can be
+// invited to multiple workspaces, and they may own leads in each; returning only
+// one membership would permanently skip the others in the scheduled sweep. The lead
+// fetch still pins owner_user_id, so this only widens coverage, never isolation.
 // deno-lint-ignore no-explicit-any
-async function resolveWorkspaceId(serviceSupabase: any, userId: string): Promise<string | null> {
+async function resolveWorkspaceIds(serviceSupabase: any, userId: string): Promise<string[]> {
   const { data, error } = await serviceSupabase
     .from("workspace_members")
     .select("workspace_id")
-    .eq("user_id", userId)
-    .limit(1)
-    .maybeSingle();
-  if (error || !data?.workspace_id) return null;
-  return data.workspace_id;
+    .eq("user_id", userId);
+  if (error || !data) return [];
+  const ids = (data as Array<{ workspace_id: string | null }>)
+    .map((r) => r.workspace_id)
+    .filter((id): id is string => !!id);
+  return [...new Set(ids)];
 }
 
 // Coverage + bounding constants for the scheduled sweep.
@@ -1028,8 +1030,8 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    const workspaceId = await resolveWorkspaceId(serviceSupabase, conn.user_id);
-    if (!workspaceId) {
+    const workspaceIds = await resolveWorkspaceIds(serviceSupabase, conn.user_id);
+    if (workspaceIds.length === 0) {
       connectionsSkipped++;
       console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (no_workspace)`);
       continue;
@@ -1054,17 +1056,17 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       continue;
     }
 
-    // Total leads OWNED BY THIS REP — drives the rotating page so coverage is
-    // guaranteed across ticks rather than re-scanning the same freshest rows.
-    // Scope by owner_user_id (not the whole workspace): this connection's mailbox
-    // is the canonical source only for leads this rep owns — the same ownership
-    // model the send path uses (automation-executor resolves the Gmail connection
-    // via lead.owner_user_id). Workspace-wide scoping would make rep A's mailbox
-    // import onto rep B's leads and re-sync each lead once per connected user.
+    // Total leads OWNED BY THIS REP across ALL their workspaces — drives the rotating
+    // cursor so coverage is guaranteed rather than re-scanning the same freshest rows.
+    // Scope by owner_user_id (not workspace-wide): this connection's mailbox is the
+    // canonical source only for leads this rep owns — the same ownership model the
+    // send path uses (automation-executor resolves the Gmail connection via
+    // lead.owner_user_id). The workspace_id IN (...) filter asserts current membership
+    // (defense in depth) without dropping the rep's other workspaces.
     const { count: totalLeads, error: countErr } = await serviceSupabase
       .from("leads")
       .select("id", { count: "exact", head: true })
-      .eq("workspace_id", workspaceId)
+      .in("workspace_id", workspaceIds)
       .eq("owner_user_id", conn.user_id)
       .not("email", "is", null);
 
@@ -1087,13 +1089,13 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     const start = cursor % totalLeads;
     const end = start + LEADS_PER_PAGE - 1;
 
-    // Service role + explicit workspace_id + owner_user_id filters reproduce the
+    // Service role + workspace_id IN (rep's memberships) + owner_user_id reproduce the
     // isolation the user path gets from RLS — leads never cross workspace OR rep
     // boundaries. Stable `id` order keeps the cursor window deterministic.
     const { data: leads, error: leadsErr } = await serviceSupabase
       .from("leads")
       .select("id, email, stage, strategy, workspace_id")
-      .eq("workspace_id", workspaceId)
+      .in("workspace_id", workspaceIds)
       .eq("owner_user_id", conn.user_id)
       .not("email", "is", null)
       .order("id", { ascending: true })
