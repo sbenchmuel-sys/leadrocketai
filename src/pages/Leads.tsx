@@ -15,7 +15,7 @@
 // sender.
 // ============================================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
 import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
@@ -120,20 +120,35 @@ export default function Leads() {
 
   const pendingCount = usePendingCandidatesCount();
 
+  // Monotonic load token — only the most recent load may apply its result, so a
+  // slower stale response (e.g. the initial null-workspace load) can't overwrite
+  // a newer active-workspace load and briefly show another workspace's leads
+  // (Codex P2 on PR #107).
+  const loadTokenRef = useRef(0);
+
   const loadLeads = async () => {
+    const token = ++loadTokenRef.current;
     try {
-      const m = await getDashboardMetrics();
+      // Pass the active workspace so the fetch is scoped to it (Codex PR #107) —
+      // a multi-workspace member won't see leads they own in other workspaces.
+      const m = await getDashboardMetrics(workspaceId);
+      if (loadTokenRef.current !== token) return; // superseded — ignore stale result
       setLeads(m.leads);
     } catch {
-      toast.error("Failed to load leads");
+      if (loadTokenRef.current === token) toast.error("Failed to load leads");
     } finally {
-      setIsLoading(false);
+      if (loadTokenRef.current === token) setIsLoading(false);
     }
   };
 
+  // Refetch when the active workspace resolves or changes. On first mount
+  // workspaceId is often still undefined (WorkspaceProvider resolves async), so
+  // without this dependency the initial load wouldn't be workspace-scoped and
+  // would never correct itself (Codex P1 on PR #107).
   useEffect(() => {
     loadLeads();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
 
   // ── Filtering ──────────────────────────────────────────────────────────
   const filteredLeads = useMemo(() => {

@@ -70,31 +70,39 @@ const DASHBOARD_LEAD_COLUMNS = `
   action_permanently_dismissed, group_id, campaign_id
 `;
 
-async function fetchLeads(): Promise<EnrichedLead[]> {
+async function fetchLeads(workspaceId?: string): Promise<EnrichedLead[]> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return [];
 
-  // Lead-visibility scoping WITHIN a workspace. The cross-company wall is RLS
-  // (is_workspace_member) and is untouched here — this only narrows which leads
-  // a member sees inside their own workspace, and never widens beyond it.
+  // Lead-visibility scoping: admins see everything RLS permits; every other
+  // member (reps AND managers) is restricted to their own leads.
   //
-  //   • admin   → everything RLS permits (UNCHANGED — still gated on profiles.role).
-  //   • manager → their whole workspace's leads. "A manager's team" reuses the
-  //               exact definition the Manager Analytics page uses: every member
-  //               of the manager's workspace. fetchManagerMetrics() scopes solely
-  //               by workspace_id (managerAnalyticsQueries.ts) — there is no finer
-  //               team model in the schema, so workspace == team.
-  //   • rep     → own leads only (UNCHANGED).
+  // The leads SELECT RLS policy is already owner-scoped — is_workspace_admin
+  // gates on the workspace 'admin' role only, so a non-admin is DB-restricted
+  // to `owner_user_id = self` no matter what the app asks for. This app-level
+  // owner filter honestly matches that reality. A genuine manager team-view is
+  // parked (see KNOWN_ISSUES.md → "Manager team-view on the Leads page"); do
+  // NOT re-add an app-only manager exemption — it's a no-op against RLS.
   //
-  // Fail-safe: if the role or workspace can't be read for any reason, fall back
-  // to the most restrictive scope (own leads only). Silence never widens access.
+  // Active-workspace scoping (Codex PR #107): owner-only filtering doesn't
+  // constrain to the active workspace, so a member of multiple workspaces who
+  // owns leads in each would otherwise see them mixed together. Scope the fetch
+  // to the active workspace when it's known.
+  //
+  // Fail-safe: if the role or active workspace can't be read for any reason,
+  // fall back to the most restrictive scope (own leads only). Silence never
+  // widens access.
   let query = supabase
     .from("leads")
     .select(DASHBOARD_LEAD_COLUMNS)
     .order("last_activity_at", { ascending: false })
     .limit(1000);
+
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
+  }
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -104,22 +112,7 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   const isAdmin = (profile as { role?: string } | null)?.role === "admin";
 
   if (!isAdmin) {
-    // Resolve the workspace role the same way Manager Analytics does
-    // (workspace_members.role). Managers get the whole workspace; everyone else
-    // — reps, unknown roles, or an unreadable membership — falls back to own.
-    const { data: membership } = await supabase
-      .from("workspace_members")
-      .select("role, workspace_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    const wsRole = (membership as { role?: string } | null)?.role;
-    const wsId = (membership as { workspace_id?: string } | null)?.workspace_id;
-
-    if (wsRole === "manager" && wsId) {
-      query = query.eq("workspace_id", wsId);
-    } else {
-      query = query.eq("owner_user_id", user.id);
-    }
+    query = query.eq("owner_user_id", user.id);
   }
 
   const { data, error } = await query;
@@ -376,18 +369,20 @@ function buildDemoMetrics(): DashboardMetrics {
 
 /**
  * Fetch leads and compute all dashboard metrics in one call.
- * `workspace_id` is accepted for future multi-workspace support
- * but currently unused (RLS scopes to auth.uid()).
+ * `workspaceId`, when provided, scopes the lead fetch to that workspace so a
+ * multi-workspace member doesn't see leads they own in OTHER workspaces mixed
+ * into the active one (Codex PR #107). Omitting it falls back to owner/RLS
+ * scoping.
  */
 export async function getDashboardMetrics(
-  _workspace_id?: string
+  workspaceId?: string
 ): Promise<DashboardMetrics> {
   // In demo mode, skip database and use curated dataset
   if (isDemoMode()) {
     return buildDemoMetrics();
   }
 
-  const leads = await fetchLeads();
+  const leads = await fetchLeads(workspaceId);
 
   const groupIds = Array.from(
     new Set(

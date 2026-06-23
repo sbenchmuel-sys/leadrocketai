@@ -16,6 +16,24 @@ Phases referenced here are the action-queue redesign rollout:
 
 ---
 
+## Manager team-view on the Leads page
+
+**Status: parked — requires a Tier-1 RLS change. Do not attempt an app-only fix.**
+
+Manager team-view on the Leads page is parked. The leads SELECT RLS policy is
+owner-scoped (is_workspace_admin = admin only), so managers are restricted to
+their own leads at the database level regardless of app code. The Unit A
+app-level manager-scope logic is currently a no-op. To genuinely give managers
+a team view requires a Tier-1 RLS change plus a DB-readable definition of a
+manager's team (reuse Manager Analytics' scoping). Do not attempt an app-only
+fix.
+
+The dead app-level manager exemption has since been reverted so the app filter
+honestly matches the database rule: non-admins (reps and managers) get
+own-leads-only; admins unchanged.
+
+---
+
 ## Edge function config.toml registration
 
 **Status: closed by Phase 1.5.**
