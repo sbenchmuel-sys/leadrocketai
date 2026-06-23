@@ -6,9 +6,11 @@
 // Automation LOGIC is unchanged: enable/disable write the exact same fields as
 // AutomationPreviewCard (shared via @/lib/leadAutomationActions), and the
 // executor's pause-on-reply / pause-on-meeting safety still governs sends. This
-// component only changes how that control is presented. Turning ON is refused
-// when a safety blocker is present (mirrors the existing Resume guard), so the
-// toggle can never re-arm a lead that just replied or booked a meeting.
+// component only changes how that control is presented. Turning ON refuses to
+// RESUME a previously-enrolled lead while a safety blocker persists (mirrors the
+// legacy Resume guard), but a first-time enable is unguarded (mirrors the legacy
+// Enable path) so an inbound/lookback-seeded lead carrying last_inbound_at can
+// still be enrolled.
 
 import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -26,7 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import {
-  getAutomationBlockers, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
+  getAutomationBlockers, getAutomationResumeBlocker, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
 } from "@/lib/leadAutomationActions";
 import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 
@@ -66,7 +68,7 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   } else if (isOn) {
     description = "On — sending the follow-ups for you. Pauses automatically if they reply or book a meeting.";
   } else if (safetyPaused) {
-    description = `Paused — ${blockers[0].toLowerCase()}. Turn on to resume, or open Details.`;
+    description = `Paused — ${blockers[0].toLowerCase()}. Open Details to manage.`;
   } else if (userPaused) {
     description = "Paused — turn on to resume the sequence.";
   } else {
@@ -75,10 +77,13 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
 
   const handleToggle = async (next: boolean) => {
     if (next) {
-      // Respect pause-on-reply / pause-on-meeting: never re-arm a blocked lead.
-      const fresh = getAutomationBlockers(lead);
-      if (fresh.length > 0) {
-        toast.error(`Can't turn on — ${fresh[0].toLowerCase()}.`);
+      // Respect pause-on-reply / pause-on-meeting on RESUME only — never re-arm a
+      // previously-enrolled lead while a safety blocker persists. A first-time
+      // enable (never enrolled, e.g. an inbound lead that carries last_inbound_at)
+      // is allowed, matching the legacy Enable path.
+      const resumeBlocker = getAutomationResumeBlocker(lead);
+      if (resumeBlocker) {
+        toast.error(`Can't resume — ${resumeBlocker.toLowerCase()}. Open Details to stop the sequence.`);
         return;
       }
       setConfirmOpen(true);

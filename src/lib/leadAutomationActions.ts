@@ -52,6 +52,26 @@ export function getAutomationBlockers(lead: LeadDetail): string[] {
   return blockers;
 }
 
+// True once a lead has ever been enrolled in automation (consent given, a step
+// scheduled, or a next action queued). Distinguishes a first-time enable from a
+// resume of a previously-enrolled-but-paused lead.
+export function automationEverEnabled(lead: LeadDetail): boolean {
+  return (lead as any).automation_mode != null || !!(lead as any).eligible_at || !!lead.next_action_key;
+}
+
+// The blocker that should PREVENT turning automation on, or null if allowed.
+// Mirrors the legacy split exactly: the old "Enable Automation" path applied NO
+// blocker check (so a first inbound/lookback-seeded lead — which legitimately
+// carries last_inbound_at — can still be enrolled), while the old "Resume" path
+// refused to restart a previously-enrolled lead while a safety blocker (reply /
+// meeting / closed / motion change) persists. The executor's server-side
+// pause-on-reply / pause-on-meeting is unchanged and remains the real guard.
+export function getAutomationResumeBlocker(lead: LeadDetail): string | null {
+  if (!automationEverEnabled(lead)) return null; // first-time enable — unguarded
+  const blockers = getAutomationBlockers(lead);
+  return blockers.length > 0 ? blockers[0] : null;
+}
+
 // Fields written when automation is fully turned off / stopped (clears the
 // sequence + revokes consent). Used by Disable and Stop Sequence.
 export const AUTOMATION_DISABLE_FIELDS: Record<string, unknown> = {

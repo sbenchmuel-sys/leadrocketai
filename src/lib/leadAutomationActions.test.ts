@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import {
   getAutomationBlockers,
+  getAutomationResumeBlocker,
+  automationEverEnabled,
   buildAutomationEnableFields,
   AUTOMATION_DISABLE_FIELDS,
   getStepLabels,
@@ -102,6 +104,38 @@ describe("buildAutomationEnableFields — turning on sets explicit consent", () 
     const fields = buildAutomationEnableFields(makeLead({ motion: null as unknown as string }));
     expect(fields.next_action_key).toBe("send_pre_1");
     expect(fields.automation_mode).toBe("full_auto");
+  });
+});
+
+describe("getAutomationResumeBlocker — guard resume, allow first-time enable", () => {
+  it("allows a first-time enable even when the lead has replied (never enrolled)", () => {
+    // e.g. an inbound_response / lookback-seeded lead that carries last_inbound_at
+    const lead = makeLead({
+      motion: "inbound_response",
+      last_inbound_at: "2026-06-20T10:00:00Z",
+      // never enrolled: no automation_mode, no eligible_at, no next_action_key
+    });
+    expect(automationEverEnabled(lead)).toBe(false);
+    expect(getAutomationResumeBlocker(lead)).toBeNull();
+  });
+
+  it("refuses to resume a previously-enrolled lead that has replied", () => {
+    const lead = makeLead({
+      last_inbound_at: "2026-06-20T10:00:00Z",
+      next_action_key: "send_pre_2", // was enrolled
+    });
+    expect(automationEverEnabled(lead)).toBe(true);
+    expect(getAutomationResumeBlocker(lead)).toBe("Lead has replied");
+  });
+
+  it("refuses to resume a previously-enrolled lead with a booked meeting", () => {
+    const lead = makeLead({ has_future_meeting: true, automation_mode: "full_auto" } as any);
+    expect(getAutomationResumeBlocker(lead)).toBe("Meeting scheduled");
+  });
+
+  it("allows resume of a previously-enrolled lead with no blockers", () => {
+    const lead = makeLead({ next_action_key: "send_pre_3" });
+    expect(getAutomationResumeBlocker(lead)).toBeNull();
   });
 });
 
