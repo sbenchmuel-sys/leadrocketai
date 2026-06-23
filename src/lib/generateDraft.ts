@@ -654,35 +654,23 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
   // Step 7: Request finalized AI content (non-stream) for reliable post-processing
   // then emit it in UI-sized chunks for a streaming-like experience.
+  // NOTE: use supabase.functions.invoke() rather than raw fetch — the Lovable Preview's
+  // fetch proxy (cdn.gpteng.co/lovable.js) intercepts and breaks raw POSTs to edge functions,
+  // surfacing as "TypeError: Failed to fetch" before the request leaves the browser.
   let fullText = "";
   try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-    
-    // Get auth token
-    const { data: { session } } = await supabase.auth.getSession();
-    const authToken = session?.access_token || supabaseKey;
-
-    const resp = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}`,
-        "apikey": supabaseKey,
-      },
-      body: JSON.stringify({
+    const { data: aiData, error: invokeErr } = await supabase.functions.invoke("ai_task", {
+      body: {
         task: finalIntent,
         payload: { ...aiPayload, model_hint: complexity.model_used },
-      }),
+      },
     });
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error("[streamDraft] ai_task request failed:", resp.status, errText);
-      throw new Error(`ai_task request failed: ${resp.status}`);
+    if (invokeErr) {
+      console.error("[streamDraft] ai_task invoke failed:", invokeErr);
+      throw new Error(invokeErr.message || "ai_task invoke failed");
     }
 
-    const aiData = await resp.json();
     if (!aiData?.ok || typeof aiData?.content !== "string") {
       console.error("[streamDraft] ai_task returned invalid payload:", aiData);
       throw new Error(aiData?.error || "ai_task returned invalid payload");
