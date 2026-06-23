@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!session?.user) {
         setProfile(null);
         setIsLoading(false);
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+      } else if (event === "SIGNED_IN") {
         // New sign-in: set loading and fetch profile via setTimeout to avoid
         // Supabase client deadlock (auth state change callback must return first)
         setIsLoading(true);
@@ -55,6 +55,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isMounted) loadProfileForUser();
         }, 0);
       }
+      // TOKEN_REFRESHED: silently update session/user (done above). Do NOT
+      // toggle isLoading or refetch profile — that unmounts the whole route
+      // tree mid-session and wipes in-progress form state (e.g. NewCampaign).
     });
 
     // INITIAL load — controls isLoading for the first render
