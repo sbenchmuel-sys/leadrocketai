@@ -718,6 +718,20 @@ Generated 2026-06-11 from `git log --first-parent main --since=2026-03-01` (436 
   - OW-LI-3 (plan length — REGRESSION): an email-only outreach builds exactly 9 touches; one with LinkedIn selected still builds exactly 9 touches, including 3 LinkedIn. Pass when: never 12. Named regression for the 12→9 fix (`9c480a8`) — the plan must never silently grow back to 12.
   - OW-LI-4 (distinct labels): in Step 2, the three LinkedIn touches read as "Connect on LinkedIn", "React to their post", and "LinkedIn message" — not three identical "LinkedIn" rows.
 
+### Lead Detail redesign — Unit 3: slim the right rail (PR #112) — Tier 2 (automation-control-adjacent)
+- What it does: Trims the Lead Detail page so a rep sees only what helps the next move. The right rail now shows just an Automation on/off toggle (one-line plain status) and the latest meeting recap. The duplicate "Company Signals / Enrich" block and the duplicate "Run Analysis / Analyzed X ago" control are hidden on this page (the plain-English Summary stays). The right-rail Signals & Risks is dropped (canonical copy stays in the Intelligence card). Stakeholders/Partners, Lead Context, Deep Analysis, Upload, and a review-only Saved Drafts pane move behind a single "More" menu. A stakeholder avatar row appears in the header only for 2+ person deals. The automation enable/disable logic was extracted verbatim to `src/lib/leadAutomationActions.ts` (no logic change); the toggle refuses to turn ON while a safety blocker (reply / booked meeting / closed / motion change) is present.
+- Where: `src/pages/LeadDetail.tsx`, `src/components/lead/{AutomationToggleCard,AutomationPreviewCard,LeadOverviewPanel,LeadDetailHeader,StakeholderAvatarRow,DraftsTab}.tsx`, `src/components/leads/UnifiedIntelligenceCard.tsx`, `src/lib/leadAutomationActions.ts`.
+- PRs/commits: PR #112.
+- Existing tests: `src/lib/leadAutomationActions.test.ts` (enable/disable/blocker field parity).
+- Scenarios:
+  - LD3-1 (solo lead): open a solo lead (no group). Pass when: header shows NO avatar row; the right rail shows only Automation + Latest Meeting (no empty Stakeholders/Partners/Lead-Context boxes); "Add person" is reachable via More → People & partners.
+  - LD3-2 (2+ person deal): open a lead in a group of 2+ (Group-thread Gina's group). Pass when: a small avatar row appears in the header, the champion is flagged, each avatar links to that person's lead page, and ONLY same-dealership people appear (isolation).
+  - LD3-3 (Tier 2, automation OFF→ON): on a clean eligible lead (Eligible Ed), flip Automation on and confirm. Pass when: it schedules the next step (toast), the switch reads On, and the lead has `automation_mode = full_auto`. Flipping off clears the sequence AND `automation_mode` (sends stop).
+  - LD3-4 (Tier 2, safety — must hold): on Replied Rita (or a lead with a booked meeting), try to flip Automation ON. Pass when: it is REFUSED with a plain message ("Can't turn on — lead has replied"), `automation_mode` stays null, no step is scheduled. Proves the toggle can't re-arm a paused-by-safety lead.
+  - LD3-5 (automation Details): expand the toggle's "Details". Pass when: the full controls (scheduled steps, Preview, Pause/Resume/Stop) are present and still work — nothing deleted, just hidden.
+  - LD3-6 (More menu, no 404): click through More → Saved drafts / Meetings / People & partners / Lead context / Deep analysis / Upload. Pass when: each opens its pane; the Saved Drafts pane is review-only (Copy / Send / Mark sent — NO composer) so "Draft it" stays the single compose entry; the meeting card's "See all meetings" link lands on the Meetings pane (booking stays reachable).
+  - LD3-7 (meeting date dedup): open a lead whose latest meeting was auto-titled ("Meeting — <date>"). Pass when: the latest-meeting header shows the date once, not "Jun 17, 2026 — Meeting — Jun 17, 2026".
+
 ---
 
 ## Existing unit test map
