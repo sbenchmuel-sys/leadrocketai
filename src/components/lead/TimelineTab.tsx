@@ -4,18 +4,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
-import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Zap, Download, FileText, Reply, Clock } from "lucide-react";
+import { Mail, MailOpen, Calendar, Phone, StickyNote, Settings2, ChevronDown, ChevronRight, MessageSquare, Smartphone, Plus, EyeOff, Eye, Undo2, Download, FileText, Reply, Clock, SlidersHorizontal, X } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import CallTimelineCard from "@/components/call/CallTimelineCard";
-import { MailLastSyncedChip } from "@/components/mail/MailLastSyncedChip";
-import { useMailSync } from "@/hooks/useMailSync";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { SummaryBody } from "@/components/SummaryBody";
+import { stripEmailDisclaimer, relativeTimeShort, oneLineGist } from "@/lib/timelineDisplay";
 
 // PR 2.4 — minimal lead shape passed to EmailActionDialog when user clicks
 // Reply/Follow-up. Group view fetches all members up front; solo view uses
@@ -356,6 +355,88 @@ function formatSnippet(item: TimelineItem): string {
   }
 }
 
+/* ── Unit 2 — display helpers (who · body · gist) ── */
+
+function nameFromEmail(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  // "Display Name <addr>" → Display Name
+  const angle = /^\s*"?([^"<]+?)"?\s*</.exec(trimmed);
+  if (angle && angle[1] && angle[1].trim() && !angle[1].includes("@")) return angle[1].trim();
+  // bare email → prettified local part
+  const local = extractBareEmail(trimmed).split("@")[0] || "";
+  if (!local) return "";
+  return local.replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function channelIconFor(item: TimelineItem) {
+  const ch = item.channel;
+  if (ch === "email") return item.direction === "inbound" ? <MailOpen className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />;
+  if (ch === "whatsapp") return <MessageSquare className="h-3.5 w-3.5" />;
+  if (ch === "sms") return <Smartphone className="h-3.5 w-3.5" />;
+  if (ch === "voice") return <Phone className="h-3.5 w-3.5" />;
+  if (ch === "meeting") return <Calendar className="h-3.5 w-3.5" />;
+  return <StickyNote className="h-3.5 w-3.5" />;
+}
+
+function whoTextFor(item: TimelineItem, currentLead?: TimelineMinimalLead | null): string {
+  if (item.event_type === "system_note") return "Update";
+  if (item.channel === "meeting") return "Meeting";
+  if (item.channel === "voice") return "Call";
+  if (item.event_type === "note") return "Note";
+  if (item.direction === "outbound") return "You";
+  // inbound message → the person who reached out
+  const meta = item.metadata_json as Record<string, unknown> | null;
+  return (
+    item.lead_name ||
+    currentLead?.name ||
+    nameFromEmail(meta?.from_email as string | undefined) ||
+    "Them"
+  );
+}
+
+/** Who said it — a small channel icon + person/"You". Replaces the colored
+ *  Inbound/Outbound/SMS direction badges on conversation rows. */
+function WhoLabel({ item, currentLead }: { item: TimelineItem; currentLead?: TimelineMinimalLead | null }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 min-w-0">
+      <span className="text-muted-foreground shrink-0">{channelIconFor(item)}</span>
+      <span className="text-sm font-medium text-foreground truncate">{whoTextFor(item, currentLead)}</span>
+    </span>
+  );
+}
+
+/** Relative time with the exact timestamp kept on hover. */
+function RelTime({ at }: { at: string }) {
+  return (
+    <span className="text-[11px] text-muted-foreground shrink-0" title={format(new Date(at), "MMM d, yyyy · h:mm a")}>
+      {relativeTimeShort(at)}
+    </span>
+  );
+}
+
+/** Full message body for display: system notes via formatSnippet, emails with
+ *  the confidentiality footer stripped, everything else as-is. Display only —
+ *  the stored body is never modified. */
+function displayBodyFor(item: TimelineItem): string {
+  if (item.event_type === "system_note") return formatSnippet(item);
+  if (item.channel === "email") return stripEmailDisclaimer(item.snippet_text);
+  return item.snippet_text || "";
+}
+
+/** One-line gist for the collapsed row — prefers the message text, falls back
+ *  to the AI summary when the body is empty (e.g. retention-purged). */
+function gistFor(item: TimelineItem): string {
+  const body = displayBodyFor(item);
+  if (body.trim()) return oneLineGist(body);
+  const meta = item.metadata_json as Record<string, unknown> | null;
+  return oneLineGist((meta?.ai_summary as string | undefined) || "");
+}
+
+// Below this body length, a separate AI-summary box just repeats the message,
+// so we drop it; above it the boxed summary helps scan a long thread.
+const LONG_BODY_CHARS = 280;
+
 /* ── PR 2.4 — Reply / Follow-up sub-components ── */
 
 export interface RowActions {
@@ -502,6 +583,7 @@ function TimelineEntry({
   groupMode,
   actions,
   freshestRingId,
+  currentLead,
 }: {
   item: TimelineItem;
   defaultOpen: boolean;
@@ -512,13 +594,16 @@ function TimelineEntry({
   groupMode: boolean;
   actions: RowActions;
   freshestRingId: string | null;
+  currentLead?: TimelineMinimalLead | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const tags = useMemo(() => getSignalTags(item), [item]);
   const meta = item.metadata_json as any;
-  const isAutomation = item.provider === "automation" || meta?.source === "automation";
   const aiReplyWorthy = (item.status_json as any)?.ai_reply_worthy;
   const aiSummary = meta?.ai_summary;
+  const displayBody = displayBodyFor(item);
+  const gist = gistFor(item);
+  const showSummaryBox = !!aiSummary && displayBody.length >= LONG_BODY_CHARS;
   const toEmails = Array.isArray(meta?.to_emails) ? (meta.to_emails as string[]) : [];
   const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
   const showParticipants = item.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
@@ -537,17 +622,9 @@ function TimelineEntry({
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <ChannelBadge item={item} />
+                  <WhoLabel item={item} currentLead={currentLead} />
                   {groupMode && <LeadChip name={item.lead_name} />}
-                  {isAutomation && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                      <Zap className="h-2.5 w-2.5" />
-                      Auto-sent
-                    </span>
-                  )}
-                  <span className="text-[11px] text-muted-foreground">
-                    {format(new Date(item.occurred_at), "MMM d · h:mm a")}
-                  </span>
+                  <RelTime at={item.occurred_at} />
                   {aiReplyWorthy && (
                     <span className="text-[10px] font-medium text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">
                       Reply Needed
@@ -574,18 +651,10 @@ function TimelineEntry({
                     )}
                   </div>
                 )}
-                {!open && (aiSummary || item.snippet_text) && (
-                  aiSummary ? (
-                    <SummaryBody
-                      text={aiSummary}
-                      maxBullets={4}
-                      textClassName="text-[13px] text-muted-foreground leading-relaxed"
-                    />
-                  ) : (
-                    <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-                      {formatSnippet(item)}
-                    </p>
-                  )
+                {!open && gist && (
+                  <p className="text-[13px] text-muted-foreground line-clamp-1 leading-relaxed">
+                    {gist}
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
@@ -604,7 +673,7 @@ function TimelineEntry({
 
         <CollapsibleContent className="animate-accordion-down">
           <div className="pl-3 pb-2 space-y-2">
-            {aiSummary && (
+            {showSummaryBox && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
                 <p className="text-[11px] font-medium text-muted-foreground mb-1">AI Summary</p>
                 <SummaryBody
@@ -613,11 +682,16 @@ function TimelineEntry({
                 />
               </div>
             )}
-            {item.snippet_text && (
+            {displayBody ? (
               <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                {formatSnippet(item)}
+                {displayBody}
               </p>
-            )}
+            ) : aiSummary ? (
+              <SummaryBody
+                text={aiSummary}
+                textClassName="text-[13px] text-muted-foreground leading-relaxed"
+              />
+            ) : null}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {tags.map(tag => (
@@ -644,6 +718,7 @@ function ThreadEntry({
   groupMode,
   actions,
   freshestRingId,
+  currentLead,
 }: {
   thread: ThreadGroup;
   defaultOpen: boolean;
@@ -653,6 +728,7 @@ function ThreadEntry({
   groupMode: boolean;
   actions: RowActions;
   freshestRingId: string | null;
+  currentLead?: TimelineMinimalLead | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [threadExpanded, setThreadExpanded] = useState(false);
@@ -661,6 +737,9 @@ function ThreadEntry({
   const meta = latest.metadata_json as any;
   const aiReplyWorthy = (latest.status_json as any)?.ai_reply_worthy;
   const aiSummary = meta?.ai_summary;
+  const displayBody = displayBodyFor(latest);
+  const gist = gistFor(latest);
+  const showSummaryBox = !!aiSummary && displayBody.length >= LONG_BODY_CHARS;
   const toEmails = Array.isArray(meta?.to_emails) ? (meta.to_emails as string[]) : [];
   const ccEmails = Array.isArray(meta?.cc_emails) ? (meta.cc_emails as string[]) : [];
   const showParticipants = latest.channel === "email" && (toEmails.length > 1 || ccEmails.length > 0);
@@ -679,14 +758,9 @@ function ThreadEntry({
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <ChannelBadge item={latest} />
+                  <WhoLabel item={latest} currentLead={currentLead} />
                   {groupMode && <LeadChip name={latest.lead_name} />}
-                  <span className="text-[11px] text-muted-foreground">
-                    {format(new Date(latest.occurred_at), "MMM d · h:mm a")}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full border border-border">
-                    Thread ({thread.items.length})
-                  </span>
+                  <RelTime at={latest.occurred_at} />
                   {aiReplyWorthy && (
                     <span className="text-[10px] font-medium text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">
                       Reply Needed
@@ -713,18 +787,10 @@ function ThreadEntry({
                     )}
                   </div>
                 )}
-                {!open && (aiSummary || latest.snippet_text) && (
-                  aiSummary ? (
-                    <SummaryBody
-                      text={aiSummary}
-                      maxBullets={4}
-                      textClassName="text-[13px] text-muted-foreground leading-relaxed"
-                    />
-                  ) : (
-                    <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-                      {latest.snippet_text}
-                    </p>
-                  )
+                {!open && gist && (
+                  <p className="text-[13px] text-muted-foreground line-clamp-1 leading-relaxed">
+                    {gist}
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-1 pt-1">
@@ -743,7 +809,7 @@ function ThreadEntry({
 
         <CollapsibleContent className="animate-accordion-down">
           <div className="pl-3 pb-2 space-y-2">
-            {aiSummary && (
+            {showSummaryBox && (
               <div className="bg-accent/50 rounded-md px-3 py-2">
                 <p className="text-[11px] font-medium text-muted-foreground mb-1">AI Summary</p>
                 <SummaryBody
@@ -752,11 +818,16 @@ function ThreadEntry({
                 />
               </div>
             )}
-            {latest.snippet_text && (
+            {displayBody ? (
               <p className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed line-clamp-4">
-                {latest.snippet_text}
+                {displayBody}
               </p>
-            )}
+            ) : aiSummary ? (
+              <SummaryBody
+                text={aiSummary}
+                textClassName="text-[13px] text-muted-foreground leading-relaxed"
+              />
+            ) : null}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {tags.map(tag => (
@@ -793,11 +864,9 @@ function ThreadEntry({
                           )}
                         >
                           <div className="flex items-center gap-2">
-                            <ChannelBadge item={msg} />
+                            <WhoLabel item={msg} currentLead={currentLead} />
                             {groupMode && <LeadChip name={msg.lead_name} />}
-                            <span className="text-[11px] text-muted-foreground">
-                              {format(new Date(msg.occurred_at), "MMM d · h:mm a")}
-                            </span>
+                            <RelTime at={msg.occurred_at} />
                             <div className="flex-1" />
                             {msgShowReply && <ReplyButton item={msg} actions={actions} />}
                             {msgFollowupVis !== "never" && (
@@ -806,7 +875,7 @@ function ThreadEntry({
                             <HideButton itemId={msg.id} isHidden={msg.hidden} onToggle={onToggleHide} />
                           </div>
                           <p className={cn("text-[13px] text-muted-foreground line-clamp-3 leading-relaxed", msg.hidden && "line-through")}>
-                            {msg.snippet_text}
+                            {displayBodyFor(msg)}
                           </p>
                         </div>
                       );
@@ -837,9 +906,7 @@ function MeetingEntry({ item, defaultOpen, onToggleHide }: { item: TimelineItem;
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2">
                   <ChannelBadge item={item} />
-                  <span className="text-[11px] text-muted-foreground">
-                    {format(new Date(item.occurred_at), "MMM d")}
-                  </span>
+                  <RelTime at={item.occurred_at} />
                   {item.hidden && (
                     <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                       Hidden
@@ -881,7 +948,7 @@ function MeetingEntry({ item, defaultOpen, onToggleHide }: { item: TimelineItem;
 }
 
 /* ── WhatsApp Entry ── */
-function WhatsAppEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHide: (id: string, hidden: boolean) => void }) {
+function WhatsAppEntry({ item, onToggleHide, currentLead }: { item: TimelineItem; onToggleHide: (id: string, hidden: boolean) => void; currentLead?: TimelineMinimalLead | null }) {
   const isOutbound = item.direction === "outbound";
   return (
     <div className={cn("py-3 px-3 -mx-3 group", isOutbound ? "flex justify-end" : "flex justify-start", item.hidden && "opacity-50")}>
@@ -890,10 +957,8 @@ function WhatsAppEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHid
         isOutbound ? "bg-primary/10 rounded-br-md" : "bg-accent rounded-bl-md"
       )}>
         <div className="flex items-center gap-2">
-          <ChannelBadge item={item} />
-          <span className="text-[11px] text-muted-foreground">
-            {format(new Date(item.occurred_at), "MMM d · h:mm a")}
-          </span>
+          <WhoLabel item={item} currentLead={currentLead} />
+          <RelTime at={item.occurred_at} />
           <HideButton itemId={item.id} isHidden={item.hidden} onToggle={onToggleHide} />
         </div>
         <p className={cn("text-[13px] text-foreground leading-relaxed whitespace-pre-wrap", item.hidden && "line-through")}>
@@ -959,9 +1024,7 @@ function CallEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHide: (
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <ChannelBadge item={item} />
-                  <span className="text-[11px] text-muted-foreground">
-                    {format(new Date(item.occurred_at), "MMM d · h:mm a")}
-                  </span>
+                  <RelTime at={item.occurred_at} />
                   {duration && (
                     <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full border border-border">
                       {Math.round(duration / 60)}m {duration % 60}s
@@ -1034,6 +1097,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   const [isSavingReply, setIsSavingReply] = useState(false);
   const [activeFilter, setActiveFilter] = useState<TimelineFilter>("all");
   const [showHidden, setShowHidden] = useState(false);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   // PR 2.4 — group members lookup (id → MinimalLead). Empty in solo mode.
   const [groupMembers, setGroupMembers] = useState<Map<string, TimelineMinimalLead>>(new Map());
   // PR 2.4 — EmailActionDialog reply target state.
@@ -1041,15 +1105,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   const [replyContext, setReplyContext] = useState<"reply" | "follow_up">("reply");
   const [replyTargetLead, setReplyTargetLead] = useState<TimelineMinimalLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { syncLead, isSyncing, isConnected } = useMailSync();
-
   const groupMode = !!groupId;
-
-  const handleQuickSync = async () => {
-    if (!currentLead?.email) return;
-    await syncLead(currentLead.id, currentLead.email);
-    loadTimeline();
-  };
 
   const loadTimeline = () => {
     setIsLoading(true);
@@ -1299,57 +1355,80 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
 
   return (
     <div className="space-y-0">
-      {/* Filter bar */}
-      <div className="flex items-center gap-2 pb-3 flex-wrap">
-        <div className="flex items-center gap-1.5 flex-1 flex-wrap">
-          {FILTER_OPTIONS.map(opt => (
-            <button
-              key={opt.value}
-              onClick={() => setActiveFilter(opt.value)}
-              className={cn(
-                "text-[12px] font-medium px-3 py-1 rounded-full border transition-colors",
-                activeFilter === opt.value
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-muted/50 text-muted-foreground border-border hover:bg-accent hover:text-foreground"
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isConnected && currentLead?.email && !groupMode && (
-            <MailLastSyncedChip
-              prefix="Timeline · "
-              onRefresh={handleQuickSync}
-              isRefreshing={isSyncing}
-            />
-          )}
-
+      {/* Filter bar — "All" by default + a single Filter affordance */}
+      <div className="flex items-center gap-2 pb-3">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0 flex-wrap">
           <button
-            onClick={() => setShowHidden(!showHidden)}
+            onClick={() => setActiveFilter("all")}
             className={cn(
-              "text-[11px] flex items-center gap-1 px-2 py-1 rounded border transition-colors",
-              showHidden
-                ? "bg-accent text-foreground border-border"
-                : "text-muted-foreground border-transparent hover:text-foreground"
+              "text-[12px] font-medium px-3 py-1 rounded-full border transition-colors",
+              activeFilter === "all"
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-muted/50 text-muted-foreground border-border hover:bg-accent hover:text-foreground"
             )}
           >
-            {showHidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
-            {showHidden ? "Showing hidden" : `${hiddenCount > 0 ? hiddenCount + " hidden" : "Show hidden"}`}
+            All
           </button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs"
-            onClick={() => setShowReplyForm(!showReplyForm)}
-          >
-            <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
-            Log WhatsApp Reply
-          </Button>
+          {activeFilter !== "all" && (
+            <button
+              onClick={() => setActiveFilter("all")}
+              className="inline-flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-full border bg-primary text-primary-foreground border-primary"
+              title="Clear filter"
+            >
+              {FILTER_OPTIONS.find(o => o.value === activeFilter)?.label}
+              <X className="h-3 w-3" />
+            </button>
+          )}
+
+          <Popover open={filterMenuOpen} onOpenChange={setFilterMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                className="inline-flex items-center gap-1 text-[12px] font-medium px-2.5 py-1 rounded-full border bg-muted/50 text-muted-foreground border-border hover:bg-accent hover:text-foreground transition-colors"
+                title="Filter the timeline"
+              >
+                <SlidersHorizontal className="h-3 w-3" />
+                Filter
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-44 p-1">
+              {FILTER_OPTIONS.filter(o => o.value !== "all").map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setActiveFilter(opt.value); setFilterMenuOpen(false); }}
+                  className={cn(
+                    "w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent",
+                    activeFilter === opt.value && "bg-accent font-medium"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              <div className="my-1 border-t border-border" />
+              <button
+                onClick={() => { setShowHidden(!showHidden); setFilterMenuOpen(false); }}
+                className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 text-xs rounded hover:bg-accent"
+              >
+                {showHidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                {showHidden ? "Hide hidden items" : `Show hidden${hiddenCount > 0 ? ` (${hiddenCount})` : ""}`}
+              </button>
+            </PopoverContent>
+          </Popover>
+
+          {showHidden && (
+            <span className="text-[11px] text-muted-foreground">Showing hidden</span>
+          )}
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs shrink-0"
+          onClick={() => setShowReplyForm(!showReplyForm)}
+        >
+          <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+          Log WhatsApp Reply
+        </Button>
       </div>
 
       {/* Inline reply form */}
@@ -1396,11 +1475,12 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
                   groupMode={groupMode}
                   actions={rowActions}
                   freshestRingId={freshestRingId}
+                  currentLead={currentLead}
                 />
               ) : entry.channel === "meeting" ? (
                 <MeetingEntry item={entry} defaultOpen={isExpanded} onToggleHide={handleToggleHide} />
               ) : entry.channel === "whatsapp" ? (
-                <WhatsAppEntry item={entry} onToggleHide={handleToggleHide} />
+                <WhatsAppEntry item={entry} onToggleHide={handleToggleHide} currentLead={currentLead} />
               ) : entry.channel === "voice" ? (
                 <CallEntry item={entry} onToggleHide={handleToggleHide} />
               ) : (
@@ -1414,6 +1494,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
                   groupMode={groupMode}
                   actions={rowActions}
                   freshestRingId={freshestRingId}
+                  currentLead={currentLead}
                 />
               )}
             </div>
