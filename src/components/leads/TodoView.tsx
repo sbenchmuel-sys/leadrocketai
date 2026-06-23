@@ -202,6 +202,14 @@ export function TodoView() {
     });
 
   // ── Quick actions ──────────────────────────────────────────────────────
+  // How many drafts are generating right now — drives both the bulk-draft slot
+  // math and the disabled state of the button (Codex P2 on PR #108).
+  const draftingCount = useMemo(
+    () => Array.from(queue.values()).filter((q) => q.status === "generating").length,
+    [queue],
+  );
+  const draftQueueFull = draftingCount >= MAX_BULK_DRAFT;
+
   const handleBulkDraft = () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
@@ -210,8 +218,7 @@ export function TodoView() {
     // — and KEEP everything else selected for a second batch, rather than firing
     // enqueues the queue will reject and clearing them from the selection
     // (Codex P2 on PR #108).
-    const generating = Array.from(queue.values()).filter((q) => q.status === "generating").length;
-    const slots = Math.max(0, MAX_BULK_DRAFT - generating);
+    const slots = Math.max(0, MAX_BULK_DRAFT - draftingCount);
     if (slots === 0) {
       toast.error(`Already drafting the maximum of ${MAX_BULK_DRAFT}. Try again once some finish.`);
       return;
@@ -278,7 +285,12 @@ export function TodoView() {
             {selectedIds.size} selected
           </span>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={handleBulkDraft}>
+            <Button
+              size="sm"
+              onClick={handleBulkDraft}
+              disabled={draftQueueFull}
+              title={draftQueueFull ? `Already drafting the maximum of ${MAX_BULK_DRAFT}` : undefined}
+            >
               Draft emails
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
