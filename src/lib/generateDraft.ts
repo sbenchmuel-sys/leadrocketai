@@ -621,27 +621,20 @@ export async function streamDraft(input: StreamDraftInput): Promise<DraftPipelin
 
     if (!cacheCheck) {
       console.log("[streamDraft] No context cache — triggering build", isFirstTouch ? "(BLOCKING for first-touch)" : "(fire-and-forget)");
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      const { data: { session: s } } = await supabase.auth.getSession();
-      const buildPromise = fetch(`${supabaseUrl}/functions/v1/build-lead-context`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${s?.access_token || supabaseKey}`,
-          apikey: supabaseKey,
-        },
-        body: JSON.stringify({ lead_id, force: true }),
+      // Use supabase.functions.invoke to bypass the Lovable Preview fetch proxy that
+      // intercepts raw cross-origin POSTs and surfaces as "TypeError: Failed to fetch".
+      const buildPromise = supabase.functions.invoke("build-lead-context", {
+        body: { lead_id, force: true },
       });
 
       if (isFirstTouch) {
         // BLOCK: wait for context cache to build so ai_task has signals + angles
         try {
-          const resp = await buildPromise;
-          if (resp.ok) {
+          const { error: buildErr } = await buildPromise;
+          if (!buildErr) {
             console.log("[streamDraft] ✅ Context cache built before draft generation");
           } else {
-            console.warn("[streamDraft] Context cache build returned", resp.status);
+            console.warn("[streamDraft] Context cache build error:", buildErr);
           }
         } catch (err) {
           console.warn("[streamDraft] Context cache build failed, proceeding without:", err);
