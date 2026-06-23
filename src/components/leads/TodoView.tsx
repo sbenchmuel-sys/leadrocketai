@@ -45,6 +45,9 @@ type Channel = "email" | "call";
 type ChannelFilter = "all" | Channel;
 
 const TODO_PAGE_SIZE = 25;
+// Matches MAX_CONCURRENT in useBackgroundDraftQueue — draft at most this many at
+// once so the overflow isn't silently dropped.
+const MAX_BULK_DRAFT = 20;
 
 /** Forward-compatible channel read. No call signal exists yet → all email. */
 function channelOf(lead: QueueLeadRow): Channel {
@@ -132,7 +135,6 @@ export function TodoView() {
 
   // Composer dialog state.
   const [composerLead, setComposerLead] = useState<QueueLeadRow | null>(null);
-  const [composerPrefill, setComposerPrefill] = useState<{ subject?: string; body?: string }>({});
   const [composerOpen, setComposerOpen] = useState(false);
 
   const loadTodos = useCallback(async () => {
@@ -203,26 +205,27 @@ export function TodoView() {
   const handleBulkDraft = () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    ids.forEach((id) => enqueue(id));
-    toast.success(`Drafting ${ids.length} email${ids.length === 1 ? "" : "s"}…`);
-    setSelectedIds(new Set());
+    // The background draft queue caps active drafts. Draft up to that many now
+    // and KEEP the overflow selected for a second batch, rather than clearing
+    // the selection and silently dropping them (Codex P2 on PR #108).
+    const batch = ids.slice(0, MAX_BULK_DRAFT);
+    const rest = ids.slice(MAX_BULK_DRAFT);
+    batch.forEach((id) => enqueue(id));
+    setSelectedIds(new Set(rest));
+    toast.success(
+      rest.length > 0
+        ? `Drafting ${batch.length} emails… ${rest.length} still selected (max ${MAX_BULK_DRAFT} at a time).`
+        : `Drafting ${batch.length} email${batch.length === 1 ? "" : "s"}…`,
+    );
   };
 
   const openComposer = (lead: QueueLeadRow) => {
-    // If a draft was pre-generated (bulk), consume it as the prefill; otherwise
-    // the dialog auto-generates one on open.
-    let prefill: { subject?: string; body?: string } = {};
-    if (getStatus(lead.id)?.status === "ready") {
-      const entry = consume(lead.id);
-      if (entry?.result) {
-        prefill = {
-          subject: entry.result.suggested_subject || entry.subject,
-          body: entry.result.draft_text ?? undefined,
-        };
-      }
-    }
+    // Open the composer WITHOUT prefill so it generates (which hydrates reply
+    // threading) — hitting the draft cache the bulk pre-draft warmed, so it's
+    // fast. Passing the pre-generated text as prefill would make the dialog skip
+    // its threading hydration and send replies unthreaded (Codex P1 on PR #108).
+    consume(lead.id); // clear the "Draft ready" indicator now they're acting
     setComposerLead(lead);
-    setComposerPrefill(prefill);
     setComposerOpen(true);
   };
 
@@ -346,13 +349,10 @@ export function TodoView() {
           }}
           open={composerOpen}
           actionKey={composerLead.next_action_key ?? undefined}
-          prefilledSubject={composerPrefill.subject}
-          prefilledBody={composerPrefill.body}
           onOpenChange={(o) => {
             setComposerOpen(o);
             if (!o) {
               setComposerLead(null);
-              setComposerPrefill({});
               void loadTodos();
             }
           }}

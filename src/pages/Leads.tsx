@@ -115,7 +115,6 @@ export default function Leads() {
 
   // Draft review dialog (opened from a "Draft ready" tag).
   const [draftLead, setDraftLead] = useState<EnrichedLead | null>(null);
-  const [draftPrefill, setDraftPrefill] = useState<{ subject?: string; body?: string }>({});
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
 
   const pendingCount = usePendingCandidatesCount();
@@ -254,13 +253,13 @@ export default function Leads() {
   };
 
   const openDraft = (lead: EnrichedLead) => {
-    const entry = consume(lead.id);
-    if (!entry?.result) return;
+    // Clear the "Draft ready" indicator now that the rep is acting on it, then
+    // open the composer WITHOUT prefill so it generates (which hydrates reply
+    // threading). The bulk pre-draft already warmed the draft cache, so this is
+    // fast. Passing prefill would skip the dialog's threading hydration and send
+    // replies as new, unthreaded emails (Codex P1 on PR #108).
+    consume(lead.id);
     setDraftLead(lead);
-    setDraftPrefill({
-      subject: entry.result.suggested_subject || entry.subject,
-      body: entry.result.draft_text,
-    });
     setDraftDialogOpen(true);
   };
 
@@ -630,13 +629,11 @@ export default function Leads() {
         <EmailActionDialog
           lead={draftLead}
           open={draftDialogOpen}
-          prefilledSubject={draftPrefill.subject}
-          prefilledBody={draftPrefill.body}
+          actionKey={draftLead.next_action_key ?? undefined}
           onOpenChange={(open) => {
             setDraftDialogOpen(open);
             if (!open) {
               setDraftLead(null);
-              setDraftPrefill({});
               loadLeads();
             }
           }}
