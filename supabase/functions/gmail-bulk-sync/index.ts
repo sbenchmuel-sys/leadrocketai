@@ -8,6 +8,7 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
+import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -783,9 +784,24 @@ async function syncLeadEmails(
     metrics.last_inbound_at,
   ].filter(Boolean).map(d => new Date(d!).getTime());
   
-  const lastActivityAt = activityDates.length > 0 
+  // Only set last_activity_at from REAL activity. Falling back to now() would make a
+  // lead with no imported email look freshly active on every 20-min scheduled sweep
+  // (codex P1). `undefined` is dropped from the update, leaving the column as-is.
+  const hasActivity = activityDates.length > 0;
+  const lastActivityAt = hasActivity
     ? new Date(Math.max(...activityDates)).toISOString()
-    : new Date().toISOString();
+    : undefined;
+
+  // True no-op guard: a lead with no email activity AND no meetings has nothing for
+  // this function to derive — stage would be deriveStage()'s "new" default and every
+  // metric would be null, so the final update would clobber a manually-advanced stage
+  // (contacted/engaged/closing) and zero out fields on every 20-min scheduled run.
+  // Leave the row untouched. Bounce / OOO / defer / meeting-confirmation handlers
+  // above already persisted their own targeted updates, so only the derived
+  // metrics/stage/action overwrite is skipped. Benefits the user "Sync now" path too.
+  if (!hasActivity && metrics.meeting_summary_count === 0) {
+    return { synced, errors, stage: currentStage };
+  }
 
   // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
@@ -859,6 +875,11 @@ async function syncLeadEmails(
   } else if (hasRecentAutoSend) {
     // CRITICAL: Recently-sent guard -- executor sent an email recently, don't re-arm.
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Recent automation send detected (${recentAutoSendCount} in last 2h) -- suppressing action overwrite`);
+  } else if (!hasActivity && !actionResult.needs_action) {
+    // No interactions on record and nothing to flag — leave existing action fields
+    // untouched rather than clearing flags set elsewhere (manual / candidate) on
+    // every no-op scheduled sweep (codex P1). A lead with real activity, or one
+    // that derives an action, still flows through the normal overwrite below.
   } else {
     // Apply derived action for non-nurture, non-OOO, non-automation-scheduled leads
     updatePayload.needs_action = actionResult.needs_action;
@@ -898,12 +919,314 @@ async function syncLeadEmails(
   return { synced, errors, stage: newStage };
 }
 
+// Resolve ALL of the connection owner's workspace memberships — gmail_connections
+// has no workspace_id column, so we join through workspace_members. A rep can be
+// invited to multiple workspaces, and they may own leads in each; returning only
+// one membership would permanently skip the others in the scheduled sweep. The lead
+// fetch still pins owner_user_id, so this only widens coverage, never isolation.
+// deno-lint-ignore no-explicit-any
+async function resolveWorkspaceIds(serviceSupabase: any, userId: string): Promise<string[]> {
+  const { data, error } = await serviceSupabase
+    .from("workspace_members")
+    .select("workspace_id")
+    .eq("user_id", userId);
+  if (error || !data) return [];
+  const ids = (data as Array<{ workspace_id: string | null }>)
+    .map((r) => r.workspace_id)
+    .filter((id): id is string => !!id);
+  return [...new Set(ids)];
+}
+
+// Coverage + bounding constants for the scheduled sweep.
+//
+// RUN_BUDGET_MS: a single run-wide wall-clock budget, checked between connections
+// AND between leads, so total work is bounded regardless of how many accounts /
+// leads exist. Kept under cron-dispatcher's 55s forward timeout so the dispatcher
+// doesn't record every tick as a 504.
+//
+// LEADS_PER_PAGE: how many of a connection owner's leads one run pulls into memory.
+// Coverage is guaranteed by a PERSISTED per-connection cursor (gmail_connections
+// .bulk_sync_cursor): each run resumes from the cursor, syncs as many leads as the
+// budget allows, then advances the cursor by the count ACTUALLY processed (mod
+// total) — so a window that doesn't fit the budget resumes exactly where it stopped
+// next run and no tail is ever permanently skipped. Connections are also rotated per
+// tick so a long-running early account can't starve later ones. syncLeadEmails is
+// idempotent (dedup by gmail_message_id), so any overlap is harmless.
+const RUN_BUDGET_MS = 45_000;
+const LEADS_PER_PAGE = 150;
+const CRON_MAX_RESULTS = 10;
+
+// Monotonic, ~per-tick rotation seed. The sweep cron fires every 20 min; bucketing
+// wall-clock into 20-min slots gives a different starting offset each run without
+// any persisted cursor. Two runs in the same slot (e.g. a manual re-trigger) reuse
+// the same page — harmless, since the sync is idempotent.
+function currentTickIndex(): number {
+  return Math.floor(Date.now() / (20 * 60 * 1000));
+}
+
+// An account-wide Gmail auth failure (revoked token, missing read scope, refresh
+// failure) fails identically for EVERY lead on that connection. Detect it so the
+// scheduled sweep can flag the connection for reconnect and stop retrying per-lead.
+// Same heuristic as the user-path handler's `needsReconnect` at the bottom.
+function isAccountWideAuthError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("revoked") ||
+    m.includes("reconnect") ||
+    m.includes("reauthorize") ||
+    m.includes("invalid_grant") ||
+    m.includes("insufficient") ||
+    m.includes("permissions") ||
+    m.includes("no refresh token")
+  );
+}
+
+// Scheduled (cron-dispatcher / service-role) entry path. There is no user JWT
+// and the cron payload carries no leadIds, so this self-discovers every connected
+// Gmail account and syncs its workspace's leads. Per-connection try/catch keeps a
+// single bad account (e.g. revoked token) from aborting the whole run.
+// deno-lint-ignore no-explicit-any
+async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
+  const startedAt = Date.now();
+
+  const { data: connections, error: connErr } = await serviceSupabase
+    .from("gmail_connections")
+    .select("user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect, bulk_sync_cursor");
+
+  if (connErr) {
+    console.error("[gmail-bulk-sync] cron: failed to load gmail_connections:", connErr.message);
+    return new Response(JSON.stringify({ ok: false, error: connErr.message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  let connectionsProcessed = 0;
+  let connectionsSkipped = 0;
+  let connectionsDeferred = 0;
+  let leadsProcessed = 0;
+  let leadsDeferred = 0;
+  let totalSynced = 0;
+  let budgetExhausted = false;
+
+  // Rotate the connection start position each tick so a long-running early account
+  // can't permanently starve later ones when the run-wide budget is tight.
+  const allConns = connections ?? [];
+  const tick = currentTickIndex();
+  const startIdx = allConns.length > 0 ? tick % allConns.length : 0;
+  const rotatedConns = [...allConns.slice(startIdx), ...allConns.slice(0, startIdx)];
+
+  for (const conn of rotatedConns) {
+    // Run-wide budget: stop cleanly and report what was deferred to the next tick.
+    if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      budgetExhausted = true;
+      connectionsDeferred++;
+      continue;
+    }
+
+    if (conn.needs_reconnect) {
+      connectionsSkipped++;
+      console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (needs_reconnect)`);
+      continue;
+    }
+
+    const workspaceIds = await resolveWorkspaceIds(serviceSupabase, conn.user_id);
+    if (workspaceIds.length === 0) {
+      connectionsSkipped++;
+      console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (no_workspace)`);
+      continue;
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await refreshTokenIfNeeded(serviceSupabase, conn);
+    } catch (err) {
+      connectionsSkipped++;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} token refresh failed:`, msg);
+      // Self-heal: a revoked/refresh-failed token won't recover on its own, so flag
+      // the connection. The needs_reconnect guard above then skips it next tick
+      // instead of attempting a doomed refresh every 20 min.
+      if (isAccountWideAuthError(msg)) {
+        await serviceSupabase
+          .from("gmail_connections")
+          .update({ needs_reconnect: true })
+          .eq("user_id", conn.user_id);
+      }
+      continue;
+    }
+
+    // Total leads OWNED BY THIS REP across ALL their workspaces — drives the rotating
+    // cursor so coverage is guaranteed rather than re-scanning the same freshest rows.
+    // Scope by owner_user_id (not workspace-wide): this connection's mailbox is the
+    // canonical source only for leads this rep owns — the same ownership model the
+    // send path uses (automation-executor resolves the Gmail connection via
+    // lead.owner_user_id). The workspace_id IN (...) filter asserts current membership
+    // (defense in depth) without dropping the rep's other workspaces.
+    const { count: totalLeads, error: countErr } = await serviceSupabase
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .in("workspace_id", workspaceIds)
+      .eq("owner_user_id", conn.user_id)
+      .not("email", "is", null);
+
+    if (countErr) {
+      connectionsSkipped++;
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} lead count failed:`, countErr.message);
+      continue;
+    }
+    if (!totalLeads || totalLeads === 0) {
+      connectionsProcessed++;
+      continue;
+    }
+
+    // Resume from this connection's persisted cursor — a rotating offset into the
+    // owner's leads (ordered by stable `id`). Advancing the cursor AFTER the loop by
+    // the count actually processed means a window that doesn't fit the run budget
+    // resumes exactly where it stopped next run, instead of restarting the same head
+    // rows and never reaching the tail.
+    const cursor = Number(conn.bulk_sync_cursor) || 0;
+    const start = cursor % totalLeads;
+    const end = start + LEADS_PER_PAGE - 1;
+
+    // Service role + workspace_id IN (rep's memberships) + owner_user_id reproduce the
+    // isolation the user path gets from RLS — leads never cross workspace OR rep
+    // boundaries. Stable `id` order keeps the cursor window deterministic.
+    const { data: leads, error: leadsErr } = await serviceSupabase
+      .from("leads")
+      .select("id, email, stage, strategy, workspace_id")
+      .in("workspace_id", workspaceIds)
+      .eq("owner_user_id", conn.user_id)
+      .not("email", "is", null)
+      .order("id", { ascending: true })
+      .range(start, end);
+
+    if (leadsErr) {
+      connectionsSkipped++;
+      console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} lead fetch failed:`, leadsErr.message);
+      continue;
+    }
+
+    const windowLeads = leads ?? [];
+    if (totalLeads > LEADS_PER_PAGE) {
+      console.log(
+        `[gmail-bulk-sync] cron: user=${conn.user_id} ${totalLeads} owned leads — ` +
+          `window rows ${start}-${start + Math.max(windowLeads.length - 1, 0)} this run (cursor=${cursor}).`,
+      );
+    }
+
+    // Optimistic cursor: persist the offset PAST each lead BEFORE doing its work.
+    // CRON_MAX_RESULTS only caps the initial Gmail search, not syncLeadEmails' walk
+    // over a lead's existing locked threads — a lead with a long history can blow the
+    // dispatcher's 55s / the platform wall-clock mid-lead. Advancing the cursor first
+    // means such a hard kill can't re-pin the same slow lead and wedge the connection;
+    // it's retried on the next full rotation instead. syncLeadEmails is idempotent.
+    let accountAuthFailed = false;
+    let processed = 0;
+    for (const lead of windowLeads) {
+      // Budget reached mid-window: STOP without advancing for this lead. The cursor
+      // still points at it (last persisted from the previous iteration), so the next
+      // run resumes exactly here — no permanent skip.
+      if (Date.now() - startedAt > RUN_BUDGET_MS) {
+        budgetExhausted = true;
+        leadsDeferred += windowLeads.length - processed;
+        break;
+      }
+
+      // Move the persisted cursor past this lead before its (potentially slow) work.
+      const nextCursor = (start + processed + 1) % totalLeads;
+      await serviceSupabase
+        .from("gmail_connections")
+        .update({ bulk_sync_cursor: nextCursor })
+        .eq("user_id", conn.user_id);
+
+      try {
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
+        totalSynced += result.synced;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (isAccountWideAuthError(msg)) {
+          // This token fails for every lead (e.g. missing read scope). Flag the
+          // connection for reconnect and stop the window — retrying the rest would
+          // only burn the run budget and starve healthy connections.
+          console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect, skipping rest of window:`, msg);
+          await serviceSupabase
+            .from("gmail_connections")
+            .update({ needs_reconnect: true })
+            .eq("user_id", conn.user_id);
+          accountAuthFailed = true;
+          break;
+        }
+        // A non-auth, lead-specific error is fine — the cursor already moved past it,
+        // so it's retried on the next full rotation rather than wedging here.
+        console.error(`[gmail-bulk-sync] cron: lead=${lead.id} sync failed:`, msg);
+      }
+      processed++;
+      leadsProcessed++;
+    }
+
+    if (accountAuthFailed) {
+      connectionsSkipped++;
+      continue; // last_sync_at left as-is for a flagged-for-reconnect account
+    }
+
+    // Cursor is already persisted per-lead; just stamp the sync time.
+    await serviceSupabase
+      .from("gmail_connections")
+      .update({ last_sync_at: new Date().toISOString() })
+      .eq("user_id", conn.user_id);
+
+    connectionsProcessed++;
+  }
+
+  if (budgetExhausted) {
+    console.warn(
+      `[gmail-bulk-sync] cron: run budget (${RUN_BUDGET_MS}ms) reached — ` +
+        `${connectionsDeferred} connection(s) + ${leadsDeferred} lead(s) deferred to next tick (rotation resumes there).`,
+    );
+  }
+
+  const summary = {
+    ok: true,
+    mode: "scheduled" as const,
+    duration_ms: Date.now() - startedAt,
+    budget_exhausted: budgetExhausted,
+    connectionsProcessed,
+    connectionsSkipped,
+    connectionsDeferred,
+    leadsProcessed,
+    leadsDeferred,
+    totalSynced,
+  };
+  console.log("[gmail-bulk-sync] cron done", JSON.stringify(summary));
+  return new Response(JSON.stringify(summary), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // ── Scheduled / internal branch (cron-dispatcher or service-role) ──
+    // cron-dispatcher forwards with X-Internal-Secret only (no Bearer token), so
+    // config.toml MUST set verify_jwt = false or the gateway 401s before we run.
+    // This is the in-code auth gate; user JWTs fall through to the user path below.
+    if (isInternalCaller(req) || isServiceRoleToken(req)) {
+      const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
+      return await runScheduledBulkSync(serviceSupabase);
+    }
+
+    // ── User-facing branch (UI "Sync now" / per-lead sync) ──
+    // With verify_jwt = false the gateway no longer enforces a JWT, so this branch
+    // authenticates the user itself via getUser() below — an absent/invalid token
+    // is rejected with 401, keeping the endpoint user-scoped.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(JSON.stringify({ ok: false, error: "Missing authorization header" }), {
@@ -912,10 +1235,6 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });

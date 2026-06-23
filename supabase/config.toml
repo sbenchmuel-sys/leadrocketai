@@ -155,3 +155,11 @@ verify_jwt = false
 # enforces workspace membership in code (requireAuth + assertWorkspaceMembership).
 [functions.outreach-touch-action]
 verify_jwt = true
+
+# gmail-bulk-sync is DUAL-MODE: cron-dispatcher (X-Internal-Secret, no Bearer) AND
+# the UI "Sync now" / per-lead sync (user JWT). It gates the scheduled branch in
+# code via isInternalCaller/isServiceRoleToken and authenticates the user branch
+# via getUser(), so verify_jwt MUST be false — true would 401 the dispatcher's
+# forward before the in-code gate runs (the cron path had been silently failing).
+[functions.gmail-bulk-sync]
+verify_jwt = false
