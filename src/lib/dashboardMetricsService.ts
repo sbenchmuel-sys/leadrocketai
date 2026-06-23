@@ -70,7 +70,7 @@ const DASHBOARD_LEAD_COLUMNS = `
   action_permanently_dismissed, group_id, campaign_id
 `;
 
-async function fetchLeads(): Promise<EnrichedLead[]> {
+async function fetchLeads(workspaceId?: string): Promise<EnrichedLead[]> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -86,13 +86,23 @@ async function fetchLeads(): Promise<EnrichedLead[]> {
   // parked (see KNOWN_ISSUES.md → "Manager team-view on the Leads page"); do
   // NOT re-add an app-only manager exemption — it's a no-op against RLS.
   //
-  // Fail-safe: if the role can't be read for any reason, fall back to the most
-  // restrictive scope (own leads only). Silence never widens access.
+  // Active-workspace scoping (Codex PR #107): owner-only filtering doesn't
+  // constrain to the active workspace, so a member of multiple workspaces who
+  // owns leads in each would otherwise see them mixed together. Scope the fetch
+  // to the active workspace when it's known.
+  //
+  // Fail-safe: if the role or active workspace can't be read for any reason,
+  // fall back to the most restrictive scope (own leads only). Silence never
+  // widens access.
   let query = supabase
     .from("leads")
     .select(DASHBOARD_LEAD_COLUMNS)
     .order("last_activity_at", { ascending: false })
     .limit(1000);
+
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
+  }
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -359,18 +369,20 @@ function buildDemoMetrics(): DashboardMetrics {
 
 /**
  * Fetch leads and compute all dashboard metrics in one call.
- * `workspace_id` is accepted for future multi-workspace support
- * but currently unused (RLS scopes to auth.uid()).
+ * `workspaceId`, when provided, scopes the lead fetch to that workspace so a
+ * multi-workspace member doesn't see leads they own in OTHER workspaces mixed
+ * into the active one (Codex PR #107). Omitting it falls back to owner/RLS
+ * scoping.
  */
 export async function getDashboardMetrics(
-  _workspace_id?: string
+  workspaceId?: string
 ): Promise<DashboardMetrics> {
   // In demo mode, skip database and use curated dataset
   if (isDemoMode()) {
     return buildDemoMetrics();
   }
 
-  const leads = await fetchLeads();
+  const leads = await fetchLeads(workspaceId);
 
   const groupIds = Array.from(
     new Set(

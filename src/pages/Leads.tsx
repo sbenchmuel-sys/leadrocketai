@@ -118,7 +118,9 @@ export default function Leads() {
 
   const loadLeads = async () => {
     try {
-      const m = await getDashboardMetrics();
+      // Pass the active workspace so the fetch is scoped to it (Codex PR #107) —
+      // a multi-workspace member won't see leads they own in other workspaces.
+      const m = await getDashboardMetrics(workspaceId);
       setLeads(m.leads);
     } catch {
       toast.error("Failed to load leads");
