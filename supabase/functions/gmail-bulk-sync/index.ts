@@ -792,6 +792,17 @@ async function syncLeadEmails(
     ? new Date(Math.max(...activityDates)).toISOString()
     : undefined;
 
+  // True no-op guard: a lead with no email activity AND no meetings has nothing for
+  // this function to derive — stage would be deriveStage()'s "new" default and every
+  // metric would be null, so the final update would clobber a manually-advanced stage
+  // (contacted/engaged/closing) and zero out fields on every 20-min scheduled run.
+  // Leave the row untouched. Bounce / OOO / defer / meeting-confirmation handlers
+  // above already persisted their own targeted updates, so only the derived
+  // metrics/stage/action overwrite is skipped. Benefits the user "Sync now" path too.
+  if (!hasActivity && metrics.meeting_summary_count === 0) {
+    return { synced, errors, stage: currentStage };
+  }
+
   // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
