@@ -129,9 +129,14 @@ export default function Leads() {
     }
   };
 
+  // Refetch when the active workspace resolves or changes. On first mount
+  // workspaceId is often still undefined (WorkspaceProvider resolves async), so
+  // without this dependency the initial load wouldn't be workspace-scoped and
+  // would never correct itself (Codex P1 on PR #107).
   useEffect(() => {
     loadLeads();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
 
   // ── Filtering ──────────────────────────────────────────────────────────
   const filteredLeads = useMemo(() => {
