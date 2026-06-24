@@ -346,10 +346,17 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
     );
     const isEmailStep = stepChannel === "email";
     const meetingEnabled = isEmailStep && meetingDecision === "off" ? false : true;
-    // Force only a ticked EMAIL touch that has a real link, and never for inbound
-    // (its own hard rules already drive a meeting CTA).
+    // Force only a ticked EMAIL touch that has a real link, never for inbound (its
+    // own hard rules already drive a meeting CTA), and NEVER when the lead already
+    // has a meeting booked — otherwise the "Meeting already booked — do not ask for
+    // another" warning and a "include the booking link" hard rule would contradict
+    // each other and the email could ask an already-booked lead to book again.
     const forceMeetingCta =
-      isEmailStep && !isInboundEmail && meetingDecision === "force_on" && !!input.calendar_link;
+      isEmailStep &&
+      !isInboundEmail &&
+      meetingDecision === "force_on" &&
+      !!input.calendar_link &&
+      !input.meeting_booked;
 
     const hints: string[] = [
       ...(input.structured_campaign?.steps?.find(s => s.step_number === stepNumber)?.generation_hints || []) as string[],

@@ -213,18 +213,32 @@ describe("a non-email step flagged is ignored", () => {
 // ── (f) meeting already booked still suppresses the ask ─────────────────────
 
 describe("(f) meeting already booked suppresses the ask", () => {
-  it("the prompt warns the model not to ask for another meeting", () => {
-    const campaign = emailCampaign([true, true, true, true]);
-    const instruction = resolveCampaignInstruction({
+  const campaign = emailCampaign([true, true, true, true]); // step 2 force_on
+
+  function step2({ booked }: { booked: boolean }) {
+    return resolveCampaignInstruction({
       lead_id: "lead-1",
       action_key: "send_pre_2",
       motion: "outbound_prospecting",
       structured_campaign: campaign,
       calendar_link: REP_LINK,
-      meeting_booked: true,
+      meeting_booked: booked,
     });
-    const block = formatInstructionForPrompt(instruction);
-    expect(block).toMatch(/Meeting already booked/i);
+  }
+
+  it("the prompt warns the model not to ask for another meeting", () => {
+    expect(formatInstructionForPrompt(step2({ booked: true }))).toMatch(/Meeting already booked/i);
+  });
+
+  it("a ticked (force-on) step does NOT add the force rule once a meeting is booked", () => {
+    // Codex P2: the "include the booking link" hard rule must not contradict the
+    // "do not ask for another meeting" warning.
+    const booked = step2({ booked: true });
+    const notBooked = step2({ booked: false });
+    const hasForceRule = (i: typeof booked) =>
+      i.hard_rules.some((r) => /meeting booking link/i.test(r));
+    expect(hasForceRule(notBooked)).toBe(true); // normally forced
+    expect(hasForceRule(booked)).toBe(false); // suppressed when booked
   });
 });
 
