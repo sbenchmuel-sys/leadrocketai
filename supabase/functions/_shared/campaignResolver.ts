@@ -373,7 +373,11 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
         "Warm inbound response — they contacted us first",
         "Thank them for reaching out through the website/form and acknowledge their specific interest",
         "Briefly explain relevant company value from approved context",
-        "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
+        // When this inbound step is explicitly OFF, never surface a booking link —
+        // ask for availability instead (mirrors the gated cta_type below).
+        meetingEnabled
+          ? "Use a meeting CTA; include the calendar link if available, otherwise ask for availability"
+          : "Use a meeting CTA by asking for their availability — do NOT include a booking link",
         "Do not ask cold discovery questions such as their biggest challenge",
         "Do not use cold-observation framing",
       ] : (forceMeetingCta ? [...structuredStep.hard_rules, FORCE_MEETING_CTA_RULE] : structuredStep.hard_rules),
@@ -387,7 +391,7 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
       },
       max_word_count: isInboundEmail ? 150 : structuredStep.max_words,
       cta_type: isInboundEmail
-        ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
+        ? (meetingEnabled && input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
         : structuredStep.cta_type,
       raw_custom_instructions: rawCustom,
       meeting_cta_enabled: meetingEnabled,

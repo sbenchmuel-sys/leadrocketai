@@ -270,12 +270,37 @@ describe("(b) instruction shortcut sets the per-step flags", () => {
   it("\"add the meeting CTA to every email\" → all email steps flagged true", () => {
     const plan = buildDefaultPlan(["email", "voice", "sms"]);
     const scope = detectMeetingCtaIntent("Please add the meeting CTA to every email.");
-    expect(scope).toBe("all");
+    expect(scope).toBe("all_on");
     const applied = applyMeetingCtaIntent(plan, scope);
     for (const s of applied) {
       if (s.channel === "email") expect(s.include_meeting_cta).toBe(true);
       else expect(s.include_meeting_cta ?? null).toBeNull(); // non-email never flagged
     }
+  });
+
+  it("a NEGATED 'every email' request opts every email OUT (Codex P2)", () => {
+    const plan = buildDefaultPlan(["email", "voice"]);
+    for (const phrase of [
+      "Don't add the meeting link to every email.",
+      "Do not include a calendar link in any of the emails.",
+      "No booking link on every email please.",
+    ]) {
+      expect(detectMeetingCtaIntent(phrase)).toBe("all_off");
+    }
+    const applied = applyMeetingCtaIntent(plan, "all_off");
+    for (const s of applied) {
+      if (s.channel === "email") expect(s.include_meeting_cta).toBe(false);
+      else expect(s.include_meeting_cta ?? null).toBeNull();
+    }
+    // and the OFF flag actually withholds the link at generation
+    const campaign = emailCampaign([false, false, false, false]);
+    expect(linkForStep(campaign, 2, REP_LINK).link).toBeNull();
+  });
+
+  it("a scheduling note that merely mentions a meeting is not a negated opt-out", () => {
+    // "no meeting on Tuesday" must NOT be read as "no meeting link".
+    expect(detectMeetingCtaIntent("Add the meeting link to every email, but no meeting on Tuesday."))
+      .toBe("all_on");
   });
 
   it("each flagged email then threads the link at generation", () => {
@@ -331,6 +356,35 @@ describe("draftStepToRow persists the per-step flag", () => {
     expect(draftStepToRow("c1", { ...base, include_meeting_cta: true }).include_meeting_cta).toBe(true);
     expect(draftStepToRow("c1", { ...base, include_meeting_cta: false }).include_meeting_cta).toBe(false);
     expect(draftStepToRow("c1", base).include_meeting_cta).toBeNull();
+  });
+});
+
+// ── inbound: explicit OFF withholds the link from the inbound CTA block ──────
+
+describe("inbound step explicitly OFF never leaks the booking URL (Codex P2)", () => {
+  function inbound(flag: boolean | null) {
+    return resolveCampaignInstruction({
+      lead_id: "lead-1",
+      action_key: "send_pre_1",
+      motion: "inbound_response",
+      structured_campaign: emailCampaign([flag]),
+      calendar_link: REP_LINK,
+    });
+  }
+
+  it("OFF → cta_type carries no URL, the prompt block has no URL, the rule forbids a link", () => {
+    const off = inbound(false);
+    expect(off.meeting_cta_enabled).toBe(false);
+    expect(off.cta_type).toBe("meeting_request");
+    expect(off.cta_type).not.toContain(REP_LINK);
+    expect(formatInstructionForPrompt(off)).not.toContain(REP_LINK);
+    expect(off.hard_rules.some((r) => /do NOT include a booking link/i.test(r))).toBe(true);
+  });
+
+  it("null (default) inbound still embeds the booking link — unchanged", () => {
+    const on = inbound(null);
+    expect(on.cta_type).toBe(`meeting_booking:${REP_LINK}`);
+    expect(formatInstructionForPrompt(on)).toContain(REP_LINK);
   });
 });
 
