@@ -188,6 +188,56 @@ function resolveCTA(
   return CHANNEL_CTA_DEFAULTS[channel]?.[step] || "question";
 }
 
+// ── Per-step meeting-CTA decision (Unit 3) ──────────────────────────
+// The per-step source of truth for whether a touch carries the rep's booking
+// link is campaign_steps.include_meeting_cta (a NULLABLE column added in Unit 2).
+//
+//   true  → "force_on": the rep explicitly ticked this email — include the link,
+//            even on touches whose template would normally hold it back (intro).
+//   false → "off":      the rep explicitly unticked it — never include the link.
+//   null/undefined → "default": leave today's behavior untouched. The live send
+//            path already passes the rep's calendar_link on every touch and lets
+//            the per-step prompt template decide whether a meeting CTA is
+//            appropriate (intro holds back, follow-ups offer). Preserving that is
+//            what keeps null-flag emails BYTE-IDENTICAL to before this change.
+//
+// This is the ONE place the tri-state collapses to a decision; both the live
+// send (resolveCampaignInstruction → automation-executor) and the authoring
+// preview (resolveCampaignAuthoringInstruction → ai_task) consume it so the
+// preview and the real send always agree.
+export type MeetingCtaDecision = "force_on" | "default" | "off";
+
+export function resolveStepMeetingCta(
+  perStepFlag: boolean | null | undefined,
+): MeetingCtaDecision {
+  if (perStepFlag === true) return "force_on";
+  if (perStepFlag === false) return "off";
+  return "default";
+}
+
+// Hard rule appended when a step is FORCE-ON: makes the meeting link an explicit,
+// structural instruction so it survives even the intro template's
+// "no calendar links unless instructed" guard. Only added when the rep ticked the
+// box AND a real calendar link exists (no link → no placeholder, no broken CTA).
+const FORCE_MEETING_CTA_RULE =
+  "Include the rep's meeting booking link as a clear call-to-action — use the provided link.";
+
+// The booking link to thread into a draft (live send or authoring preview) given
+// a resolved instruction and the SENDING rep's own calendar_link. Returns null —
+// not a placeholder — when the channel isn't email, the step's meeting CTA is off,
+// or the rep has no link. Both the live send and the preview derive the link from
+// this single helper so they never disagree, and it can only ever return the link
+// that was PASSED IN (the caller is responsible for passing the right rep's link).
+export function meetingLinkForDraft(
+  instruction: Pick<ResolvedInstruction, "channel" | "meeting_cta_enabled">,
+  calendarLink: string | null | undefined,
+): string | null {
+  if (instruction.channel !== "email") return null;
+  if (!instruction.meeting_cta_enabled) return null;
+  const link = (calendarLink || "").trim();
+  return link || null;
+}
+
 // ── Sequence context builder ────────────────────────────────────────
 
 function buildSequenceContext(input: CampaignResolverInput, stepNumber: number): SequenceContext {
@@ -287,6 +337,20 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
     const globalInstr = input.structured_campaign?.global_instructions || null;
     const rawCustom = [globalInstr, customInstr].filter(Boolean).join("\n") || null;
 
+    // Per-step meeting-CTA decision (Unit 3). The flag is email-only — a value on
+    // a non-email touch is ignored. force_on appends a hard rule so the link
+    // survives template-level suppression; off withholds the link entirely; null
+    // leaves output byte-identical to before this change.
+    const meetingDecision = resolveStepMeetingCta(
+      input.structured_campaign?.steps?.find((s) => s.step_number === stepNumber)?.include_meeting_cta,
+    );
+    const isEmailStep = stepChannel === "email";
+    const meetingEnabled = isEmailStep && meetingDecision === "off" ? false : true;
+    // Force only a ticked EMAIL touch that has a real link, and never for inbound
+    // (its own hard rules already drive a meeting CTA).
+    const forceMeetingCta =
+      isEmailStep && !isInboundEmail && meetingDecision === "force_on" && !!input.calendar_link;
+
     const hints: string[] = [
       ...(input.structured_campaign?.steps?.find(s => s.step_number === stepNumber)?.generation_hints || []) as string[],
     ];
@@ -305,7 +369,7 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
         "Use a meeting CTA; include the calendar link if available, otherwise ask for availability",
         "Do not ask cold discovery questions such as their biggest challenge",
         "Do not use cold-observation framing",
-      ] : structuredStep.hard_rules,
+      ] : (forceMeetingCta ? [...structuredStep.hard_rules, FORCE_MEETING_CTA_RULE] : structuredStep.hard_rules),
       generation_hints: isInboundEmail ? ["Open by acknowledging their inbound interest, then move toward a meeting", ...hints] : hints,
       sequence_context: sequenceContext,
       personalization_context: {
@@ -319,6 +383,7 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
         ? (input.calendar_link ? `meeting_booking:${input.calendar_link}` : "meeting_request")
         : structuredStep.cta_type,
       raw_custom_instructions: rawCustom,
+      meeting_cta_enabled: meetingEnabled,
     };
   }
 
@@ -384,6 +449,9 @@ export function resolveCampaignInstruction(input: CampaignResolverInput): Resolv
     raw_custom_instructions: hasCustomInstructions
       ? [...legacy.global_rules, ...Object.values(legacy.step_instructions)].join("\n")
       : null,
+    // Legacy path has no per-step flag → preserve today's behavior (the link is
+    // threaded as before; the legacy resolveCTA / template still decide its use).
+    meeting_cta_enabled: true,
   };
 }
 

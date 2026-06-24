@@ -1059,6 +1059,29 @@ serve(async (req) => {
           }
           console.log(`[automation-executor] ✅ Structured instruction: ch=${resolvedInstruction.channel}, fw=${resolvedInstruction.framework}, step=${resolvedInstruction.sequence_context.step_number}, words=${resolvedInstruction.max_word_count}`);
 
+          // Per-step meeting-CTA gate (Unit 3). The rep's OWN booking link
+          // (lead-owner rep_profile only — never another rep's) is threaded into
+          // the draft UNLESS this step's include_meeting_cta is explicitly false.
+          // null/true keep today's behavior, so null-flag emails are byte-identical
+          // (same payload as before). An explicit "off" withholds the link from
+          // BOTH meeting_link and the rep_context Calendar Link line so the model
+          // can't surface it from either place. No link → empty string (no
+          // placeholder), so a rep without a calendar_link omits the CTA cleanly.
+          const meetingCtaEnabled = resolvedInstruction.meeting_cta_enabled;
+          const repCalendarLink = repProfile?.calendar_link || "";
+          const meetingLinkForSend = meetingCtaEnabled ? repCalendarLink : "";
+          const repContextBlock = repProfile
+            ? [
+                `Sender Name: ${repProfile.full_name || "Sales Rep"}`,
+                `Sender Title: ${repProfile.job_title || ""}`,
+                `Sender Company: ${repProfile.company_name || ""}`,
+                ...(meetingCtaEnabled ? [`Calendar Link: ${repCalendarLink}`] : []),
+              ].join("\n")
+            : "";
+          if (!meetingCtaEnabled) {
+            console.log(`[automation-executor] 🚫 Meeting CTA withheld for lead ${lead.id} — step include_meeting_cta=false`);
+          }
+
           // Generate draft via ai_task
           const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
             method: "POST",
@@ -1075,8 +1098,8 @@ serve(async (req) => {
                 outbound_tone: (lead as any).outbound_tone || "direct",
                 lead_context: `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nMotion: ${isInboundLead ? "inbound_response" : lead.motion}\nSource: ${lead.source_type || "manual_entry"}\nStage: ${lead.stage}${lead.job_title ? `\nJob Title: ${lead.job_title}` : ""}${lead.industry ? `\nIndustry: ${lead.industry}` : ""}${(lead as any).initial_message ? `\nInitial Message: ${(lead as any).initial_message}` : ""}${lead.country ? `\nCountry: ${lead.country}` : ""}${lead.city ? `\nCity: ${lead.city}` : ""}${lead.state ? `\nState: ${lead.state}` : ""}${lead.website ? `\nWebsite: ${lead.website}` : ""}${lead.linkedin_url ? `\nLinkedIn: ${lead.linkedin_url}` : ""}${lead.company_linkedin_url ? `\nCompany LinkedIn: ${lead.company_linkedin_url}` : ""}`,
                 lead_card_message: (lead as any).initial_message || "",
-                rep_context: repProfile ? `Sender Name: ${repProfile.full_name || "Sales Rep"}\nSender Title: ${repProfile.job_title || ""}\nSender Company: ${repProfile.company_name || ""}\nCalendar Link: ${repProfile.calendar_link || ""}` : "",
-                meeting_link: repProfile?.calendar_link || "",
+                rep_context: repContextBlock,
+                meeting_link: meetingLinkForSend,
                 custom_instructions: resolvedInstructions,
                 // NEW: structured campaign instruction block for deterministic prompt assembly
                 campaign_instruction: structuredInstructionBlock,

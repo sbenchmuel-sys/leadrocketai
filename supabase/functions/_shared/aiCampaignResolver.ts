@@ -24,7 +24,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { loadCampaignById } from "./campaignStepLoader.ts";
 import type { LoadedCampaign, StructuredCampaignStep } from "./campaignStepConfig.ts";
-import { resolveCampaignInstruction, formatInstructionForPrompt } from "./campaignResolver.ts";
+import { resolveCampaignInstruction, formatInstructionForPrompt, meetingLinkForDraft } from "./campaignResolver.ts";
 import type { CanonicalChannel } from "./campaignTypes.ts";
 import { isWorkspaceMember, validateCampaignKnowledgeDoc } from "./campaignKnowledgeDoc.ts";
 
@@ -50,6 +50,15 @@ export interface CampaignAuthoringInstruction {
   channel: CanonicalChannel;
   /** The variant_group actually selected (industry label, or null = General). */
   variantGroup: string | null;
+  /**
+   * The booking link to thread into THIS touch's preview draft, or null when the
+   * step's meeting CTA is off / the channel isn't email / the rep has no
+   * calendar_link. This is the REQUESTING rep's OWN rep_profiles.calendar_link
+   * (per-rep, fail-closed — never another rep's). The caller sets it as
+   * enhancedPayload.meeting_link so the authoring preview makes the SAME per-step
+   * CTA decision the live send will. Always null for campaign-level (collateral).
+   */
+  meetingLink: string | null;
 }
 
 // ── Variant selection ───────────────────────────────────────────────────────
@@ -144,6 +153,19 @@ export async function resolveCampaignAuthoringInstruction(
   const campaign = await loadCampaignById(campaignId, client);
   if (!campaign) return null;
 
+  // The requesting rep's OWN booking link (per-rep, fail-closed) — loaded by
+  // user_id so a rep can never preview another rep's link. Best-effort: a missing
+  // profile or empty link resolves to null → the meeting CTA is omitted cleanly
+  // (no placeholder, no broken link). Threaded into the preview only when this
+  // step's decision is on (mirrors the live send).
+  const { data: repProfile } = await client
+    .from("rep_profiles")
+    .select("calendar_link")
+    .eq("user_id", requestingUserId)
+    .maybeSingle();
+  const repCalendarLink =
+    (repProfile as { calendar_link?: string | null } | null)?.calendar_link?.trim() || null;
+
   // Validate the campaign's knowledge document before trusting it to scope KB
   // retrieval, via the shared fail-closed helper (same code the live send path
   // uses). knowledge_document_id is member-writable, so a crafted id pointing at
@@ -162,6 +184,8 @@ export async function resolveCampaignAuthoringInstruction(
       knowledgeDocOwnerId,
       channel: (campaign.default_channel || "email") as CanonicalChannel,
       variantGroup: industry?.trim() ? industry.trim() : null,
+      // Campaign-level (collateral) generation is not a per-step email touch.
+      meetingLink: null,
     };
   }
 
@@ -179,7 +203,13 @@ export async function resolveCampaignAuthoringInstruction(
     channel: (targetStep.channel || campaign.default_channel) as CanonicalChannel,
     structured_campaign: selected,
     include_meeting_cta: campaign.include_meeting_cta,
+    calendar_link: repCalendarLink,
   });
+
+  // Thread the rep's own link into the preview exactly when the live send would —
+  // via the SAME shared helper the send path uses, so PREVIEW and SEND always
+  // agree on the per-step CTA. Only ever returns the link we passed in (this rep's).
+  const meetingLink = meetingLinkForDraft(instruction, repCalendarLink);
 
   return {
     promptBlock: formatInstructionForPrompt(instruction),
@@ -187,5 +217,6 @@ export async function resolveCampaignAuthoringInstruction(
     knowledgeDocOwnerId,
     channel: instruction.channel,
     variantGroup: targetStep.variant_group ?? null,
+    meetingLink,
   };
 }

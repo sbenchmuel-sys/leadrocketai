@@ -404,3 +404,65 @@ export function setStepMeetingCta(
     i === index && s.channel === "email" ? { ...s, include_meeting_cta: value } : s,
   );
 }
+
+// ── Instruction shortcut: meeting-CTA intent (Unit 3) ───────────────
+// A typed campaign instruction like "add the meeting link to every email" is a
+// shortcut that ticks the per-step "Include a meeting link" boxes so the rep can
+// see and fine-tune them. We act ONLY on clear, unambiguous "every/all emails"
+// phrasing tied to a meeting concept. We deliberately DO NOT parse specific email
+// numbers from free text ("emails 2 and 3") — those are what the per-step
+// checkboxes are for. Conservative by design: an unclear or soft ask leaves every
+// step null (today's default behavior — no email changes byte for byte).
+
+export type MeetingCtaScope = "all" | "soft" | "none";
+
+// Clear meeting / booking / calendar phrasing. Kept tight to avoid false positives
+// — a bare "call" is too broad (cold calls, phone calls), so it's excluded.
+const MEETING_CONCEPT_RE =
+  /\b(?:meeting link|calendar link|booking link|meeting cta|book a (?:call|time|meeting|slot|chat)|schedule a (?:call|meeting|time|chat)|grab (?:some |a )?time|find a time|meeting|calendar|booking)\b/i;
+
+// A universal quantifier over the email touches: "every email", "all emails",
+// "each message", "every single email", "all of the emails".
+const ALL_EMAILS_RE =
+  /\b(?:every|each|all)\s+(?:single\s+)?(?:of\s+the\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+
+// Specific-email phrasing we must NOT act on structurally (the rep should use the
+// checkboxes): "email 2", "emails 2 and 3", "step 3", "the second email",
+// "first and third emails", "2nd email".
+const SPECIFIC_EMAIL_RE =
+  /\b(?:e-?mail|message|touch|step)s?\s*#?\s*\d+\b|\b(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+(?:and\s+(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+
+/** Whether the instruction names specific emails by number/ordinal (→ checkboxes,
+ *  not a structural shortcut). Exported for the optional UI hint and for tests. */
+export function mentionsSpecificEmailSteps(instructions: string | null | undefined): boolean {
+  return SPECIFIC_EMAIL_RE.test(instructions || "");
+}
+
+/**
+ * Classify a campaign's custom instructions for meeting-CTA intent:
+ *  - "all"  → clear "every/all emails" + a meeting concept, no specific numbers.
+ *  - "soft" → a meeting concept but unscoped, or scoped to specific emails.
+ *  - "none" → no meeting concept at all.
+ * Only "all" drives a structural change (see applyMeetingCtaIntent).
+ */
+export function detectMeetingCtaIntent(instructions: string | null | undefined): MeetingCtaScope {
+  const text = (instructions || "").trim();
+  if (!text || !MEETING_CONCEPT_RE.test(text)) return "none";
+  // Naming specific emails → leave it to the per-step checkboxes.
+  if (mentionsSpecificEmailSteps(text)) return "soft";
+  if (ALL_EMAILS_RE.test(text)) return "all";
+  return "soft";
+}
+
+/**
+ * Tick the per-step "Include a meeting link" flag on every EMAIL touch when the
+ * instruction clearly asks for it on all emails. Any other scope leaves the plan
+ * untouched (email steps stay null → today's default). Non-email touches are
+ * never flagged (the meeting link is email-only).
+ */
+export function applyMeetingCtaIntent(plan: DraftStep[], scope: MeetingCtaScope): DraftStep[] {
+  if (scope !== "all") return plan;
+  return plan.map((s) =>
+    s.channel === "email" ? { ...s, include_meeting_cta: true } : s,
+  );
+}

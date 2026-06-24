@@ -1420,6 +1420,12 @@ serve(async (req) => {
         if (instr) {
           enhancedPayload.campaign_instruction = instr.promptBlock;
           campaignAuthoring = true;
+          // Per-step meeting-CTA (Unit 3): thread the requesting rep's OWN booking
+          // link into the preview exactly when the live send would. instr.meetingLink
+          // is already the per-step decision (null when off / non-email / no link),
+          // so the authoring preview and the real send agree. Setting "" cleanly
+          // omits the CTA (replaceTemplateVars drops an empty {{MEETING_LINK}}).
+          enhancedPayload.meeting_link = instr.meetingLink ?? "";
           // The resolver returns the document id and its owner ONLY after
           // verifying the owner is a member of the campaign's workspace, so
           // these are safe to use for owner-scoped KB retrieval (the doc owner

@@ -34,6 +34,8 @@ import {
   changeStepChannel,
   setStepGap,
   setStepMeetingCta,
+  detectMeetingCtaIntent,
+  applyMeetingCtaIntent,
   type DraftStep,
 } from "@/lib/campaignDefaults";
 import {
@@ -165,7 +167,12 @@ export default function NewCampaign() {
     // save uses the form's name/instructions — and rebuilds the plan from
     // scratch, so no starter touches linger.
     setStarter(null);
-    setPlan(buildDefaultPlan(Array.from(channels)));
+    // Instruction shortcut (Unit 3): if the instructions clearly ask for a
+    // meeting link on EVERY email, pre-tick the per-step boxes so they reflect it
+    // — the rep can still fine-tune each one. Specific-email or soft asks leave
+    // the boxes as-is (null = inherit today's default).
+    const meetingScope = detectMeetingCtaIntent(composedInstructions);
+    setPlan(applyMeetingCtaIntent(buildDefaultPlan(Array.from(channels)), meetingScope));
     setStep(2);
   };
 

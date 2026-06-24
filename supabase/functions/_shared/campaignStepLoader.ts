@@ -21,7 +21,7 @@ import type { LoadedCampaign, StructuredCampaignStep } from "./campaignStepConfi
 import { isCampaignSendable } from "./campaignStepConfig.ts";
 
 const STEP_COLUMNS =
-  "step_number, step_type, channel, framework, objective, cta_type, max_word_count, hard_rules, generation_hints, custom_instructions, delay_days, active, variant_group";
+  "step_number, step_type, channel, framework, objective, cta_type, max_word_count, hard_rules, generation_hints, custom_instructions, delay_days, active, variant_group, include_meeting_cta";
 
 const CAMPAIGN_COLUMNS =
   "id, workspace_id, motion, default_channel, include_meeting_cta, global_instructions, knowledge_document_id, status";
