@@ -114,17 +114,27 @@ describe("getAutomationResumeBlocker — guard resume, allow first-time enable",
     const lead = makeLead({
       motion: "inbound_response",
       last_inbound_at: "2026-06-20T10:00:00Z",
-      // never enrolled: no automation_mode, no eligible_at, no next_action_key
+      // never enrolled: no automation_mode consent
     });
     expect(automationEverEnabled(lead)).toBe(false);
     expect(getAutomationResumeBlocker(lead)).toBeNull();
   });
 
-  it("refuses to resume a previously-enrolled lead that has replied", () => {
+  it("treats a manual queue item (needs_action/eligible_at but no consent) as never-enrolled", () => {
     const lead = makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2",
+      last_inbound_at: "2026-06-25T11:00:00Z", // even with a 'blocker', no consent → not automation
+    } as any);
+    expect(automationEverEnabled(lead)).toBe(false);
+    expect(getAutomationResumeBlocker(lead)).toBeNull(); // can be enabled, not refused
+  });
+
+  it("refuses to resume a previously-enrolled (consented) lead that has replied", () => {
+    const lead = makeLead({
+      automation_mode: "full_auto",
       last_inbound_at: "2026-06-20T10:00:00Z",
-      next_action_key: "send_pre_2", // was enrolled
-    });
+      next_action_key: "send_pre_2",
+    } as any);
     expect(automationEverEnabled(lead)).toBe(true);
     expect(getAutomationResumeBlocker(lead)).toBe("Lead has replied");
   });
@@ -135,7 +145,7 @@ describe("getAutomationResumeBlocker — guard resume, allow first-time enable",
   });
 
   it("allows resume of a previously-enrolled lead with no blockers", () => {
-    const lead = makeLead({ next_action_key: "send_pre_3" });
+    const lead = makeLead({ next_action_key: "send_pre_3", automation_mode: "full_auto" } as any);
     expect(getAutomationResumeBlocker(lead)).toBeNull();
   });
 });
@@ -172,6 +182,16 @@ describe("getAutomationToggleState — the switch must never misreport sending",
 
   it("never-enrolled lead → Off (not paused), eligible to turn on", () => {
     const s = getAutomationToggleState(makeLead({}));
+    expect(s.isOn).toBe(false);
+    expect(s.safetyPaused).toBe(false);
+    expect(s.userPaused).toBe(false);
+  });
+
+  it("manual queue item (needs_action + eligible_at, NO consent) → Off, never 'sending'", () => {
+    // upstream sync can flag a manual lead; without automation_mode it must read Off
+    const s = getAutomationToggleState(makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2",
+    } as any));
     expect(s.isOn).toBe(false);
     expect(s.safetyPaused).toBe(false);
     expect(s.userPaused).toBe(false);

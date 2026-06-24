@@ -56,7 +56,13 @@ export function getAutomationBlockers(lead: LeadDetail): string[] {
 // scheduled, or a next action queued). Distinguishes a first-time enable from a
 // resume of a previously-enrolled-but-paused lead.
 export function automationEverEnabled(lead: LeadDetail): boolean {
-  return (lead as any).automation_mode != null || !!(lead as any).eligible_at || !!lead.next_action_key;
+  // Consent (automation_mode) is the ONLY true automation signal — the same gate
+  // the executor and dashboardUtils use. A manual queue item can carry
+  // needs_action / eligible_at / next_action_key WITHOUT consent; those must NOT
+  // count as automation, or the toggle would report a manual lead as "sending"
+  // and turning it off would wipe the manual next_action_key. Disable clears
+  // automation_mode, so a disabled lead correctly reads as a fresh first-enable.
+  return (lead as any).automation_mode != null;
 }
 
 // The blocker that should PREVENT turning automation on, or null if allowed.
@@ -96,13 +102,16 @@ export function getAutomationToggleState(lead: LeadDetail): AutomationToggleStat
     (motion === "outbound_prospecting" || motion === "inbound_response" || motion === "nurture") &&
     stage !== "closed_won" && stage !== "closed_lost";
 
-  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
+  // Consent is required for ANY on/paused state — a manual queue item (eligible_at
+  // + needs_action but automation_mode null) is NOT automation and reads as Off.
+  const consented = automationEverEnabled(lead);
+  const hasAutomationEnabled = consented && !!(lead as any).eligible_at && lead.needs_action;
   const blockers = getAutomationBlockers(lead);
-  const safetyPaused = blockers.length > 0 && automationEverEnabled(lead);
-  const userPaused = !hasAutomationEnabled && !!lead.next_action_key && !safetyPaused;
-  // ON strictly means actively sending now: enabled AND not in a safety-pause
-  // window. During the reply/meeting window (flags not yet cleared by the
-  // executor) hasAutomationEnabled can still be true, so exclude safetyPaused.
+  const safetyPaused = blockers.length > 0 && consented;
+  const userPaused = consented && !hasAutomationEnabled && !!lead.next_action_key && !safetyPaused;
+  // ON strictly means actively sending now: consented + enabled, AND not in a
+  // safety-pause window. During the reply/meeting window (flags not yet cleared by
+  // the executor) hasAutomationEnabled can still be true, so exclude safetyPaused.
   const isOn = hasAutomationEnabled && !safetyPaused;
 
   return {

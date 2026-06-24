@@ -94,6 +94,11 @@ export default function LeadDetail() {
   };
 
   useEffect(() => {
+    // Reset on lead change so we never keep rendering the previous lead (and its
+    // stakeholder avatars / status) while the new one loads. Only the id-change
+    // effect clears — visibility refresh and in-page updates reload without a flash.
+    setLead(null);
+    setIsLoading(true);
     loadLead();
   }, [id]);
 
