@@ -28,6 +28,12 @@ import type { CanonicalChannel } from "@/lib/channels";
 import {
   DEFAULT_GLOBAL_INSTRUCTIONS,
   buildDefaultPlan,
+  insertStep,
+  removeStep,
+  moveStep,
+  changeStepChannel,
+  setStepGap,
+  setStepMeetingCta,
   type DraftStep,
 } from "@/lib/campaignDefaults";
 import {
@@ -166,19 +172,31 @@ export default function NewCampaign() {
     setStep(2);
   };
 
+  // All structural edits go through the pure plan helpers, which renumber, keep
+  // the first touch on day 0, recompute the gap chain so the schedule stays what
+  // the rep intended, and keep each email's intent coherent with its position.
   const handleChangeDelay = (index: number, delayDays: number) => {
-    setPlan((prev) => prev.map((s, i) => (i === index ? { ...s, delay_days: delayDays } : s)));
+    setPlan((prev) => setStepGap(prev, index, delayDays));
   };
 
   const handleRemove = (index: number) => {
-    setPlan((prev) =>
-      prev
-        .filter((_, i) => i !== index)
-        // Renumber, and force the new first touch to start on day 0 — the
-        // first message always goes out right away (and its delay control is
-        // disabled), so a removed first touch must not leave a stale gap.
-        .map((s, i) => ({ ...s, step_number: i + 1, delay_days: i === 0 ? 0 : s.delay_days })),
-    );
+    setPlan((prev) => removeStep(prev, index));
+  };
+
+  const handleMove = (index: number, dir: -1 | 1) => {
+    setPlan((prev) => moveStep(prev, index, dir));
+  };
+
+  const handleChangeChannel = (index: number, channel: CanonicalChannel) => {
+    setPlan((prev) => changeStepChannel(prev, index, channel));
+  };
+
+  const handleInsert = (atIndex: number, channel: CanonicalChannel) => {
+    setPlan((prev) => insertStep(prev, atIndex, channel));
+  };
+
+  const handleToggleMeeting = (index: number, value: boolean) => {
+    setPlan((prev) => setStepMeetingCta(prev, index, value));
   };
 
   const goToRecipients = () => {
@@ -272,6 +290,8 @@ export default function NewCampaign() {
           custom_instructions: s.custom_instructions,
           active: s.active,
           variant_group: null,
+          // Per-step meeting-link choice (email touches); null = inherit default.
+          include_meeting_cta: s.include_meeting_cta ?? null,
         })),
       });
 
@@ -528,8 +548,13 @@ export default function NewCampaign() {
           <CampaignScript
             steps={plan}
             editable
+            smsEnabled={smsEnabled}
             onChangeDelay={handleChangeDelay}
             onRemove={handleRemove}
+            onMove={handleMove}
+            onChangeChannel={handleChangeChannel}
+            onInsert={handleInsert}
+            onToggleMeeting={handleToggleMeeting}
           />
 
           <div className="flex gap-3">

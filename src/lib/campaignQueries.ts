@@ -63,6 +63,9 @@ export interface CampaignStep {
   delay_days: number;
   active: boolean;
   variant_group: string | null;
+  // Per-step meeting-link override. null = inherit campaigns.include_meeting_cta.
+  // Hand-typed here until Lovable regenerates types.ts after the migration applies.
+  include_meeting_cta: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -166,6 +169,9 @@ export interface DraftCampaignStep {
   custom_instructions: string;
   active: boolean;
   variant_group?: string | null;
+  // Per-step meeting-link override (email touches). undefined/null = inherit
+  // the campaign-level default — i.e. unchanged behavior for existing flows.
+  include_meeting_cta?: boolean | null;
 }
 
 export interface CreateCampaignInput {
@@ -179,7 +185,10 @@ export interface CreateCampaignInput {
   steps: DraftCampaignStep[];
 }
 
-function draftStepToRow(campaignId: string, s: DraftCampaignStep) {
+// Exported for unit tests — the single mapping from an authored draft step to a
+// campaign_steps row. Both create and replace funnel through it, so testing it
+// covers the persisted shape for every write path.
+export function draftStepToRow(campaignId: string, s: DraftCampaignStep) {
   return {
     campaign_id: campaignId,
     step_number: s.step_number,
@@ -190,6 +199,8 @@ function draftStepToRow(campaignId: string, s: DraftCampaignStep) {
     custom_instructions: s.custom_instructions || null,
     active: s.active,
     variant_group: s.variant_group ?? null,
+    // null (the default) = inherit the campaign-level meeting-link toggle.
+    include_meeting_cta: s.include_meeting_cta ?? null,
   };
 }
 
