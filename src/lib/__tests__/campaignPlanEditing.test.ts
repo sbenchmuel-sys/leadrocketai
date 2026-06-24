@@ -101,6 +101,31 @@ describe("insertStep — add a call between two emails", () => {
     expect(channels(next)).toEqual(["email", "sms"]);
   });
 
+  it("a mid-insert shifts the later touches out by the new touch's gap", () => {
+    const p = plan([
+      { ch: "email", gap: 0 }, // day 0
+      { ch: "email", gap: 2 }, // day 2
+      { ch: "email", gap: 2 }, // day 4
+    ]);
+    const next = insertStep(p, 1, "voice");
+    // call lands on day 2, the two later emails move out by the call's 2-day gap.
+    expect(cumulativeDays(next)).toEqual([0, 2, 4, 6]);
+  });
+
+  it("a front-insert puts the new touch on day 0 and shifts the rest out (no day-0 collision)", () => {
+    // Regression: a touch added at the very top used to land on the same day as
+    // the old first message ([0,0,2,4]) instead of shifting the schedule out the
+    // way a mid-insert does. The new first must be day 0 and the rest move out.
+    const p = plan([
+      { ch: "email", gap: 0 }, // day 0
+      { ch: "email", gap: 2 }, // day 2
+      { ch: "email", gap: 2 }, // day 4
+    ]);
+    const next = insertStep(p, 0, "email");
+    expect(next).toHaveLength(4);
+    expect(cumulativeDays(next)).toEqual([0, 2, 4, 6]);
+  });
+
   it("re-derives email roles when a call splits the emails", () => {
     // Two emails: intro + breakup. Insert a call between → the second email is
     // still the last email, so it stays the breakup.
@@ -158,6 +183,17 @@ describe("changeStepChannel — switch what a touch is", () => {
     ]);
     const next = changeStepChannel(p, 1, "email");
     expect(next[1].channel).toBe("email");
+  });
+
+  it("does not shift the schedule when only the channel changes", () => {
+    const p = plan([
+      { ch: "email", gap: 0 }, // day 0
+      { ch: "sms", gap: 2 }, // day 2
+      { ch: "email", gap: 3 }, // day 5
+    ]);
+    const before = cumulativeDays(p);
+    const next = changeStepChannel(p, 1, "email");
+    expect(cumulativeDays(next)).toEqual(before); // [0, 2, 5] unchanged
   });
 
   it("clears the meeting-link flag when a touch leaves email", () => {

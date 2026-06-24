@@ -316,7 +316,15 @@ export function insertStep(
 ): DraftStep[] {
   const clamped = Math.max(0, Math.min(atIndex, plan.length));
   const next = [...plan];
-  next.splice(clamped, 0, blankTouch(channel));
+  const added = blankTouch(channel);
+  next.splice(clamped, 0, added);
+  // Inserting BEFORE the current first touch: the new touch becomes day 0
+  // (normalizePlan forces the first gap to 0), so hand the new touch's gap to
+  // the displaced old-first. Otherwise the two would collide on day 0 and the
+  // rest of the schedule wouldn't shift out the way a mid-insert does.
+  if (clamped === 0 && next.length > 1) {
+    next[1] = { ...next[1], delay_days: added.delay_days };
+  }
   return normalizePlan(next);
 }
 
