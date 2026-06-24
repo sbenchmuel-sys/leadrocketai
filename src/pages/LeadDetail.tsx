@@ -3,8 +3,14 @@ import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
+import DraftsTab from "@/components/lead/DraftsTab";
 import UploadTab from "@/components/lead/UploadTab";
 import RecommendationsTab from "@/components/lead/RecommendationsTab";
 import MeetingsTab from "@/components/lead/MeetingsTab";
@@ -18,6 +24,18 @@ import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceC
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
+// Secondary panes — reachable from the "More" menu so the default view stays
+// Timeline-only (Unit 3). Old in-app navigations that set these tab values
+// (e.g. "see all meetings") still resolve to a valid pane, so nothing 404s.
+const MORE_TABS: { value: string; label: string }[] = [
+  { value: "drafts", label: "Saved drafts" },
+  { value: "meetings", label: "Meetings" },
+  { value: "partners", label: "People & partners" },
+  { value: "context", label: "Lead context" },
+  { value: "analysis", label: "Deep analysis" },
+  { value: "upload", label: "Upload files" },
+];
+
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -26,6 +44,7 @@ export default function LeadDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
   const [activeTab, setActiveTab] = useState("timeline");
+  const moreActive = MORE_TABS.some(t => t.value === activeTab);
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
   const location = useLocation();
@@ -75,6 +94,11 @@ export default function LeadDetail() {
   };
 
   useEffect(() => {
+    // Reset on lead change so we never keep rendering the previous lead (and its
+    // stakeholder avatars / status) while the new one loads. Only the id-change
+    // effect clears — visibility refresh and in-page updates reload without a flash.
+    setLead(null);
+    setIsLoading(true);
     loadLead();
   }, [id]);
 
@@ -126,9 +150,35 @@ export default function LeadDetail() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="w-full justify-start">
               <TabsTrigger value="timeline">Timeline</TabsTrigger>
-              <TabsTrigger value="meetings">Meetings</TabsTrigger>
-              <TabsTrigger value="upload">Upload</TabsTrigger>
-              <TabsTrigger value="analysis">Deep Analysis</TabsTrigger>
+              {/* Everything else lives behind "More" so a rep sees Timeline by
+                  default. The trigger shows the active pane's name when on one. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-all",
+                      moreActive
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {moreActive ? MORE_TABS.find(t => t.value === activeTab)?.label : "More"}
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {MORE_TABS.map(t => (
+                    <DropdownMenuItem
+                      key={t.value}
+                      onSelect={() => setActiveTab(t.value)}
+                      className={cn(activeTab === t.value && "bg-accent")}
+                    >
+                      {t.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </TabsList>
 
             <TabsContent value="timeline" className="mt-6">
@@ -148,41 +198,50 @@ export default function LeadDetail() {
                 }}
               />
             </TabsContent>
+            <TabsContent value="drafts" className="mt-6">
+              {/* Review-only — composing happens via the header "Draft it". */}
+              <DraftsTab lead={lead} onUpdate={handleUpdate} variant="review" />
+            </TabsContent>
             <TabsContent value="meetings" className="mt-6">
               <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
             </TabsContent>
-            <TabsContent value="upload" className="mt-6">
-              <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
+            <TabsContent value="partners" className="mt-6">
+              {workspaceId ? (
+                <StakeholdersPartnersPanel
+                  leadId={lead.id}
+                  leadName={lead.name}
+                  leadCompany={lead.company ?? null}
+                  workspaceId={workspaceId}
+                  onChanged={handleUpdate}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading workspace…</p>
+              )}
+            </TabsContent>
+            <TabsContent value="context" className="mt-6">
+              {workspaceId ? (
+                <LeadContextPanel leadId={lead.id} workspaceId={workspaceId} onUpdate={handleUpdate} />
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading workspace…</p>
+              )}
             </TabsContent>
             <TabsContent value="analysis" className="mt-6">
               <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
             </TabsContent>
+            <TabsContent value="upload" className="mt-6">
+              <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
+            </TabsContent>
           </Tabs>
         </div>
 
-        {/* Sticky side panel — 1/3 */}
+        {/* Sticky side panel — 1/3. Unit 3: Automation toggle + Latest Meeting
+            only. Stakeholders/Partners and Lead Context moved to the More menu. */}
         <div className="hidden lg:block space-y-4">
           <LeadOverviewPanel
             lead={lead}
             onNavigateToMeetings={() => setActiveTab("meetings")}
             onUpdate={handleUpdate}
           />
-          {workspaceId && (
-            <StakeholdersPartnersPanel
-              leadId={lead.id}
-              leadName={lead.name}
-              leadCompany={lead.company ?? null}
-              workspaceId={workspaceId}
-              onChanged={handleUpdate}
-            />
-          )}
-          {workspaceId && (
-            <LeadContextPanel
-              leadId={lead.id}
-              workspaceId={workspaceId}
-              onUpdate={handleUpdate}
-            />
-          )}
         </div>
       </div>
 

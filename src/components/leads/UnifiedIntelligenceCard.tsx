@@ -518,8 +518,9 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Company Signals */}
-        {signals.length > 0 && (
+        {/* Company Signals — hidden on the lead-detail page (compact). Unit 3
+            removed the Company Signals / Enrich block from that surface. */}
+        {!isCompact && signals.length > 0 && (
           <>
             <Separator />
             <div>
@@ -567,8 +568,8 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Enrich button */}
-        {signals.length === 0 && showEnrichButton && enrichment !== undefined && (
+        {/* Enrich button — hidden on compact (lead-detail) per Unit 3. */}
+        {!isCompact && signals.length === 0 && showEnrichButton && enrichment !== undefined && (
           <>
             <Separator />
             <div className="flex items-center justify-between gap-2">
@@ -589,29 +590,36 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
           </>
         )}
 
-        {/* Footer: Last run + Recompute button */}
-        <Separator />
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-muted-foreground">
-            {lastComputedAt
-              ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
-              : "Never analyzed"}
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs gap-1"
-            onClick={handleRecompute}
-            disabled={isAnalyzing}
-          >
-            {isAnalyzing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Brain className="h-3 w-3" />
-            )}
-            {isAnalyzing ? "Analyzing…" : "Run Analysis"}
-          </Button>
-        </div>
+        {/* Footer: Last run + Recompute button — hidden on the lead-detail page
+            (compact). Unit 3 moved the "Analyzed X ago / Run Analysis" control to
+            the Deep Analysis pane (RecommendationsTab) so reps keep a recompute
+            path; the plain-English Summary above is the kept surface here. */}
+        {!isCompact && (
+          <>
+            <Separator />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] text-muted-foreground">
+                {lastComputedAt
+                  ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
+                  : "Never analyzed"}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                onClick={handleRecompute}
+                disabled={isAnalyzing}
+              >
+                {isAnalyzing ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Brain className="h-3 w-3" />
+                )}
+                {isAnalyzing ? "Analyzing…" : "Run Analysis"}
+              </Button>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
