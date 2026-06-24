@@ -37,7 +37,12 @@ import {
 } from "@/lib/campaignQueries";
 import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
 import { ingestCampaignKnowledge } from "@/lib/generateCampaignContent";
+import {
+  starterToCreateInput,
+  type StarterCadence,
+} from "@/lib/starterCadences";
 import { CampaignScript } from "@/components/automations/CampaignScript";
+import { StarterCadencePicker } from "@/components/automations/StarterCadencePicker";
 import { getLeadsList, type LeadListItem } from "@/lib/supabaseQueries";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -99,6 +104,9 @@ export default function NewCampaign() {
   const [leadSearch, setLeadSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Which starter cadence (if any) is currently being cloned into a draft.
+  const [startingId, setStartingId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!workspaceId) return;
     supabase
@@ -126,6 +134,28 @@ export default function NewCampaign() {
     const offerLine = offer.trim() ? `What we're offering: ${offer.trim()}\n\n` : "";
     return offerLine + instructions.trim();
   }, [offer, instructions]);
+
+  // Clone a ready-made cadence into a new DRAFT outreach and open it for
+  // editing. Reuses the exact same createCampaignWithSteps path as the custom
+  // builder — the draft inherits send_mode 'review' (manual); the SMS touch is
+  // kept regardless of sms_enabled (the picker flags when it needs enabling).
+  const handleUseStarter = async (cadence: StarterCadence) => {
+    if (!workspaceId) {
+      toast.error("No workspace selected.");
+      return;
+    }
+    setStartingId(cadence.id);
+    try {
+      const campaignId = await createCampaignWithSteps(
+        starterToCreateInput(cadence, workspaceId),
+      );
+      toast.success(`"${cadence.name}" added as a draft — edit it before anything sends.`);
+      navigate(`/app/automations/${campaignId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't add that cadence");
+      setStartingId(null);
+    }
+  };
 
   const handleBuild = () => {
     if (!name.trim()) {
@@ -324,6 +354,22 @@ export default function NewCampaign() {
       {/* ── Step 1: basics ── */}
       {step === 1 && (
         <div className="space-y-6">
+          {/* Ready-made cadences — one click clones into an editable draft. */}
+          <StarterCadencePicker
+            smsEnabled={smsEnabled}
+            startingId={startingId}
+            onUse={handleUseStarter}
+            disabled={saving}
+          />
+
+          <div className="flex items-center gap-3" role="separator">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              or build your own
+            </span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="name">What's this outreach called?</Label>
             <Input
