@@ -44,7 +44,7 @@ import {
 import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
 import { ingestCampaignKnowledge } from "@/lib/generateCampaignContent";
 import {
-  starterToCreateInput,
+  starterToDraftSteps,
   type StarterCadence,
 } from "@/lib/starterCadences";
 import { CampaignScript } from "@/components/automations/CampaignScript";
@@ -110,8 +110,12 @@ export default function NewCampaign() {
   const [leadSearch, setLeadSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Which starter cadence (if any) is currently being cloned into a draft.
-  const [startingId, setStartingId] = useState<string | null>(null);
+  // The starter cadence the rep picked (if any). Drives the campaign-level
+  // fields (name, instructions, default channel, meeting-link default) at save
+  // time; null on the custom "Build my outreach" path. The per-step plan itself
+  // lives in `plan` like any other outreach, so the rep edits a picked starter
+  // in the exact same Step-2 editor as a hand-built one.
+  const [starter, setStarter] = useState<StarterCadence | null>(null);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -141,26 +145,15 @@ export default function NewCampaign() {
     return offerLine + instructions.trim();
   }, [offer, instructions]);
 
-  // Clone a ready-made cadence into a new DRAFT outreach and open it for
-  // editing. Reuses the exact same createCampaignWithSteps path as the custom
-  // builder — the draft inherits send_mode 'review' (manual); the SMS touch is
-  // kept regardless of sms_enabled (the picker flags when it needs enabling).
-  const handleUseStarter = async (cadence: StarterCadence) => {
-    if (!workspaceId) {
-      toast.error("No workspace selected.");
-      return;
-    }
-    setStartingId(cadence.id);
-    try {
-      const campaignId = await createCampaignWithSteps(
-        starterToCreateInput(cadence, workspaceId),
-      );
-      toast.success(`"${cadence.name}" added as a draft — edit it before anything sends.`);
-      navigate(`/app/automations/${campaignId}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't add that cadence");
-      setStartingId(null);
-    }
+  // Prefill the editable plan from a ready-made cadence and drop the rep into
+  // Step 2 — the SAME Unit-2 editor as the custom path. Nothing is written yet:
+  // the rep can add/remove/reorder touches and tick meeting links, and the draft
+  // is created on Save (handleConfirm), inheriting send_mode 'review' (manual).
+  // The SMS touch is kept regardless of sms_enabled (the editor flags it inline).
+  const handleUseStarter = (cadence: StarterCadence) => {
+    setStarter(cadence);
+    setPlan(starterToDraftSteps(cadence));
+    setStep(2);
   };
 
   const handleBuild = () => {
@@ -168,6 +161,10 @@ export default function NewCampaign() {
       toast.error("Give your outreach a name first.");
       return;
     }
+    // Switching to the custom path clears any picked-starter identity so the
+    // save uses the form's name/instructions — and rebuilds the plan from
+    // scratch, so no starter touches linger.
+    setStarter(null);
     setPlan(buildDefaultPlan(Array.from(channels)));
     setStep(2);
   };
@@ -267,14 +264,18 @@ export default function NewCampaign() {
     }
     setSaving(true);
     try {
-      const defaultChannel: CanonicalChannel = "email";
+      // A picked starter carries its own name/instructions/default-channel and
+      // campaign-level meeting-link default; the custom path uses the form. Both
+      // create the same kind of draft (status 'draft', send_mode 'review'). The
+      // per-step plan below is identical either way — it already carries each
+      // touch's include_meeting_cta from the editor.
       const campaignId = await createCampaignWithSteps({
         workspace_id: workspaceId,
-        name: name.trim(),
-        campaign_type: campaignType,
-        default_channel: defaultChannel,
-        include_meeting_cta: false,
-        global_instructions: composedInstructions,
+        name: starter ? starter.name : name.trim(),
+        campaign_type: starter ? "general" : campaignType,
+        default_channel: starter ? starter.default_channel : "email",
+        include_meeting_cta: starter ? starter.include_meeting_cta : false,
+        global_instructions: starter ? starter.global_instructions : composedInstructions,
         // The flyer (if any) is ingested below via ingestCampaignKnowledge,
         // which sets knowledge_ref + knowledge_document_id only on success.
         // Leave it null here so a file we couldn't read never shows as attached.
@@ -374,12 +375,10 @@ export default function NewCampaign() {
       {/* ── Step 1: basics ── */}
       {step === 1 && (
         <div className="space-y-6">
-          {/* Ready-made cadences — one click clones into an editable draft. */}
+          {/* Ready-made cadences — one click prefills the editable plan below. */}
           <StarterCadencePicker
             smsEnabled={smsEnabled}
-            startingId={startingId}
             onUse={handleUseStarter}
-            disabled={saving}
           />
 
           <div className="flex items-center gap-3" role="separator">
@@ -537,7 +536,9 @@ export default function NewCampaign() {
         <div className="space-y-6">
           <div>
             <h2 className="text-base font-semibold text-foreground">
-              Here's your outreach
+              {/* Echo the picked starter's name so the rep can confirm at a
+                  glance they're editing the sequence they tapped. */}
+              {starter ? `Here's your ${starter.name} outreach` : "Here's your outreach"}
             </h2>
             <p className="text-sm text-muted-foreground">
               Read it top to bottom. Nudge the spacing or drop a message if you want —
