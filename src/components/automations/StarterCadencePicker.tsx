@@ -1,4 +1,4 @@
-import { Loader2, Mail, PhoneCall, Phone, Sparkles } from "lucide-react";
+import { Mail, PhoneCall, Phone, Sparkles } from "lucide-react";
 import {
   STARTER_CADENCES,
   cadenceUsesSms,
@@ -8,11 +8,8 @@ import {
 interface StarterCadencePickerProps {
   /** From workspaces.sms_enabled — gates the "needs SMS enabled" note. */
   smsEnabled: boolean;
-  /** Id of the cadence currently being created, or null. Shows a spinner. */
-  startingId: string | null;
+  /** Picking a card hands the cadence back to prefill the editable plan. */
   onUse: (cadence: StarterCadence) => void;
-  /** Disable all cards (e.g. another create is in flight). */
-  disabled?: boolean;
 }
 
 /** Plain-language "3 emails · 2 calls · 1 text" line for a cadence. */
@@ -30,15 +27,14 @@ function channelSummary(cadence: StarterCadence): string {
 }
 
 /**
- * The "Use a starter cadence" entry point. Selecting a card clones that starter
- * into a new DRAFT outreach (createCampaignWithSteps) and opens it for editing.
- * Nothing sends — the draft ships in review/manual mode like any other.
+ * The "Use a starter cadence" entry point. Selecting a card prefills the
+ * editable Step-2 plan from that starter's touches — the rep edits it like any
+ * outreach and the draft is created on Save. Nothing is written on pick, and
+ * the draft ships in review/manual mode like any other.
  */
 export function StarterCadencePicker({
   smsEnabled,
-  startingId,
   onUse,
-  disabled,
 }: StarterCadencePickerProps) {
   return (
     <div className="space-y-3">
@@ -49,19 +45,17 @@ export function StarterCadencePicker({
         </h2>
       </div>
       <p className="text-sm text-muted-foreground">
-        Pick one and we'll set up the whole sequence as a draft. You can edit
-        every message before anything goes out.
+        Pick one and we'll lay out the whole sequence for you. You can change
+        every step before anything goes out.
       </p>
 
       <div className="space-y-3">
         {STARTER_CADENCES.map((cadence) => {
-          const isStarting = startingId === cadence.id;
           const needsSms = cadenceUsesSms(cadence) && !smsEnabled;
           return (
             <button
               key={cadence.id}
               type="button"
-              disabled={disabled || startingId !== null}
               onClick={() => onUse(cadence)}
               className="w-full rounded-lg border border-border p-4 text-left transition-colors hover:border-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -74,9 +68,6 @@ export function StarterCadencePicker({
                     {cadence.tagline}
                   </p>
                 </div>
-                {isStarting && (
-                  <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                )}
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

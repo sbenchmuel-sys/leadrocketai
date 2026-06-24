@@ -30,3 +30,6 @@ dist-ssr
 .vercel
 
 .vercel
+
+# TypeScript incremental build info (build artifacts)
+*.tsbuildinfo
