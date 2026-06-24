@@ -163,3 +163,44 @@ verify_jwt = true
 # forward before the in-code gate runs (the cron path had been silently failing).
 [functions.gmail-bulk-sync]
 verify_jwt = false
+
+# ── Dispatchable cron targets (auth-gated in code) ──────────────────────────────
+# These are reached ONLY via cron-dispatcher, which forwards with X-Internal-Secret
+# and NO Bearer token. Each self-authenticates in code (requireScheduledCaller /
+# requirePrivilegedCaller — internal-secret OR service-role), so verify_jwt MUST be
+# false: otherwise the Supabase gateway 401s the dispatcher's forward before the
+# in-code gate runs and the cron silently never executes. Safe to expose at the
+# gateway only because cron-dispatcher itself is now auth-gated (Codex P1 PR #109):
+# an unauthenticated caller can no longer reach these through the dispatcher.
+[functions.promote-winning-interactions]
+verify_jwt = false
+
+[functions.message-cleanup]
+verify_jwt = false
+
+[functions.generate-reply-suggestions]
+verify_jwt = false
+
+[functions.compute-manager-analytics]
+verify_jwt = false
+
+[functions.detect-lead-candidates]
+verify_jwt = false
+
+[functions.score-lead-candidate]
+verify_jwt = false
+
+[functions.lookback-seed-candidates]
+verify_jwt = false
+
+[functions.calendar-sync]
+verify_jwt = false
+
+[functions.transcript-poller]
+verify_jwt = false
+
+[functions.classify-outbound]
+verify_jwt = false
+
+[functions.intelligence-queue-drain]
+verify_jwt = false
