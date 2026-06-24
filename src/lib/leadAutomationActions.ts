@@ -85,6 +85,9 @@ export interface AutomationToggleState {
   /** Whether the toggle card renders at all (motion eligible + not closed). */
   eligible: boolean;
   isUnsubscribed: boolean;
+  /** Automation consent given (automation_mode set). Gates the Details panel so
+   *  a non-consented manual queue item never exposes a destructive Disable. */
+  consented: boolean;
   safetyPaused: boolean;
   userPaused: boolean;
   /** Switch checked = automation is actively sending RIGHT NOW. Excludes the
@@ -117,6 +120,7 @@ export function getAutomationToggleState(lead: LeadDetail): AutomationToggleStat
   return {
     eligible,
     isUnsubscribed,
+    consented,
     safetyPaused,
     userPaused,
     isOn,

@@ -43,7 +43,7 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const motion = lead.motion;
-  const { eligible, isUnsubscribed, safetyPaused, userPaused, isOn, primaryBlocker } =
+  const { eligible, isUnsubscribed, consented, safetyPaused, userPaused, isOn, primaryBlocker } =
     getAutomationToggleState(lead);
   if (!eligible) return null;
 
@@ -126,8 +126,12 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
 
       <p className="text-xs text-muted-foreground">{description}</p>
 
-      {/* Details — full control surface, collapsed by default (hide, don't delete). */}
-      {!isUnsubscribed && (
+      {/* Details — full control surface, collapsed by default (hide, don't delete).
+          Shown only once automation is actually consented: a non-consented manual
+          queue item (needs_action/eligible_at but no automation_mode) must not be
+          able to reach the legacy card's "Disable Automation", which would wipe
+          its manual next_action_key. Turning the toggle on (consent) reveals it. */}
+      {!isUnsubscribed && consented && (
         <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
           <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground py-1">
             <ChevronDown className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-180")} />

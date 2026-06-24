@@ -207,6 +207,17 @@ describe("getAutomationToggleState — the switch must never misreport sending",
   it("closed deal → not eligible (card hidden)", () => {
     expect(getAutomationToggleState(makeLead({ stage: "closed_won" })).eligible).toBe(false);
   });
+
+  it("consented flag gates the Details panel (manual item = not consented)", () => {
+    // manual item: queue flags but no automation_mode → Details must stay hidden
+    expect(getAutomationToggleState(makeLead({
+      eligible_at: "2026-06-25T09:30:00Z", needs_action: true, next_action_key: "send_pre_2",
+    } as any)).consented).toBe(false);
+    // never-enrolled clean lead → not consented
+    expect(getAutomationToggleState(makeLead({})).consented).toBe(false);
+    // enrolled (consent given) → consented, Details available
+    expect(getAutomationToggleState(makeLead({ automation_mode: "full_auto" } as any)).consented).toBe(true);
+  });
 });
 
 describe("getStepLabels", () => {
