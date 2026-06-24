@@ -31,6 +31,9 @@ export interface DraftStep {
   cta_type: string;
   custom_instructions: string;
   active: boolean;
+  // Per-step "Include a meeting link" override (email touches only).
+  // null = inherit the campaign-level default; true/false = force on/off.
+  include_meeting_cta?: boolean | null;
 }
 
 // ── The recommended 9-touch plan, presented as FINISHED ─────────────
@@ -197,4 +200,199 @@ export function cumulativeDays(steps: { delay_days: number }[]): number[] {
     running += s.delay_days;
     return running;
   });
+}
+
+// ── Cadence touch editor — pure plan mutations ──────────────────────
+// The editor only lets a rep add/switch between the three plain channels they
+// understand: an email, a call, or a text. (LinkedIn touches come from the
+// default plan and are reordered, never authored here — calls/texts are manual
+// touches and adding them never routes them into the auto-send path, which
+// filters to email.)
+
+/** A channel a rep can add or switch a touch to, with its plain-English verb. */
+export interface EditableChannelOption {
+  channel: CanonicalChannel;
+  label: string;
+}
+
+export const EDITABLE_CHANNELS: EditableChannelOption[] = [
+  { channel: "email", label: "email" },
+  { channel: "voice", label: "call" },
+  { channel: "sms", label: "text" },
+];
+
+// Default gap (days after the previous touch) for a freshly added touch.
+const NEW_TOUCH_GAP = 2;
+
+/**
+ * A touch needs SMS turned on for the workspace before it can run. The editor
+ * FLAGS such a step inline rather than dropping it — the rep keeps the step and
+ * is told to enable texting in Settings.
+ */
+export function stepNeedsSmsSetup(
+  step: { channel: CanonicalChannel },
+  smsEnabled: boolean,
+): boolean {
+  return step.channel === "sms" && !smsEnabled;
+}
+
+/** Plain-English intent for an EMAIL touch, derived from its position. */
+export function emailIntent(stepType: StepType): string {
+  switch (stepType) {
+    case "intro":
+      return "first message";
+    case "breakup":
+      return "last message";
+    default:
+      return "follow-up";
+  }
+}
+
+/**
+ * Re-derive the position-dependent fields after any structural change so the
+ * plan stays coherent:
+ *  - step_number renumbered 1..N (no gaps),
+ *  - the first touch always lands on day 0 (its gap is forced to 0 — the first
+ *    message goes out right away and its delay control is disabled),
+ *  - EMAIL step_type/cta_type follow the email's POSITION among the emails
+ *    (first email → intro, last email → breakup, the rest → follow-up). The
+ *    live template is chosen at send time by sequence position, so keeping
+ *    step_type aligned with position keeps the plain-language intent honest and
+ *    the right template firing. Non-email touches keep their authored type.
+ */
+export function normalizePlan(plan: DraftStep[]): DraftStep[] {
+  const emailIndexes = plan
+    .map((s, i) => (s.channel === "email" ? i : -1))
+    .filter((i) => i >= 0);
+
+  return plan.map((s, i) => {
+    const base: DraftStep = {
+      ...s,
+      step_number: i + 1,
+      delay_days: i === 0 ? 0 : s.delay_days,
+    };
+    if (s.channel !== "email") return base;
+
+    const ord = emailIndexes.indexOf(i);
+    const isFirstEmail = ord === 0;
+    const isLastEmail = ord === emailIndexes.length - 1;
+    const step_type: StepType = isFirstEmail
+      ? "intro"
+      : isLastEmail
+        ? "breakup"
+        : "followup";
+    return {
+      ...base,
+      step_type,
+      cta_type: step_type === "breakup" ? "breakup_close" : "question",
+    };
+  });
+}
+
+/** A blank touch for a newly added channel, before normalization. */
+function blankTouch(channel: CanonicalChannel): DraftStep {
+  return {
+    step_number: 0, // set by normalizePlan
+    step_type: "followup", // re-derived for emails by normalizePlan
+    channel,
+    delay_days: NEW_TOUCH_GAP,
+    cta_type: "question",
+    custom_instructions: "",
+    active: true,
+    include_meeting_cta: null,
+  };
+}
+
+/**
+ * Insert a new touch of `channel` so it becomes step number `atIndex` (0-based
+ * slot). `atIndex >= plan.length` appends at the end. Later touches keep their
+ * gaps, so adding a step pushes everything after it out by the new touch's gap —
+ * the intuitive "I added a step, the rest moves later."
+ */
+export function insertStep(
+  plan: DraftStep[],
+  atIndex: number,
+  channel: CanonicalChannel,
+): DraftStep[] {
+  const clamped = Math.max(0, Math.min(atIndex, plan.length));
+  const next = [...plan];
+  next.splice(clamped, 0, blankTouch(channel));
+  return normalizePlan(next);
+}
+
+/**
+ * Remove the touch at `index`. To keep the OVERALL schedule intact, the removed
+ * touch's gap rolls into the touch that follows it — so later touches land on
+ * the same days they did before, instead of all sliding earlier by accident.
+ * Always keeps at least one touch.
+ */
+export function removeStep(plan: DraftStep[], index: number): DraftStep[] {
+  if (plan.length <= 1 || index < 0 || index >= plan.length) return plan;
+  const removedGap = plan[index].delay_days;
+  const next = plan.filter((_, i) => i !== index);
+  // The step that followed the removed one now sits at `index` in `next`.
+  // Roll the removed gap into it so its absolute landing day is unchanged.
+  // (Skipped when removing the first or last touch — no follower to absorb it,
+  // and the new first touch is forced to day 0 by normalizePlan anyway.)
+  if (index > 0 && index < next.length) {
+    next[index] = { ...next[index], delay_days: next[index].delay_days + removedGap };
+  }
+  return normalizePlan(next);
+}
+
+/**
+ * Move the touch at `index` one slot in `dir` (-1 up / +1 down). The per-slot
+ * gaps stay put and only the touches swap between slots, so the schedule rhythm
+ * (the day each slot lands on) is unchanged — reordering message types never
+ * shifts the overall timing.
+ */
+export function moveStep(plan: DraftStep[], index: number, dir: -1 | 1): DraftStep[] {
+  const j = index + dir;
+  if (j < 0 || j >= plan.length) return plan;
+  const next = [...plan];
+  const a = next[index];
+  const b = next[j];
+  next[index] = { ...b, delay_days: a.delay_days };
+  next[j] = { ...a, delay_days: b.delay_days };
+  return normalizePlan(next);
+}
+
+/**
+ * Change an existing touch's channel (e.g. turn an email into a call). Leaving
+ * email clears the per-step meeting-link flag, since it only applies to emails.
+ */
+export function changeStepChannel(
+  plan: DraftStep[],
+  index: number,
+  channel: CanonicalChannel,
+): DraftStep[] {
+  const next = plan.map((s, i) =>
+    i === index
+      ? {
+          ...s,
+          channel,
+          include_meeting_cta: channel === "email" ? s.include_meeting_cta ?? null : null,
+        }
+      : s,
+  );
+  return normalizePlan(next);
+}
+
+/** Set a gap (days after the previous touch) on the touch at `index`. */
+export function setStepGap(plan: DraftStep[], index: number, days: number): DraftStep[] {
+  const next = plan.map((s, i) =>
+    i === index ? { ...s, delay_days: Math.max(0, Math.round(days)) } : s,
+  );
+  return normalizePlan(next);
+}
+
+/** Toggle the per-step "Include a meeting link" flag (email touches only). */
+export function setStepMeetingCta(
+  plan: DraftStep[],
+  index: number,
+  value: boolean,
+): DraftStep[] {
+  return plan.map((s, i) =>
+    i === index && s.channel === "email" ? { ...s, include_meeting_cta: value } : s,
+  );
 }
