@@ -6,7 +6,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
-import LinkedInMessageButton from "@/components/lead/LinkedInMessageButton";
 import StakeholderAvatarRow from "@/components/lead/StakeholderAvatarRow";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { getLeadStatusLine } from "@/lib/leadStatusLine";
@@ -75,14 +74,9 @@ export default function LeadDetailHeader({
         </Button>
         <div className="flex gap-1.5">
           <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
-          <LinkedInMessageButton
-            leadId={lead.id}
-            leadName={lead.name}
-            leadCompany={lead.company}
-            leadTitle={lead.job_title}
-            linkedinUrl={(lead as any).linkedin_url}
-            mode="followup"
-          />
+          {/* LinkedIn message button removed from the lead header (Unit 3) — it
+              didn't belong among the page-level actions. LinkedIn outreach stays
+              available in the Outreach flow (campaign LinkedIn touches). */}
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
           {/* Reconnect chip renders ONLY when a workspace mail_account has
               needs_reconnect=true or status='error'. Rendered outside the
