@@ -30,6 +30,9 @@ export default function StakeholderAvatarRow({ leadId, currentLeadId }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // Clear immediately so navigating to another lead never flashes the prior
+    // lead's stakeholders while the new lookup is in flight.
+    setMembers([]);
     getLeadGroupContext(leadId)
       .then((ctx) => { if (!cancelled) setMembers(ctx.members); })
       .catch(() => { if (!cancelled) setMembers([]); });
