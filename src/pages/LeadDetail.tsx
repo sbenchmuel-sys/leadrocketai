@@ -49,10 +49,6 @@ export default function LeadDetail() {
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
   const [showLogDialog, setShowLogDialog] = useState(false);
-  // "I handled this" clears the lead's next_action_key via the RPC. Remember it so
-  // "Draft it anyway" in the handled state still drafts the dismissed step this
-  // session (rather than falling back to a generic draft). Cleared on undo / lead change.
-  const [dismissedActionKey, setDismissedActionKey] = useState<string | undefined>(undefined);
   // Latest route id — so an in-flight mark-handled / undo doesn't reload the
   // previous lead's data onto a lead the rep has since navigated to (Codex P2).
   const currentIdRef = useRef(id);
@@ -74,9 +70,7 @@ export default function LeadDetail() {
     // Open the recommended draft in the review-and-send composer. The dialog
     // auto-generates from the lead's next_action_key (or its own sensible
     // default when there's no recommendation) and always ends in manual Send.
-    // Prefer the live action key; fall back to the one we dismissed this session
-    // so "Draft it anyway" in the handled state still targets that step.
-    setDraftActionKey(lead?.next_action_key ?? dismissedActionKey ?? undefined);
+    setDraftActionKey(lead?.next_action_key ?? undefined);
     setShowDraftDialog(true);
   };
 
@@ -125,7 +119,6 @@ export default function LeadDetail() {
     setMarkingHandled(true);
     const actedId = id;
     try {
-      const keyBefore = lead?.next_action_key ?? undefined;
       const snapshot = await markActionHandled(actedId, { permanent: true });
       toast.success("Marked as handled", {
         duration: 5000,
@@ -136,7 +129,6 @@ export default function LeadDetail() {
               await undoMarkActionHandled(actedId, snapshot);
               // Skip the view refresh if the rep has since navigated to another lead.
               if (currentIdRef.current !== actedId) return;
-              setDismissedActionKey(undefined);
               await handleUpdate();
             } catch (err) {
               console.error("Undo mark-handled failed:", err);
@@ -147,7 +139,6 @@ export default function LeadDetail() {
       });
       // Don't reload the previous lead onto a lead the rep navigated to mid-RPC.
       if (currentIdRef.current !== actedId) return;
-      setDismissedActionKey(keyBefore);
       await handleUpdate();
     } catch (err) {
       console.error("Mark handled failed:", err);
@@ -164,7 +155,6 @@ export default function LeadDetail() {
     // effect clears — visibility refresh and in-page updates reload without a flash.
     setLead(null);
     setIsLoading(true);
-    setDismissedActionKey(undefined);
     loadLead();
   }, [id]);
 
