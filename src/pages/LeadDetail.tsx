@@ -92,11 +92,15 @@ export default function LeadDetail() {
     if (!id) return;
     try {
       const data = await getLeadDetail(id);
+      // If the rep navigated to another lead while this fetch was in flight, drop
+      // the result — never render the previous lead's data on the new route (Codex P2).
+      if (currentIdRef.current !== id) return;
       setLead(data);
     } catch (err) {
+      if (currentIdRef.current !== id) return;
       toast.error("Failed to load lead");
     } finally {
-      setIsLoading(false);
+      if (currentIdRef.current === id) setIsLoading(false);
     }
   };
 
