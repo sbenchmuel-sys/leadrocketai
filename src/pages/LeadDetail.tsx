@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
@@ -18,6 +18,7 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
+import LogMeetingDialog from "@/components/lead/LogMeetingDialog";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
 import StakeholdersPartnersPanel from "@/components/lead/StakeholdersPartnersPanel";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
@@ -47,6 +48,7 @@ export default function LeadDetail() {
   const moreActive = MORE_TABS.some(t => t.value === activeTab);
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
+  const [showLogDialog, setShowLogDialog] = useState(false);
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -146,6 +148,24 @@ export default function LeadDetail() {
         <div className="lg:col-span-2 space-y-6">
           {/* Canonical Intelligence — always visible above tabs */}
           <UnifiedIntelligenceCard lead={lead} mode="compact" onUpdated={handleUpdate} />
+
+          {/* Mobile only — the desktop "Log a meeting" lives in the right rail,
+              which is hidden on phones (hidden lg:block). Surface it here so a rep
+              on the road can still log a meeting they just had in one tap. */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="lg:hidden w-full justify-center"
+            onClick={() => setShowLogDialog(true)}
+          >
+            <Calendar className="h-4 w-4 mr-2" /> Log a meeting
+          </Button>
+          <LogMeetingDialog
+            open={showLogDialog}
+            onOpenChange={setShowLogDialog}
+            leadId={lead.id}
+            onSaved={handleUpdate}
+          />
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="w-full justify-start">
