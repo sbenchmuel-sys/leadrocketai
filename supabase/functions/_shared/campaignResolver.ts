@@ -222,22 +222,6 @@ export function resolveStepMeetingCta(
 const FORCE_MEETING_CTA_RULE =
   "Include the rep's meeting booking link as a clear call-to-action — use the provided link.";
 
-// The booking link to thread into a draft (live send or authoring preview) given
-// a resolved instruction and the SENDING rep's own calendar_link. Returns null —
-// not a placeholder — when the channel isn't email, the step's meeting CTA is off,
-// or the rep has no link. Both the live send and the preview derive the link from
-// this single helper so they never disagree, and it can only ever return the link
-// that was PASSED IN (the caller is responsible for passing the right rep's link).
-export function meetingLinkForDraft(
-  instruction: Pick<ResolvedInstruction, "channel" | "meeting_cta_enabled">,
-  calendarLink: string | null | undefined,
-): string | null {
-  if (instruction.channel !== "email") return null;
-  if (!instruction.meeting_cta_enabled) return null;
-  const link = (calendarLink || "").trim();
-  return link || null;
-}
-
 // ── Sequence context builder ────────────────────────────────────────
 
 function buildSequenceContext(input: CampaignResolverInput, stepNumber: number): SequenceContext {

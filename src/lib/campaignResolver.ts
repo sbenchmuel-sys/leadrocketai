@@ -126,20 +126,6 @@ export function resolveStepMeetingCta(
   return "default";
 }
 
-// Mirrors meetingLinkForDraft in the server resolver. Returns the booking link to
-// thread into a draft (null = none) given the channel, the per-step decision, and
-// the SENDING rep's own calendar_link.
-export function meetingLinkForDraft(
-  channel: CanonicalChannel,
-  meetingCtaEnabled: boolean,
-  calendarLink: string | null | undefined,
-): string | null {
-  if (channel !== "email") return null;
-  if (!meetingCtaEnabled) return null;
-  const link = (calendarLink || "").trim();
-  return link || null;
-}
-
 // ── Internal helpers ────────────────────────────────────────────────
 
 function resolveStepNumber(actionKey: string | null, maxStep = 4): number {

@@ -439,7 +439,7 @@ const SPECIFIC_EMAIL_RE =
 // meeting word paired with an unambiguous CTA noun so scheduling notes ("no
 // meeting on Tuesday") don't trip it.
 const NEGATED_MEETING_RE =
-  /\b(?:no|skip|omit|exclude|without|remove|drop)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b|\b(?:don'?t|do\s+not|never)\s+(?:include|mention|add|push|attach|insert|use)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)\s+(?:link|cta|button|invite|url|request)\b/i;
+  /\b(?:no|skip|omit|exclude|without|remove|drop)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b|\b(?:don'?t|do\s+not|never)\s+(?:include|mention|add|push|attach|insert|use)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b/i;
 
 /** Whether the instruction names specific emails by number/ordinal (→ checkboxes,
  *  not a structural shortcut). Exported for the optional UI hint and for tests. */
@@ -460,12 +460,16 @@ export function mentionsSpecificEmailSteps(instructions: string | null | undefin
 export function detectMeetingCtaIntent(instructions: string | null | undefined): MeetingCtaScope {
   const text = (instructions || "").trim();
   if (!text || !MEETING_CONCEPT_RE.test(text)) return "none";
-  // Naming specific emails → leave it to the per-step checkboxes (regardless of polarity).
-  if (mentionsSpecificEmailSteps(text)) return "soft";
+  // An EXPLICIT universal ask wins, even if the text also names specific emails.
+  // (The default instructions carry a boilerplate "on the 2nd and 3rd emails…"
+  // line; without this order, adding "…to every email" would be misread as a
+  // specific-email ask and the shortcut would silently do nothing.) A negated
+  // universal request is an explicit opt-out, not a force-on.
   if (ALL_EMAILS_RE.test(text)) {
-    // A negated universal request is an explicit opt-out, not a force-on.
     return NEGATED_MEETING_RE.test(text) ? "all_off" : "all_on";
   }
+  // No universal quantifier: naming specific emails (or any softer ask) is left to
+  // the per-step checkboxes — no structural change.
   return "soft";
 }
 

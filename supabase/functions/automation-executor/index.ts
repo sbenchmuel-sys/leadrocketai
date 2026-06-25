@@ -1788,7 +1788,7 @@ serve(async (req) => {
           }
 
           const firstName = (lead.name || "").split(" ")[0] || "there";
-          const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName);
+          const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id);
           if (!content) {
             console.warn(`[automation-executor:cold] no content for campaign ${camp.id} step ${touch.step_number} — deferring touch ${touch.id}`);
             // No generated content for this step (generation pending/failed or the row was

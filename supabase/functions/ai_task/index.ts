@@ -1420,24 +1420,11 @@ serve(async (req) => {
         if (instr) {
           enhancedPayload.campaign_instruction = instr.promptBlock;
           campaignAuthoring = true;
-          // Per-step meeting-CTA (Unit 3): thread the requesting rep's OWN booking
-          // link into the preview exactly when the live send would. instr.meetingLink
-          // is already the per-step decision (null when off / non-email / no link),
-          // so the authoring preview and the real send agree. Setting "" cleanly
-          // omits the CTA (replaceTemplateVars drops an empty {{MEETING_LINK}}).
-          enhancedPayload.meeting_link = instr.meetingLink ?? "";
-          // The cold follow-up / breakup templates (pre_email_2/3/4) expose the link
-          // ONLY through {{REP_CONTEXT}} — they don't render {{MEETING_LINK}}. The live
-          // send carries it in rep_context's "Calendar Link:" line, so the preview
-          // must too, or the link would show on the intro preview but vanish on
-          // follow-up previews while still appearing on the live send. Add the same
-          // line (only when the link is on) so preview == send across every template.
-          if (instr.meetingLink) {
-            const existingRepCtx = String(enhancedPayload.rep_context || "").trim();
-            enhancedPayload.rep_context = existingRepCtx
-              ? `${existingRepCtx}\nCalendar Link: ${instr.meetingLink}`
-              : `Calendar Link: ${instr.meetingLink}`;
-          }
+          // NOTE: the per-rep meeting link is NOT injected into authored content.
+          // Authored copy is workspace-shared (campaign_step_content) and shipped by
+          // the cold sender, so baking any rep's link here would leak it into another
+          // rep's send. The booking link is appended per-send from the LEAD OWNER's
+          // own calendar_link instead — see appendOwnerMeetingCta in coldOutreach.ts.
           // The resolver returns the document id and its owner ONLY after
           // verifying the owner is a member of the campaign's workspace, so
           // these are safe to use for owner-scoped KB retrieval (the doc owner

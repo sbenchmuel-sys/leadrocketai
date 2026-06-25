@@ -20,6 +20,8 @@ import { computeNextEligibleAt, type ExecutionSettings } from "./executionSettin
 import { buildColdEmailFooter } from "./coldEmailFooter.ts";
 import { plainTextToHtml } from "./emailUtils.ts";
 import { isSendableColdEmail, isColdSuppressed } from "./coldSendFloorRules.ts";
+import { resolveStepMeetingCta } from "./campaignResolver.ts";
+import { appendMeetingCta } from "./meetingCtaLine.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -42,6 +44,7 @@ export async function resolveTouchContent(
   stepNumber: number,
   leadIndustry: string | null,
   leadFirstName: string,
+  ownerUserId: string | null = null,
 ): Promise<TouchContent | null> {
   const { data: rows } = await supabase
     .from("campaign_step_content")
@@ -71,10 +74,51 @@ export async function resolveTouchContent(
       .replace(/\{name\}/gi, first)
       .replace(/\[name\]/gi, first);
 
+  const body = await appendOwnerMeetingCta(
+    supabase, campaignId, stepNumber, ownerUserId, interpolate(match.body),
+  );
   return {
     subject: interpolate(match.subject || `Following up, ${first}`),
-    body: interpolate(match.body),
+    body,
   };
+}
+
+/**
+ * Per-rep meeting CTA (Unit 3). Append the LEAD OWNER's OWN booking link to the
+ * body — but ONLY when this step's include_meeting_cta is explicitly ON. The link
+ * is never baked into the shared campaign_step_content; it is resolved here, per
+ * send, from the owner's rep_profiles.calendar_link, so one rep's link can never
+ * leak into another rep's send. Cold sends carry no link today, so null/false stay
+ * link-free (byte-unchanged) — only an explicit tick (force_on) adds one. No link
+ * on the owner's profile → nothing appended (no placeholder).
+ */
+async function appendOwnerMeetingCta(
+  supabase: ServiceClient,
+  campaignId: string,
+  stepNumber: number,
+  ownerUserId: string | null,
+  body: string,
+): Promise<string> {
+  if (!ownerUserId) return body;
+  // The per-step flag lives on the General (variant_group NULL) step row — where
+  // the cadence editor writes it.
+  const { data: stepRow } = await supabase
+    .from("campaign_steps")
+    .select("include_meeting_cta")
+    .eq("campaign_id", campaignId)
+    .eq("step_number", stepNumber)
+    .is("variant_group", null)
+    .maybeSingle();
+  const flag = (stepRow as { include_meeting_cta?: boolean | null } | null)?.include_meeting_cta ?? null;
+  if (resolveStepMeetingCta(flag) !== "force_on") return body;
+
+  const { data: prof } = await supabase
+    .from("rep_profiles")
+    .select("calendar_link")
+    .eq("user_id", ownerUserId)
+    .maybeSingle();
+  const link = (prof as { calendar_link?: string | null } | null)?.calendar_link?.trim() || null;
+  return appendMeetingCta(body, link);
 }
 
 // ── Fail-closed floor (runs on EVERY cold send, automatic and review) ─────────

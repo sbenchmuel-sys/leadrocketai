@@ -1,151 +1,99 @@
-// Run: deno test --no-check supabase/functions/_shared/campaignMeetingCta.test.ts
+// Run: deno test --no-check --allow-net --allow-env supabase/functions/_shared/campaignMeetingCta.test.ts
 //
-// Covers the AUTHORING-PREVIEW side of the per-step meeting CTA (Unit 3):
-// resolveCampaignAuthoringInstruction must thread ONLY the REQUESTING rep's own
-// rep_profiles.calendar_link (per-rep, fail-closed — never another rep's), make
-// the SAME per-step decision the live send makes, and omit the CTA cleanly when
-// there's no link. The cross-rep no-leak case (g) is the load-bearing one.
-import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
-import { resolveCampaignAuthoringInstruction } from "./aiCampaignResolver.ts";
+// Per-rep meeting CTA (Outreach Unit 3) — the SEND-TIME injection. Cold campaign
+// emails ship the workspace-SHARED campaign_step_content body, so the booking link
+// is NEVER baked into stored content; resolveTouchContent appends the LEAD OWNER's
+// OWN link at send. The load-bearing case (g) is cross-rep no-leak: rep A and rep B
+// sending the same authored copy must each get their OWN link, never the other's.
+import { assertEquals, assert } from "https://deno.land/std@0.168.0/testing/asserts.ts";
+import { buildMeetingCtaLine, appendMeetingCta } from "./meetingCtaLine.ts";
+import { resolveTouchContent } from "./coldOutreach.ts";
 
-const WS = "ws-1";
-const REP_A = "rep-A";
-const REP_B = "rep-B";
 const LINK_A = "https://cal.example.com/rep-a";
 const LINK_B = "https://cal.example.com/rep-b";
+// The authored body is shared + contains NO link (only a name token).
+const SHARED_BODY = "Hi {first_name}, quick thought on your rollout. Worth a chat?";
 
-interface MockOpts {
-  members: string[]; // user_ids that are members of WS
-  repLinks: Record<string, string | null>; // user_id → calendar_link
-  step2Flag: boolean | null; // include_meeting_cta on the email step we author
-  step2Channel?: string;
-}
+// ── pure helper ─────────────────────────────────────────────────────────────
 
-// Minimal chainable mock of the supabase-js builder for the queries this resolver
-// makes: campaigns (meta + full row), workspace_members, campaign_steps (.order),
-// rep_profiles. knowledge_document_id is null so the KB validation short-circuits.
+Deno.test("appendMeetingCta: appends the link, null-safe, idempotent", () => {
+  assertEquals(appendMeetingCta("Body.", null), "Body.");
+  assertEquals(appendMeetingCta("Body.", "   "), "Body.");
+  const out = appendMeetingCta("Body.", LINK_A);
+  assert(out.includes(LINK_A));
+  assert(out.startsWith("Body."));
+  // idempotent — a re-resolve never double-appends
+  assertEquals(appendMeetingCta(out, LINK_A), out);
+  assert(buildMeetingCtaLine(LINK_A).includes(LINK_A));
+});
+
+// ── resolveTouchContent send-time injection ─────────────────────────────────
+
 // deno-lint-ignore no-explicit-any
-function makeClient(opts: MockOpts): any {
-  const campaignRow = {
-    id: "camp-1",
-    workspace_id: WS,
-    motion: "outbound_prospecting",
-    default_channel: "email",
-    include_meeting_cta: false,
-    global_instructions: null,
-    knowledge_document_id: null,
-    status: "draft",
-  };
-  const steps = [
-    { step_number: 1, step_type: "intro", channel: "email", framework: null, objective: null, cta_type: "question", max_word_count: null, hard_rules: [], generation_hints: [], custom_instructions: null, delay_days: 0, active: true, variant_group: null, include_meeting_cta: null },
-    { step_number: 2, step_type: "followup", channel: opts.step2Channel ?? "email", framework: null, objective: null, cta_type: "question", max_word_count: null, hard_rules: [], generation_hints: [], custom_instructions: null, delay_days: 2, active: true, variant_group: null, include_meeting_cta: opts.step2Flag },
-    { step_number: 3, step_type: "breakup", channel: "email", framework: null, objective: null, cta_type: "breakup_close", max_word_count: null, hard_rules: [], generation_hints: [], custom_instructions: null, delay_days: 4, active: true, variant_group: null, include_meeting_cta: null },
-  ];
-
+function makeClient(opts: { stepFlag: boolean | null; ownerLinks: Record<string, string | null> }): any {
   return {
     from(table: string) {
       const filters: Record<string, unknown> = {};
       const builder: Record<string, unknown> = {
         select: () => builder,
-        eq: (col: string, val: unknown) => {
-          filters[col] = val;
-          return builder;
-        },
-        limit: () => builder,
-        order: () => Promise.resolve({ data: steps, error: null }),
+        eq: (c: string, v: unknown) => { filters[c] = v; return builder; },
+        is: (c: string, v: unknown) => { filters[c] = v; return builder; },
         maybeSingle: () => {
-          if (table === "campaigns") return Promise.resolve({ data: campaignRow, error: null });
-          if (table === "workspace_members") {
-            const ok = filters["workspace_id"] === WS && opts.members.includes(filters["user_id"] as string);
-            return Promise.resolve({ data: ok ? { user_id: filters["user_id"] } : null, error: null });
+          if (table === "campaign_steps") {
+            return Promise.resolve({ data: { include_meeting_cta: opts.stepFlag }, error: null });
           }
           if (table === "rep_profiles") {
-            const link = opts.repLinks[filters["user_id"] as string] ?? null;
-            return Promise.resolve({ data: { calendar_link: link }, error: null });
+            return Promise.resolve({ data: { calendar_link: opts.ownerLinks[filters["user_id"] as string] ?? null }, error: null });
           }
           return Promise.resolve({ data: null, error: null });
         },
+        // campaign_step_content is awaited directly (no maybeSingle).
+        then: (resolve: (v: unknown) => void) =>
+          resolve({ data: table === "campaign_step_content" ? [{ subject: "Hi", body: SHARED_BODY, variant_group: null }] : [], error: null }),
       };
       return builder;
     },
   };
 }
 
-async function authorStep2(client: unknown, userId: string) {
-  return await resolveCampaignAuthoringInstruction(
-    // deno-lint-ignore no-explicit-any
-    client as any,
-    "camp-1",
-    2, // step number
-    null, // industry
-    userId,
-  );
+async function bodyFor(stepFlag: boolean | null, owner: string | null, ownerLinks: Record<string, string | null>) {
+  const c = makeClient({ stepFlag, ownerLinks });
+  const out = await resolveTouchContent(c, "camp-1", 2, null, "Rita", owner);
+  return out?.body ?? "";
 }
 
-// ── (g) cross-rep no-leak — the load-bearing case ───────────────────────────
-
-Deno.test("ISOLATION: each rep previews ONLY their own booking link", async () => {
-  const client = makeClient({
-    members: [REP_A, REP_B],
-    repLinks: { [REP_A]: LINK_A, [REP_B]: LINK_B },
-    step2Flag: true,
-  });
-  const asA = await authorStep2(client, REP_A);
-  const asB = await authorStep2(client, REP_B);
-  assertEquals(asA?.meetingLink, LINK_A); // rep A sees A's link
-  assertEquals(asB?.meetingLink, LINK_B); // rep B sees B's link
-  // Never the other rep's link.
-  assertEquals(asA?.meetingLink === LINK_B, false);
-  assertEquals(asB?.meetingLink === LINK_A, false);
+Deno.test("force_on + owner has a link → the OWNER's link is appended", async () => {
+  const body = await bodyFor(true, "rep-a", { "rep-a": LINK_A });
+  assert(body.includes(LINK_A), "owner's link should be appended");
 });
 
-// ── (c) rep with no calendar_link → CTA omitted cleanly ─────────────────────
-
-Deno.test("no calendar link → meetingLink null (no placeholder), even when flagged on", async () => {
-  const client = makeClient({
-    members: [REP_A],
-    repLinks: { [REP_A]: null },
-    step2Flag: true,
-  });
-  const out = await authorStep2(client, REP_A);
-  assertEquals(out?.meetingLink, null);
+Deno.test("ISOLATION: each rep gets ONLY their own link from the SAME shared body (g)", async () => {
+  const ownerLinks = { "rep-a": LINK_A, "rep-b": LINK_B };
+  const aBody = await bodyFor(true, "rep-a", ownerLinks);
+  const bBody = await bodyFor(true, "rep-b", ownerLinks);
+  assert(aBody.includes(LINK_A) && !aBody.includes(LINK_B), "rep A gets only A's link");
+  assert(bBody.includes(LINK_B) && !bBody.includes(LINK_A), "rep B gets only B's link");
+  // The shared authored body itself carries NO link — proves nothing is baked in.
+  assert(!SHARED_BODY.includes("http"));
 });
 
-// ── decision parity: false off, null on (matches live) ──────────────────────
-
-Deno.test("explicit false → link withheld in the preview", async () => {
-  const client = makeClient({ members: [REP_A], repLinks: { [REP_A]: LINK_A }, step2Flag: false });
-  const out = await authorStep2(client, REP_A);
-  assertEquals(out?.meetingLink, null);
+Deno.test("null flag → no link appended (cold-send byte-unchanged)", async () => {
+  const body = await bodyFor(null, "rep-a", { "rep-a": LINK_A });
+  assert(!body.includes(LINK_A), "null must not add a link");
 });
 
-Deno.test("null flag → link threaded (preview matches live's default-on)", async () => {
-  const client = makeClient({ members: [REP_A], repLinks: { [REP_A]: LINK_A }, step2Flag: null });
-  const out = await authorStep2(client, REP_A);
-  assertEquals(out?.meetingLink, LINK_A);
+Deno.test("false flag → no link appended", async () => {
+  const body = await bodyFor(false, "rep-a", { "rep-a": LINK_A });
+  assert(!body.includes(LINK_A));
 });
 
-// ── non-email step flagged → ignored ────────────────────────────────────────
-
-Deno.test("a non-email step flagged on never previews a booking link", async () => {
-  const client = makeClient({
-    members: [REP_A],
-    repLinks: { [REP_A]: LINK_A },
-    step2Flag: true,
-    step2Channel: "voice",
-  });
-  const out = await authorStep2(client, REP_A);
-  assertEquals(out?.meetingLink, null);
+Deno.test("force_on but owner has NO link → CTA omitted cleanly (no placeholder)", async () => {
+  const body = await bodyFor(true, "rep-a", { "rep-a": null });
+  assertEquals(body.includes("http"), false);
+  assertEquals(body.includes("grab a time"), false);
 });
 
-// ── fail-closed: a non-member gets nothing at all ───────────────────────────
-
-Deno.test("ISOLATION: a non-member of the workspace gets null (no link, no instruction)", async () => {
-  const client = makeClient({
-    members: [REP_A], // REP_B is NOT a member here
-    repLinks: { [REP_A]: LINK_A, [REP_B]: LINK_B },
-    step2Flag: true,
-  });
-  const out = await authorStep2(client, REP_B);
-  assertEquals(out, null);
+Deno.test("no ownerUserId → no link (defensive)", async () => {
+  const body = await bodyFor(true, null, { "rep-a": LINK_A });
+  assert(!body.includes(LINK_A));
 });
