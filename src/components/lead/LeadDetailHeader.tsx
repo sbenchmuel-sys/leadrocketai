@@ -31,6 +31,9 @@ interface LeadDetailHeaderProps {
   onDraftIt?: () => void;
   /** "I handled this" — dismiss the suggested next move (reversible, no send). */
   onMarkHandled?: () => void;
+  /** True while a mark-handled request is in flight — disables the button so a
+   *  double-tap can't fire a second dismiss (which would break Undo). */
+  markHandledBusy?: boolean;
 }
 
 const BACK_ROUTES: Record<OriginContext, string> = {
@@ -40,7 +43,7 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled,
+  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
@@ -236,7 +239,7 @@ export default function LeadDetailHeader({
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
               {onMarkHandled && hasPendingAction && (
-                <Button variant="ghost" size="sm" onClick={onMarkHandled} className="text-muted-foreground gap-1.5">
+                <Button variant="ghost" size="sm" onClick={onMarkHandled} disabled={markHandledBusy} className="text-muted-foreground gap-1.5">
                   <Check className="h-4 w-4" />
                   I handled this
                 </Button>

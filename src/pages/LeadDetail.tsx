@@ -57,6 +57,12 @@ export default function LeadDetail() {
   // previous lead's data onto a lead the rep has since navigated to (Codex P2).
   const currentIdRef = useRef(id);
   currentIdRef.current = id;
+  // In-flight guard for "I handled this" — a double-tap would otherwise fire a
+  // second RPC that snapshots the already-cleared state, so its Undo would restore
+  // the DISMISSED state instead of the original action (Codex P2). Ref = synchronous
+  // guard against fast double-clicks; state = disables the button.
+  const markingHandledRef = useRef(false);
+  const [markingHandled, setMarkingHandled] = useState(false);
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -114,7 +120,9 @@ export default function LeadDetail() {
   // suggestion-dismissal flag only; sends/deletes nothing). syncEngine re-arms it
   // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
   const handleMarkHandled = async () => {
-    if (!id) return;
+    if (!id || markingHandledRef.current) return;
+    markingHandledRef.current = true;
+    setMarkingHandled(true);
     const actedId = id;
     try {
       const keyBefore = lead?.next_action_key ?? undefined;
@@ -144,6 +152,9 @@ export default function LeadDetail() {
     } catch (err) {
       console.error("Mark handled failed:", err);
       toast.error("Couldn't mark as handled");
+    } finally {
+      markingHandledRef.current = false;
+      setMarkingHandled(false);
     }
   };
 
@@ -194,6 +205,7 @@ export default function LeadDetail() {
         onSyncComplete={loadLead}
         onDraftIt={handleDraftIt}
         onMarkHandled={handleMarkHandled}
+        markHandledBusy={markingHandled}
       />
 
       {/* Split layout: Main content + Side panel */}
