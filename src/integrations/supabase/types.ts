@@ -724,6 +724,7 @@ export type Database = {
           generation_hints: Json
           hard_rules: Json
           id: string
+          include_meeting_cta: boolean | null
           max_word_count: number | null
           objective: string | null
           step_number: number
@@ -743,6 +744,7 @@ export type Database = {
           generation_hints?: Json
           hard_rules?: Json
           id?: string
+          include_meeting_cta?: boolean | null
           max_word_count?: number | null
           objective?: string | null
           step_number: number
@@ -762,6 +764,7 @@ export type Database = {
           generation_hints?: Json
           hard_rules?: Json
           id?: string
+          include_meeting_cta?: boolean | null
           max_word_count?: number | null
           objective?: string | null
           step_number?: number
