@@ -1,4 +1,4 @@
-import { Mail, PhoneCall, Phone, Sparkles } from "lucide-react";
+import { Mail, PhoneCall, Phone, Sparkles, Users } from "lucide-react";
 import {
   STARTER_CADENCES,
   cadenceUsesSms,
@@ -66,6 +66,15 @@ export function StarterCadencePicker({
                   </div>
                   <p className="mt-0.5 text-sm text-muted-foreground">
                     {cadence.tagline}
+                  </p>
+                  {/* Who to enroll — the name + tagline describe what it does,
+                      not who it's for, so spell that out in one line. */}
+                  <p className="mt-1.5 flex items-start gap-1.5 text-xs text-foreground/80">
+                    <Users className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span>
+                      <span className="font-medium">Best for:</span>{" "}
+                      {cadence.whoFor}
+                    </span>
                   </p>
                 </div>
               </div>

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Collapsible,
   CollapsibleContent,
@@ -35,6 +36,8 @@ import {
   X,
   Loader2,
   Save,
+  AlertTriangle,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -54,6 +57,11 @@ import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
 import { CampaignCollateralSection } from "@/components/automations/CampaignCollateralSection";
 import { AddLeadsDialog } from "@/components/automations/AddLeadsDialog";
+import {
+  fetchColdSendFloor,
+  describeColdSendFloor,
+  type ColdSendFloor,
+} from "@/lib/coldSendFloor";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -76,6 +84,9 @@ export default function CampaignDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
+  // Workspace cold-send floor — drives the plain-language "why automatic isn't
+  // firing" note under the Sending control. null until loaded.
+  const [floor, setFloor] = useState<ColdSendFloor | null>(null);
   const [collateral, setCollateral] = useState<CampaignCollateral[]>([]);
   // The campaign currently shown — guards against a stale collateral fetch from a
   // previously-viewed campaign resolving after navigation and writing wrong-
@@ -115,6 +126,21 @@ export default function CampaignDetail() {
     loadPeople();
     loadCollateral();
   }, [id, loadPeople, loadCollateral]);
+
+  // Load the workspace cold-send floor once the campaign (and its workspace) is
+  // known, so we can honestly explain when "Send automatically" won't actually
+  // fire. Best-effort: a failed read just leaves the note hidden.
+  useEffect(() => {
+    const workspaceId = campaign?.workspace_id;
+    if (!workspaceId) return;
+    let cancelled = false;
+    fetchColdSendFloor(workspaceId)
+      .then((f) => {
+        if (!cancelled) setFloor(f);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [campaign?.workspace_id]);
 
   const handleSaveInstructions = async () => {
     if (!id) return;
@@ -213,6 +239,8 @@ export default function CampaignDetail() {
     );
   }
 
+  const floorStatus = floor ? describeColdSendFloor(floor) : null;
+
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-12">
       {/* Header */}
@@ -259,6 +287,9 @@ export default function CampaignDetail() {
         <CardContent className="space-y-3 pt-4">
           <div>
             <p className="text-sm font-medium text-foreground">Sending</p>
+            <p className="text-xs text-muted-foreground">
+              Choose how each email goes out. You can switch this anytime.
+            </p>
             <div className="mt-2 inline-flex rounded-md border border-border p-0.5">
               <Button
                 size="sm"
@@ -282,6 +313,37 @@ export default function CampaignDetail() {
                 ? "Emails send on schedule with all the usual safety checks. Calls and texts are always yours to do."
                 : "Each email waits in your Outreach list for you to send. Calls and texts are yours to do."}
             </p>
+
+            {/* Honest "dead switch" guard: automatic is selected, but the
+                workspace floor isn't met, so nothing will actually send yet.
+                Spell out what's missing in plain language with a way to fix it. */}
+            {campaign.send_mode === "automatic" && floorStatus && !floorStatus.ready && (
+              <Alert className="mt-3 border-amber-500/40 text-foreground [&>svg]:text-amber-600 dark:[&>svg]:text-amber-500">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription className="space-y-2">
+                  <p className="text-xs">
+                    These emails won't send automatically yet — your workspace still needs:
+                  </p>
+                  <ul className="ml-4 list-disc space-y-1 text-xs">
+                    {floorStatus.reasons.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-muted-foreground">
+                    Until then, each email waits in your Outreach list for you to send.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => navigate("/app/settings")}
+                  >
+                    <SettingsIcon className="mr-1.5 h-3.5 w-3.5" />
+                    Open Settings
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
           {/* Pause/Resume only applies to a live (active or paused) outreach —
               hidden for drafts (not launched) and completed (finished). */}

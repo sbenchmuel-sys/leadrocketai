@@ -33,9 +33,13 @@ vi.mock("sonner", () => ({
 
 const createCampaignWithSteps = vi.fn((..._args: any[]) => Promise.resolve("camp-1"));
 const deleteCampaign = vi.fn((..._args: any[]) => Promise.resolve());
+// Existing workspace outreaches — drives the save-time name de-duplication.
+// Default: none, so names pass through untouched.
+const fetchWorkspaceCampaigns = vi.fn(async (..._args: any[]): Promise<any[]> => []);
 vi.mock("@/lib/campaignQueries", () => ({
   createCampaignWithSteps: (...args: any[]) => createCampaignWithSteps(...args),
   deleteCampaign: (...args: any[]) => deleteCampaign(...args),
+  fetchWorkspaceCampaigns: (...args: any[]) => fetchWorkspaceCampaigns(...args),
 }));
 
 const enrollLeadsInCampaign = vi.fn((..._args: any[]) => Promise.resolve());
@@ -327,6 +331,20 @@ describe("NewCampaign — starter cadence prefills the editable plan", () => {
     // Custom path: the default 9-touch plan and the FORM's name — not the starter's.
     expect(input.name).toBe("My own outreach");
     expect(input.steps).toHaveLength(9);
+  });
+
+  it("auto-suffixes the name when the same starter is added twice", async () => {
+    // The workspace already has an "Inbound Intro" — the second one must not
+    // collide. The rep can still rename later; this just keeps them apart.
+    fetchWorkspaceCampaigns.mockResolvedValueOnce([{ name: "Inbound Intro" }]);
+
+    renderWizard();
+    pickStarter(/Inbound Intro/i);
+    const input = await saveAndReadSteps();
+
+    expect(input.name).toBe("Inbound Intro 2");
+    // The rep is told what happened, in plain language.
+    expect(toast.info).toHaveBeenCalledWith(expect.stringMatching(/saved this one as "Inbound Intro 2"/i));
   });
 
   it("switching from the custom path to a starter replaces the custom plan", async () => {
