@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead } from "@/lib/supabaseQueries";
+import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -95,6 +95,36 @@ export default function LeadDetail() {
     setRefreshKey(prev => prev + 1);
   };
 
+  // "I handled this" — dismiss the suggested next move WITHOUT sending. Reuses the
+  // same atomic RPC + Undo pattern as the Queue's "Mark as handled" (sets the
+  // suggestion-dismissal flag only; sends/deletes nothing). syncEngine re-arms it
+  // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
+  const handleMarkHandled = async () => {
+    if (!id) return;
+    try {
+      const snapshot = await markActionHandled(id, { permanent: true });
+      toast.success("Marked as handled", {
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await undoMarkActionHandled(id, snapshot);
+              await handleUpdate();
+            } catch (err) {
+              console.error("Undo mark-handled failed:", err);
+              toast.error("Undo failed");
+            }
+          },
+        },
+      });
+      await handleUpdate();
+    } catch (err) {
+      console.error("Mark handled failed:", err);
+      toast.error("Couldn't mark as handled");
+    }
+  };
+
   useEffect(() => {
     // Reset on lead change so we never keep rendering the previous lead (and its
     // stakeholder avatars / status) while the new one loads. Only the id-change
@@ -140,6 +170,7 @@ export default function LeadDetail() {
         onUpdate={handleUpdate}
         onSyncComplete={loadLead}
         onDraftIt={handleDraftIt}
+        onMarkHandled={handleMarkHandled}
       />
 
       {/* Split layout: Main content + Side panel */}
