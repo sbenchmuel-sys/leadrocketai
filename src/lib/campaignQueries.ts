@@ -278,6 +278,73 @@ export async function replaceCampaignSteps(campaignId: string, steps: DraftCampa
   }
 }
 
+/**
+ * A step in a RECONCILING step-replace: the authored draft plus its identity
+ * (orig_step_number) so the write path can move this touch's generated copy and
+ * collateral link to its new number, drop them when the touch is removed, and
+ * leave an inserted touch (null) with no copy.
+ */
+export interface ReconcileCampaignStep extends DraftCampaignStep {
+  /** Prior step_number, or null for a touch added in this edit session. */
+  orig_step_number: number | null;
+}
+
+/**
+ * Re-shape a DRAFT campaign's steps and ATOMICALLY reconcile the dependent
+ * per-step copy (campaign_step_content) and collateral links (both keyed by
+ * step_number) so renumbering never orphans or mis-points them. Surviving steps
+ * keep their copy (incl. rep edits); removed steps' copy is dropped; inserted
+ * steps start blank.
+ *
+ * Delegates to the SECURITY DEFINER RPC, which REFUSES any campaign that isn't a
+ * draft or that already has enrollments/touches — structural edits to a live,
+ * sending campaign are blocked server-side (today's read-only behavior is kept).
+ * Throws on error.
+ */
+export async function replaceCampaignStepsReconciled(
+  campaignId: string,
+  steps: ReconcileCampaignStep[],
+): Promise<void> {
+  // 1-based new step_number = array position; orig_step_number carries identity.
+  const payload = steps.map((s, i) => ({
+    orig_step_number: s.orig_step_number,
+    step_number: i + 1,
+    step_type: s.step_type,
+    channel: s.channel,
+    cta_type: s.cta_type,
+    delay_days: s.delay_days,
+    custom_instructions: s.custom_instructions || null,
+    active: s.active,
+    variant_group: s.variant_group ?? null,
+    include_meeting_cta: s.include_meeting_cta ?? null,
+  }));
+  const { error } = await supabase.rpc("replace_campaign_steps_reconciled" as any, {
+    _campaign_id: campaignId,
+    _steps: payload as any,
+  });
+  if (error) throw new Error(error.message || "Couldn't save your changes to the steps");
+}
+
+/**
+ * Whether a campaign already has any live cadence rows — enrollments or
+ * pre-laid-out touches. Used to gate structural step editing to fresh drafts
+ * only (a draft has none; once leads are enrolled, renumbering would corrupt the
+ * in-flight schedule). The RPC enforces the same rule server-side; this just
+ * keeps the UI from offering an edit that would be rejected.
+ */
+export async function campaignHasCadenceRows(campaignId: string): Promise<boolean> {
+  const { count: enrollCount } = await supabase
+    .from("campaign_enrollment")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId);
+  if ((enrollCount ?? 0) > 0) return true;
+  const { count: touchCount } = await supabase
+    .from("campaign_touch")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId);
+  return (touchCount ?? 0) > 0;
+}
+
 /** Delete a campaign. Steps cascade; enrolled leads' campaign_id is set null by FK. */
 export async function deleteCampaign(campaignId: string) {
   const { error } = await supabase.from("campaigns").delete().eq("id", campaignId);
