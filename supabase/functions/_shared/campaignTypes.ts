@@ -54,6 +54,14 @@ export interface ResolvedInstruction {
   max_word_count: number;
   cta_type: string;
   raw_custom_instructions: string | null;  // legacy compat
+  // Per-step meeting-CTA decision (Unit 3). TRUE means the sending rep's booking
+  // link should be threaded into this touch's draft; FALSE means it must be
+  // withheld. Derived from campaign_steps.include_meeting_cta via
+  // resolveStepMeetingCta: explicit false → false; explicit true / null → true
+  // (null preserves today's "always pass the link, let the template decide"
+  // behavior, so null-flag emails stay byte-identical). The call site (live send /
+  // authoring preview) gates whether it passes the rep's own calendar_link.
+  meeting_cta_enabled: boolean;
 }
 
 // ── Action key → step number mapping ────────────────────────────────

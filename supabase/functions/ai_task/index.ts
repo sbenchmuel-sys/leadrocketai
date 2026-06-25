@@ -1420,6 +1420,11 @@ serve(async (req) => {
         if (instr) {
           enhancedPayload.campaign_instruction = instr.promptBlock;
           campaignAuthoring = true;
+          // NOTE: the per-rep meeting link is NOT injected into authored content.
+          // Authored copy is workspace-shared (campaign_step_content) and shipped by
+          // the cold sender, so baking any rep's link here would leak it into another
+          // rep's send. The booking link is appended per-send from the LEAD OWNER's
+          // own calendar_link instead — see appendOwnerMeetingCta in coldOutreach.ts.
           // The resolver returns the document id and its owner ONLY after
           // verifying the owner is a member of the campaign's workspace, so
           // these are safe to use for owner-scoped KB retrieval (the doc owner

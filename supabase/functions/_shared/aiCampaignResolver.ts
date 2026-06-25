@@ -179,6 +179,9 @@ export async function resolveCampaignAuthoringInstruction(
     channel: (targetStep.channel || campaign.default_channel) as CanonicalChannel,
     structured_campaign: selected,
     include_meeting_cta: campaign.include_meeting_cta,
+    // No calendar_link here on purpose: authored copy is workspace-shared, so it
+    // must stay link-free (the booking link is appended per-send from the lead
+    // owner's profile). Passing no link keeps the force rule from baking a URL.
   });
 
   return {

@@ -404,3 +404,96 @@ export function setStepMeetingCta(
     i === index && s.channel === "email" ? { ...s, include_meeting_cta: value } : s,
   );
 }
+
+// ── Instruction shortcut: meeting-CTA intent (Unit 3) ───────────────
+// A typed campaign instruction like "add the meeting link to every email" is a
+// shortcut that ticks the per-step "Include a meeting link" boxes so the rep can
+// see and fine-tune them. We act ONLY on clear, unambiguous "every/all emails"
+// phrasing tied to a meeting concept. We deliberately DO NOT parse specific email
+// numbers from free text ("emails 2 and 3") — those are what the per-step
+// checkboxes are for. Conservative by design: an unclear or soft ask leaves every
+// step null (today's default behavior — no email changes byte for byte).
+
+export type MeetingCtaScope = "all_on" | "all_off" | "soft" | "none";
+
+// Clear meeting / booking / calendar phrasing. Kept tight to avoid false positives
+// — a bare "call" is too broad (cold calls, phone calls), so it's excluded.
+const MEETING_CONCEPT_RE =
+  /\b(?:meeting link|calendar link|booking link|meeting cta|book a (?:call|time|meeting|slot|chat)|schedule a (?:call|meeting|time|chat)|grab (?:some |a )?time|find a time|meeting|calendar|booking)\b/i;
+
+// A universal quantifier over the email touches: "every email", "all emails",
+// "each message", "every single email", "all/all the/all of the emails".
+// AFFIRMATIVE form deliberately EXCLUDES "any": "add the link to ANY of the emails
+// where it fits" is an ambiguous/conditional ask, not a clear "every email".
+const ALL_EMAILS_AFFIRMATIVE_RE =
+  /\b(?:every|each|all)\s+(?:single\s+|one\s+)?(?:of\s+)?(?:the\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+// In a NEGATED opt-out, "any" DOES read as universal ("no links in ANY emails" =
+// "in all emails"), so the negated form additionally accepts "any".
+const ALL_EMAILS_NEGATED_RE =
+  /\b(?:every|each|all|any)\s+(?:single\s+|one\s+)?(?:of\s+)?(?:the\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+
+// Specific-email phrasing we must NOT act on structurally (the rep should use the
+// checkboxes): "email 2", "emails 2 and 3", "step 3", "the second email",
+// "first and third emails", "2nd email".
+const SPECIFIC_EMAIL_RE =
+  /\b(?:e-?mail|message|touch|step)s?\s*#?\s*\d+\b|\b(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+(?:and\s+(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+
+// A NEGATED meeting-link ask ("don't add the meeting link", "no calendar link",
+// "skip the booking link"). Mirrors the proven opt-out regexes in ai_task so the
+// shortcut never FORCES links on when the rep explicitly opts out. Requires the
+// meeting word paired with an unambiguous CTA noun so scheduling notes ("no
+// meeting on Tuesday") don't trip it.
+const NEGATED_MEETING_RE =
+  /\b(?:no|skip|omit|exclude|without|remove|drop)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b|\b(?:don'?t|do\s+not|never)\s+(?:include|mention|add|push|attach|insert|use|put|place)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b/i;
+
+/** Whether the instruction names specific emails by number/ordinal (→ checkboxes,
+ *  not a structural shortcut). Exported for the optional UI hint and for tests. */
+export function mentionsSpecificEmailSteps(instructions: string | null | undefined): boolean {
+  return SPECIFIC_EMAIL_RE.test(instructions || "");
+}
+
+/**
+ * Classify a campaign's custom instructions for meeting-CTA intent:
+ *  - "all_on"  → clear "every/all emails" + a meeting concept, no specific numbers,
+ *                affirmative ("add the meeting link to every email").
+ *  - "all_off" → the SAME universal phrasing but NEGATED ("don't add the meeting
+ *                link to every email") → tick every email OFF, honoring the opt-out.
+ *  - "soft"    → a meeting concept but unscoped, or scoped to specific emails.
+ *  - "none"    → no meeting concept at all.
+ * Only "all_on"/"all_off" drive a structural change (see applyMeetingCtaIntent).
+ */
+export function detectMeetingCtaIntent(instructions: string | null | undefined): MeetingCtaScope {
+  const text = (instructions || "").trim();
+  if (!text || !MEETING_CONCEPT_RE.test(text)) return "none";
+  // An EXPLICIT universal ask wins, even if the text also names specific emails.
+  // (The default instructions carry a boilerplate "on the 2nd and 3rd emails…"
+  // line; without this, adding "…to every email" would be misread as a
+  // specific-email ask and the shortcut would silently do nothing.) A NEGATED
+  // universal request is an explicit opt-out (and there "any emails" counts); an
+  // AFFIRMATIVE force-on requires an unambiguous every/all (never a conditional "any").
+  if (NEGATED_MEETING_RE.test(text)) {
+    return ALL_EMAILS_NEGATED_RE.test(text) ? "all_off" : "soft";
+  }
+  if (ALL_EMAILS_AFFIRMATIVE_RE.test(text)) {
+    return "all_on";
+  }
+  // No universal quantifier: naming specific emails (or any softer ask) is left to
+  // the per-step checkboxes — no structural change.
+  return "soft";
+}
+
+/**
+ * Apply a universal meeting-CTA intent to the plan's EMAIL touches:
+ *  - "all_on"  → tick every email ON (include_meeting_cta=true).
+ *  - "all_off" → tick every email OFF (include_meeting_cta=false) — honors an
+ *                explicit "don't add the meeting link to every email".
+ *  - anything else → leave the plan untouched (email steps stay null → today's
+ *    default). Non-email touches are never flagged (the meeting link is email-only).
+ */
+export function applyMeetingCtaIntent(plan: DraftStep[], scope: MeetingCtaScope): DraftStep[] {
+  if (scope !== "all_on" && scope !== "all_off") return plan;
+  const value = scope === "all_on";
+  return plan.map((s) =>
+    s.channel === "email" ? { ...s, include_meeting_cta: value } : s,
+  );
+}

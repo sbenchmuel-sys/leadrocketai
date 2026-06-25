@@ -32,6 +32,7 @@ import {
   AlertTriangle,
   Check,
   FileText,
+  Calendar,
 } from "lucide-react";
 import { toast } from "sonner";
 import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
@@ -390,6 +391,16 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
             Day {day}
           </Badge>
           <span className="text-sm font-medium text-foreground">{touchVerb(step.channel)}</span>
+          {step.channel === "email" && step.include_meeting_cta === true && (
+            <Badge
+              variant="secondary"
+              className="ml-1 gap-1 text-xs font-normal"
+              title="Your booking link is added to this email when it sends"
+            >
+              <Calendar className="h-3 w-3" />
+              meeting link
+            </Badge>
+          )}
           {edited && (
             <Badge variant="secondary" className="ml-1 gap-1 text-xs font-normal">
               <Check className="h-3 w-3" />

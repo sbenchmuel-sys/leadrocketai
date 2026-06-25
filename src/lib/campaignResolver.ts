@@ -106,7 +106,24 @@ export interface ClientCampaignResolverInput {
     generation_hints: string[];
     custom_instructions?: string | null;
     step_type: StepType;
+    // Per-step meeting-link override (email touches). Mirrors the server.
+    include_meeting_cta?: boolean | null;
   } | null;
+}
+
+// ── Per-step meeting-CTA decision (Unit 3) ──────────────────────────
+// MUST stay identical to resolveStepMeetingCta in the server
+// supabase/functions/_shared/campaignResolver.ts. See that file for the full
+// rationale: true = force the rep's booking link on, false = withhold it, and
+// null/undefined = leave today's behavior untouched (byte-identical).
+export type MeetingCtaDecision = "force_on" | "default" | "off";
+
+export function resolveStepMeetingCta(
+  perStepFlag: boolean | null | undefined,
+): MeetingCtaDecision {
+  if (perStepFlag === true) return "force_on";
+  if (perStepFlag === false) return "off";
+  return "default";
 }
 
 // ── Internal helpers ────────────────────────────────────────────────

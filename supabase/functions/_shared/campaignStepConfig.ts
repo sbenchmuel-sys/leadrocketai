@@ -38,6 +38,11 @@ export interface StructuredCampaignStep {
   delay_days: number;
   active: boolean;
   variant_group?: string | null;
+  // Per-step meeting-link override (email touches). null/undefined = inherit the
+  // campaign-level default (today's behavior); true = force the booking link on
+  // for this touch; false = force it off. Read at generation time (Unit 3) as the
+  // per-step source of truth — see resolveStepMeetingCta in campaignResolver.ts.
+  include_meeting_cta?: boolean | null;
 }
 
 export interface LoadedCampaign {

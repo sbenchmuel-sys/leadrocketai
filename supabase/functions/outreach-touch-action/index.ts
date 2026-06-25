@@ -224,7 +224,7 @@ Deno.serve(async (req) => {
     let body = (payload.body || "").trim();
     if (!subject || !body) {
       const firstName = (lead.name || "").split(" ")[0] || "there";
-      const content = await resolveTouchContent(admin, camp.id, touch.step_number, lead.industry, firstName);
+      const content = await resolveTouchContent(admin, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id);
       if (!content) return json({ ok: false, error: "No content to send for this touch" }, 400);
       subject = subject || content.subject;
       body = body || content.body;
