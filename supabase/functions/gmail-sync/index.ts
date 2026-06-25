@@ -28,6 +28,81 @@ import {
   buildLeadUpdate,
 } from "../_shared/syncEngine.ts";
 
+// Number of Gmail message fetches to run in parallel. Gmail's list API returns
+// only message IDs, so each message needs its own round-trip; fetching them in
+// bounded-parallel batches (instead of one-at-a-time) is the whole speed-up.
+// Tune here — higher = faster but more pressure on Gmail's per-user rate limit.
+const FETCH_CONCURRENCY = 6;
+
+// Run `fn` over `items` with at most `limit` promises in flight at once.
+// Returns results in the SAME order as `items` (so downstream processing can
+// stay in message order). Does not throw on a single failure — `fn` is expected
+// to catch its own errors and return a sentinel.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const runWorker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  const workerCount = Math.min(limit, items.length);
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < workerCount; w++) workers.push(runWorker());
+  await Promise.all(workers);
+  return results;
+}
+
+// Fetch a single Gmail message (format=full), retrying with exponential backoff
+// only on rate-limit responses (429, or 403 with a rate-limit reason). Any other
+// non-OK status is returned as-is for the caller to skip; a total failure returns
+// null. The caller treats null / non-OK identically to the old `continue`.
+async function fetchGmailMessageWithRetry(
+  gmailMessageId: string,
+  accessToken: string,
+): Promise<Response | null> {
+  const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`;
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (resp.status === 429 || resp.status === 403) {
+        const text = await resp.text().catch(() => "");
+        const isRateLimit =
+          resp.status === 429 ||
+          text.includes("rateLimitExceeded") ||
+          text.includes("userRateLimitExceeded");
+        if (isRateLimit && attempt < MAX_ATTEMPTS - 1) {
+          const delayMs = 250 * Math.pow(2, attempt); // 250 → 500 → 1000ms
+          console.warn(`[gmail-sync] Rate-limited fetching ${gmailMessageId} (status ${resp.status}); backing off ${delayMs}ms`);
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        // Not a rate limit, or out of attempts: hand back a non-OK Response so the
+        // caller skips this message (it only reads the body on .ok).
+        return new Response(text, { status: resp.status });
+      }
+      return resp;
+    } catch (err) {
+      // Network-level failure. Retry a couple of times, then give up (skip).
+      if (attempt < MAX_ATTEMPTS - 1) {
+        const delayMs = 250 * Math.pow(2, attempt);
+        console.warn(`[gmail-sync] Network error fetching ${gmailMessageId}; retrying in ${delayMs}ms`, err);
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 interface GmailPart {
   mimeType?: string;
   body?: { data?: string };
@@ -377,23 +452,47 @@ serve(async (req) => {
     const errors: string[] = [];
     let hasClosingKeywords = false;
 
-    // Fetch and process each message
+    // Pre-filter: decide which messages actually need fetching, preserving the
+    // dedupe / purged-body-restore skip exactly as before. Gmail list message IDs
+    // are unique, so doing this up front is equivalent to the per-row check that
+    // used to open the loop.
+    const idsToFetch: string[] = [];
     for (const { id: gmailMessageId } of messageIds) {
       const existingBody = existingBodyByMessageId.get(gmailMessageId);
       const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
       if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) {
         continue;
       }
+      idsToFetch.push(gmailMessageId);
+    }
+
+    // Fetch full message JSON in bounded-parallel batches. Each fetch is isolated:
+    // a failed / non-OK fetch yields a null message and is skipped during
+    // processing, exactly like the old `if (!msgResponse.ok) continue;`.
+    const mainFetchStart = Date.now();
+    const fetchedMessages = await mapWithConcurrency(idsToFetch, FETCH_CONCURRENCY, async (gmailMessageId) => {
+      const msgResponse = await fetchGmailMessageWithRetry(gmailMessageId, accessToken);
+      if (!msgResponse || !msgResponse.ok) return { gmailMessageId, message: null as GmailMessage | null };
+      try {
+        const message: GmailMessage = await msgResponse.json();
+        return { gmailMessageId, message };
+      } catch {
+        return { gmailMessageId, message: null as GmailMessage | null };
+      }
+    });
+    console.log(
+      `[gmail-sync] Main pass: ${idsToFetch.length} messages to fetch, ` +
+      `${Math.ceil(idsToFetch.length / FETCH_CONCURRENCY)} batches of ${FETCH_CONCURRENCY}, ` +
+      `fetched in ${Date.now() - mainFetchStart}ms`,
+    );
+
+    // Process each fetched message sequentially, in the original message order.
+    // The processing logic below is unchanged from the previous per-message loop —
+    // only the network fetch was moved out into the parallel pass above.
+    for (const { gmailMessageId, message } of fetchedMessages) {
+      if (!message) continue;
 
       try {
-        const msgResponse = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-
-        if (!msgResponse.ok) continue;
-
-        const message: GmailMessage = await msgResponse.json();
         const headers = message.payload.headers;
         const threadId = message.threadId;
         
@@ -917,34 +1016,45 @@ serve(async (req) => {
         
         console.log(`[gmail-sync] Found ${zoomMessageIds.length} Zoom summary emails via dedicated search`);
 
-        const zoomMessages = [];
-        for (const { id: gmailMessageId } of zoomMessageIds) {
-          const msgResponse = await fetch(
-            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gmailMessageId}?format=full`,
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-          );
-          if (!msgResponse.ok) continue;
-          
-          const message = await msgResponse.json();
-          const headers = message.payload?.headers || [];
-          const from = getHeader(headers, "From") || "";
-          const subject = getHeader(headers, "Subject") || "";
-          const date = getHeader(headers, "Date");
-          const to = getHeader(headers, "To") || "";
-          const cc = getHeader(headers, "Cc") || "";
-          
-          zoomMessages.push({
-            user_id: user.id,
-            gmail_message_id: gmailMessageId,
-            gmail_thread_id: message.threadId,
-            sent_at: date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString(),
-            subject,
-            from_email: from,
-            to_email: to,
-            cc_email: cc,
-            raw_text: getMessageBody(message),
-          });
-        }
+        const zoomFetchStart = Date.now();
+        const zoomResults = await mapWithConcurrency(
+          zoomMessageIds,
+          FETCH_CONCURRENCY,
+          async ({ id: gmailMessageId }: { id: string }) => {
+            const msgResponse = await fetchGmailMessageWithRetry(gmailMessageId, accessToken);
+            if (!msgResponse || !msgResponse.ok) return null;
+            let message;
+            try {
+              message = await msgResponse.json();
+            } catch {
+              return null;
+            }
+            const headers = message.payload?.headers || [];
+            const from = getHeader(headers, "From") || "";
+            const subject = getHeader(headers, "Subject") || "";
+            const date = getHeader(headers, "Date");
+            const to = getHeader(headers, "To") || "";
+            const cc = getHeader(headers, "Cc") || "";
+
+            return {
+              user_id: user.id,
+              gmail_message_id: gmailMessageId,
+              gmail_thread_id: message.threadId,
+              sent_at: date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString(),
+              subject,
+              from_email: from,
+              to_email: to,
+              cc_email: cc,
+              raw_text: getMessageBody(message),
+            };
+          },
+        );
+        const zoomMessages = zoomResults.filter(Boolean);
+        console.log(
+          `[gmail-sync] Zoom pass: ${zoomMessageIds.length} messages, ` +
+          `${Math.ceil(zoomMessageIds.length / FETCH_CONCURRENCY)} batches of ${FETCH_CONCURRENCY}, ` +
+          `fetched in ${Date.now() - zoomFetchStart}ms`,
+        );
 
         if (zoomMessages.length > 0) {
           console.log(`[gmail-sync] Processing ${zoomMessages.length} Zoom summary emails...`);
