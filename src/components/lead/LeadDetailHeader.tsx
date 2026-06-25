@@ -214,10 +214,21 @@ export default function LeadDetailHeader({
       <div className="border-t border-border/40" />
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 py-3">
         {handled ? (
-          <div className="flex-1 min-w-0 flex items-center gap-2 text-sm text-muted-foreground">
-            <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span>You've handled this — it'll come back if they reply.</span>
-          </div>
+          <>
+            <div className="flex-1 min-w-0 flex items-center gap-2 text-sm text-muted-foreground">
+              <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>You've handled this — it'll come back if they reply.</span>
+            </div>
+            {/* Keep compose reachable (Unit 1: "Draft it" is the single compose
+                entry) but quiet — opens the normal composer with a sensible
+                default. NOT trying to re-draft the dismissed step (that was buggy). */}
+            {onDraftIt && (
+              <Button variant="ghost" size="sm" onClick={onDraftIt} className="shrink-0 text-muted-foreground gap-1.5">
+                <PenLine className="h-4 w-4" />
+                Draft it
+              </Button>
+            )}
+          </>
         ) : (
           <>
             <div className="flex-1 min-w-0">
