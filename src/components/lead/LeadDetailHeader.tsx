@@ -49,11 +49,13 @@ export default function LeadDetailHeader({
   // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
   const quick = resolveLeadQuickActions(lead);
   const handled = (lead as any).action_permanently_dismissed === true;
-  // Only offer "I handled this" when there's an ACTUAL pending action to dismiss.
-  // The next-move card shows a generic fallback line even when nothing is pending;
-  // dismissing that would set the permanent-dismiss flag and could suppress a
-  // FUTURE follow-up reminder until a fresh inbound (Codex P2).
-  const hasPendingAction = lead.needs_action === true || !!lead.next_action_key;
+  // Only offer "I handled this" when the lead is ACTUALLY action-required now.
+  // Gate strictly on needs_action: syncEngine also stores next_action_key for
+  // WAITING/PAUSED states (e.g. wait_reply_threshold, paused_meeting_scheduled)
+  // with needs_action=false — dismissing those would set the permanent-dismiss
+  // flag and suppress the eventual reply/follow-up reminder until a fresh inbound
+  // (Codex P2). When nothing is due, the card just shows the next-move + Draft it.
+  const hasPendingAction = lead.needs_action === true;
 
   // Lightweight context badge counts
   const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
