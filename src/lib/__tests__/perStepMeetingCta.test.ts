@@ -270,6 +270,13 @@ describe("(b) instruction shortcut", () => {
       .toBe("all_on");
   });
 
+  it("affirmative ambiguous 'any of the emails' stays soft, but negated 'any' opts out (Codex P2)", () => {
+    // "any ... where it fits" is conditional, NOT a clear "every email".
+    expect(detectMeetingCtaIntent("Add the meeting link to any of the emails where it fits.")).toBe("soft");
+    // but a negated "any" is still a universal opt-out.
+    expect(detectMeetingCtaIntent("Don't put a calendar link on any of the emails.")).toBe("all_off");
+  });
+
   it("naming specific emails (no universal ask) is left to the checkboxes", () => {
     expect(mentionsSpecificEmailSteps("Add the calendar link to emails 2 and 3")).toBe(true);
     expect(detectMeetingCtaIntent("Add the calendar link to emails 2 and 3")).toBe("soft");

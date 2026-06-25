@@ -422,9 +422,14 @@ const MEETING_CONCEPT_RE =
   /\b(?:meeting link|calendar link|booking link|meeting cta|book a (?:call|time|meeting|slot|chat)|schedule a (?:call|meeting|time|chat)|grab (?:some |a )?time|find a time|meeting|calendar|booking)\b/i;
 
 // A universal quantifier over the email touches: "every email", "all emails",
-// "each message", "every single email", "all of the emails", "all the emails",
-// "any of the emails" (the last reads as universal in a negated opt-out).
-const ALL_EMAILS_RE =
+// "each message", "every single email", "all/all the/all of the emails".
+// AFFIRMATIVE form deliberately EXCLUDES "any": "add the link to ANY of the emails
+// where it fits" is an ambiguous/conditional ask, not a clear "every email".
+const ALL_EMAILS_AFFIRMATIVE_RE =
+  /\b(?:every|each|all)\s+(?:single\s+|one\s+)?(?:of\s+)?(?:the\s+)?(?:e-?mails?|messages?|touches?)\b/i;
+// In a NEGATED opt-out, "any" DOES read as universal ("no links in ANY emails" =
+// "in all emails"), so the negated form additionally accepts "any".
+const ALL_EMAILS_NEGATED_RE =
   /\b(?:every|each|all|any)\s+(?:single\s+|one\s+)?(?:of\s+)?(?:the\s+)?(?:e-?mails?|messages?|touches?)\b/i;
 
 // Specific-email phrasing we must NOT act on structurally (the rep should use the
@@ -439,7 +444,7 @@ const SPECIFIC_EMAIL_RE =
 // meeting word paired with an unambiguous CTA noun so scheduling notes ("no
 // meeting on Tuesday") don't trip it.
 const NEGATED_MEETING_RE =
-  /\b(?:no|skip|omit|exclude|without|remove|drop)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b|\b(?:don'?t|do\s+not|never)\s+(?:include|mention|add|push|attach|insert|use)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b/i;
+  /\b(?:no|skip|omit|exclude|without|remove|drop)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b|\b(?:don'?t|do\s+not|never)\s+(?:include|mention|add|push|attach|insert|use|put|place)\s+(?:the\s+|a\s+|any\s+)?(?:meeting|calendar|booking)s?\s+(?:link|cta|button|invite|url|request)s?\b/i;
 
 /** Whether the instruction names specific emails by number/ordinal (→ checkboxes,
  *  not a structural shortcut). Exported for the optional UI hint and for tests. */
@@ -462,11 +467,15 @@ export function detectMeetingCtaIntent(instructions: string | null | undefined):
   if (!text || !MEETING_CONCEPT_RE.test(text)) return "none";
   // An EXPLICIT universal ask wins, even if the text also names specific emails.
   // (The default instructions carry a boilerplate "on the 2nd and 3rd emails…"
-  // line; without this order, adding "…to every email" would be misread as a
-  // specific-email ask and the shortcut would silently do nothing.) A negated
-  // universal request is an explicit opt-out, not a force-on.
-  if (ALL_EMAILS_RE.test(text)) {
-    return NEGATED_MEETING_RE.test(text) ? "all_off" : "all_on";
+  // line; without this, adding "…to every email" would be misread as a
+  // specific-email ask and the shortcut would silently do nothing.) A NEGATED
+  // universal request is an explicit opt-out (and there "any emails" counts); an
+  // AFFIRMATIVE force-on requires an unambiguous every/all (never a conditional "any").
+  if (NEGATED_MEETING_RE.test(text)) {
+    return ALL_EMAILS_NEGATED_RE.test(text) ? "all_off" : "soft";
+  }
+  if (ALL_EMAILS_AFFIRMATIVE_RE.test(text)) {
+    return "all_on";
   }
   // No universal quantifier: naming specific emails (or any softer ask) is left to
   // the per-step checkboxes — no structural change.
