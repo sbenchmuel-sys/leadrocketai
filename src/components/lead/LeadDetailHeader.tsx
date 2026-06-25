@@ -4,8 +4,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine } from "lucide-react";
+import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine, Check, MessageSquare, MessageCircle } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
+import { resolveLeadQuickActions } from "@/lib/leadQuickActions";
+import { smsLink, whatsappLink } from "@/lib/outreachDeepLinks";
 import StakeholderAvatarRow from "@/components/lead/StakeholderAvatarRow";
 import type { LeadDetail } from "@/lib/supabaseQueries";
 import { getLeadStatusLine } from "@/lib/leadStatusLine";
@@ -27,6 +29,11 @@ interface LeadDetailHeaderProps {
   onSyncComplete: () => void;
   /** One-tap: generate the recommended draft and open it for review-and-send. */
   onDraftIt?: () => void;
+  /** "I handled this" — dismiss the suggested next move (reversible, no send). */
+  onMarkHandled?: () => void;
+  /** True while a mark-handled request is in flight — disables the button so a
+   *  double-tap can't fire a second dismiss (which would break Undo). */
+  markHandledBusy?: boolean;
 }
 
 const BACK_ROUTES: Record<OriginContext, string> = {
@@ -36,10 +43,22 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt,
+  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
+
+  // Which "reach out directly" buttons to show (hide-when-missing + opt-out).
+  // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
+  const quick = resolveLeadQuickActions(lead);
+  const handled = (lead as any).action_permanently_dismissed === true;
+  // Only offer "I handled this" when the lead is ACTUALLY action-required now.
+  // Gate strictly on needs_action: syncEngine also stores next_action_key for
+  // WAITING/PAUSED states (e.g. wait_reply_threshold, paused_meeting_scheduled)
+  // with needs_action=false — dismissing those would set the permanent-dismiss
+  // flag and suppress the eventual reply/follow-up reminder until a fresh inbound
+  // (Codex P2). When nothing is due, the card just shows the next-move + Draft it.
+  const hasPendingAction = lead.needs_action === true;
 
   // Lightweight context badge counts
   const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
@@ -74,6 +93,26 @@ export default function LeadDetailHeader({
         </Button>
         <div className="flex gap-1.5">
           <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
+          {/* Reach out directly (Unit 4b): WhatsApp + SMS open the rep's OWN apps
+              via deep-links. Hidden when the number's missing or the lead opted
+              out (WhatsApp also needs wa_opted_in). No Email here — "Draft it"
+              below is the single compose entry. */}
+          {quick.whatsapp && (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" asChild>
+              <a href={whatsappLink(quick.whatsapp.number, "")} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="h-3.5 w-3.5" />
+                WhatsApp
+              </a>
+            </Button>
+          )}
+          {quick.sms && (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" asChild>
+              <a href={smsLink(quick.sms.phone, "")}>
+                <MessageSquare className="h-3.5 w-3.5" />
+                Text
+              </a>
+            </Button>
+          )}
           {/* LinkedIn message button removed from the lead header (Unit 3) — it
               didn't belong among the page-level actions. LinkedIn outreach stays
               available in the Outreach flow (campaign LinkedIn touches). */}
@@ -169,23 +208,53 @@ export default function LeadDetailHeader({
         </div>
       </div>
 
-      {/* ROW 2 — Next move + one-tap Draft it (never a dead card) */}
+      {/* ROW 2 — Next move + one-tap Draft it (never a dead card). When the rep
+          has marked it handled, show a calm state instead of nagging — it comes
+          back on its own when the customer replies (existing re-arm). */}
       <div className="border-t border-border/40" />
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 py-3">
-        <div className="flex-1 min-w-0">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Next move</span>
-          <p className="text-sm font-medium text-foreground">
-            {lead.next_step || "Send a quick check-in to keep this moving"}
-          </p>
-          {lead.next_step_reason && (
-            <p className="text-xs text-muted-foreground mt-0.5">{lead.next_step_reason}</p>
-          )}
-        </div>
-        {onDraftIt && (
-          <Button onClick={onDraftIt} className="w-full sm:w-auto shrink-0 gap-1.5">
-            <PenLine className="h-4 w-4" />
-            Draft it
-          </Button>
+        {handled ? (
+          <>
+            <div className="flex-1 min-w-0 flex items-center gap-2 text-sm text-muted-foreground">
+              <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>You've handled this — it'll come back if they reply.</span>
+            </div>
+            {/* Keep compose reachable (Unit 1: "Draft it" is the single compose
+                entry) but quiet — opens the normal composer with a sensible
+                default. NOT trying to re-draft the dismissed step (that was buggy). */}
+            {onDraftIt && (
+              <Button variant="ghost" size="sm" onClick={onDraftIt} className="shrink-0 text-muted-foreground gap-1.5">
+                <PenLine className="h-4 w-4" />
+                Draft it
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="flex-1 min-w-0">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Next move</span>
+              <p className="text-sm font-medium text-foreground">
+                {lead.next_step || "Send a quick check-in to keep this moving"}
+              </p>
+              {lead.next_step_reason && (
+                <p className="text-xs text-muted-foreground mt-0.5">{lead.next_step_reason}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              {onMarkHandled && hasPendingAction && (
+                <Button variant="ghost" size="sm" onClick={onMarkHandled} disabled={markHandledBusy} className="text-muted-foreground gap-1.5">
+                  <Check className="h-4 w-4" />
+                  I handled this
+                </Button>
+              )}
+              {onDraftIt && (
+                <Button onClick={onDraftIt} className="flex-1 sm:flex-none gap-1.5">
+                  <PenLine className="h-4 w-4" />
+                  Draft it
+                </Button>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

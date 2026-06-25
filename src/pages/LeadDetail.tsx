@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead } from "@/lib/supabaseQueries";
+import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +49,16 @@ export default function LeadDetail() {
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
   const [showLogDialog, setShowLogDialog] = useState(false);
+  // Latest route id — so an in-flight mark-handled / undo doesn't reload the
+  // previous lead's data onto a lead the rep has since navigated to (Codex P2).
+  const currentIdRef = useRef(id);
+  currentIdRef.current = id;
+  // In-flight guard for "I handled this" — a double-tap would otherwise fire a
+  // second RPC that snapshots the already-cleared state, so its Undo would restore
+  // the DISMISSED state instead of the original action (Codex P2). Ref = synchronous
+  // guard against fast double-clicks; state = disables the button.
+  const markingHandledRef = useRef(false);
+  const [markingHandled, setMarkingHandled] = useState(false);
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -82,17 +92,61 @@ export default function LeadDetail() {
     if (!id) return;
     try {
       const data = await getLeadDetail(id);
+      // If the rep navigated to another lead while this fetch was in flight, drop
+      // the result — never render the previous lead's data on the new route (Codex P2).
+      if (currentIdRef.current !== id) return;
       setLead(data);
     } catch (err) {
+      if (currentIdRef.current !== id) return;
       toast.error("Failed to load lead");
     } finally {
-      setIsLoading(false);
+      if (currentIdRef.current === id) setIsLoading(false);
     }
   };
 
   const handleUpdate = async () => {
     await loadLead();
     setRefreshKey(prev => prev + 1);
+  };
+
+  // "I handled this" — dismiss the suggested next move WITHOUT sending. Reuses the
+  // same atomic RPC + Undo pattern as the Queue's "Mark as handled" (sets the
+  // suggestion-dismissal flag only; sends/deletes nothing). syncEngine re-arms it
+  // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
+  const handleMarkHandled = async () => {
+    if (!id || markingHandledRef.current) return;
+    markingHandledRef.current = true;
+    setMarkingHandled(true);
+    const actedId = id;
+    try {
+      const snapshot = await markActionHandled(actedId, { permanent: true });
+      toast.success("Marked as handled", {
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await undoMarkActionHandled(actedId, snapshot);
+              // Skip the view refresh if the rep has since navigated to another lead.
+              if (currentIdRef.current !== actedId) return;
+              await handleUpdate();
+            } catch (err) {
+              console.error("Undo mark-handled failed:", err);
+              toast.error("Undo failed");
+            }
+          },
+        },
+      });
+      // Don't reload the previous lead onto a lead the rep navigated to mid-RPC.
+      if (currentIdRef.current !== actedId) return;
+      await handleUpdate();
+    } catch (err) {
+      console.error("Mark handled failed:", err);
+      toast.error("Couldn't mark as handled");
+    } finally {
+      markingHandledRef.current = false;
+      setMarkingHandled(false);
+    }
   };
 
   useEffect(() => {
@@ -140,6 +194,8 @@ export default function LeadDetail() {
         onUpdate={handleUpdate}
         onSyncComplete={loadLead}
         onDraftIt={handleDraftIt}
+        onMarkHandled={handleMarkHandled}
+        markHandledBusy={markingHandled}
       />
 
       {/* Split layout: Main content + Side panel */}
