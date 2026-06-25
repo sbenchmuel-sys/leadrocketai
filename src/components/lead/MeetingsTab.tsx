@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,6 +75,8 @@ import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { CalendarLastSyncedChip } from "@/components/calendar/CalendarLastSyncedChip";
 import { StuckTranscriptBanner } from "@/components/meeting/StuckTranscriptBanner";
 import { UpcomingMeetingsSection } from "@/components/lead/UpcomingMeetingsSection";
+import LogMeetingDialog from "@/components/lead/LogMeetingDialog";
+import { extractJson, parseRecapJson } from "@/lib/meetingRecap";
 
 interface MeetingsTabProps {
   leadId: string;
@@ -108,120 +109,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
   const [selectedLeadId, setSelectedLeadId] = useState<string>("");
   const [isReassigning, setIsReassigning] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [addTitle, setAddTitle] = useState("");
-  const [addDate, setAddDate] = useState(new Date().toISOString().split("T")[0]);
-  const [addNotes, setAddNotes] = useState("");
-  const [isAddingMeeting, setIsAddingMeeting] = useState(false);
   const { runTask } = useAITask();
-
-  const extractJson = (content: string): string => {
-    const trimmed = content.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    return (fenced?.[1] ?? trimmed).trim();
-  };
-
-  // Tolerant JSON parser: strips fences, and if the payload looks truncated
-  // (starts with `{` but doesn't end with `}`), trims to the last balanced `}`
-  // and retries. Returns null on unrecoverable failure.
-  const parseRecapJson = (raw: string): Record<string, unknown> | null => {
-    const stripped = extractJson(raw);
-    try {
-      return JSON.parse(stripped) as Record<string, unknown>;
-    } catch (e1) {
-      if (stripped.startsWith("{")) {
-        const lastBrace = stripped.lastIndexOf("}");
-        if (lastBrace > 0) {
-          const candidate = stripped.slice(0, lastBrace + 1);
-          try {
-            return JSON.parse(candidate) as Record<string, unknown>;
-          } catch (e2) {
-            console.error("[MeetingsTab] recap repair parse failed:", e2, candidate.slice(0, 300));
-          }
-        }
-      }
-      console.error("[MeetingsTab] recap parse failed:", e1, stripped.slice(0, 300));
-      return null;
-    }
-  };
-
-
-  const handleAddMeetingSummary = async () => {
-    if (!addNotes.trim()) {
-      toast.error("Please enter meeting notes");
-      return;
-    }
-    setIsAddingMeeting(true);
-    try {
-      const lead = await getLeadDetail(leadId);
-      const leadContext = `Name: ${lead.name}\nCompany: ${lead.company}\nEmail: ${lead.email}\nStrategy: ${lead.strategy}\nStatus: ${lead.status}`;
-      const kb = await getKnowledgeChunks(true);
-      const knowledgeContext = kb.slice(0, 5).map(k => k.content.slice(0, 500)).join("\n---\n");
-      const cleanedNotes = addNotes.split(/\n-{2,}|\nOn .* wrote:|\nFrom:|\n>|\nSent from/)[0].slice(0, 3000).trim();
-
-      // Step 1: Generate recap
-      toast.info("Step 1/2: Generating meeting recap...");
-      const recapResult = await runTask("post_meeting_recap", {
-        mode: lead.strategy,
-        lead_context: leadContext,
-        meeting_summary: cleanedNotes,
-        knowledge_context: knowledgeContext,
-        meeting_link: lead.meeting_link || "",
-      });
-
-      if (!recapResult.ok || !recapResult.content) {
-        throw new Error(recapResult.error || "AI returned an empty recap — please try again");
-      }
-      const recapData = parseRecapJson(recapResult.content);
-      if (!recapData) {
-        throw new Error("AI returned an invalid recap format — please try again");
-      }
-
-      // Step 2: Extract milestones
-      toast.info("Step 2/2: Extracting milestones...");
-      const milestonesResult = await runTask("extract_milestones_risks", {
-        lead_context: leadContext,
-        interactions_text: cleanedNotes,
-      });
-
-      let milestonesData: { milestones: Array<{ description: string; status?: string; date?: string }>; risks: unknown[] } = { milestones: [], risks: [] };
-      if (milestonesResult.ok && milestonesResult.content) {
-        try { milestonesData = JSON.parse(extractJson(milestonesResult.content)); } catch (e) { console.error("Failed to parse milestones:", e); }
-      }
-
-      // Create meeting pack
-      await createMeetingPack({
-        lead_id: leadId,
-        title: addTitle.trim() || `Meeting — ${format(parseISO(addDate), "MMM d, yyyy")}`,
-        meeting_date: addDate,
-        raw_notes: addNotes,
-        internal_recap_bullets: (recapData?.internal_recap_bullets as string[]) || [],
-        open_questions: (recapData?.open_questions as string[]) || [],
-        milestones: (milestonesData.milestones || []).map(m => ({
-          description: m.description,
-          status: (m.status || "pending") as "completed" | "pending",
-          date: m.date || null,
-        })),
-        follow_up_email_subject: (recapData?.customer_email as Record<string, string>)?.subject || null,
-        follow_up_email_body: (recapData?.customer_email as Record<string, string>)?.body || null,
-      });
-
-      // Update lead stage to post_meeting
-      await supabase.from("leads").update({ stage: "post_meeting", last_activity_at: new Date().toISOString() }).eq("id", leadId);
-
-      toast.success("Meeting summary added with AI analysis!");
-      setShowAddForm(false);
-      setAddTitle("");
-      setAddDate(new Date().toISOString().split("T")[0]);
-      setAddNotes("");
-      loadData();
-      onMilestonesAdded?.();
-    } catch (err) {
-      console.error("Failed to add meeting summary:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to add meeting summary");
-    } finally {
-      setIsAddingMeeting(false);
-    }
-  };
 
   const regenerateRecapForPack = async (pack: MeetingPackItem) => {
     if (!pack.raw_notes || !pack.raw_notes.trim()) {
@@ -574,38 +462,16 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     );
   }
 
-  const addMeetingForm = showAddForm && (
-    <Card className="border-primary/20">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">Add Meeting Summary</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Title (optional)</label>
-            <Input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="e.g. Discovery Call" />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Date</label>
-            <Input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Meeting Notes</label>
-          <Textarea value={addNotes} onChange={e => setAddNotes(e.target.value)} placeholder="Paste meeting notes, key discussion points, and action items..." rows={8} />
-        </div>
-        <div className="flex gap-2">
-          <Button onClick={handleAddMeetingSummary} disabled={isAddingMeeting || !addNotes.trim()}>
-            {isAddingMeeting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
-            {isAddingMeeting ? "Analyzing..." : "Add & Analyze"}
-          </Button>
-          <Button variant="outline" onClick={() => setShowAddForm(false)} disabled={isAddingMeeting}>Cancel</Button>
-        </div>
-      </CardContent>
-    </Card>
+  const logMeetingDialog = (
+    <LogMeetingDialog
+      open={showAddForm}
+      onOpenChange={setShowAddForm}
+      leadId={leadId}
+      onSaved={() => { loadData(); onMilestonesAdded?.(); }}
+    />
   );
 
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && !showAddForm) {
+  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0) {
     return (
       <div className="space-y-6">
         <UpcomingMeetingsSection leadId={leadId} />
@@ -614,23 +480,15 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
             <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="font-medium text-lg mb-2">No Meetings Yet</h3>
             <p className="text-muted-foreground text-sm max-w-md mx-auto mb-4">
-              Add meeting summaries to trigger AI analysis — recap, milestones, and follow-up email generation.
+              Log a meeting to trigger AI analysis — recap, milestones, and follow-up email generation.
             </p>
             <Button onClick={() => setShowAddForm(true)}>
               <PlusCircle className="h-4 w-4 mr-2" />
-              Add Meeting Summary
+              Log a meeting
             </Button>
           </CardContent>
         </Card>
-      </div>
-    );
-  }
-
-  if (meetingPacks.length === 0 && zoomSummaries.length === 0 && capturedSummaries.length === 0 && showAddForm) {
-    return (
-      <div className="space-y-6">
-        <UpcomingMeetingsSection leadId={leadId} />
-        {addMeetingForm}
+        {logMeetingDialog}
       </div>
     );
   }
@@ -639,17 +497,15 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     <div className="space-y-6">
       <UpcomingMeetingsSection leadId={leadId} />
       <StuckTranscriptBanner leadId={leadId} />
-      {/* Add Meeting Summary button + form */}
+      {/* Log a meeting */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <CalendarLastSyncedChip onRefresh={loadData} />
-        {!showAddForm && (
-          <Button variant="outline" onClick={() => setShowAddForm(true)}>
-            <PlusCircle className="h-4 w-4 mr-2" />
-            Add Meeting Summary
-          </Button>
-        )}
+        <Button variant="outline" onClick={() => setShowAddForm(true)}>
+          <PlusCircle className="h-4 w-4 mr-2" />
+          Log a meeting
+        </Button>
       </div>
-      {addMeetingForm}
+      {logMeetingDialog}
 
       {/* Captured Meeting Transcripts (auto from Google Meet / Teams) */}
       {capturedSummaries.length > 0 && (
