@@ -2,13 +2,20 @@ import { describe, it, expect } from "vitest";
 import { resolveLeadQuickActions } from "@/lib/leadQuickActions";
 
 describe("resolveLeadQuickActions", () => {
-  it("SMS shows when a phone exists and the lead isn't opted out", () => {
-    expect(resolveLeadQuickActions({ phone: "+15551234567" }).sms).toEqual({ phone: "+15551234567" });
+  it("SMS shows when a phone exists, SMS opt-in is set, and not opted out", () => {
+    expect(
+      resolveLeadQuickActions({ phone: "+15551234567", sms_opted_in: true }).sms,
+    ).toEqual({ phone: "+15551234567" });
   });
 
-  it("SMS hidden when there's no phone (or only whitespace)", () => {
-    expect(resolveLeadQuickActions({ phone: null }).sms).toBeNull();
-    expect(resolveLeadQuickActions({ phone: "   " }).sms).toBeNull();
+  it("SMS hidden without SMS opt-in, even with a phone (mirrors channels.ts)", () => {
+    expect(resolveLeadQuickActions({ phone: "+15551234567", sms_opted_in: false }).sms).toBeNull();
+    expect(resolveLeadQuickActions({ phone: "+15551234567" }).sms).toBeNull(); // opt-in undefined
+  });
+
+  it("SMS hidden when there's no phone (or only whitespace), even if opted in", () => {
+    expect(resolveLeadQuickActions({ phone: null, sms_opted_in: true }).sms).toBeNull();
+    expect(resolveLeadQuickActions({ phone: "   ", sms_opted_in: true }).sms).toBeNull();
   });
 
   it("WhatsApp shows with a whatsapp_number + opt-in", () => {
@@ -36,6 +43,7 @@ describe("resolveLeadQuickActions", () => {
     const out = resolveLeadQuickActions({
       phone: "+15551234567",
       whatsapp_number: "+15559876543",
+      sms_opted_in: true,
       wa_opted_in: true,
       unsubscribed: true,
     });

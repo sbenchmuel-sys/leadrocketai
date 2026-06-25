@@ -15,6 +15,8 @@ export interface LeadQuickActionInput {
   whatsapp_number?: string | null;
   /** Lead-level opt-out — when true, no manual messaging quick-actions are offered. */
   unsubscribed?: boolean | null;
+  /** SMS consent — required for the Text action (mirrors channels.ts `smsOk`). */
+  sms_opted_in?: boolean | null;
   /** WhatsApp consent — required for the WhatsApp action (WhatsApp policy). */
   wa_opted_in?: boolean | null;
 }
@@ -28,17 +30,20 @@ export interface LeadQuickActions {
 
 /**
  * Which messaging quick-actions to show:
- *  - SMS: a phone number exists AND the lead isn't opted out.
+ *  - SMS: a phone number exists AND the lead has opted in to SMS AND isn't opted
+ *    out. (Mirrors the app's existing SMS availability rule in channels.ts — a
+ *    manual text still needs the lead's SMS consent.)
  *  - WhatsApp: a WhatsApp number exists (falls back to the phone number) AND the
  *    lead has opted in to WhatsApp AND isn't opted out.
- * Missing detail or opt-out → that action is null (button hidden — never dead).
+ * Missing detail, missing consent, or opt-out → that action is null (button
+ * hidden — never dead).
  */
 export function resolveLeadQuickActions(lead: LeadQuickActionInput): LeadQuickActions {
   const optedOut = lead.unsubscribed === true;
   const phone = (lead.phone || "").trim();
   const waNumber = (lead.whatsapp_number || "").trim() || phone;
   return {
-    sms: !optedOut && phone ? { phone } : null,
+    sms: !optedOut && lead.sms_opted_in === true && phone ? { phone } : null,
     whatsapp: !optedOut && lead.wa_opted_in === true && waNumber ? { number: waNumber } : null,
   };
 }

@@ -49,6 +49,10 @@ export default function LeadDetail() {
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
   const [showLogDialog, setShowLogDialog] = useState(false);
+  // "I handled this" clears the lead's next_action_key via the RPC. Remember it so
+  // "Draft it anyway" in the handled state still drafts the dismissed step this
+  // session (rather than falling back to a generic draft). Cleared on undo / lead change.
+  const [dismissedActionKey, setDismissedActionKey] = useState<string | undefined>(undefined);
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -60,7 +64,9 @@ export default function LeadDetail() {
     // Open the recommended draft in the review-and-send composer. The dialog
     // auto-generates from the lead's next_action_key (or its own sensible
     // default when there's no recommendation) and always ends in manual Send.
-    setDraftActionKey(lead?.next_action_key ?? undefined);
+    // Prefer the live action key; fall back to the one we dismissed this session
+    // so "Draft it anyway" in the handled state still targets that step.
+    setDraftActionKey(lead?.next_action_key ?? dismissedActionKey ?? undefined);
     setShowDraftDialog(true);
   };
 
@@ -102,7 +108,9 @@ export default function LeadDetail() {
   const handleMarkHandled = async () => {
     if (!id) return;
     try {
+      const keyBefore = lead?.next_action_key ?? undefined;
       const snapshot = await markActionHandled(id, { permanent: true });
+      setDismissedActionKey(keyBefore);
       toast.success("Marked as handled", {
         duration: 5000,
         action: {
@@ -110,6 +118,7 @@ export default function LeadDetail() {
           onClick: async () => {
             try {
               await undoMarkActionHandled(id, snapshot);
+              setDismissedActionKey(undefined);
               await handleUpdate();
             } catch (err) {
               console.error("Undo mark-handled failed:", err);
@@ -131,6 +140,7 @@ export default function LeadDetail() {
     // effect clears — visibility refresh and in-page updates reload without a flash.
     setLead(null);
     setIsLoading(true);
+    setDismissedActionKey(undefined);
     loadLead();
   }, [id]);
 
