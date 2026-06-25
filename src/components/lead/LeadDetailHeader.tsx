@@ -49,6 +49,11 @@ export default function LeadDetailHeader({
   // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
   const quick = resolveLeadQuickActions(lead);
   const handled = (lead as any).action_permanently_dismissed === true;
+  // Only offer "I handled this" when there's an ACTUAL pending action to dismiss.
+  // The next-move card shows a generic fallback line even when nothing is pending;
+  // dismissing that would set the permanent-dismiss flag and could suppress a
+  // FUTURE follow-up reminder until a fresh inbound (Codex P2).
+  const hasPendingAction = lead.needs_action === true || !!lead.next_action_key;
 
   // Lightweight context badge counts
   const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
@@ -228,7 +233,7 @@ export default function LeadDetailHeader({
               )}
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-              {onMarkHandled && (
+              {onMarkHandled && hasPendingAction && (
                 <Button variant="ghost" size="sm" onClick={onMarkHandled} className="text-muted-foreground gap-1.5">
                   <Check className="h-4 w-4" />
                   I handled this

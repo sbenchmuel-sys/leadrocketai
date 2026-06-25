@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -53,6 +53,10 @@ export default function LeadDetail() {
   // "Draft it anyway" in the handled state still drafts the dismissed step this
   // session (rather than falling back to a generic draft). Cleared on undo / lead change.
   const [dismissedActionKey, setDismissedActionKey] = useState<string | undefined>(undefined);
+  // Latest route id — so an in-flight mark-handled / undo doesn't reload the
+  // previous lead's data onto a lead the rep has since navigated to (Codex P2).
+  const currentIdRef = useRef(id);
+  currentIdRef.current = id;
   const location = useLocation();
   const originContext: "dashboard" | "leads" | "inbox" = location.state?.originContext || "dashboard";
   const { isConnected } = useGmailConnection();
@@ -107,17 +111,19 @@ export default function LeadDetail() {
   // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
   const handleMarkHandled = async () => {
     if (!id) return;
+    const actedId = id;
     try {
       const keyBefore = lead?.next_action_key ?? undefined;
-      const snapshot = await markActionHandled(id, { permanent: true });
-      setDismissedActionKey(keyBefore);
+      const snapshot = await markActionHandled(actedId, { permanent: true });
       toast.success("Marked as handled", {
         duration: 5000,
         action: {
           label: "Undo",
           onClick: async () => {
             try {
-              await undoMarkActionHandled(id, snapshot);
+              await undoMarkActionHandled(actedId, snapshot);
+              // Skip the view refresh if the rep has since navigated to another lead.
+              if (currentIdRef.current !== actedId) return;
               setDismissedActionKey(undefined);
               await handleUpdate();
             } catch (err) {
@@ -127,6 +133,9 @@ export default function LeadDetail() {
           },
         },
       });
+      // Don't reload the previous lead onto a lead the rep navigated to mid-RPC.
+      if (currentIdRef.current !== actedId) return;
+      setDismissedActionKey(keyBefore);
       await handleUpdate();
     } catch (err) {
       console.error("Mark handled failed:", err);
