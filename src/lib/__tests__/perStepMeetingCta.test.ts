@@ -32,6 +32,7 @@ import {
 } from "@/lib/campaignDefaults";
 
 import { draftStepToRow } from "@/lib/campaignQueries";
+import { previewMeetingLink, appendMeetingCtaLocal } from "@/lib/outreachQueue";
 
 const REP_LINK = "https://cal.example.com/rita";
 
@@ -288,6 +289,35 @@ describe("(b) instruction shortcut", () => {
     for (const scope of ["soft", "none"] as const) {
       expect(applyMeetingCtaIntent(plan, scope).every((s) => (s.include_meeting_cta ?? null) === null)).toBe(true);
     }
+  });
+});
+
+// ── review preview: visible + editable + per-rep, no cross-rep leak ─────────
+
+describe("review-mode preview meeting link", () => {
+  const ME = "rep-me";
+  const base = { channel: "email", currentUserId: ME, myCalendarLink: REP_LINK };
+
+  it("force_on + my own lead + my link → show my link", () => {
+    expect(previewMeetingLink({ ...base, leadOwnerUserId: ME, stepFlag: true })).toBe(REP_LINK);
+  });
+
+  it("ISOLATION: a coworker's lead (admin view) → never my link", () => {
+    expect(previewMeetingLink({ ...base, leadOwnerUserId: "rep-other", stepFlag: true })).toBeNull();
+  });
+
+  it("null/false flag, non-email, or no link → nothing shown", () => {
+    expect(previewMeetingLink({ ...base, leadOwnerUserId: ME, stepFlag: null })).toBeNull();
+    expect(previewMeetingLink({ ...base, leadOwnerUserId: ME, stepFlag: false })).toBeNull();
+    expect(previewMeetingLink({ ...base, channel: "voice", leadOwnerUserId: ME, stepFlag: true })).toBeNull();
+    expect(previewMeetingLink({ ...base, myCalendarLink: null, leadOwnerUserId: ME, stepFlag: true })).toBeNull();
+  });
+
+  it("appendMeetingCtaLocal mirrors the server: appends, null-safe, idempotent", () => {
+    expect(appendMeetingCtaLocal("Body.", null)).toBe("Body.");
+    const out = appendMeetingCtaLocal("Body.", REP_LINK)!;
+    expect(out).toContain(REP_LINK);
+    expect(appendMeetingCtaLocal(out, REP_LINK)).toBe(out); // no double-append
   });
 });
 

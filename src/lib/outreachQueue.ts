@@ -14,6 +14,36 @@
 // ============================================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import { resolveStepMeetingCta } from "@/lib/campaignResolver";
+
+// Mirrors buildMeetingCtaLine in supabase/functions/_shared/meetingCtaLine.ts —
+// keep the wording in sync so the review preview matches the live send byte for byte.
+function meetingCtaLine(link: string): string {
+  return `P.S. If it's easier, grab a time that works for you here: ${link}`;
+}
+export function appendMeetingCtaLocal(body: string | null, link: string | null): string | null {
+  if (!body || !link) return body;
+  if (body.includes(link)) return body; // idempotent — never double-append
+  return `${body.trimEnd()}\n\n${meetingCtaLine(link)}`;
+}
+
+/**
+ * The booking link to SHOW in a review preview for a touch (null = none).
+ * Fail-closed, per-rep: email-only, only when the step is force_on, only the
+ * CURRENT user's own link, and ONLY on a touch whose lead THEY own — so an admin
+ * viewing a coworker's touch never sees (or sends) their own link on it.
+ */
+export function previewMeetingLink(args: {
+  channel: string;
+  leadOwnerUserId: string | null;
+  currentUserId: string | null;
+  myCalendarLink: string | null;
+  stepFlag: boolean | null | undefined;
+}): string | null {
+  if (args.channel !== "email" || !args.myCalendarLink) return null;
+  if (!args.currentUserId || args.leadOwnerUserId !== args.currentUserId) return null;
+  return resolveStepMeetingCta(args.stepFlag) === "force_on" ? args.myCalendarLink : null;
+}
 
 export type OutreachChannel = "email" | "voice" | "sms" | "whatsapp" | "linkedin";
 
@@ -85,7 +115,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     .from("campaign_touch" as any)
     .select(
       "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
-        "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry)",
+        "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry, owner_user_id)",
     )
     .eq("status", "queued")
     .in("campaign_id", activeIds)
@@ -123,6 +153,43 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     );
   };
 
+  // Per-rep meeting CTA (Unit 3): show the booking link in the review body so the
+  // rep SEES it (and can edit/remove it) before approving — the send ships the
+  // reviewed body verbatim, never mutating it afterward. Mirrors the server append
+  // (resolveTouchContent/meetingCtaLine.ts) so the preview matches the live send.
+  // PER-REP, FAIL-CLOSED: only the CURRENT user's OWN link is shown, and only on a
+  // touch whose lead THEY own — never another rep's link, even in an admin view.
+  const { data: authData } = await supabase.auth.getUser();
+  const meId = authData?.user?.id ?? null;
+  let myCalLink: string | null = null;
+  const stepFlag = new Map<string, boolean | null>();
+  if (meId) {
+    const { data: prof } = await supabase
+      .from("rep_profiles")
+      .select("calendar_link")
+      .eq("user_id", meId)
+      .maybeSingle();
+    myCalLink = ((prof as any)?.calendar_link ?? "").trim() || null;
+    if (myCalLink) {
+      const { data: steps } = await supabase
+        .from("campaign_steps" as any)
+        .select("campaign_id, step_number, include_meeting_cta")
+        .in("campaign_id", campaignIds)
+        .is("variant_group", null);
+      for (const s of (steps || []) as any[]) {
+        stepFlag.set(`${s.campaign_id}|${s.step_number}`, s.include_meeting_cta ?? null);
+      }
+    }
+  }
+  const meetingLinkFor = (t: any, lead: any): string | null =>
+    previewMeetingLink({
+      channel: t.channel,
+      leadOwnerUserId: lead.owner_user_id ?? null,
+      currentUserId: meId,
+      myCalendarLink: myCalLink,
+      stepFlag: stepFlag.get(`${t.campaign_id}|${t.step_number}`) ?? null,
+    });
+
   // `rows` is already (a) constrained to active campaigns, (b) owner-scoped via the
   // leads!inner join (no hidden-lead or blank-card rows, no buried work), and (c)
   // capped. Each row's lead is embedded.
@@ -145,7 +212,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       linkedinUrl: lead.linkedin_url ?? null,
       whatsappNumber: lead.whatsapp_number ?? null,
       subject: interpolateName(c?.subject ?? null, first),
-      body: interpolateName(c?.body ?? null, first),
+      body: appendMeetingCtaLocal(interpolateName(c?.body ?? null, first), meetingLinkFor(t, lead)),
       smsText: interpolateName(c?.sms_text ?? null, first),
       talkingPoints: interpolateName(c?.talking_points ?? null, first),
       voicemailScript: interpolateName(c?.voicemail_script ?? null, first),
