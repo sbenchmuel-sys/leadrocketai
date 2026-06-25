@@ -188,6 +188,11 @@ export interface SendColdEmailArgs {
   subject: string;
   body: string;
   unsubscribeUrl: string;
+  // The (campaign, step) this email belongs to — used to append the per-rep
+  // meeting CTA here, in the ONE sender, so review-mode sends (which supply their
+  // own body and skip resolveTouchContent) still get the lead owner's link.
+  campaignId: string;
+  stepNumber: number;
 }
 
 export interface SendColdEmailResult {
@@ -227,8 +232,16 @@ export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendC
   const postalAddress = (ws?.cold_outreach_postal_address || "").trim();
   if (!postalAddress) return { ok: false, reason: "no company postal address (CAN-SPAM)" };
 
+  // Per-rep meeting CTA (Unit 3), applied in the ONE sender so EVERY path gets it
+  // — including review-mode sends that supply their own body and skip
+  // resolveTouchContent. Idempotent: if resolveTouchContent already appended the
+  // owner's link, this is a no-op. Per-rep (lead owner) + gated by the fresh flag.
+  const bodyWithCta = await appendOwnerMeetingCta(
+    args.supabase, args.campaignId, args.stepNumber, args.lead.owner_user_id, args.body,
+  );
+
   const footer = buildColdEmailFooter({ unsubscribeUrl: args.unsubscribeUrl, postalAddress });
-  const bodyWithFooter = args.body + footer.footerText;
+  const bodyWithFooter = bodyWithCta + footer.footerText;
 
   const headers = {
     "Content-Type": "application/json",

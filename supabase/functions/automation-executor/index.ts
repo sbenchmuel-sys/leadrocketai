@@ -1868,6 +1868,7 @@ serve(async (req) => {
             workspaceId: lead.workspace_id,
             mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
             subject: content.subject, body: content.body, unsubscribeUrl,
+            campaignId: camp.id, stepNumber: touch.step_number,
           });
 
           if (!sendRes.ok) {

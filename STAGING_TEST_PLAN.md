@@ -760,7 +760,7 @@ Generated 2026-06-11 from `git log --first-parent main --since=2026-03-01` (436 
   - PSM-6 (review preview == send): in review mode, preview a flagged-ON touch then send it. Pass when: the previewed body and the sent body both contain the lead-owner's link (review uses the same `resolveTouchContent`).
   - PSM-7 (meeting already booked): a lead with `has_future_meeting=true` on a flagged step (regeneration path). Pass when: the draft does NOT ask for a new meeting AND gets no "include the booking link" force rule (the booked-suppression wins).
   - PSM-8 (auto-send gating unchanged — REGRESSION): cold-send consent gate, suppression/unsubscribe floor, OOO/dedup unchanged. Pass when: OC-2/OC-3 still hold; this PR only adds (or omits) a per-rep link line, never changes WHETHER a send is allowed, and the CAN-SPAM footer still follows the appended CTA.
-  - PSM-9 (review-edited body): in review mode the rep edits the body before sending. Pass when: the edited body is sent verbatim (the append only runs when `resolveTouchContent` resolves the body, i.e. when the rep didn't supply one) — no double link.
+  - PSM-9 (Tier 1 — review-mode sends still get the link): review-mode "Send" supplies its own subject/body (skips `resolveTouchContent`), but the per-rep CTA is also appended inside the ONE sender `sendColdEmailTouch`, idempotently. Pass when: a flagged-ON step sent via review mode contains the lead owner's link exactly once (no double-append if the previewed body already had it); the CTA sits ABOVE the CAN-SPAM footer.
 
 ---
 
