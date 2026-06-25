@@ -41,8 +41,10 @@ import {
 import {
   createCampaignWithSteps,
   deleteCampaign,
+  fetchWorkspaceCampaigns,
   type CampaignType,
 } from "@/lib/campaignQueries";
+import { dedupeCampaignName } from "@/lib/campaignNaming";
 import { enrollLeadsInCampaign } from "@/lib/campaignEnrollment";
 import { ingestCampaignKnowledge } from "@/lib/generateCampaignContent";
 import {
@@ -271,6 +273,20 @@ export default function NewCampaign() {
     }
     setSaving(true);
     try {
+      // A picked starter clones in with a FIXED name ("Inbound Intro", …), so a
+      // rep who uses the same starter twice would get two indistinguishable
+      // entries. Auto-suffix (" 2", " 3", …) against the workspace's existing
+      // names so each one stays tellable-apart. Best-effort: if the lookup fails,
+      // fall back to the requested name rather than blocking the save.
+      const desiredName = starter ? starter.name : name.trim();
+      let finalName = desiredName;
+      try {
+        const existing = await fetchWorkspaceCampaigns(workspaceId);
+        finalName = dedupeCampaignName(desiredName, existing.map((c) => c.name));
+      } catch {
+        /* keep desiredName */
+      }
+
       // A picked starter carries its own name/instructions/default-channel and
       // campaign-level meeting-link default; the custom path uses the form. Both
       // create the same kind of draft (status 'draft', send_mode 'review'). The
@@ -278,7 +294,7 @@ export default function NewCampaign() {
       // touch's include_meeting_cta from the editor.
       const campaignId = await createCampaignWithSteps({
         workspace_id: workspaceId,
-        name: starter ? starter.name : name.trim(),
+        name: finalName,
         campaign_type: starter ? "general" : campaignType,
         default_channel: starter ? starter.default_channel : "email",
         include_meeting_cta: starter ? starter.include_meeting_cta : false,
@@ -348,6 +364,9 @@ export default function NewCampaign() {
       }
 
       toast.success("Outreach saved as a draft");
+      if (finalName !== desiredName) {
+        toast.info(`You already have an outreach called "${desiredName}" — saved this one as "${finalName}". Rename it anytime.`);
+      }
       if (flyerFailed) {
         toast.info("Saved — but we couldn't read that file. Add a text-based one on the next page.");
       }

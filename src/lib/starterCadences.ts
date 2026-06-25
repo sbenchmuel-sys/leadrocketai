@@ -48,8 +48,14 @@ export interface StarterCadence {
   /** Stable id used as the React key and the picker's selection token. */
   id: string;
   name: string;
-  /** One-line plain-language summary for the card. */
+  /** One-line plain-language summary of what the cadence DOES. */
   tagline: string;
+  /**
+   * One line: WHO a rep should enroll. The copy a starter generates is
+   * motion/position-derived, so the name alone doesn't tell a rep who it's for —
+   * this hint does. Shown on the card so the right people get the right cadence.
+   */
+  whoFor: string;
   /** A touch more detail under the tagline. */
   description: string;
   default_channel: CanonicalChannel;
@@ -79,6 +85,7 @@ export const STARTER_CADENCES: StarterCadence[] = [
     id: "inbound_intro",
     name: "Inbound Intro",
     tagline: "Reply fast, then follow up across email, call and text.",
+    whoFor: "Leads that came in via your website, a form, or a referral.",
     description:
       "A 7-touch mix for warm or inbound leads: lead with a quick reply, then weave in calls and a text between follow-up emails over nine days.",
     default_channel: "email",
@@ -154,6 +161,7 @@ export const STARTER_CADENCES: StarterCadence[] = [
     id: "cold_outbound",
     name: "Cold Outbound",
     tagline: "A focused four-email cold sequence.",
+    whoFor: "Cold prospects who've never heard from you before.",
     description:
       "Email-only: intro, two follow-ups, then a respectful breakup over twelve days. Stays behind every existing cold-send guardrail.",
     default_channel: "email",
@@ -202,6 +210,7 @@ export const STARTER_CADENCES: StarterCadence[] = [
     id: "reengage",
     name: "Re-engage",
     tagline: "Reconnect with people who went quiet.",
+    whoFor: "Past contacts who stalled or went dark and need a nudge.",
     description:
       "Three warm emails for past contacts: a soft check-in, a fresh-angle follow-up, then a gentle close over nine days.",
     default_channel: "email",
