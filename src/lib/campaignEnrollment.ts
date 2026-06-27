@@ -111,6 +111,17 @@ export interface CadenceStep {
 }
 
 /**
+ * Stable fingerprint of the schedule-relevant step shape (number + channel +
+ * gap). Used to detect a concurrent draft step-edit between reading the steps
+ * and writing a lead's touch rows — any reorder/insert/remove/retime/channel
+ * change flips it, so enrollment can bail rather than strand touches on a stale
+ * numbering.
+ */
+export function stepScheduleFingerprint(steps: CadenceStep[]): string {
+  return steps.map((s) => `${s.step_number}:${s.channel}:${s.delay_days}`).join("|");
+}
+
+/**
  * Cumulative business-day offset of each step from the lead's start day.
  * offset[0] = 0 (touch 1 lands on the start day). Because each delay_days is a
  * business-day gap, the cumulative offset is just the running sum.
@@ -727,6 +738,36 @@ export async function enrollLeadsInCampaign(
       await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
     }
     throw new Error(enrErr.message || "Failed to create enrollments");
+  }
+
+  // Guard the schedule against a concurrent DRAFT step-edit
+  // (replace_campaign_steps_reconciled) that renumbered the cadence between our
+  // step read (gatherEnrollmentContext) and these touch inserts. Writing touches
+  // against a stale numbering is exactly the corruption the edit RPC's guard is
+  // meant to prevent; the RPC's pre-check can't see our enrollment until it
+  // commits, so we re-read the step fingerprint here and bail if it changed. The
+  // edit side has the symmetric post-write re-check, so whichever commits second
+  // loses — never a mismatch.
+  const { data: stepsNowRows } = await supabase
+    .from("campaign_steps")
+    .select("step_number, channel, delay_days, active")
+    .eq("campaign_id", campaignId)
+    .order("step_number", { ascending: true });
+  const stepsNow: CadenceStep[] = (stepsNowRows || [])
+    .filter((s: any) => s.active !== false)
+    .map((s: any) => ({ step_number: s.step_number, channel: s.channel, delay_days: s.delay_days ?? 0 }));
+  if (stepScheduleFingerprint(stepsNow) !== stepScheduleFingerprint(steps)) {
+    // Roll back this enrollment to its pre-call state (same as the touch-insert
+    // failure path): delete the enrollment rows we just created and clear ONLY
+    // the campaign_id values this call stamped (members keep theirs).
+    const enrIds = ((insertedEnrollments || []) as any[]).map((e) => e.id);
+    if (enrIds.length > 0) {
+      await supabase.from("campaign_enrollment" as any).delete().in("id", enrIds);
+    }
+    if (newlyStampedIds.length > 0) {
+      await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
+    }
+    throw new Error("The outreach steps changed while you were enrolling. Please try again.");
   }
 
   // Touch rows for every enrollment.

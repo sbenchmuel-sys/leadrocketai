@@ -38,6 +38,7 @@ import {
   Save,
   AlertTriangle,
   Settings as SettingsIcon,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -46,13 +47,29 @@ import {
   fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
+  replaceCampaignStepsReconciled,
+  campaignHasCadenceRows,
   type CampaignWithSteps,
+  type CampaignStep,
   type CampaignLead,
   type SendMode,
   type CampaignCollateral,
+  type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
 import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
 import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
+import {
+  insertStep,
+  removeStep,
+  moveStep,
+  changeStepChannel,
+  setStepGap,
+  setStepMeetingCta,
+  type DraftStep,
+} from "@/lib/campaignDefaults";
+import { canEditCampaignSteps, effectiveOrigStepNumber } from "@/lib/campaignStepReconcile";
+import { supabase } from "@/integrations/supabase/client";
+import type { CanonicalChannel } from "@/lib/channels";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { CampaignContentReview } from "@/components/automations/CampaignContentReview";
 import { CampaignCollateralSection } from "@/components/automations/CampaignCollateralSection";
@@ -84,6 +101,23 @@ export default function CampaignDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
+  // ── Structural step editing (draft-only) ──
+  // Whether this campaign already has live cadence rows (enrollments/touches).
+  // Drafts have none; once it does, renumbering would corrupt in-flight sends,
+  // so the editor is hidden and the read-only script is kept. null = unknown yet.
+  const [hasCadenceRows, setHasCadenceRows] = useState<boolean | null>(null);
+  const [editingSteps, setEditingSteps] = useState(false);
+  // The working copy while editing. Carries each touch's orig_step_number so the
+  // reconciling save can move its generated copy/links to the new number.
+  const [draftPlan, setDraftPlan] = useState<DraftStep[]>([]);
+  const [savingSteps, setSavingSteps] = useState(false);
+  const [confirmStepsSave, setConfirmStepsSave] = useState(false);
+  // Whether the workspace can send texts — gates the SMS add/change options and
+  // flags any existing text touch that still needs setup. Mirrors NewCampaign.
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  // Bumped after a successful step save to remount the content/collateral
+  // sections so they re-fetch the reconciled rows.
+  const [stepsRev, setStepsRev] = useState(0);
   // Workspace cold-send floor — drives the plain-language "why automatic isn't
   // firing" note under the Sending control. null until loaded.
   const [floor, setFloor] = useState<ColdSendFloor | null>(null);
@@ -142,6 +176,44 @@ export default function CampaignDetail() {
     return () => { cancelled = true; };
   }, [campaign?.workspace_id]);
 
+  // Re-read whether the campaign has live cadence rows (enrollments/touches).
+  // Called on load AND after Add/Remove people, so enrolling on this same page
+  // immediately locks "Edit the steps" instead of letting the rep edit into a
+  // save the RPC would reject.
+  const refreshCadenceGate = useCallback(() => {
+    if (!id) return;
+    campaignHasCadenceRows(id)
+      .then((has) => {
+        setHasCadenceRows(has);
+        if (has) setEditingSteps(false); // people got enrolled — lock editing now
+      })
+      .catch(() => setHasCadenceRows(true)); // fail closed
+  }, [id]);
+
+  // Is this campaign safe to structurally edit? Load the gate, and reset any
+  // in-progress edit when we switch campaign.
+  useEffect(() => {
+    if (!id) return;
+    setEditingSteps(false);
+    setHasCadenceRows(null);
+    refreshCadenceGate();
+  }, [id, refreshCadenceGate]);
+
+  // SMS capability for the editor (gates add/change-to-text and the "needs
+  // setup" flag). Best-effort; defaults to off.
+  useEffect(() => {
+    const workspaceId = campaign?.workspace_id;
+    if (!workspaceId) return;
+    let cancelled = false;
+    supabase
+      .from("workspaces")
+      .select("sms_enabled")
+      .eq("id", workspaceId)
+      .single()
+      .then(({ data }) => { if (!cancelled) setSmsEnabled(data?.sms_enabled ?? false); });
+    return () => { cancelled = true; };
+  }, [campaign?.workspace_id]);
+
   const handleSaveInstructions = async () => {
     if (!id) return;
     setSavingInstructions(true);
@@ -173,6 +245,7 @@ export default function CampaignDetail() {
       // campaign_id — clearing campaign_id alone would leave the cadence running.
       await unenrollLeadFromCampaign(id, leadId);
       setPeople((prev) => prev.filter((p) => p.id !== leadId));
+      refreshCadenceGate(); // removing the last enrolled person may re-open editing
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove that person");
     }
@@ -220,6 +293,86 @@ export default function CampaignDetail() {
     }
   };
 
+  // ── Structural step editing (draft-only) ──
+  // Project saved steps into the editor's working plan, stamping each touch's
+  // current step_number as its identity so the reconciling save can carry its
+  // copy/links to the new number.
+  const toDraftPlan = (steps: CampaignStep[]): DraftStep[] =>
+    steps.map((s) => ({
+      step_number: s.step_number,
+      step_type: s.step_type,
+      channel: s.channel,
+      delay_days: s.delay_days,
+      cta_type: s.cta_type,
+      custom_instructions: s.custom_instructions ?? "",
+      active: s.active,
+      include_meeting_cta: s.include_meeting_cta ?? null,
+      orig_step_number: s.step_number,
+      orig_channel: s.channel,
+    }));
+
+  const startEditingSteps = () => {
+    if (!campaign) return;
+    setDraftPlan(toDraftPlan(campaign.steps));
+    setEditingSteps(true);
+  };
+  const cancelEditingSteps = () => {
+    setEditingSteps(false);
+    setDraftPlan([]);
+  };
+
+  // All structural mutations go through the same tested pure helpers the
+  // new-campaign builder uses — never a forked editor. They preserve each
+  // touch's orig_step_number (extra fields ride through the spreads).
+  const onChangeDelay = (index: number, delayDays: number) =>
+    setDraftPlan((p) => setStepGap(p, index, delayDays));
+  const onRemove = (index: number) => setDraftPlan((p) => removeStep(p, index));
+  const onMove = (index: number, dir: -1 | 1) => setDraftPlan((p) => moveStep(p, index, dir));
+  const onChangeChannel = (index: number, channel: CanonicalChannel) =>
+    setDraftPlan((p) => changeStepChannel(p, index, channel));
+  const onInsert = (atIndex: number, channel: CanonicalChannel) =>
+    setDraftPlan((p) => insertStep(p, atIndex, channel));
+  const onToggleMeeting = (index: number, value: boolean) =>
+    setDraftPlan((p) => setStepMeetingCta(p, index, value));
+
+  const doSaveSteps = async () => {
+    if (!id || !campaign) return;
+    setConfirmStepsSave(false);
+    setSavingSteps(true);
+    try {
+      const payload: ReconcileCampaignStep[] = draftPlan.map((s) => ({
+        step_number: s.step_number,
+        step_type: s.step_type,
+        channel: s.channel,
+        delay_days: s.delay_days,
+        cta_type: s.cta_type,
+        custom_instructions: s.custom_instructions,
+        active: s.active,
+        include_meeting_cta: s.include_meeting_cta ?? null,
+        variant_group: null,
+        // effective identity: a step whose channel no longer matches its saved
+        // copy sends null (copy dropped, starts blank); an undone channel change
+        // restores the original number so its copy is preserved.
+        orig_step_number: effectiveOrigStepNumber(s),
+      }));
+      await replaceCampaignStepsReconciled(id, payload);
+      // Reload the campaign so the read-only script + content sections reflect
+      // the renumbered steps, and remount the dependents so they re-fetch the
+      // reconciled copy/links.
+      const fresh = await fetchCampaignById(id);
+      setCampaign(fresh);
+      setStepsRev((n) => n + 1);
+      loadCollateral();
+      setEditingSteps(false);
+      setDraftPlan([]);
+      toast.success("Steps updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save your changes");
+    } finally {
+      setSavingSteps(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -240,6 +393,10 @@ export default function CampaignDetail() {
   }
 
   const floorStatus = floor ? describeColdSendFloor(floor) : null;
+  // Structural step edits are draft-only and never while live cadence rows
+  // exist. Treat "unknown" (still loading) as not-yet-editable. The RPC enforces
+  // the same rule server-side.
+  const canEditSteps = canEditCampaignSteps(campaign.status, hasCadenceRows !== false);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-12">
@@ -393,8 +550,55 @@ export default function CampaignDetail() {
 
       {/* The script */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground">The messages</h2>
-        {campaign.steps.length === 0 ? (
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">The messages</h2>
+          {/* Edit the cadence — draft-only. Once people are enrolled the steps
+              are locked (renumbering would break in-flight sends). */}
+          {canEditSteps && !editingSteps && campaign.steps.length > 0 && (
+            <Button variant="outline" size="sm" onClick={startEditingSteps}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit the steps
+            </Button>
+          )}
+        </div>
+
+        {editingSteps ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Add, remove, reorder or retime a touch. Removing a touch deletes its
+              message; a new touch starts blank — you'll write it below. Your other
+              messages move with their steps.
+            </p>
+            <CampaignScript
+              steps={draftPlan}
+              editable
+              smsEnabled={smsEnabled}
+              onChangeDelay={onChangeDelay}
+              onRemove={onRemove}
+              onMove={onMove}
+              onChangeChannel={onChangeChannel}
+              onInsert={onInsert}
+              onToggleMeeting={onToggleMeeting}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={cancelEditingSteps} disabled={savingSteps}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setConfirmStepsSave(true)}
+                disabled={savingSteps || draftPlan.length === 0}
+              >
+                {savingSteps ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                Save steps
+              </Button>
+            </div>
+          </div>
+        ) : campaign.steps.length === 0 ? (
           <p className="text-sm text-muted-foreground">No messages in this outreach.</p>
         ) : (
           <CampaignScript
@@ -436,9 +640,17 @@ export default function CampaignDetail() {
         </Collapsible>
       </section>
 
-      {/* Full-cadence generated script (Unit B Phase 2) */}
-      {campaign.steps.length > 0 && (
-        <CampaignContentReview campaign={campaign} people={people} collateral={collateral} />
+      {/* Full-cadence generated script (Unit B Phase 2). Hidden while editing the
+          steps (its copy is keyed by step_number — it would show stale rows until
+          the reconciling save lands). Remounts via key after a save so it
+          re-fetches the reconciled copy. */}
+      {campaign.steps.length > 0 && !editingSteps && (
+        <CampaignContentReview
+          key={`content-${stepsRev}`}
+          campaign={campaign}
+          people={people}
+          collateral={collateral}
+        />
       )}
 
       {/* Collateral (Unit D) */}
@@ -504,8 +716,25 @@ export default function CampaignDetail() {
         onOpenChange={setAddOpen}
         campaignId={campaign.id}
         excludeIds={people.map((p) => p.id)}
-        onAdded={loadPeople}
+        onAdded={() => { loadPeople(); refreshCadenceGate(); }}
       />
+
+      <AlertDialog open={confirmStepsSave} onOpenChange={setConfirmStepsSave}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save these step changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your messages move with their steps. Any touch you removed will lose
+              its written message, and any new touch starts blank for you to write.
+              Nothing is sent — this just reshapes the plan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction onClick={doSaveSteps}>Save steps</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
