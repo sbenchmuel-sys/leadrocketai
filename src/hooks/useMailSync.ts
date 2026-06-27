@@ -574,6 +574,60 @@ export function useMailSync() {
     return parsedResult.completed_indices.length;
   };
 
+  // ============================================================
+  // syncLeads — provider-aware bulk refresh for a set of leads.
+  // Routes to gmail-bulk-sync / outlook-bulk-sync, batched so a
+  // large visible page can't become one very long request.
+  // Returns an aggregate; the caller owns its own loading UI.
+  // ============================================================
+  const syncLeads = async (
+    leadIds: string[],
+    maxResults = 20,
+  ): Promise<{ ok: boolean; totalSynced: number; needsReconnect?: boolean; error?: string }> => {
+    if (leadIds.length === 0) return { ok: true, totalSynced: 0 };
+
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) return { ok: false, totalSynced: 0, error: "Not authenticated" };
+
+    const syncFunction = provider === "outlook" ? "outlook-bulk-sync" : "gmail-bulk-sync";
+    const BATCH_SIZE = 15;
+    let totalSynced = 0;
+
+    for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
+      const batch = leadIds.slice(i, i + BATCH_SIZE);
+      let data: { ok?: boolean; totalSynced?: number; needsReconnect?: boolean; error?: string } = {};
+      try {
+        const response = await fetch(`${supabaseUrl}/functions/v1/${syncFunction}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ leadIds: batch, maxResults }),
+        });
+        const rawBody = await response.text();
+        data = rawBody ? JSON.parse(rawBody) : {};
+      } catch (err) {
+        // Network / parse failure on a batch — return what we have so far.
+        return { ok: false, totalSynced, error: err instanceof Error ? err.message : "Refresh failed" };
+      }
+
+      if (data?.needsReconnect) {
+        await persistReconnectFlag(activeAccount?.id, true, data.error ?? null);
+        return { ok: false, totalSynced, needsReconnect: true, error: data.error };
+      }
+      if (data?.ok) {
+        totalSynced += Number(data.totalSynced ?? 0);
+      }
+    }
+
+    // All batches succeeded — clear any stale reconnect flag.
+    await persistReconnectFlag(activeAccount?.id, false);
+    return { ok: true, totalSynced };
+  };
+
   return {
     // State
     isSyncing,
@@ -586,6 +640,7 @@ export function useMailSync() {
 
     // Actions
     syncLead,
+    syncLeads,
     sendEmail,
     matchEmailsToMilestones,
     refetch: fetchActiveAccount,

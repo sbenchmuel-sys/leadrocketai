@@ -145,17 +145,17 @@ export function GmailSyncButton({
                   {isSyncing ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Syncing...
+                      Refreshing…
                     </>
                   ) : justSynced ? (
                     <>
                       <CheckCircle2 className="h-4 w-4 mr-2" />
-                      Synced!
+                      Updated
                     </>
                   ) : (
                     <>
                       <RefreshCw className="h-4 w-4 mr-2" />
-                      Sync {providerLabel}
+                      Refresh
                     </>
                   )}
                 </Button>

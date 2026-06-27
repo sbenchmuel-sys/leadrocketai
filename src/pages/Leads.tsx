@@ -58,7 +58,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Plus, Search, Trash2, ChevronDown, Loader2 } from "lucide-react";
+import { Plus, Search, Trash2, ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -69,6 +69,7 @@ import { AddToAutomationDialog } from "@/components/leads/AddToAutomationDialog"
 import { ShowMoreFooter } from "@/components/leads/ShowMoreFooter";
 import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
+import { useMailSync } from "@/hooks/useMailSync";
 
 type ViewMode = "todo" | "all";
 type Chip = "all" | "new" | "automation";
@@ -118,6 +119,14 @@ export default function Leads() {
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
 
   const pendingCount = usePendingCandidatesCount();
+
+  // Manual "Refresh": pull new mail for the leads currently on screen, then
+  // reload the list. Sync also runs automatically server-side every ~20 min —
+  // this is just the on-demand nudge. The whole control is hidden when no
+  // mailbox is connected (see header).
+  const { isConnected: mailConnected, isLoading: mailLoading, syncLeads, activeAccount } = useMailSync();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
 
   // Monotonic load token — only the most recent load may apply its result, so a
   // slower stale response (e.g. the initial null-workspace load) can't overwrite
@@ -207,6 +216,39 @@ export default function Leads() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
+
+  // "Updated N ago" hint — shows the most recent of a manual refresh in this
+  // session or the mailbox's own last sync. Hidden if neither is known.
+  const lastUpdatedAt = refreshedAt ?? activeAccount?.last_sync_at ?? null;
+
+  const handleRefresh = async () => {
+    // Only refresh what's on screen — the leads currently rendered that have an
+    // email address. Server-side sync covers the rest of the book on its own.
+    const ids = pageLeads.filter((l) => l.email).map((l) => l.id);
+    if (ids.length === 0) {
+      toast.success("You're up to date");
+      return;
+    }
+    setIsRefreshing(true);
+    try {
+      const result = await syncLeads(ids);
+      // A reconnect toast is already raised inside the hook; nothing to add here.
+      if (result.needsReconnect) return;
+      if (!result.ok) {
+        toast.error("Couldn't refresh — please try again");
+        return;
+      }
+      await loadLeads();
+      setRefreshedAt(new Date().toISOString());
+      toast.success(
+        result.totalSynced > 0
+          ? `${result.totalSynced} new ${result.totalSynced === 1 ? "reply" : "replies"}`
+          : "You're up to date",
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   // ── Add lead ───────────────────────────────────────────────────────────
@@ -359,6 +401,32 @@ export default function Leads() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-foreground">Leads</h1>
         <div className="flex items-center gap-2">
+          {/* Refresh — quiet outline action, left of Import/Add so "Add Lead"
+              stays the loud primary. Hidden entirely when no mailbox is
+              connected. The muted "Updated …" line is desktop-only to keep the
+              one-handed mobile header uncluttered. */}
+          {mailConnected && !mailLoading && (
+            <>
+              {lastUpdatedAt && (
+                <span className="hidden sm:inline text-xs text-muted-foreground">
+                  Updated {formatDistanceToNow(new Date(lastUpdatedAt), { addSuffix: true })}
+                </span>
+              )}
+              <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+                {isRefreshing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Refreshing…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh
+                  </>
+                )}
+              </Button>
+            </>
+          )}
           <LeadImportDialog onImportComplete={loadLeads} />
           <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
             <DialogTrigger asChild>

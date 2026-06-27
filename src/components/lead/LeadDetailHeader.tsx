@@ -14,6 +14,7 @@ import { getLeadStatusLine } from "@/lib/leadStatusLine";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
+import { useMailSync } from "@/hooks/useMailSync";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -43,10 +44,16 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isConnected, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
+  lead, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
+  // Whether a mailbox is connected — read from the canonical mail_accounts
+  // source (falls back to legacy gmail_connections inside the hook). The
+  // `isConnected` prop passed from LeadDetail comes from the legacy-only check
+  // and is intentionally ignored here so the Refresh button shows for reps
+  // connected via the current flow (Gmail or Outlook).
+  const { isConnected: mailConnected, isLoading: mailLoading } = useMailSync();
 
   // Which "reach out directly" buttons to show (hide-when-missing + opt-out).
   // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
@@ -119,12 +126,10 @@ export default function LeadDetailHeader({
           <EditLeadDialog lead={lead} onUpdate={onUpdate} />
           {/* Reconnect chip renders ONLY when a workspace mail_account has
               needs_reconnect=true or status='error'. Rendered outside the
-              isConnected ternary because `isConnected` here comes from the
-              legacy gmail_connections check — a token can be revoked while
-              the legacy row still exists, leaving isConnected=true and
-              hiding the chip exactly when the user needs it. */}
+              connection ternary so a revoked token still surfaces the chip
+              even when a mailbox row exists. */}
           <MailReconnectChip compact />
-          {isConnected ? (
+          {mailLoading ? null : mailConnected ? (
             <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
           ) : (
             <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
