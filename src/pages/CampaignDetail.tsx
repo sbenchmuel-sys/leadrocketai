@@ -176,18 +176,28 @@ export default function CampaignDetail() {
     return () => { cancelled = true; };
   }, [campaign?.workspace_id]);
 
-  // Is this campaign safe to structurally edit? Load whether any cadence rows
-  // exist (drafts have none). Reset any in-progress edit when we switch campaign.
+  // Re-read whether the campaign has live cadence rows (enrollments/touches).
+  // Called on load AND after Add/Remove people, so enrolling on this same page
+  // immediately locks "Edit the steps" instead of letting the rep edit into a
+  // save the RPC would reject.
+  const refreshCadenceGate = useCallback(() => {
+    if (!id) return;
+    campaignHasCadenceRows(id)
+      .then((has) => {
+        setHasCadenceRows(has);
+        if (has) setEditingSteps(false); // people got enrolled — lock editing now
+      })
+      .catch(() => setHasCadenceRows(true)); // fail closed
+  }, [id]);
+
+  // Is this campaign safe to structurally edit? Load the gate, and reset any
+  // in-progress edit when we switch campaign.
   useEffect(() => {
     if (!id) return;
     setEditingSteps(false);
     setHasCadenceRows(null);
-    let cancelled = false;
-    campaignHasCadenceRows(id)
-      .then((has) => { if (!cancelled) setHasCadenceRows(has); })
-      .catch(() => { if (!cancelled) setHasCadenceRows(true); }); // fail closed
-    return () => { cancelled = true; };
-  }, [id]);
+    refreshCadenceGate();
+  }, [id, refreshCadenceGate]);
 
   // SMS capability for the editor (gates add/change-to-text and the "needs
   // setup" flag). Best-effort; defaults to off.
@@ -235,6 +245,7 @@ export default function CampaignDetail() {
       // campaign_id — clearing campaign_id alone would leave the cadence running.
       await unenrollLeadFromCampaign(id, leadId);
       setPeople((prev) => prev.filter((p) => p.id !== leadId));
+      refreshCadenceGate(); // removing the last enrolled person may re-open editing
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove that person");
     }
@@ -701,7 +712,7 @@ export default function CampaignDetail() {
         onOpenChange={setAddOpen}
         campaignId={campaign.id}
         excludeIds={people.map((p) => p.id)}
-        onAdded={loadPeople}
+        onAdded={() => { loadPeople(); refreshCadenceGate(); }}
       />
 
       <AlertDialog open={confirmStepsSave} onOpenChange={setConfirmStepsSave}>

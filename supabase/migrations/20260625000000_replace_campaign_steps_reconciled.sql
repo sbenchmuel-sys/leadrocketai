@@ -50,8 +50,14 @@ DECLARE
   v_count     int;
 BEGIN
   -- ── Resolve campaign + authorize (fail closed) ──
+  -- FOR UPDATE locks the campaign row for this transaction: it serializes
+  -- concurrent step-edit calls on the same campaign and blocks against an
+  -- activation (UPDATE campaigns.status) racing the edit. (It does NOT, by
+  -- itself, block enrollment — enrollment never touches the campaigns row — so
+  -- the enrollment race is closed by the post-write re-check below AND by a
+  -- matching step-fingerprint re-check on the enrollment side.)
   SELECT workspace_id, status INTO v_workspace, v_status
-  FROM public.campaigns WHERE id = _campaign_id;
+  FROM public.campaigns WHERE id = _campaign_id FOR UPDATE;
   IF v_workspace IS NULL THEN
     RAISE EXCEPTION 'campaign not found' USING ERRCODE = '42501';
   END IF;
@@ -155,6 +161,20 @@ BEGIN
          THEN (elem->>'include_meeting_cta')::boolean
          ELSE NULL END
   FROM jsonb_array_elements(_steps) WITH ORDINALITY AS t(elem, ord);
+
+  -- ── Post-write re-assert the enrollment guard (TOCTOU close) ──
+  -- A concurrent enrollment that committed AFTER the pre-check above but during
+  -- this transaction would now be visible (READ COMMITTED). If any cadence rows
+  -- appeared while we were renumbering, abort so the whole edit rolls back —
+  -- enrollment wins, the renumber is discarded, nothing is left mismatched. The
+  -- symmetric window (enrollment reads old steps, then inserts touches after we
+  -- commit) is closed on the enrollment side, which re-reads the step
+  -- fingerprint immediately before inserting touches and bails if it changed.
+  IF EXISTS (SELECT 1 FROM public.campaign_enrollment WHERE campaign_id = _campaign_id)
+     OR EXISTS (SELECT 1 FROM public.campaign_touch WHERE campaign_id = _campaign_id) THEN
+    RAISE EXCEPTION 'cannot edit steps: people were enrolled while you were editing'
+      USING ERRCODE = '42501';
+  END IF;
 END;
 $$;
 

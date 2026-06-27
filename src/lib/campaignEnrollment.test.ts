@@ -11,6 +11,7 @@ import {
   buildTouchSchedule,
   canReceiveChannel,
   isLiveRelationship,
+  stepScheduleFingerprint,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -312,5 +313,34 @@ describe("isLiveRelationship — don't cold-enroll an active relationship", () =
   it("a missing/unknown stage is not treated as a closed deal", () => {
     expect(isLiveRelationship({ stage: null }, NOW)).toBe(false);
     expect(isLiveRelationship({}, NOW)).toBe(false);
+  });
+});
+
+// Detects a concurrent draft step-edit between reading steps and writing touches.
+describe("stepScheduleFingerprint — concurrent step-edit guard", () => {
+  it("is identical for the same plan and changes on any structural edit", () => {
+    const base = stepScheduleFingerprint(STEPS);
+    expect(stepScheduleFingerprint(STEPS)).toBe(base); // stable
+
+    // reorder (swap steps 2 and 3)
+    const reordered: CadenceStep[] = [
+      { step_number: 1, channel: "email", delay_days: 0 },
+      { step_number: 2, channel: "voice", delay_days: 3 },
+      { step_number: 3, channel: "email", delay_days: 2 },
+      { step_number: 4, channel: "email", delay_days: 3 },
+      { step_number: 5, channel: "sms", delay_days: 2 },
+    ];
+    expect(stepScheduleFingerprint(reordered)).not.toBe(base);
+
+    // remove a step
+    expect(stepScheduleFingerprint(STEPS.slice(0, 4))).not.toBe(base);
+
+    // retime a step
+    const retimed = STEPS.map((s, i) => (i === 1 ? { ...s, delay_days: 7 } : s));
+    expect(stepScheduleFingerprint(retimed)).not.toBe(base);
+
+    // channel change
+    const rechanneled = STEPS.map((s, i) => (i === 2 ? { ...s, channel: "email" as const } : s));
+    expect(stepScheduleFingerprint(rechanneled)).not.toBe(base);
   });
 });
