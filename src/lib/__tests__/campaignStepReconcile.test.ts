@@ -110,15 +110,28 @@ describe("orig_step_number rides through the shared editor helpers", () => {
     expect(origs(next)).toEqual([1, null, 2]);
   });
 
-  it("changing a touch's channel and timing leaves its identity intact", () => {
+  it("retiming a touch leaves its identity intact", () => {
     const p = savedPlan([
       { ch: "email", gap: 0 }, // orig 1
       { ch: "sms", gap: 2 }, //   orig 2
     ]);
-    const a = changeStepChannel(p, 1, "voice");
-    expect(origs(a)).toEqual([1, 2]);
-    const b = setStepGap(a, 1, 5);
+    const b = setStepGap(p, 1, 5);
     expect(origs(b)).toEqual([1, 2]);
+  });
+
+  it("changing a saved touch's channel DROPS its content identity (stale channel-shaped copy must not carry over)", () => {
+    const p = savedPlan([
+      { ch: "email", gap: 0 }, // orig 1
+      { ch: "sms", gap: 2 }, //   orig 2
+    ]);
+    // sms → voice: the old text copy is wrong for a call, so identity is dropped.
+    const next = changeStepChannel(p, 1, "voice");
+    expect(origs(next)).toEqual([1, null]);
+    // The dropped step's old number lands in `removed` → the RPC deletes its
+    // stale copy; the call starts blank and regenerates via "Build the messages".
+    const { map, removed } = computeStepReconciliation(next, [1, 2]);
+    expect(removed).toEqual([2]);
+    expect(map).toEqual([{ oldNumber: 1, newNumber: 1 }]);
   });
 });
 

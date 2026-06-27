@@ -375,6 +375,15 @@ export function moveStep(plan: DraftStep[], index: number, dir: -1 | 1): DraftSt
 /**
  * Change an existing touch's channel (e.g. turn an email into a call). Leaving
  * email clears the per-step meeting-link flag, since it only applies to emails.
+ *
+ * A channel change also DROPS this touch's content identity (orig_step_number →
+ * null) when the channel actually changes. campaign_step_content is channel-
+ * shaped (email subject/body vs call talking-points vs sms text), so carrying a
+ * saved step's old copy onto a new channel would leave the wrong fields filled —
+ * and because bulk "Build the messages" skips any step that already has a row,
+ * the rep could never regenerate it. Dropping the identity makes the reconciling
+ * save delete the stale copy so the new channel starts blank and regenerates
+ * cleanly. (No-op in the new-campaign builder — orig is already null there.)
  */
 export function changeStepChannel(
   plan: DraftStep[],
@@ -387,6 +396,7 @@ export function changeStepChannel(
           ...s,
           channel,
           include_meeting_cta: channel === "email" ? s.include_meeting_cta ?? null : null,
+          orig_step_number: s.channel === channel ? s.orig_step_number ?? null : null,
         }
       : s,
   );
