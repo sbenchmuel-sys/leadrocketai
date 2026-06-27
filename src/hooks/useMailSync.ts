@@ -85,7 +85,7 @@ interface MilestoneItem {
   completedAt?: string;
 }
 
-export function useMailSync() {
+export function useMailSync(workspaceId?: string | null) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeAccount, setActiveAccount] = useState<MailAccountInfo | null>(null);
@@ -101,24 +101,31 @@ export function useMailSync() {
         return;
       }
 
-      // Try mail_accounts first (preferred — supports both providers)
-      const { data: defaultAccount } = await supabase
+      // Try mail_accounts first (preferred — supports both providers).
+      // When a workspaceId is supplied, scope to THAT workspace's mailbox — a
+      // user in more than one workspace otherwise gets their global default
+      // account, which may belong to a different workspace (wrong provider /
+      // wrong mailbox / reconnect flag on the wrong account).
+      let defaultQuery = supabase
         .from("mail_accounts")
         .select("id, provider, email_address, status, is_default, last_sync_at")
         .eq("status", "connected")
-        .eq("is_default", true)
-        .maybeSingle();
+        .eq("is_default", true);
+      if (workspaceId) defaultQuery = defaultQuery.eq("workspace_id", workspaceId);
+      const { data: defaultAccount } = await defaultQuery.maybeSingle();
 
       if (defaultAccount) {
         setActiveAccount(defaultAccount as MailAccountInfo);
         return;
       }
 
-      // Fallback: any connected mail_account
-      const { data: anyAccount } = await supabase
+      // Fallback: any connected mail_account (same workspace scoping)
+      let anyQuery = supabase
         .from("mail_accounts")
         .select("id, provider, email_address, status, is_default, last_sync_at")
-        .eq("status", "connected")
+        .eq("status", "connected");
+      if (workspaceId) anyQuery = anyQuery.eq("workspace_id", workspaceId);
+      const { data: anyAccount } = await anyQuery
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -153,7 +160,7 @@ export function useMailSync() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     fetchActiveAccount();

@@ -124,7 +124,7 @@ export default function Leads() {
   // reload the list. Sync also runs automatically server-side every ~20 min —
   // this is just the on-demand nudge. The whole control is hidden when no
   // mailbox is connected (see header).
-  const { isConnected: mailConnected, isLoading: mailLoading, syncLeads, activeAccount } = useMailSync();
+  const { isConnected: mailConnected, isLoading: mailLoading, syncLeads, activeAccount } = useMailSync(workspaceId);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
 

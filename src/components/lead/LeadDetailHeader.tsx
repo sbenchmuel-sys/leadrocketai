@@ -15,6 +15,7 @@ import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
 import { useMailSync } from "@/hooks/useMailSync";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -49,11 +50,13 @@ export default function LeadDetailHeader({
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
   // Whether a mailbox is connected — read from the canonical mail_accounts
-  // source (falls back to legacy gmail_connections inside the hook). The
-  // `isConnected` prop passed from LeadDetail comes from the legacy-only check
-  // and is intentionally ignored here so the Refresh button shows for reps
-  // connected via the current flow (Gmail or Outlook).
-  const { isConnected: mailConnected, isLoading: mailLoading } = useMailSync();
+  // source (falls back to legacy gmail_connections inside the hook), scoped to
+  // the ACTIVE workspace so a multi-workspace user doesn't pick another
+  // workspace's mailbox. The `isConnected` prop passed from LeadDetail comes
+  // from the legacy-only check and is intentionally ignored here so the Refresh
+  // button shows for reps connected via the current flow (Gmail or Outlook).
+  const { workspaceId } = useWorkspace();
+  const { isConnected: mailConnected, isLoading: mailLoading } = useMailSync(workspaceId);
 
   // Which "reach out directly" buttons to show (hide-when-missing + opt-out).
   // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
