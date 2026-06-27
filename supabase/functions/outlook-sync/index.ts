@@ -103,7 +103,7 @@ serve(async (req) => {
       });
     }
 
-    const { leadId, leadEmail, maxResults = 20 } = await req.json();
+    const { leadId, leadEmail, maxResults = 20, workspace_id: requestedWorkspaceId } = await req.json();
     const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim().toLowerCase() : "";
 
     if (!leadId || !leadEmailNorm) {
@@ -114,14 +114,19 @@ serve(async (req) => {
 
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Find the Outlook mail_account for this user's workspace
-    // First get the user's workspace
-    const { data: membership } = await supabase
+    // Find the Outlook mail_account for the lead's workspace. When the caller
+    // passes workspace_id (e.g. outlook-bulk-sync, or a multi-workspace user's
+    // Refresh), scope to THAT workspace — still verifying the user is a member —
+    // instead of defaulting to the user's first membership, which could resolve a
+    // different workspace's mailbox and break workspace isolation.
+    let membershipQuery = supabase
       .from("workspace_members")
       .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+      .eq("user_id", user.id);
+    if (typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0) {
+      membershipQuery = membershipQuery.eq("workspace_id", requestedWorkspaceId);
+    }
+    const { data: membership } = await membershipQuery.limit(1).maybeSingle();
 
     if (!membership) {
       return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {

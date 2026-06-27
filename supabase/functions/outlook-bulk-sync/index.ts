@@ -136,6 +136,10 @@ serve(async (req) => {
             leadId: lead.id,
             leadEmail: lead.email,
             maxResults,
+            // Forward the workspace this bulk run already resolved so outlook-sync
+            // scopes to the same mailbox instead of re-resolving to the user's
+            // first membership (workspace isolation for multi-workspace users).
+            workspace_id: membership.workspace_id,
           }),
         });
 
