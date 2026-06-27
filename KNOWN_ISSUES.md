@@ -569,3 +569,38 @@ filter on `match_knowledge_chunks_v2`, then scope all KB retrieval (authoring,
 live send, **and** cold outbound — which has the same user-scoped behavior
 today) by workspace. This would let multi-workspace reps also get a grounded
 doc-less fallback and make every KB read workspace-exact. Not scheduled.
+
+---
+
+## Cadence editor & meeting CTA — known gaps
+
+Deferred gaps in the cadence (campaign) editor and the per-step meeting-CTA
+work. Logged here so they don't drop.
+
+- **Editing live (enrolled) campaigns is blocked.** Structural editing of a
+  campaign is disabled once any enrollment or touch exists, or once status is
+  anything other than `draft` — at that point the campaign is read-only.
+  Accepted by Shai 2026-06-27. A future unit could allow editing a live
+  campaign by reconciling in-flight touches as the steps change, but that is a
+  bigger and riskier piece of work.
+
+- **No server-side guard against an empty step list.** The
+  `edit_campaign_steps` RPC will accept an empty `steps` array; today only the
+  UI prevents you from saving zero steps. Optional hardening: have the RPC
+  refuse a zero-step save so the rule doesn't depend on the client.
+
+- **A starter's name doesn't guarantee its wording.** Generated copy is derived
+  from the motion/position, so picking a starter by name doesn't pin down the
+  exact words it produces. "Who this is for" hints were added to set
+  expectations, but the safe check is still to spot-check the actual wording at
+  live-send.
+
+- **One-off Queue drafts ignore the per-step meeting-CTA flag (PSM-9).**
+  One-off drafts generated from the Queue (`generateDraft.ts`) don't yet read
+  the per-step `include_meeting_cta` flag, so they won't honor that per-step
+  choice.
+
+- **Two overlapping meeting-CTA controls.** The legacy
+  `CampaignSettingsPanel` meeting-CTA checkbox overlaps the new per-step
+  meeting-CTA control. Future cleanup: dedupe or deprecate the legacy
+  checkbox so there's a single source of truth.
