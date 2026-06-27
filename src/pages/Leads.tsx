@@ -232,7 +232,7 @@ export default function Leads() {
     }
     setIsRefreshing(true);
     try {
-      const result = await syncLeads(ids);
+      const result = await syncLeads(ids, workspaceId);
       // A reconnect toast is already raised inside the hook; nothing to add here.
       if (result.needsReconnect) return;
       if (!result.ok) {

@@ -582,6 +582,7 @@ export function useMailSync() {
   // ============================================================
   const syncLeads = async (
     leadIds: string[],
+    workspaceId?: string | null,
     maxResults = 20,
   ): Promise<{ ok: boolean; totalSynced: number; needsReconnect?: boolean; error?: string }> => {
     if (leadIds.length === 0) return { ok: true, totalSynced: 0 };
@@ -598,6 +599,8 @@ export function useMailSync() {
     for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
       const batch = leadIds.slice(i, i + BATCH_SIZE);
       let data: { ok?: boolean; totalSynced?: number; needsReconnect?: boolean; error?: string } = {};
+      let httpOk = false;
+      let httpStatus = 0;
       try {
         const response = await fetch(`${supabaseUrl}/functions/v1/${syncFunction}`, {
           method: "POST",
@@ -605,8 +608,14 @@ export function useMailSync() {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ leadIds: batch, maxResults }),
+          // Pass the active workspace so outlook-bulk-sync resolves the mailbox
+          // for THIS workspace (it otherwise falls back to the member's first
+          // workspace — wrong mailbox for a multi-workspace user). gmail-bulk-sync
+          // ignores the extra field.
+          body: JSON.stringify({ leadIds: batch, maxResults, ...(workspaceId ? { workspace_id: workspaceId } : {}) }),
         });
+        httpOk = response.ok;
+        httpStatus = response.status;
         const rawBody = await response.text();
         data = rawBody ? JSON.parse(rawBody) : {};
       } catch (err) {
@@ -618,9 +627,13 @@ export function useMailSync() {
         await persistReconnectFlag(activeAccount?.id, true, data.error ?? null);
         return { ok: false, totalSynced, needsReconnect: true, error: data.error };
       }
-      if (data?.ok) {
-        totalSynced += Number(data.totalSynced ?? 0);
+      // A failed batch (HTTP error, or the function returning ok:false for a
+      // missing connection / lead-fetch failure) must surface — not be swallowed
+      // into a "You're up to date" toast.
+      if (!httpOk || data?.ok !== true) {
+        return { ok: false, totalSynced, error: data?.error ?? `Refresh failed (${httpStatus})` };
       }
+      totalSynced += Number(data.totalSynced ?? 0);
     }
 
     // All batches succeeded — clear any stale reconnect flag.
