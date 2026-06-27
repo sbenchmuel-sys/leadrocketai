@@ -103,7 +103,7 @@ serve(async (req) => {
       });
     }
 
-    const { leadId, leadEmail, maxResults = 20, workspace_id: requestedWorkspaceId } = await req.json();
+    const { leadId, leadEmail, maxResults = 20, workspace_id: requestedWorkspaceId, mail_account_id: requestedAccountId } = await req.json();
     const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim().toLowerCase() : "";
 
     if (!leadId || !leadEmailNorm) {
@@ -114,35 +114,61 @@ serve(async (req) => {
 
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Find the Outlook mail_account for the lead's workspace. When the caller
-    // passes workspace_id (e.g. outlook-bulk-sync, or a multi-workspace user's
-    // Refresh), scope to THAT workspace — still verifying the user is a member —
-    // instead of defaulting to the user's first membership, which could resolve a
-    // different workspace's mailbox and break workspace isolation.
-    let membershipQuery = supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id);
-    if (typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0) {
-      membershipQuery = membershipQuery.eq("workspace_id", requestedWorkspaceId);
-    }
-    const { data: membership } = await membershipQuery.limit(1).maybeSingle();
+    // Resolve which Outlook mail_account to sync with. Preference order:
+    //   1. An explicit mail_account_id (the per-lead Refresh sends this) — pin
+    //      that exact account, but ONLY after verifying the caller is a member of
+    //      its workspace, so a user can't sync via an account in a workspace they
+    //      don't belong to.
+    //   2. An explicit workspace_id (bulk refresh) — the connected Outlook
+    //      account in that workspace, verifying membership.
+    //   3. Fallback: the caller's first workspace membership (legacy behaviour).
+    // deno-lint-ignore no-explicit-any
+    let mailAccount: any = null;
 
-    if (!membership) {
-      return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
+      const { data: acct } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("id", requestedAccountId)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .maybeSingle();
+      if (acct) {
+        const { data: acctMembership } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", user.id)
+          .eq("workspace_id", acct.workspace_id)
+          .maybeSingle();
+        if (acctMembership) mailAccount = acct;
+      }
+    } else {
+      let membershipQuery = supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", user.id);
+      if (typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0) {
+        membershipQuery = membershipQuery.eq("workspace_id", requestedWorkspaceId);
+      }
+      const { data: membership } = await membershipQuery.limit(1).maybeSingle();
 
-    const { data: mailAccount } = await serviceSupabase
-      .from("mail_accounts")
-      .select("*")
-      .eq("workspace_id", membership.workspace_id)
-      .eq("provider", "outlook")
-      .eq("status", "connected")
-      .order("is_default", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      if (!membership) {
+        return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { data: acct } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("workspace_id", membership.workspace_id)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      mailAccount = acct;
+    }
 
     if (!mailAccount) {
       return new Response(JSON.stringify({ ok: false, error: "Outlook not connected" }), {

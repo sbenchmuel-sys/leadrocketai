@@ -97,17 +97,26 @@ serve(async (req) => {
       );
     }
 
-    // Fetch lead emails
+    // Fetch lead emails — scoped to the resolved workspace. We forward this
+    // workspace to every per-lead outlook-sync, so a batch that (through staleness
+    // or tampering) names a lead from ANOTHER workspace must not be synced against
+    // this workspace's mailbox. Filtering here drops those out-of-workspace leads.
     const { data: leadsData, error: leadsErr } = await supabase
       .from("leads")
       .select("id, email")
-      .in("id", leadIds);
+      .in("id", leadIds)
+      .eq("workspace_id", membership.workspace_id);
 
     if (leadsErr || !leadsData) {
       return new Response(JSON.stringify({ ok: false, error: "Failed to fetch leads" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    const droppedCount = leadIds.length - leadsData.length;
+    if (droppedCount > 0) {
+      console.warn(`[outlook-bulk-sync] Dropped ${droppedCount} lead id(s) not in workspace ${membership.workspace_id}`);
     }
 
     console.log(`[outlook-bulk-sync] Starting bulk sync for ${leadsData.length} leads (account ${mailAccount.email_address})`);
