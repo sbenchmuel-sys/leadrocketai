@@ -133,7 +133,7 @@ export default function LeadDetailHeader({
               even when a mailbox row exists. */}
           <MailReconnectChip compact />
           {mailLoading ? null : mailConnected ? (
-            <GmailSyncButton leadId={lead.id} leadEmail={lead.email} onSyncComplete={onSyncComplete} />
+            <GmailSyncButton leadId={lead.id} leadEmail={lead.email} workspaceId={workspaceId} onSyncComplete={onSyncComplete} />
           ) : (
             <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
               <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>

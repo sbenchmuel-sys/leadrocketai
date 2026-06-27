@@ -404,8 +404,10 @@ export default function Leads() {
           {/* Refresh — quiet outline action, left of Import/Add so "Add Lead"
               stays the loud primary. Hidden entirely when no mailbox is
               connected. The muted "Updated …" line is desktop-only to keep the
-              one-handed mobile header uncluttered. */}
-          {mailConnected && !mailLoading && (
+              one-handed mobile header uncluttered. Only shown on the all-leads
+              list (it refreshes those rows); the To-do and Pending views own a
+              different data path, so Refresh would target the wrong set there. */}
+          {view === "all" && subTab === "leads" && mailConnected && !mailLoading && (
             <>
               {lastUpdatedAt && (
                 <span className="hidden sm:inline text-xs text-muted-foreground">

@@ -24,6 +24,10 @@ interface GmailSyncButtonProps {
   variant?: "default" | "outline" | "ghost" | "secondary";
   size?: "default" | "sm" | "lg" | "icon";
   showLastSync?: boolean;
+  /** Scope the mailbox lookup to a workspace — pass the active workspace so a
+   *  multi-workspace user syncs the right mailbox (matches the gate that
+   *  decided to render this button). */
+  workspaceId?: string | null;
 }
 
 export function GmailSyncButton({
@@ -33,6 +37,7 @@ export function GmailSyncButton({
   variant = "outline",
   size = "sm",
   showLastSync = true,
+  workspaceId,
 }: GmailSyncButtonProps) {
   const navigate = useNavigate();
   const { connectGmail } = useGmailConnection();
@@ -44,7 +49,7 @@ export function GmailSyncButton({
     provider,
     providerLabel,
     activeAccount,
-  } = useMailSync();
+  } = useMailSync(workspaceId);
 
   const [justSynced, setJustSynced] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
