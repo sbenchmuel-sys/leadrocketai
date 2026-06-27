@@ -18,6 +18,7 @@ import { describe, it, expect } from "vitest";
 import {
   canEditCampaignSteps,
   computeStepReconciliation,
+  effectiveOrigStepNumber,
 } from "@/lib/campaignStepReconcile";
 import {
   normalizePlan,
@@ -44,6 +45,7 @@ function savedPlan(defs: Array<{ ch: CanonicalChannel; gap: number }>): DraftSte
       active: true,
       include_meeting_cta: null,
       orig_step_number: i + 1,
+      orig_channel: d.ch,
     })),
   );
 }
@@ -119,19 +121,37 @@ describe("orig_step_number rides through the shared editor helpers", () => {
     expect(origs(b)).toEqual([1, 2]);
   });
 
-  it("changing a saved touch's channel DROPS its content identity (stale channel-shaped copy must not carry over)", () => {
+  it("changing a saved touch's channel DROPS its content (stale channel-shaped copy must not carry over)", () => {
     const p = savedPlan([
       { ch: "email", gap: 0 }, // orig 1
-      { ch: "sms", gap: 2 }, //   orig 2
+      { ch: "sms", gap: 2 }, //   orig 2, orig_channel sms
     ]);
-    // sms → voice: the old text copy is wrong for a call, so identity is dropped.
+    // sms → voice: the old text copy is wrong for a call. Identity is PRESERVED
+    // in the working copy (so an undo can restore it) but is NOT effective.
     const next = changeStepChannel(p, 1, "voice");
-    expect(origs(next)).toEqual([1, null]);
-    // The dropped step's old number lands in `removed` → the RPC deletes its
-    // stale copy; the call starts blank and regenerates via "Build the messages".
+    expect(origs(next)).toEqual([1, 2]); // raw identity kept
+    expect(effectiveOrigStepNumber(next[1])).toBeNull(); // but copy not carried
+    // So reconciliation drops old step 2's copy; the call starts blank.
     const { map, removed } = computeStepReconciliation(next, [1, 2]);
     expect(removed).toEqual([2]);
     expect(map).toEqual([{ oldNumber: 1, newNumber: 1 }]);
+  });
+
+  it("UNDOING a channel change restores the copy (no avoidable data loss)", () => {
+    const p = savedPlan([
+      { ch: "email", gap: 0 }, // orig 1
+      { ch: "sms", gap: 2 }, //   orig 2, orig_channel sms
+    ]);
+    // sms → voice → back to sms before saving: the final channel matches the
+    // saved copy's channel, so its identity is effective again and copy is kept.
+    const next = changeStepChannel(changeStepChannel(p, 1, "voice"), 1, "sms");
+    expect(effectiveOrigStepNumber(next[1])).toBe(2);
+    const { map, removed } = computeStepReconciliation(next, [1, 2]);
+    expect(removed).toEqual([]); // nothing deleted — the edit was undone
+    expect(map).toEqual([
+      { oldNumber: 1, newNumber: 1 },
+      { oldNumber: 2, newNumber: 2 },
+    ]);
   });
 });
 

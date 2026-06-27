@@ -67,7 +67,7 @@ import {
   setStepMeetingCta,
   type DraftStep,
 } from "@/lib/campaignDefaults";
-import { canEditCampaignSteps } from "@/lib/campaignStepReconcile";
+import { canEditCampaignSteps, effectiveOrigStepNumber } from "@/lib/campaignStepReconcile";
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
 import { CampaignScript } from "@/components/automations/CampaignScript";
@@ -308,6 +308,7 @@ export default function CampaignDetail() {
       active: s.active,
       include_meeting_cta: s.include_meeting_cta ?? null,
       orig_step_number: s.step_number,
+      orig_channel: s.channel,
     }));
 
   const startEditingSteps = () => {
@@ -349,7 +350,10 @@ export default function CampaignDetail() {
         active: s.active,
         include_meeting_cta: s.include_meeting_cta ?? null,
         variant_group: null,
-        orig_step_number: s.orig_step_number ?? null,
+        // effective identity: a step whose channel no longer matches its saved
+        // copy sends null (copy dropped, starts blank); an undone channel change
+        // restores the original number so its copy is preserved.
+        orig_step_number: effectiveOrigStepNumber(s),
       }));
       await replaceCampaignStepsReconciled(id, payload);
       // Reload the campaign so the read-only script + content sections reflect

@@ -40,6 +40,13 @@ export interface DraftStep {
   // undefined = a freshly added touch with no prior identity (no copy yet).
   // Unused by the new-campaign builder (every touch is new there).
   orig_step_number?: number | null;
+  // The channel the saved copy was generated for. campaign_step_content is
+  // channel-shaped (email subject/body vs call talking-points vs sms text), so
+  // the saved copy is only valid to carry forward while the channel still
+  // matches this. Switching a channel away (then maybe back) is decided at save
+  // via effectiveOrigStepNumber — NOT by destroying orig_step_number on edit, so
+  // an undone channel change keeps its copy. null = no prior copy.
+  orig_channel?: CanonicalChannel | null;
 }
 
 // ── The recommended 9-touch plan, presented as FINISHED ─────────────
@@ -307,6 +314,7 @@ function blankTouch(channel: CanonicalChannel): DraftStep {
     active: true,
     include_meeting_cta: null,
     orig_step_number: null, // freshly added — no prior copy to carry forward
+    orig_channel: null,
   };
 }
 
@@ -376,14 +384,12 @@ export function moveStep(plan: DraftStep[], index: number, dir: -1 | 1): DraftSt
  * Change an existing touch's channel (e.g. turn an email into a call). Leaving
  * email clears the per-step meeting-link flag, since it only applies to emails.
  *
- * A channel change also DROPS this touch's content identity (orig_step_number →
- * null) when the channel actually changes. campaign_step_content is channel-
- * shaped (email subject/body vs call talking-points vs sms text), so carrying a
- * saved step's old copy onto a new channel would leave the wrong fields filled —
- * and because bulk "Build the messages" skips any step that already has a row,
- * the rep could never regenerate it. Dropping the identity makes the reconciling
- * save delete the stale copy so the new channel starts blank and regenerates
- * cleanly. (No-op in the new-campaign builder — orig is already null there.)
+ * Identity (orig_step_number / orig_channel) is PRESERVED through a channel
+ * change — we do NOT destroy it here. campaign_step_content is channel-shaped, so
+ * the saved copy is only valid while the channel matches orig_channel; that
+ * decision is made at save time by effectiveOrigStepNumber. Keeping the identity
+ * means a channel change that the rep UNDOES (email → call → email) restores the
+ * original copy instead of needlessly deleting it.
  */
 export function changeStepChannel(
   plan: DraftStep[],
@@ -396,7 +402,6 @@ export function changeStepChannel(
           ...s,
           channel,
           include_meeting_cta: channel === "email" ? s.include_meeting_cta ?? null : null,
-          orig_step_number: s.channel === channel ? s.orig_step_number ?? null : null,
         }
       : s,
   );
