@@ -183,6 +183,19 @@ serve(async (req) => {
       .eq("id", leadId)
       .single();
 
+    // Workspace-isolation guard: the lead and the resolved mailbox MUST be in
+    // the same workspace. The lead read is RLS-scoped to the caller's
+    // workspaces and the mailbox is membership-verified, but they're resolved
+    // independently — so a multi-workspace caller could otherwise pair a lead in
+    // one workspace with a mailbox in another (attaching that mailbox's emails to
+    // the wrong workspace's lead). Refuse the mismatch outright.
+    if (leadData?.workspace_id && mailAccount.workspace_id && leadData.workspace_id !== mailAccount.workspace_id) {
+      console.warn(`[outlook-sync] Workspace mismatch: lead ${leadId} (ws ${leadData.workspace_id}) vs mailbox ${mailAccount.id} (ws ${mailAccount.workspace_id}) — refusing`);
+      return new Response(JSON.stringify({ ok: false, error: "Lead and mailbox are in different workspaces" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const currentStage = leadData?.stage || "new";
     const strategy = leadData?.strategy || "fast";
     const ownerUserId = leadData?.owner_user_id || user.id;
