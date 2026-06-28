@@ -124,7 +124,7 @@ export default function Leads() {
   // reload the list. Sync also runs automatically server-side every ~20 min —
   // this is just the on-demand nudge. The whole control is hidden when no
   // mailbox is connected (see header).
-  const { isConnected: mailConnected, isLoading: mailLoading, syncLeads, activeAccount } = useMailSync(workspaceId);
+  const { isConnected: mailConnected, isLoading: mailLoading, syncLeads, activeAccount, providerLabel } = useMailSync(workspaceId);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
 
@@ -233,8 +233,12 @@ export default function Leads() {
     setIsRefreshing(true);
     try {
       const result = await syncLeads(ids, workspaceId);
-      // A reconnect toast is already raised inside the hook; nothing to add here.
-      if (result.needsReconnect) return;
+      if (result.needsReconnect) {
+        toast.error(`${providerLabel} needs reconnecting`, {
+          description: "Reconnect your mailbox in Settings, then try Refresh again.",
+        });
+        return;
+      }
       if (!result.ok) {
         toast.error("Couldn't refresh — please try again");
         return;

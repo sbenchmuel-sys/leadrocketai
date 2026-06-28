@@ -6,7 +6,7 @@
 // falls back to gmail_connections for legacy setups.
 // ============================================================
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { Json } from "@/integrations/supabase/types";
@@ -90,87 +90,89 @@ export function useMailSync(workspaceId?: string | null) {
   const [error, setError] = useState<string | null>(null);
   const [activeAccount, setActiveAccount] = useState<MailAccountInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Monotonic request id — only the most recent lookup may commit its result, so
+  // switching workspace mid-lookup can't let a slow earlier request overwrite the
+  // newer workspace's mailbox.
+  const requestSeqRef = useRef(0);
 
   // Resolve the active mail account on mount
   const fetchActiveAccount = useCallback(async () => {
     // A workspace-scoping caller passes the active workspaceId, which is `null`
     // until WorkspaceProvider resolves it. Defer the lookup until it's known so we
     // never run an UNSCOPED query that could briefly resolve another workspace's
-    // mailbox (and a slow unscoped response can't overwrite the scoped one). Stay
-    // in the loading state meanwhile. `undefined` means the caller doesn't scope
-    // at all (legacy callers) — proceed with the unscoped lookup as before.
+    // mailbox. Stay in the loading state meanwhile. `undefined` means the caller
+    // doesn't scope at all (legacy callers) — proceed with the unscoped lookup.
     if (workspaceId === null) {
       setIsLoading(true);
       setActiveAccount(null);
       return;
     }
+
+    const seq = ++requestSeqRef.current;
+    setIsLoading(true);
+
+    let result: MailAccountInfo | null = null;
     try {
-      setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setActiveAccount(null);
-        return;
+      if (user) {
+        // Try mail_accounts first (preferred — supports both providers).
+        // When a workspaceId is supplied, scope to THAT workspace's mailbox — a
+        // user in more than one workspace otherwise gets their global default
+        // account, which may belong to a different workspace.
+        let defaultQuery = supabase
+          .from("mail_accounts")
+          .select("id, provider, email_address, status, is_default, last_sync_at")
+          .eq("status", "connected")
+          .eq("is_default", true);
+        if (workspaceId) defaultQuery = defaultQuery.eq("workspace_id", workspaceId);
+        const { data: defaultAccount } = await defaultQuery.maybeSingle();
+
+        if (defaultAccount) {
+          result = defaultAccount as MailAccountInfo;
+        } else {
+          // Fallback: any connected mail_account (same workspace scoping)
+          let anyQuery = supabase
+            .from("mail_accounts")
+            .select("id, provider, email_address, status, is_default, last_sync_at")
+            .eq("status", "connected");
+          if (workspaceId) anyQuery = anyQuery.eq("workspace_id", workspaceId);
+          const { data: anyAccount } = await anyQuery
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (anyAccount) {
+            result = anyAccount as MailAccountInfo;
+          } else {
+            // Legacy fallback: gmail_connections (per-user, not workspace-scoped)
+            const { data: gmailConn } = await supabase
+              .from("gmail_connections")
+              .select("id, gmail_email, last_sync_at")
+              .eq("user_id", user.id)
+              .maybeSingle();
+
+            if (gmailConn) {
+              result = {
+                id: gmailConn.id,
+                provider: "gmail",
+                email_address: gmailConn.gmail_email,
+                status: "connected",
+                is_default: true,
+                last_sync_at: gmailConn.last_sync_at,
+              };
+            }
+          }
+        }
       }
-
-      // Try mail_accounts first (preferred — supports both providers).
-      // When a workspaceId is supplied, scope to THAT workspace's mailbox — a
-      // user in more than one workspace otherwise gets their global default
-      // account, which may belong to a different workspace (wrong provider /
-      // wrong mailbox / reconnect flag on the wrong account).
-      let defaultQuery = supabase
-        .from("mail_accounts")
-        .select("id, provider, email_address, status, is_default, last_sync_at")
-        .eq("status", "connected")
-        .eq("is_default", true);
-      if (workspaceId) defaultQuery = defaultQuery.eq("workspace_id", workspaceId);
-      const { data: defaultAccount } = await defaultQuery.maybeSingle();
-
-      if (defaultAccount) {
-        setActiveAccount(defaultAccount as MailAccountInfo);
-        return;
-      }
-
-      // Fallback: any connected mail_account (same workspace scoping)
-      let anyQuery = supabase
-        .from("mail_accounts")
-        .select("id, provider, email_address, status, is_default, last_sync_at")
-        .eq("status", "connected");
-      if (workspaceId) anyQuery = anyQuery.eq("workspace_id", workspaceId);
-      const { data: anyAccount } = await anyQuery
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (anyAccount) {
-        setActiveAccount(anyAccount as MailAccountInfo);
-        return;
-      }
-
-      // Legacy fallback: gmail_connections
-      const { data: gmailConn } = await supabase
-        .from("gmail_connections")
-        .select("id, gmail_email, last_sync_at")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (gmailConn) {
-        setActiveAccount({
-          id: gmailConn.id,
-          provider: "gmail",
-          email_address: gmailConn.gmail_email,
-          status: "connected",
-          is_default: true,
-          last_sync_at: gmailConn.last_sync_at,
-        });
-        return;
-      }
-
-      setActiveAccount(null);
     } catch {
-      setActiveAccount(null);
-    } finally {
-      setIsLoading(false);
+      result = null;
     }
+
+    // Only the most recent request may commit — a superseded one bows out and
+    // lets the newer lookup own both the account and the loading flag.
+    if (requestSeqRef.current !== seq) return;
+    setActiveAccount(result);
+    setIsLoading(false);
   }, [workspaceId]);
 
   useEffect(() => {
