@@ -71,7 +71,13 @@ export async function uploadCollateralAsset(params: {
   }
 
   const filename = sanitizeFilename(file.name);
-  const path = `${workspaceId}/${campaignId}/${collateralId}/${filename}`;
+  // A per-upload token segment so a replace (even same filename) writes to a NEW object
+  // instead of overwriting the live one in place. The old, reviewed object keeps serving
+  // its URL until the DB row flips to the new path, so there's never a window where the
+  // public URL serves unreviewed bytes while the row still reads asset_ready=true. The
+  // first path segment stays workspace_id, so the storage RLS isolation is unchanged.
+  const uploadToken = crypto.randomUUID();
+  const path = `${workspaceId}/${campaignId}/${collateralId}/${uploadToken}/${filename}`;
 
   // Read the target row FIRST. This (a) fails fast before we waste an upload if
   // the collateral slot is gone or RLS-hidden, and (b) gives us the previous
