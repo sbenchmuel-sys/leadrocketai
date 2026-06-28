@@ -103,7 +103,7 @@ serve(async (req) => {
       });
     }
 
-    const { leadId, leadEmail, maxResults = 20 } = await req.json();
+    const { leadId, leadEmail, maxResults = 20, mail_account_id: requestedAccountId } = await req.json();
     const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim().toLowerCase() : "";
 
     if (!leadId || !leadEmailNorm) {
@@ -114,43 +114,95 @@ serve(async (req) => {
 
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Find the Outlook mail_account for this user's workspace
-    // First get the user's workspace
-    const { data: membership } = await supabase
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+    // The LEAD is the source of truth for which workspace this sync belongs to.
+    // Load it first — the read is RLS-scoped, so a returned row means the caller
+    // is a member of its workspace — and refuse a missing/unreadable lead
+    // (deleted, or one the caller can't read) before touching any mailbox or
+    // doing service-role writes. This is what keeps a hidden cross-workspace lead
+    // id from being paired with a mailbox.
+    const { data: leadData } = await supabase
+      .from("leads")
+      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
+      .eq("id", leadId)
+      .single();
 
-    if (!membership) {
-      return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {
+    if (!leadData?.workspace_id) {
+      return new Response(JSON.stringify({ ok: false, error: "Lead not found" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { data: mailAccount } = await serviceSupabase
-      .from("mail_accounts")
-      .select("*")
-      .eq("workspace_id", membership.workspace_id)
-      .eq("provider", "outlook")
-      .eq("status", "connected")
-      .order("is_default", { ascending: false })
-      .limit(1)
+    // Reading the lead proves the caller OWNS it, but the leads SELECT policy
+    // allows owner_user_id reads regardless of CURRENT workspace membership — so
+    // an ex-member who still owns a lead (their leads weren't reassigned) could
+    // otherwise reach that workspace's mailbox token. Require current membership
+    // of the lead's workspace BEFORE touching any mailbox.
+    const { data: leadMembership } = await supabase
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .eq("workspace_id", leadData.workspace_id)
       .maybeSingle();
+    if (!leadMembership) {
+      console.warn(`[outlook-sync] Caller ${user.id} not a member of lead ${leadId}'s workspace ${leadData.workspace_id} — refusing`);
+      return new Response(JSON.stringify({ ok: false, error: "Not a member of this lead's workspace" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Resolve the Outlook mailbox IN THE LEAD'S WORKSPACE, so it's workspace-
+    // correct by construction and can never be paired with a lead from another
+    // workspace. (No separate membership check needed — reading the lead above
+    // already proves membership.)
+    // deno-lint-ignore no-explicit-any
+    let mailAccount: any = null;
+
+    if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
+      // A specific account was requested (per-lead Refresh). Look it up by id in
+      // the lead's workspace REGARDLESS of status.
+      const { data: requested } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("id", requestedAccountId)
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "outlook")
+        .maybeSingle();
+      if (requested) {
+        if (requested.status === "connected") {
+          mailAccount = requested;
+        } else {
+          // Found but expired/errored — it genuinely needs reconnection (covers
+          // the common case where it's the workspace's only Outlook account and
+          // just expired).
+          return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
+            status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+      // Absent (stale id, or an id that belongs to another workspace): do NOT
+      // signal reconnect — that would flip a perfectly healthy account into an
+      // error state on the client. Fall through to the workspace default below.
+    }
+
+    if (!mailAccount) {
+      // Default: the workspace's default connected Outlook account, is_default
+      // first. Used for the bulk path and when a requested id was absent.
+      const { data: wsAccounts } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1);
+      if (wsAccounts && wsAccounts.length > 0) mailAccount = wsAccounts[0];
+    }
 
     if (!mailAccount) {
       return new Response(JSON.stringify({ ok: false, error: "Outlook not connected" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    // Get current lead data
-    const { data: leadData } = await supabase
-      .from("leads")
-      .select("stage, strategy, owner_user_id, has_future_meeting, action_dismissed_at, created_at, motion, nurture_status, ooo_until, workspace_id")
-      .eq("id", leadId)
-      .single();
 
     const currentStage = leadData?.stage || "new";
     const strategy = leadData?.strategy || "fast";
