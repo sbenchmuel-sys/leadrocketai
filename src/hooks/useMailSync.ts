@@ -93,6 +93,17 @@ export function useMailSync(workspaceId?: string | null) {
 
   // Resolve the active mail account on mount
   const fetchActiveAccount = useCallback(async () => {
+    // A workspace-scoping caller passes the active workspaceId, which is `null`
+    // until WorkspaceProvider resolves it. Defer the lookup until it's known so we
+    // never run an UNSCOPED query that could briefly resolve another workspace's
+    // mailbox (and a slow unscoped response can't overwrite the scoped one). Stay
+    // in the loading state meanwhile. `undefined` means the caller doesn't scope
+    // at all (legacy callers) — proceed with the unscoped lookup as before.
+    if (workspaceId === null) {
+      setIsLoading(true);
+      setActiveAccount(null);
+      return;
+    }
     try {
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();

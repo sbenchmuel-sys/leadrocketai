@@ -77,7 +77,7 @@ export function GmailSyncButton({
     setIsReconnecting(true);
     try {
       if (provider === "outlook") {
-        navigate("/settings");
+        navigate("/app/settings");
         toast.info("Reconnect Outlook from Settings");
       } else {
         await connectGmail(window.location.pathname);
