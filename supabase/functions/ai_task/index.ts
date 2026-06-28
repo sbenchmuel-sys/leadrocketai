@@ -2153,10 +2153,17 @@ ${customInstructionsText}
     // This block overrides that with a value-led arc. (Email-1 link suppression
     // and the follow-up meeting CTA already align with the OUTBOUND motion block,
     // so the shared prompt/motion block are left unchanged.)
+    // Key the arc off the EMAIL TASK, not first_touch: if a rep puts a call/text/
+    // LinkedIn touch before the first email, that email is still the intro
+    // (pre_email_1_intro) even though its step_number > 1 — first_touch would
+    // wrongly hand it the follow-up arc (and vice-versa). The breakup
+    // (pre_email_4_breakup) has its own framing and gets no arc.
+    const isColdIntroEmail = task === "pre_email_1_intro";
+    const isColdFollowupEmail = task === "pre_email_2_followup" || task === "pre_email_3_followup";
     const coldTemplateArc =
-      campaignAuthoring && EMAIL_BODY_TASKS.has(task) && motion === "outbound_prospecting"
+      campaignAuthoring && motion === "outbound_prospecting" && (isColdIntroEmail || isColdFollowupEmail)
         ? `\n\n=== CAMPAIGN EMAIL ARC (value-led — overrides any "ask one generic question" fallback) ===\n` +
-          (isFirstTouch
+          (isColdIntroEmail
             ? `This is EMAIL 1. Open with ONE specific, concrete observation about {Company} or their industry, then ONE short, specific, low-friction ask. Do NOT fall back to a vague "how are you handling X" / "are you looking to optimize Y" question — that reads as mass-AI. Do NOT include a meeting time or calendar link.`
             : `This is a FOLLOW-UP email. Lead with a concrete value point or a genuinely fresh reason to reply drawn from the offer/knowledge above — never "just checking in" or a generic question. You may suggest a quick call in plain words (no calendar link or placeholder). One CTA only.`) +
           `\n=== END CAMPAIGN EMAIL ARC ===`
