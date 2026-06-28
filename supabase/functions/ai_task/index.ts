@@ -2077,7 +2077,7 @@ ${customInstructionsText}
     // still the intro (pre_email_1_intro / inbound_intro) even though step_number > 1.
     // Otherwise the motion/style blocks would emit OUTBOUND FOLLOW-UP while the
     // task-based email arc says EMAIL 1. Per-lead drafting is unchanged (uses isFirstTouch).
-    const motionFirstTouch = campaignAuthoring
+    const motionFirstTouch = (campaignAuthoring && EMAIL_BODY_TASKS.has(task))
       ? (task === "pre_email_1_intro" || task === "inbound_intro")
       : isFirstTouch;
     const motionBlock = buildMotionBlock({ motion, first_touch: motionFirstTouch });
