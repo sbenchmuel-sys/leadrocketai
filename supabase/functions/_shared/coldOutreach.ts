@@ -22,6 +22,7 @@ import { plainTextToHtml } from "./emailUtils.ts";
 import { isSendableColdEmail, isColdSuppressed } from "./coldSendFloorRules.ts";
 import { resolveStepMeetingCta } from "./campaignResolver.ts";
 import { appendMeetingCta } from "./meetingCtaLine.ts";
+import { ONE_PAGER_LINK_TOKEN, applyOnePagerToken } from "./onePagerToken.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -74,13 +75,45 @@ export async function resolveTouchContent(
       .replace(/\{name\}/gi, first)
       .replace(/\[name\]/gi, first);
 
-  const body = await appendOwnerMeetingCta(
+  let body = await appendOwnerMeetingCta(
     supabase, campaignId, stepNumber, ownerUserId, interpolate(match.body),
   );
+  // One-pager offer: swap the {{ONE_PAGER_LINK}} token for the campaign's CURRENT
+  // ready one-pager link for THIS variant, or strip the offer line if none is ready
+  // at send time — so a removed/never-ready file never leaves a dead link.
+  body = await applyOnePagerLink(supabase, campaignId, match.variant_group, body);
   return {
     subject: interpolate(match.subject || `Following up, ${first}`),
     body,
   };
+}
+
+/**
+ * Resolve the one-pager offer for a send. Exact-variant match (a Finance lead's
+ * General/Finance content never pulls a Healthcare one-pager). Replaces the token
+ * with the ready link, or strips the offer line when none is ready. Bodies without
+ * the token are untouched (no query cost).
+ */
+async function applyOnePagerLink(
+  supabase: ServiceClient,
+  campaignId: string,
+  variantGroup: string | null,
+  body: string,
+): Promise<string> {
+  if (!body.includes(ONE_PAGER_LINK_TOKEN)) return body;
+  let q = supabase
+    .from("campaign_collateral")
+    .select("asset_url")
+    .eq("campaign_id", campaignId)
+    .eq("collateral_type", "one_pager")
+    .eq("asset_ready", true)
+    .not("asset_path", "is", null);
+  q = variantGroup && variantGroup.trim()
+    ? q.eq("variant_group", variantGroup)
+    : q.is("variant_group", null);
+  const { data } = await q.maybeSingle();
+  const url = (data?.asset_url as string | undefined) ?? null;
+  return applyOnePagerToken(body, url);
 }
 
 /**
