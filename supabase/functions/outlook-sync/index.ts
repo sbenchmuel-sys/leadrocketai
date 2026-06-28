@@ -168,10 +168,21 @@ serve(async (req) => {
     let mailAccount: any = null;
     if (wsAccounts && wsAccounts.length > 0) {
       if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
+        // A specific account was requested (per-lead Refresh). If it isn't among
+        // this workspace's CONNECTED accounts (disconnected/errored since the
+        // client loaded it, or a stale id), tell the caller to reconnect it —
+        // don't silently fall back to a DIFFERENT mailbox and mis-attach its
+        // messages to the lead.
         mailAccount = wsAccounts.find((a: { id: string }) => a.id === requestedAccountId) ?? null;
+        if (!mailAccount) {
+          return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
+            status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } else {
+        // No specific account (bulk / default) — workspace default, is_default first.
+        mailAccount = wsAccounts[0];
       }
-      // Default-first (query is already ordered is_default desc).
-      if (!mailAccount) mailAccount = wsAccounts[0];
     }
 
     if (!mailAccount) {
