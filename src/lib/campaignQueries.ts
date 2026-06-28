@@ -643,6 +643,16 @@ export interface CampaignCollateral {
   is_edited: boolean;
   attached_step_number: number | null;
   updated_at?: string;
+  // Unit 4 — uploaded brief (asset storage, PR 4.1) + the "Use in emails" confirm
+  // (asset_ready). Hand-typed until Lovable regenerates types.ts after the
+  // migration applies. asset_ready defaults false: an uploaded-but-unconfirmed
+  // brief is never offered in an email (PR 4 gates on asset_ready).
+  asset_path: string | null;
+  asset_url: string | null;
+  asset_mime: string | null;
+  asset_filename: string | null;
+  asset_size_bytes: number | null;
+  asset_ready: boolean;
 }
 
 export type CollateralWrite = Partial<
@@ -691,6 +701,45 @@ export async function upsertCollateral(
       .insert({ campaign_id: campaignId, collateral_type: type, variant_group: vg, ...write } as any);
     if (error) throw new Error(error.message || "Failed to save collateral");
   }
+}
+
+/**
+ * Ensure a (campaign × type × variant) collateral row exists and return its id.
+ * Used by the upload flow: uploadCollateralAsset records onto an EXISTING row, so
+ * the slot must exist before the file is uploaded. Idempotent.
+ */
+export async function ensureCollateralRow(
+  campaignId: string,
+  type: CollateralType,
+  variantGroup: string | null,
+): Promise<string> {
+  const vg = STEP_CONTENT_KEY(variantGroup);
+  let findQ = supabase
+    .from("campaign_collateral" as any)
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .eq("collateral_type", type);
+  findQ = vg == null ? findQ.is("variant_group", null) : findQ.eq("variant_group", vg);
+  const { data: existing } = await findQ.maybeSingle();
+  const existingId = (existing as unknown as { id?: string } | null)?.id;
+  if (existingId) return existingId;
+
+  const { data: inserted, error } = await supabase
+    .from("campaign_collateral" as any)
+    .insert({ campaign_id: campaignId, collateral_type: type, variant_group: vg } as any)
+    .select("id")
+    .single();
+  if (error || !inserted) throw new Error(error?.message || "Couldn't create the collateral slot");
+  return (inserted as unknown as { id: string }).id;
+}
+
+/** Flip the "Use in emails" confirm on an uploaded brief (PR 4 gates sends on this). */
+export async function setCollateralAssetReady(id: string, ready: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("campaign_collateral" as any)
+    .update({ asset_ready: ready } as any)
+    .eq("id", id);
+  if (error) throw new Error(error.message || "Couldn't update the brief");
 }
 
 /** Save a rep's inline edit — locks the draft (is_edited=true). */
