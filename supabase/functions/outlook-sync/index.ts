@@ -150,39 +150,46 @@ serve(async (req) => {
       });
     }
 
-    // Resolve the connected Outlook mailbox IN THE LEAD'S WORKSPACE, so the
-    // mailbox is workspace-correct by construction and can never be paired with a
-    // lead from another workspace. Honor the caller's requested mail_account_id
-    // ONLY when it belongs to this workspace; otherwise fall back to the
-    // workspace's default connected Outlook account. (No separate membership
-    // check needed — reading the lead above already proves membership.)
-    const { data: wsAccounts } = await serviceSupabase
-      .from("mail_accounts")
-      .select("*")
-      .eq("workspace_id", leadData.workspace_id)
-      .eq("provider", "outlook")
-      .eq("status", "connected")
-      .order("is_default", { ascending: false });
-
+    // Resolve the Outlook mailbox IN THE LEAD'S WORKSPACE, so it's workspace-
+    // correct by construction and can never be paired with a lead from another
+    // workspace. (No separate membership check needed — reading the lead above
+    // already proves membership.)
     // deno-lint-ignore no-explicit-any
     let mailAccount: any = null;
-    if (wsAccounts && wsAccounts.length > 0) {
-      if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
-        // A specific account was requested (per-lead Refresh). If it isn't among
-        // this workspace's CONNECTED accounts (disconnected/errored since the
-        // client loaded it, or a stale id), tell the caller to reconnect it —
-        // don't silently fall back to a DIFFERENT mailbox and mis-attach its
-        // messages to the lead.
-        mailAccount = wsAccounts.find((a: { id: string }) => a.id === requestedAccountId) ?? null;
-        if (!mailAccount) {
-          return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
-            status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
+
+    if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
+      // A specific account was requested (per-lead Refresh). Look it up by id in
+      // the lead's workspace REGARDLESS of status, so we can tell "connected"
+      // (use it) apart from "expired/errored or stale" (ask the caller to
+      // reconnect) — including the common case where it's the workspace's only
+      // Outlook account and it just expired (a connected-only query would come
+      // back empty and we'd wrongly report a bare "not connected").
+      const { data: requested } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("id", requestedAccountId)
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "outlook")
+        .maybeSingle();
+      if (requested?.status === "connected") {
+        mailAccount = requested;
       } else {
-        // No specific account (bulk / default) — workspace default, is_default first.
-        mailAccount = wsAccounts[0];
+        return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
+    } else {
+      // No specific account (bulk / default) — the workspace's default connected
+      // Outlook account, is_default first.
+      const { data: wsAccounts } = await serviceSupabase
+        .from("mail_accounts")
+        .select("*")
+        .eq("workspace_id", leadData.workspace_id)
+        .eq("provider", "outlook")
+        .eq("status", "connected")
+        .order("is_default", { ascending: false })
+        .limit(1);
+      if (wsAccounts && wsAccounts.length > 0) mailAccount = wsAccounts[0];
     }
 
     if (!mailAccount) {
