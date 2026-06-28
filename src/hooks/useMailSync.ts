@@ -6,7 +6,7 @@
 // falls back to gmail_connections for legacy setups.
 // ============================================================
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { Json } from "@/integrations/supabase/types";
@@ -85,75 +85,95 @@ interface MilestoneItem {
   completedAt?: string;
 }
 
-export function useMailSync() {
+export function useMailSync(workspaceId?: string | null) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeAccount, setActiveAccount] = useState<MailAccountInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Monotonic request id — only the most recent lookup may commit its result, so
+  // switching workspace mid-lookup can't let a slow earlier request overwrite the
+  // newer workspace's mailbox.
+  const requestSeqRef = useRef(0);
 
   // Resolve the active mail account on mount
   const fetchActiveAccount = useCallback(async () => {
-    try {
+    // A workspace-scoping caller passes the active workspaceId, which is `null`
+    // until WorkspaceProvider resolves it. Defer the lookup until it's known so we
+    // never run an UNSCOPED query that could briefly resolve another workspace's
+    // mailbox. Stay in the loading state meanwhile. `undefined` means the caller
+    // doesn't scope at all (legacy callers) — proceed with the unscoped lookup.
+    if (workspaceId === null) {
       setIsLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setActiveAccount(null);
-        return;
-      }
-
-      // Try mail_accounts first (preferred — supports both providers)
-      const { data: defaultAccount } = await supabase
-        .from("mail_accounts")
-        .select("id, provider, email_address, status, is_default, last_sync_at")
-        .eq("status", "connected")
-        .eq("is_default", true)
-        .maybeSingle();
-
-      if (defaultAccount) {
-        setActiveAccount(defaultAccount as MailAccountInfo);
-        return;
-      }
-
-      // Fallback: any connected mail_account
-      const { data: anyAccount } = await supabase
-        .from("mail_accounts")
-        .select("id, provider, email_address, status, is_default, last_sync_at")
-        .eq("status", "connected")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (anyAccount) {
-        setActiveAccount(anyAccount as MailAccountInfo);
-        return;
-      }
-
-      // Legacy fallback: gmail_connections
-      const { data: gmailConn } = await supabase
-        .from("gmail_connections")
-        .select("id, gmail_email, last_sync_at")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (gmailConn) {
-        setActiveAccount({
-          id: gmailConn.id,
-          provider: "gmail",
-          email_address: gmailConn.gmail_email,
-          status: "connected",
-          is_default: true,
-          last_sync_at: gmailConn.last_sync_at,
-        });
-        return;
-      }
-
       setActiveAccount(null);
-    } catch {
-      setActiveAccount(null);
-    } finally {
-      setIsLoading(false);
+      return;
     }
-  }, []);
+
+    const seq = ++requestSeqRef.current;
+    setIsLoading(true);
+
+    let result: MailAccountInfo | null = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        // Try mail_accounts first (preferred — supports both providers).
+        // When a workspaceId is supplied, scope to THAT workspace's mailbox — a
+        // user in more than one workspace otherwise gets their global default
+        // account, which may belong to a different workspace.
+        let defaultQuery = supabase
+          .from("mail_accounts")
+          .select("id, provider, email_address, status, is_default, last_sync_at")
+          .eq("status", "connected")
+          .eq("is_default", true);
+        if (workspaceId) defaultQuery = defaultQuery.eq("workspace_id", workspaceId);
+        const { data: defaultAccount } = await defaultQuery.maybeSingle();
+
+        if (defaultAccount) {
+          result = defaultAccount as MailAccountInfo;
+        } else {
+          // Fallback: any connected mail_account (same workspace scoping)
+          let anyQuery = supabase
+            .from("mail_accounts")
+            .select("id, provider, email_address, status, is_default, last_sync_at")
+            .eq("status", "connected");
+          if (workspaceId) anyQuery = anyQuery.eq("workspace_id", workspaceId);
+          const { data: anyAccount } = await anyQuery
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (anyAccount) {
+            result = anyAccount as MailAccountInfo;
+          } else {
+            // Legacy fallback: gmail_connections (per-user, not workspace-scoped)
+            const { data: gmailConn } = await supabase
+              .from("gmail_connections")
+              .select("id, gmail_email, last_sync_at")
+              .eq("user_id", user.id)
+              .maybeSingle();
+
+            if (gmailConn) {
+              result = {
+                id: gmailConn.id,
+                provider: "gmail",
+                email_address: gmailConn.gmail_email,
+                status: "connected",
+                is_default: true,
+                last_sync_at: gmailConn.last_sync_at,
+              };
+            }
+          }
+        }
+      }
+    } catch {
+      result = null;
+    }
+
+    // Only the most recent request may commit — a superseded one bows out and
+    // lets the newer lookup own both the account and the loading flag.
+    if (requestSeqRef.current !== seq) return;
+    setActiveAccount(result);
+    setIsLoading(false);
+  }, [workspaceId]);
 
   useEffect(() => {
     fetchActiveAccount();
@@ -574,6 +594,73 @@ export function useMailSync() {
     return parsedResult.completed_indices.length;
   };
 
+  // ============================================================
+  // syncLeads — provider-aware bulk refresh for a set of leads.
+  // Routes to gmail-bulk-sync / outlook-bulk-sync, batched so a
+  // large visible page can't become one very long request.
+  // Returns an aggregate; the caller owns its own loading UI.
+  // ============================================================
+  const syncLeads = async (
+    leadIds: string[],
+    workspaceId?: string | null,
+    maxResults = 20,
+  ): Promise<{ ok: boolean; totalSynced: number; needsReconnect?: boolean; error?: string }> => {
+    if (leadIds.length === 0) return { ok: true, totalSynced: 0 };
+
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) return { ok: false, totalSynced: 0, error: "Not authenticated" };
+
+    const syncFunction = provider === "outlook" ? "outlook-bulk-sync" : "gmail-bulk-sync";
+    const BATCH_SIZE = 15;
+    let totalSynced = 0;
+
+    for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
+      const batch = leadIds.slice(i, i + BATCH_SIZE);
+      let data: { ok?: boolean; totalSynced?: number; needsReconnect?: boolean; error?: string } = {};
+      let httpOk = false;
+      let httpStatus = 0;
+      try {
+        const response = await fetch(`${supabaseUrl}/functions/v1/${syncFunction}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          // Pass the active workspace so outlook-bulk-sync resolves the mailbox
+          // for THIS workspace (it otherwise falls back to the member's first
+          // workspace — wrong mailbox for a multi-workspace user). gmail-bulk-sync
+          // ignores the extra field.
+          body: JSON.stringify({ leadIds: batch, maxResults, ...(workspaceId ? { workspace_id: workspaceId } : {}) }),
+        });
+        httpOk = response.ok;
+        httpStatus = response.status;
+        const rawBody = await response.text();
+        data = rawBody ? JSON.parse(rawBody) : {};
+      } catch (err) {
+        // Network / parse failure on a batch — return what we have so far.
+        return { ok: false, totalSynced, error: err instanceof Error ? err.message : "Refresh failed" };
+      }
+
+      if (data?.needsReconnect) {
+        await persistReconnectFlag(activeAccount?.id, true, data.error ?? null);
+        return { ok: false, totalSynced, needsReconnect: true, error: data.error };
+      }
+      // A failed batch (HTTP error, or the function returning ok:false for a
+      // missing connection / lead-fetch failure) must surface — not be swallowed
+      // into a "You're up to date" toast.
+      if (!httpOk || data?.ok !== true) {
+        return { ok: false, totalSynced, error: data?.error ?? `Refresh failed (${httpStatus})` };
+      }
+      totalSynced += Number(data.totalSynced ?? 0);
+    }
+
+    // All batches succeeded — clear any stale reconnect flag.
+    await persistReconnectFlag(activeAccount?.id, false);
+    return { ok: true, totalSynced };
+  };
+
   return {
     // State
     isSyncing,
@@ -586,6 +673,7 @@ export function useMailSync() {
 
     // Actions
     syncLead,
+    syncLeads,
     sendEmail,
     matchEmailsToMilestones,
     refetch: fetchActiveAccount,
