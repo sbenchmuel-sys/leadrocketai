@@ -130,9 +130,12 @@ export function CampaignCollateralSection({ campaign, people, collateral, onChan
   };
 
   const onToggleReady = async (checked: boolean) => {
-    if (!row) return;
+    if (!row?.asset_path) return;
     try {
-      await setCollateralAssetReady(row.id, checked);
+      const applied = await setCollateralAssetReady(row.id, checked, row.asset_path);
+      if (!applied) {
+        toast.error("This one-pager was changed elsewhere — re-check the box after it reloads.");
+      }
       onChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't update the brief");

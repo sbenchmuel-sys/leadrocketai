@@ -733,13 +733,26 @@ export async function ensureCollateralRow(
   return (inserted as unknown as { id: string }).id;
 }
 
-/** Flip the "Use in emails" confirm on an uploaded brief (PR 4 gates sends on this). */
-export async function setCollateralAssetReady(id: string, ready: boolean): Promise<void> {
-  const { error } = await supabase
+/**
+ * Flip the "Use in emails" confirm on an uploaded brief (PR 4 gates sends on this).
+ * The predicate includes the `expectedAssetPath` the rep is looking at, so a stale
+ * tab can't approve a file that was replaced under it (replace resets asset_ready and
+ * changes asset_path). Returns false when the file changed — caller should refetch.
+ */
+export async function setCollateralAssetReady(
+  id: string,
+  ready: boolean,
+  expectedAssetPath: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
     .from("campaign_collateral" as any)
     .update({ asset_ready: ready } as any)
-    .eq("id", id);
+    .eq("id", id)
+    .eq("asset_path", expectedAssetPath)
+    .select("id")
+    .maybeSingle();
   if (error) throw new Error(error.message || "Couldn't update the brief");
+  return !!data;
 }
 
 /** Save a rep's inline edit — locks the draft (is_edited=true). */
