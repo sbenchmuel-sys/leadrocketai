@@ -97,15 +97,21 @@ serve(async (req) => {
       );
     }
 
-    // Fetch lead emails — scoped to the resolved workspace. We forward this
-    // workspace to every per-lead outlook-sync, so a batch that (through staleness
-    // or tampering) names a lead from ANOTHER workspace must not be synced against
-    // this workspace's mailbox. Filtering here drops those out-of-workspace leads.
-    const { data: leadsData, error: leadsErr } = await supabase
+    // Fetch lead emails. ONLY scope to the resolved workspace when the caller
+    // explicitly asked for one (the list Refresh always does). When workspace_id
+    // is omitted, `membership.workspace_id` is just the user's arbitrary first
+    // membership — filtering against it would silently drop a multi-workspace
+    // caller's leads from their other workspaces. We don't need to filter in that
+    // case anyway: each per-lead outlook-sync now resolves the mailbox in the
+    // lead's OWN workspace and enforces membership, so out-of-workspace leads are
+    // refused there rather than mis-synced here.
+    const scopeToWorkspace = typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0;
+    let leadsQuery = supabase
       .from("leads")
       .select("id, email")
-      .in("id", leadIds)
-      .eq("workspace_id", membership.workspace_id);
+      .in("id", leadIds);
+    if (scopeToWorkspace) leadsQuery = leadsQuery.eq("workspace_id", membership.workspace_id);
+    const { data: leadsData, error: leadsErr } = await leadsQuery;
 
     if (leadsErr || !leadsData) {
       return new Response(JSON.stringify({ ok: false, error: "Failed to fetch leads" }), {
@@ -115,7 +121,7 @@ serve(async (req) => {
     }
 
     const droppedCount = leadIds.length - leadsData.length;
-    if (droppedCount > 0) {
+    if (scopeToWorkspace && droppedCount > 0) {
       console.warn(`[outlook-bulk-sync] Dropped ${droppedCount} lead id(s) not in workspace ${membership.workspace_id}`);
     }
 
