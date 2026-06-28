@@ -359,11 +359,19 @@ describe("NewCampaign — starter cadence prefills the editable plan", () => {
     // Back, then pick a starter — its plan must fully replace the custom one.
     // Two "Back" controls at Step 2 (header arrow + inline) — either returns to Step 1.
     fireEvent.click(screen.getAllByRole("button", { name: /^Back$/i })[0]);
-    pickStarter(/Re-engage/i);
+    pickStarter(/Cold Outbound/i);
 
     const input = await saveAndReadSteps();
-    expect(input.name).toBe("Re-engage");
-    expect(input.steps).toHaveLength(3); // Re-engage is a 3-email sequence
+    expect(input.name).toBe("Cold Outbound");
+    expect(input.steps).toHaveLength(4); // Cold Outbound is a 4-email sequence
     expect(input.steps.every((s: any) => s.channel === "email")).toBe(true);
+  });
+
+  it("does not offer the Re-engage starter (hidden until the per-lead engine ships)", () => {
+    renderWizard();
+    // Step 1 shows the picker; Re-engage is intentionally not among the cards.
+    expect(screen.getByRole("button", { name: /Inbound Intro/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Cold Outbound/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Re-engage/i })).toBeNull();
   });
 });

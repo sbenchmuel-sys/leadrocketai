@@ -22,6 +22,7 @@
 import type { CanonicalChannel } from "@/lib/channels";
 import type { StepType } from "@/lib/campaignTypes";
 import type {
+  CampaignMotion,
   CreateCampaignInput,
   DraftCampaignStep,
 } from "@/lib/campaignQueries";
@@ -58,6 +59,18 @@ export interface StarterCadence {
   whoFor: string;
   /** A touch more detail under the tagline. */
   description: string;
+  /**
+   * The campaign motion this starter clones in as. Drives review-time copy
+   * generation: "inbound_response" authors warm inbound replies, "outbound_prospecting"
+   * authors cold copy. Threaded into createCampaignWithSteps via starterToCreateInput.
+   */
+  motion: CampaignMotion;
+  /**
+   * Hidden from the picker (kept in the library for tests / future use). Re-engage
+   * is hidden until the per-lead engine can do it justice — a static template can't
+   * reference a lead's real history, which is the whole point of re-engagement.
+   */
+  hidden?: boolean;
   default_channel: CanonicalChannel;
   include_meeting_cta: boolean;
   global_instructions: string;
@@ -88,6 +101,7 @@ export const STARTER_CADENCES: StarterCadence[] = [
     whoFor: "Leads that came in via your website, a form, or a referral.",
     description:
       "A 7-touch mix for warm or inbound leads: lead with a quick reply, then weave in calls and a text between follow-up emails over nine days.",
+    motion: "inbound_response",
     default_channel: "email",
     include_meeting_cta: false,
     global_instructions: MULTICHANNEL_INSTRUCTIONS,
@@ -164,6 +178,7 @@ export const STARTER_CADENCES: StarterCadence[] = [
     whoFor: "Cold prospects who've never heard from you before.",
     description:
       "Email-only: intro, two follow-ups, then a respectful breakup over twelve days. Stays behind every existing cold-send guardrail.",
+    motion: "outbound_prospecting",
     default_channel: "email",
     include_meeting_cta: false,
     global_instructions: COLD_INSTRUCTIONS,
@@ -213,6 +228,10 @@ export const STARTER_CADENCES: StarterCadence[] = [
     whoFor: "Past contacts who stalled or went dark and need a nudge.",
     description:
       "Three warm emails for past contacts: a soft check-in, a fresh-angle follow-up, then a gentle close over nine days.",
+    motion: "re_engagement",
+    // Hidden until the per-lead engine ships — a static template can't reference
+    // a contact's real history, which is the whole point of re-engagement.
+    hidden: true,
     default_channel: "email",
     include_meeting_cta: false,
     global_instructions: REENGAGE_INSTRUCTIONS,
@@ -300,6 +319,7 @@ export function starterToCreateInput(
     workspace_id: workspaceId,
     name: cadence.name,
     campaign_type: "general",
+    motion: cadence.motion,
     default_channel: cadence.default_channel,
     include_meeting_cta: cadence.include_meeting_cta,
     global_instructions: cadence.global_instructions,

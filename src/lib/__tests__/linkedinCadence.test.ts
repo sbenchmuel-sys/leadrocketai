@@ -17,10 +17,19 @@ import {
 } from "@/lib/channels";
 import { buildDefaultPlan, touchVerb, touchLabel } from "@/lib/campaignDefaults";
 import { primaryTaskForChannel } from "@/lib/generateCampaignContent";
-import type { CampaignStep } from "@/lib/campaignQueries";
+import type { CampaignStep, CampaignWithSteps } from "@/lib/campaignQueries";
 
 function step(channel: CanonicalChannel, step_type: string): CampaignStep {
   return { channel, step_type } as unknown as CampaignStep;
+}
+
+// Minimal campaign for task-selection tests. motion drives outbound-vs-inbound;
+// steps are only consulted for the inbound email follow-up ordinal.
+function camp(
+  motion = "outbound_prospecting",
+  steps: CampaignStep[] = [],
+): CampaignWithSteps {
+  return { motion, steps } as unknown as CampaignWithSteps;
 }
 
 // ── Channel mapping ─────────────────────────────────────────────────────────
@@ -107,21 +116,57 @@ describe("touchLabel — LinkedIn touches read distinctly by step_type", () => {
 
 describe("primaryTaskForChannel — LinkedIn touch types route to the right ai_task", () => {
   it("intro → linkedin_connect (connection request)", () => {
-    expect(primaryTaskForChannel(step("linkedin", "intro"))).toBe("linkedin_connect");
+    expect(primaryTaskForChannel(camp(), step("linkedin", "intro"))).toBe("linkedin_connect");
   });
 
   it("value_add → linkedin_reaction (react to their post)", () => {
-    expect(primaryTaskForChannel(step("linkedin", "value_add"))).toBe("linkedin_reaction");
+    expect(primaryTaskForChannel(camp(), step("linkedin", "value_add"))).toBe("linkedin_reaction");
   });
 
   it("followup → linkedin_followup (follow-up message)", () => {
-    expect(primaryTaskForChannel(step("linkedin", "followup"))).toBe("linkedin_followup");
-    expect(primaryTaskForChannel(step("linkedin", "breakup"))).toBe("linkedin_followup");
+    expect(primaryTaskForChannel(camp(), step("linkedin", "followup"))).toBe("linkedin_followup");
+    expect(primaryTaskForChannel(camp(), step("linkedin", "breakup"))).toBe("linkedin_followup");
   });
 
   it("non-linkedin channels are unchanged", () => {
-    expect(primaryTaskForChannel(step("email", "intro"))).toBe("pre_email_1_intro");
-    expect(primaryTaskForChannel(step("voice", "followup"))).toBe("cold_call_talking_points");
-    expect(primaryTaskForChannel(step("sms", "followup"))).toBe("sms_message");
+    expect(primaryTaskForChannel(camp(), step("email", "intro"))).toBe("pre_email_1_intro");
+    expect(primaryTaskForChannel(camp(), step("voice", "followup"))).toBe("cold_call_talking_points");
+    expect(primaryTaskForChannel(camp(), step("sms", "followup"))).toBe("sms_message");
+  });
+});
+
+// ── Motion-aware email task selection (PR: motion-aware starters) ────────────
+
+describe("primaryTaskForChannel — email tasks follow the campaign motion", () => {
+  // An email step with a real step_number, used for the inbound follow-up ordinal.
+  const emailStep = (step_number: number, step_type: string): CampaignStep =>
+    ({ channel: "email", step_type, step_number, active: true }) as unknown as CampaignStep;
+
+  it("outbound: cold pre_email_* mapping (unchanged)", () => {
+    const c = camp("outbound_prospecting", [
+      emailStep(1, "intro"),
+      emailStep(2, "followup"),
+      emailStep(3, "followup"),
+      emailStep(4, "breakup"),
+    ]);
+    expect(primaryTaskForChannel(c, emailStep(1, "intro"))).toBe("pre_email_1_intro");
+    expect(primaryTaskForChannel(c, emailStep(2, "followup"))).toBe("pre_email_2_followup");
+    expect(primaryTaskForChannel(c, emailStep(3, "followup"))).toBe("pre_email_2_followup");
+    expect(primaryTaskForChannel(c, emailStep(4, "breakup"))).toBe("pre_email_4_breakup");
+  });
+
+  it("inbound: warm inbound_* mapping with follow-up ordinal; breakup shares the cold breakup", () => {
+    // Mirrors the Inbound Intro starter's EMAIL touches at steps 1/3/5/7
+    // (voice/sms touches at 2/4/6 interleave; only emails count for the ordinal).
+    const c = camp("inbound_response", [
+      emailStep(1, "intro"),
+      emailStep(3, "followup"),
+      emailStep(5, "followup"),
+      emailStep(7, "breakup"),
+    ]);
+    expect(primaryTaskForChannel(c, emailStep(1, "intro"))).toBe("inbound_intro");
+    expect(primaryTaskForChannel(c, emailStep(3, "followup"))).toBe("inbound_followup_1");
+    expect(primaryTaskForChannel(c, emailStep(5, "followup"))).toBe("inbound_followup_2");
+    expect(primaryTaskForChannel(c, emailStep(7, "breakup"))).toBe("pre_email_4_breakup");
   });
 });

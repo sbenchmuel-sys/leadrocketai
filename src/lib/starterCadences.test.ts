@@ -112,4 +112,28 @@ describe("starter cadence library", () => {
     expect("send_mode" in input).toBe(false);
     expect(JSON.stringify(input)).not.toContain("automatic");
   });
+
+  it("each starter clones in as its intended motion", () => {
+    expect(getStarterCadence("inbound_intro")!.motion).toBe("inbound_response");
+    expect(getStarterCadence("cold_outbound")!.motion).toBe("outbound_prospecting");
+    expect(getStarterCadence("reengage")!.motion).toBe("re_engagement");
+  });
+
+  it("starterToCreateInput threads the motion through to the create input", () => {
+    expect(starterToCreateInput(getStarterCadence("inbound_intro")!, WORKSPACE).motion).toBe(
+      "inbound_response",
+    );
+    expect(starterToCreateInput(getStarterCadence("cold_outbound")!, WORKSPACE).motion).toBe(
+      "outbound_prospecting",
+    );
+  });
+
+  it("hides only Re-engage from the picker (still present in the library for tests/future use)", () => {
+    // The picker renders STARTER_CADENCES.filter((c) => !c.hidden).
+    const visible = STARTER_CADENCES.filter((c) => !c.hidden).map((c) => c.id);
+    expect(visible).toEqual(["inbound_intro", "cold_outbound"]);
+    expect(getStarterCadence("reengage")!.hidden).toBe(true);
+    expect(getStarterCadence("inbound_intro")!.hidden).toBeFalsy();
+    expect(getStarterCadence("cold_outbound")!.hidden).toBeFalsy();
+  });
 });

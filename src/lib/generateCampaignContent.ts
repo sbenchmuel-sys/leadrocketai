@@ -49,8 +49,36 @@ export function contentKindForChannel(channel: CanonicalChannel): ContentKind {
 }
 
 // ── Channel → ai_task task selection ────────────────────────────────────────
-// Email touches REUSE the existing cold-sequence prompts, keyed by step_type.
-function emailTaskForStep(step: CampaignStep): string {
+// The 1-based position of `step` among the campaign's ACTIVE email steps
+// (1 = the first email). Used to pick the right inbound follow-up variant, the
+// same way the live sender keys send_pre_2 → inbound_followup_1 and send_pre_3 →
+// inbound_followup_2 (automation-executor).
+function emailStepOrdinal(campaign: CampaignWithSteps, step: CampaignStep): number {
+  const emails = [...campaign.steps]
+    .filter((s) => s.active && s.channel === "email")
+    .sort((a, b) => a.step_number - b.step_number);
+  const idx = emails.findIndex((s) => s.step_number === step.step_number);
+  return idx < 0 ? 1 : idx + 1;
+}
+
+// Email touches REUSE the existing sequence prompts, keyed by MOTION + step_type.
+// Outbound uses the cold pre_email_* set; inbound uses the warm inbound_* set
+// (intro + two follow-up variants), with the breakup sharing the cold breakup
+// (there is no inbound-specific breakup) — mirrors automation-executor's send path.
+function emailTaskForStep(campaign: CampaignWithSteps, step: CampaignStep): string {
+  if (campaign.motion === "inbound_response") {
+    switch (step.step_type) {
+      case "intro":
+        return "inbound_intro";
+      case "breakup":
+        return "pre_email_4_breakup";
+      default:
+        // First follow-up email → inbound_followup_1; later ones → inbound_followup_2.
+        // (the intro is email ordinal 1, so the first follow-up email is ordinal 2.)
+        return emailStepOrdinal(campaign, step) <= 2 ? "inbound_followup_1" : "inbound_followup_2";
+    }
+  }
+  // Outbound (unchanged): cold pre_email_* mapping.
   switch (step.step_type) {
     case "intro":
       return "pre_email_1_intro";
@@ -77,10 +105,10 @@ function linkedinTaskForStep(step: CampaignStep): string {
   }
 }
 
-export function primaryTaskForChannel(step: CampaignStep): string {
+export function primaryTaskForChannel(campaign: CampaignWithSteps, step: CampaignStep): string {
   switch (step.channel) {
     case "email":
-      return emailTaskForStep(step);
+      return emailTaskForStep(campaign, step);
     case "voice":
       return "cold_call_talking_points";
     case "sms":
@@ -90,26 +118,38 @@ export function primaryTaskForChannel(step: CampaignStep): string {
     case "linkedin":
       return linkedinTaskForStep(step);
     default:
-      return emailTaskForStep(step);
+      return emailTaskForStep(campaign, step);
   }
 }
 
 // ── Prompt inputs ───────────────────────────────────────────────────────────
-function buildLeadContext(industry: string | null): string {
-  const who = industry
-    ? `cold prospects in the ${industry} industry`
-    : "cold prospects (industry not specified)";
+function buildLeadContext(motion: string, industry: string | null): string {
+  const inbound = motion === "inbound_response";
+  const who = inbound
+    ? industry
+      ? `inbound leads in the ${industry} industry who reached out to us (a website form, a referral, or an inquiry)`
+      : "inbound leads who reached out to us (a website form, a referral, or an inquiry)"
+    : industry
+      ? `cold prospects in the ${industry} industry`
+      : "cold prospects (industry not specified)";
   return [
     `Audience: ${who}.`,
     "This is a REUSABLE template for many recipients — use {FirstName} for the recipient's first name and {Company} for their company. Do not invent a specific person's name.",
   ].join("\n");
 }
 
-function authoringInstructions(channel: CanonicalChannel, industry: string | null): string {
+function authoringInstructions(channel: CanonicalChannel, motion: string, industry: string | null): string {
   const variantNote = industry ? ` Tailor it to the ${industry} industry.` : "";
   if (channel === "email") {
     // Body only — the subject is generated separately via cold_email_subject so
     // it isn't eaten by the body-task greeting repair (EMAIL_BODY_TASKS).
+    if (motion === "inbound_response") {
+      return (
+        "Write the BODY of a reusable WARM inbound-reply email TEMPLATE — no subject line. The recipient contacted us first (a website form, a referral, or an inquiry), so acknowledge that and do NOT cold-pitch." +
+        variantNote +
+        " Use {FirstName} and {Company} placeholders for personalization — never a made-up name."
+      );
+    }
     return (
       "Write the BODY of a reusable cold-email TEMPLATE — no subject line." +
       variantNote +
@@ -191,9 +231,9 @@ function authoringPayload(
     motion: campaign.motion,
     first_touch: step.step_number === 1,
     channel: step.channel,
-    lead_context: buildLeadContext(industry),
+    lead_context: buildLeadContext(campaign.motion, industry),
     offer_summary: campaign.global_instructions || "",
-    custom_instructions: authoringInstructions(step.channel, industry),
+    custom_instructions: authoringInstructions(step.channel, campaign.motion, industry),
     ...(isLinkedIn
       ? {
           prospect_name: "{FirstName}",
@@ -275,7 +315,7 @@ async function generateOptionsForTouch(
   industry: string | null,
 ): Promise<GeneratedTouch> {
   const channel = step.channel;
-  const primaryTask = primaryTaskForChannel(step);
+  const primaryTask = primaryTaskForChannel(campaign, step);
   const base = authoringPayload(campaign, step, industry);
 
   const options: StepContentOption[] = [];
@@ -429,7 +469,7 @@ export async function softenTouch(
   const softer =
     base.custom_instructions +
     " IMPORTANT: keep it calm and human — no ALL-CAPS, at most one exclamation mark, no money symbols, no urgency or hype, minimal links. It must not read like spam.";
-  const { content } = await callAiTask(primaryTaskForChannel(step), { ...base, custom_instructions: softer });
+  const { content } = await callAiTask(primaryTaskForChannel(campaign, step), { ...base, custom_instructions: softer });
   const opt = optionFromContent(channel, content);
 
   // Soften regenerates only the PRIMARY content (email body / talking points /

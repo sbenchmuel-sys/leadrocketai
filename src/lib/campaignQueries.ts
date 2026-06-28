@@ -182,6 +182,11 @@ export interface CreateCampaignInput {
   include_meeting_cta: boolean;
   global_instructions: string;
   knowledge_ref?: string | null;
+  // The campaign's motion. Optional so every existing caller is unchanged —
+  // omitted falls to "outbound_prospecting" in createCampaignWithSteps (the prior
+  // hardcoded value). Starter clones pass the starter's real motion so an Inbound
+  // cadence authors warm copy instead of cold.
+  motion?: CampaignMotion;
   steps: DraftCampaignStep[];
 }
 
@@ -214,7 +219,9 @@ export async function createCampaignWithSteps(input: CreateCampaignInput): Promi
     .insert({
       workspace_id: input.workspace_id,
       name: input.name,
-      motion: "outbound_prospecting",
+      // Default to the prior hardcoded value when a caller doesn't specify, so
+      // non-starter flows are byte-identical; starter clones pass their real motion.
+      motion: input.motion ?? "outbound_prospecting",
       campaign_type: input.campaign_type,
       status: "draft",
       default_channel: input.default_channel,
