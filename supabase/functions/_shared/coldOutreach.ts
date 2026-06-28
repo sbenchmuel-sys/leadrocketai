@@ -75,14 +75,15 @@ export async function resolveTouchContent(
       .replace(/\{name\}/gi, first)
       .replace(/\[name\]/gi, first);
 
-  let body = await appendOwnerMeetingCta(
+  const body = await appendOwnerMeetingCta(
     supabase, campaignId, stepNumber, ownerUserId, interpolate(match.body),
   );
-  // One-pager offer: swap the {{ONE_PAGER_LINK}} token for the campaign's CURRENT
-  // ready one-pager link (lead-industry variant, General fallback), or strip the
-  // offer line if none is ready — so a removed/never-ready file never leaves a dead
-  // link. The sender resolves it too (defense in depth for review/edited bodies).
-  body = await resolveOnePagerInBody(supabase, campaignId, leadIndustry, body);
+  // The {{ONE_PAGER_LINK}} token is intentionally left UNRESOLVED here. It is resolved
+  // fresh inside sendColdEmailTouch, right before the provider call, so a one-pager
+  // removed/unapproved between this content resolution and the actual send (the
+  // automatic path has a multi-step gap: claim, unsubscribe token, late floor) can
+  // never deliver a stale or dead link. The sender is the SINGLE resolution point for
+  // every path (automatic, review, manual).
   return {
     subject: interpolate(match.subject || `Following up, ${first}`),
     body,

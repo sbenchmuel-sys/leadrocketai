@@ -408,16 +408,23 @@ function appendOnePagerOffer(body: string): string {
 // Does this campaign have an uploaded, rep-confirmed one-pager for this exact
 // variant? (asset_ready = true AND a file actually present.)
 async function hasReadyOnePager(campaignId: string, variant: string | null): Promise<boolean> {
-  let q = supabase
+  const { data: rows } = await supabase
     .from("campaign_collateral" as any)
-    .select("id")
+    .select("variant_group, asset_path, asset_ready")
     .eq("campaign_id", campaignId)
     .eq("collateral_type", "one_pager")
-    .eq("asset_ready", true)
-    .not("asset_path", "is", null);
-  q = variant && variant.trim() ? q.eq("variant_group", variant) : q.is("variant_group", null);
-  const { data } = await q.maybeSingle();
-  return !!data;
+    .eq("asset_ready", true);
+  const ready = ((rows || []) as unknown as Array<{ variant_group: string | null; asset_path: string | null }>)
+    .filter((r) => r.asset_path);
+  if (ready.length === 0) return false;
+  // The exact-industry one-pager OR the General/NULL one-pager (fallback) — mirrors the
+  // send-time lookup, so an industry variant still offers a shared General one-pager
+  // instead of silently omitting the token (which send-time could then never fill).
+  const v = (variant || "").trim().toLowerCase();
+  return ready.some((r) => {
+    const rv = (r.variant_group || "").trim().toLowerCase();
+    return rv === "" || (!!v && rv === v);
+  });
 }
 
 /**
