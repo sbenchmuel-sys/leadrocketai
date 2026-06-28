@@ -4473,6 +4473,10 @@ export type Database = {
           title: string
         }[]
       }
+      replace_campaign_steps_reconciled: {
+        Args: { _campaign_id: string; _steps: Json }
+        Returns: undefined
+      }
       set_lead_group_champion: {
         Args: { p_group_id: string; p_new_champion_lead_id: string }
         Returns: undefined
