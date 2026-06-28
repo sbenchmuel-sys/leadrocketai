@@ -201,8 +201,60 @@ async function refreshTokenIfNeeded(
 
     return tokens.access_token;
   }
-  
+
   return decryptedAccessToken;
+}
+
+// Resolve the connected Gmail mailbox for a workspace: prefer the canonical
+// workspace-scoped mail_accounts row (provider='gmail', connected, prefer
+// is_default), fall back to the legacy per-user gmail_connections row. Mirrors
+// per-lead gmail-sync. A null workspaceId (legacy lead) skips straight to the
+// per-user fallback. Returns null when neither mailbox exists.
+// deno-lint-ignore no-explicit-any
+async function resolveGmailConnection(
+  serviceSupabase: any,
+  workspaceId: string | null,
+  userId: string,
+): Promise<GmailTokenConnection | null> {
+  if (workspaceId) {
+    const { data: account } = await serviceSupabase
+      .from("mail_accounts")
+      .select("id, user_id, email_address, access_token, refresh_token, token_expires_at")
+      .eq("workspace_id", workspaceId)
+      .eq("provider", "gmail")
+      .eq("status", "connected")
+      .order("is_default", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (account?.access_token && account?.refresh_token) {
+      return {
+        source: "mail_accounts",
+        id: account.id,
+        user_id: account.user_id ?? userId,
+        gmail_email: account.email_address,
+        access_token_encrypted: account.access_token,
+        refresh_token_encrypted: account.refresh_token,
+        token_expires_at: account.token_expires_at,
+      };
+    }
+  }
+
+  const { data: legacyConnection } = await serviceSupabase
+    .from("gmail_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (legacyConnection) {
+    return {
+      source: "gmail_connections",
+      user_id: legacyConnection.user_id,
+      gmail_email: legacyConnection.gmail_email,
+      access_token_encrypted: legacyConnection.access_token_encrypted,
+      refresh_token_encrypted: legacyConnection.refresh_token_encrypted,
+      token_expires_at: legacyConnection.token_expires_at,
+    };
+  }
+  return null;
 }
 
 function containsClosingKeywords(text: string): boolean {
@@ -1289,87 +1341,44 @@ serve(async (req) => {
     // Create service role client first - needed to access encrypted tokens
     const serviceSupabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Resolve the caller's workspace via the user-scoped client so workspace_members
-    // RLS proves membership. Honor an explicit workspace_id from the body (the list
-    // "Refresh" button forwards it via useMailSync(workspaceId)); otherwise fall back
-    // to the caller's first workspace.
-    let membershipQuery = supabase
+    // Resolve the caller's workspace memberships via the user-scoped client so
+    // workspace_members RLS proves membership. We only resolve a workspace-scoped
+    // mailbox for workspaces the caller actually belongs to.
+    const { data: memberships } = await supabase
       .from("workspace_members")
       .select("workspace_id")
-      .eq("user_id", user.id)
-      .limit(1);
-    if (typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0) {
-      membershipQuery = membershipQuery.eq("workspace_id", requestedWorkspaceId);
-    }
-    const { data: membership } = await membershipQuery.maybeSingle();
+      .eq("user_id", user.id);
+    const memberWorkspaceIds = new Set<string>(
+      (memberships ?? [])
+        .map((m: { workspace_id: string | null }) => m.workspace_id)
+        .filter((id: string | null): id is string => !!id),
+    );
 
-    if (!membership) {
+    // Honor an explicit workspace_id from the body (the list "Refresh" button
+    // forwards it via useMailSync(workspaceId)); it must be one the caller belongs
+    // to. When omitted we route EACH requested lead to its own workspace's mailbox
+    // below, so a multi-workspace batch never silently drops the non-matching leads.
+    const explicitWorkspaceId =
+      typeof requestedWorkspaceId === "string" && requestedWorkspaceId.length > 0
+        ? requestedWorkspaceId
+        : null;
+    if (explicitWorkspaceId && !memberWorkspaceIds.has(explicitWorkspaceId)) {
       return new Response(JSON.stringify({ ok: false, error: "No workspace found" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Resolve the connected Gmail mailbox: prefer the canonical workspace-scoped
-    // mail_accounts row, fall back to the legacy per-user gmail_connections row.
-    // Mirrors per-lead gmail-sync. (column-level security blocks token access for
-    // regular users, so use the service-role client for the token columns.)
-    let connection: GmailTokenConnection | null = null;
-    const { data: account } = await serviceSupabase
-      .from("mail_accounts")
-      .select("id, user_id, email_address, access_token, refresh_token, token_expires_at")
-      .eq("workspace_id", membership.workspace_id)
-      .eq("provider", "gmail")
-      .eq("status", "connected")
-      .order("is_default", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (account?.access_token && account?.refresh_token) {
-      connection = {
-        source: "mail_accounts",
-        id: account.id,
-        user_id: account.user_id ?? user.id,
-        gmail_email: account.email_address,
-        access_token_encrypted: account.access_token,
-        refresh_token_encrypted: account.refresh_token,
-        token_expires_at: account.token_expires_at,
-      };
-    }
-
-    if (!connection) {
-      const { data: legacyConnection } = await serviceSupabase
-        .from("gmail_connections")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (legacyConnection) {
-        connection = {
-          source: "gmail_connections",
-          user_id: legacyConnection.user_id,
-          gmail_email: legacyConnection.gmail_email,
-          access_token_encrypted: legacyConnection.access_token_encrypted,
-          refresh_token_encrypted: legacyConnection.refresh_token_encrypted,
-          token_expires_at: legacyConnection.token_expires_at,
-        };
-      }
-    }
-
-    if (!connection) {
-      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
-
-    // Get leads data — scoped to the resolved workspace so a lead from another
-    // workspace in the batch isn't synced against this workspace's mailbox.
-    const { data: leadsData, error: leadsError } = await supabase
+    // Fetch the requested leads (RLS-scoped to leads the caller can access). When an
+    // explicit workspace_id is given, pin to it.
+    let leadsQuery = supabase
       .from("leads")
       .select("id, email, stage, strategy, workspace_id")
-      .eq("workspace_id", membership.workspace_id)
       .in("id", leadIds);
+    if (explicitWorkspaceId) {
+      leadsQuery = leadsQuery.eq("workspace_id", explicitWorkspaceId);
+    }
+    const { data: leadsData, error: leadsError } = await leadsQuery;
 
     if (leadsError || !leadsData) {
       return new Response(JSON.stringify({ ok: false, error: "Failed to fetch leads" }), {
@@ -1382,34 +1391,78 @@ serve(async (req) => {
     let totalSynced = 0;
     const allErrors: string[] = [];
 
-    // Process each lead
-    for (const lead of leadsData) {
-      console.log(`[gmail-bulk-sync] Syncing lead ${lead.id} (${lead.email})`);
-      
-      const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults);
-      
-      results.push({
-        leadId: lead.id,
-        synced: result.synced,
-        stage: result.stage,
-        errors: result.errors,
+    if (leadsData.length === 0) {
+      console.log(`[gmail-bulk-sync] No accessible leads matched the request — nothing to sync`);
+      return new Response(JSON.stringify({ ok: true, totalSynced: 0, leadsProcessed: 0, results, errors: allErrors }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-      
-      totalSynced += result.synced;
-      allErrors.push(...result.errors);
     }
 
-    // Update last_sync_at for the resolved connection
-    if (connection.source === "mail_accounts" && connection.id) {
-      await serviceSupabase
-        .from("mail_accounts")
-        .update({ last_sync_at: new Date().toISOString() })
-        .eq("id", connection.id);
-    } else {
-      await serviceSupabase
-        .from("gmail_connections")
-        .update({ last_sync_at: new Date().toISOString() })
-        .eq("user_id", user.id);
+    // Group leads by workspace_id so each group syncs against ITS OWN workspace
+    // mailbox. Leads with no workspace_id (legacy rows) group under null and resolve
+    // via the per-user gmail_connections fallback.
+    const leadsByWorkspace = new Map<string | null, typeof leadsData>();
+    for (const lead of leadsData) {
+      const key = (lead.workspace_id as string | null) ?? null;
+      const bucket = leadsByWorkspace.get(key);
+      if (bucket) bucket.push(lead);
+      else leadsByWorkspace.set(key, [lead]);
+    }
+
+    let anyConnectionResolved = false;
+
+    for (const [workspaceId, groupLeads] of leadsByWorkspace) {
+      // Only resolve a workspace-scoped mailbox for workspaces the caller belongs to;
+      // anything else (incl. null workspace_id) falls back to legacy gmail_connections.
+      const mailboxWorkspaceId =
+        workspaceId && memberWorkspaceIds.has(workspaceId) ? workspaceId : null;
+      const connection = await resolveGmailConnection(serviceSupabase, mailboxWorkspaceId, user.id);
+
+      if (!connection) {
+        for (const lead of groupLeads) {
+          results.push({ leadId: lead.id, synced: 0, stage: lead.stage, errors: ["Gmail not connected"] });
+        }
+        allErrors.push(`Gmail not connected for workspace ${workspaceId ?? "(legacy)"}`);
+        continue;
+      }
+      anyConnectionResolved = true;
+
+      // An account-wide token failure (revoked / insufficient scope) throws here and
+      // propagates to the outer catch, which sets needsReconnect — same as before.
+      const accessToken = await refreshTokenIfNeeded(serviceSupabase, connection);
+
+      for (const lead of groupLeads) {
+        console.log(`[gmail-bulk-sync] Syncing lead ${lead.id} (${lead.email}) [ws=${workspaceId ?? "legacy"}]`);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults);
+        results.push({
+          leadId: lead.id,
+          synced: result.synced,
+          stage: result.stage,
+          errors: result.errors,
+        });
+        totalSynced += result.synced;
+        allErrors.push(...result.errors);
+      }
+
+      // Stamp last_sync_at for the resolved connection.
+      if (connection.source === "mail_accounts" && connection.id) {
+        await serviceSupabase
+          .from("mail_accounts")
+          .update({ last_sync_at: new Date().toISOString() })
+          .eq("id", connection.id);
+      } else {
+        await serviceSupabase
+          .from("gmail_connections")
+          .update({ last_sync_at: new Date().toISOString() })
+          .eq("user_id", user.id);
+      }
+    }
+
+    if (!anyConnectionResolved) {
+      return new Response(JSON.stringify({ ok: false, error: "Gmail not connected" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log(`[gmail-bulk-sync] Completed. Total synced: ${totalSynced}, Leads processed: ${leadsData.length}`);
