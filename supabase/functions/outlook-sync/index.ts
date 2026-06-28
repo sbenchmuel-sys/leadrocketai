@@ -132,6 +132,24 @@ serve(async (req) => {
       });
     }
 
+    // Reading the lead proves the caller OWNS it, but the leads SELECT policy
+    // allows owner_user_id reads regardless of CURRENT workspace membership — so
+    // an ex-member who still owns a lead (their leads weren't reassigned) could
+    // otherwise reach that workspace's mailbox token. Require current membership
+    // of the lead's workspace BEFORE touching any mailbox.
+    const { data: leadMembership } = await supabase
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .eq("workspace_id", leadData.workspace_id)
+      .maybeSingle();
+    if (!leadMembership) {
+      console.warn(`[outlook-sync] Caller ${user.id} not a member of lead ${leadId}'s workspace ${leadData.workspace_id} — refusing`);
+      return new Response(JSON.stringify({ ok: false, error: "Not a member of this lead's workspace" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Resolve the connected Outlook mailbox IN THE LEAD'S WORKSPACE, so the
     // mailbox is workspace-correct by construction and can never be paired with a
     // lead from another workspace. Honor the caller's requested mail_account_id
