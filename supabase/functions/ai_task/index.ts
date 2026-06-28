@@ -2145,13 +2145,29 @@ ${customInstructionsText}
     if (structuredCampaignBlock) {
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
+    // Value-led arc for COLD campaign email TEMPLATES. Scoped to authoring +
+    // outbound email tasks ONLY, so the per-lead Queue draft (no campaignAuthoring)
+    // and inbound campaigns (their own warm prompts) are untouched. A template has
+    // no lead attached, so the shared cold prompt always drops into LOW-INTEL mode
+    // and "asks one neutral use-case question" — the generic, AI-sounding output.
+    // This block overrides that with a value-led arc. (Email-1 link suppression
+    // and the follow-up meeting CTA already align with the OUTBOUND motion block,
+    // so the shared prompt/motion block are left unchanged.)
+    const coldTemplateArc =
+      campaignAuthoring && EMAIL_BODY_TASKS.has(task) && motion === "outbound_prospecting"
+        ? `\n\n=== CAMPAIGN EMAIL ARC (value-led — overrides any "ask one generic question" fallback) ===\n` +
+          (isFirstTouch
+            ? `This is EMAIL 1. Open with ONE specific, concrete observation about {Company} or their industry, then ONE short, specific, low-friction ask. Do NOT fall back to a vague "how are you handling X" / "are you looking to optimize Y" question — that reads as mass-AI. Do NOT include a meeting time or calendar link.`
+            : `This is a FOLLOW-UP email. Lead with a concrete value point or a genuinely fresh reason to reply drawn from the offer/knowledge above — never "just checking in" or a generic question. You may suggest a quick call in plain words (no calendar link or placeholder). One CTA only.`) +
+          `\n=== END CAMPAIGN EMAIL ARC ===`
+        : "";
     const campaignTemplateContract = campaignAuthoring
       ? `=== CAMPAIGN TEMPLATE OUTPUT CONTRACT ===
 This is authoring-time reusable campaign copy, not a one-off email to a specific lead.
 Use exactly these merge tokens where personalization belongs: {FirstName}, {Company}, {RepFirstName}.
 Do not use bracketed placeholders like [Name] or spaced brace placeholders like {First Name}.
 Do not invent real prospect or rep names.
-=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===`
+=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===` + coldTemplateArc
       : "";
 
     // Build offer recommendation block for last-mile tasks
