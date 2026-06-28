@@ -2072,20 +2072,16 @@ ${customInstructionsText}
     const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
     const isBreakup = task === "pre_email_4_breakup";
 
-    // For campaign authoring, derive first-touch framing from the EMAIL TASK, not
-    // step_number: if a call/text/LinkedIn touch precedes the first email, that email is
-    // still the intro (pre_email_1_intro / inbound_intro) even though step_number > 1.
-    // Otherwise the motion/style blocks would emit OUTBOUND FOLLOW-UP while the
-    // task-based email arc says EMAIL 1. Per-lead drafting is unchanged (uses isFirstTouch).
-    const motionFirstTouch = (campaignAuthoring && EMAIL_BODY_TASKS.has(task))
-      ? (task === "pre_email_1_intro" || task === "inbound_intro")
-      : isFirstTouch;
-    const motionBlock = buildMotionBlock({ motion, first_touch: motionFirstTouch });
+    // first_touch is now set correctly by the caller (campaign authoring keys it off the
+    // first EMAIL position, not raw step_number — see generateCampaignContent.isIntroTouch),
+    // so the body, the separately-generated subject, and these motion/style blocks all
+    // agree on intro-vs-follow-up. No task-based override needed here.
+    const motionBlock = buildMotionBlock({ motion, first_touch: isFirstTouch });
 
     const styleParts: string[] = [];
-    const styleBlock = buildStyleModifier({ motion, first_touch: motionFirstTouch, outbound_style: outboundStyle });
+    const styleBlock = buildStyleModifier({ motion, first_touch: isFirstTouch, outbound_style: outboundStyle });
     if (styleBlock) styleParts.push(styleBlock);
-    if (motionFirstTouch && isOutboundMotion && !hasInbound) styleParts.push(getColdOutreachBlock(playbookId));
+    if (isFirstTouch && isOutboundMotion && !hasInbound) styleParts.push(getColdOutreachBlock(playbookId));
     if (isFollowUp && isOutboundMotion) styleParts.push(REPLY_PATTERNS_BLOCK);
     if (isBreakup) styleParts.push(BREAKUP_CLOSERS[playbookId] || BREAKUP_CLOSERS.general_sales);
     const styleModifier = styleParts.join("\n\n") || "";
