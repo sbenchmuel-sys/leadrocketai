@@ -652,6 +652,9 @@ export interface CampaignCollateral {
   asset_mime: string | null;
   asset_filename: string | null;
   asset_size_bytes: number | null;
+  // Changes on EVERY upload (incl. a same-filename replace, where asset_path is
+  // unchanged) — used as the per-upload token guarding the "Use in emails" tick.
+  asset_uploaded_at: string | null;
   asset_ready: boolean;
 }
 
@@ -735,20 +738,21 @@ export async function ensureCollateralRow(
 
 /**
  * Flip the "Use in emails" confirm on an uploaded brief (PR 4 gates sends on this).
- * The predicate includes the `expectedAssetPath` the rep is looking at, so a stale
- * tab can't approve a file that was replaced under it (replace resets asset_ready and
- * changes asset_path). Returns false when the file changed — caller should refetch.
+ * The predicate pins the EXACT upload the rep reviewed via `expectedUploadedAt` — a
+ * per-upload token that changes on every upload, INCLUDING a same-filename replace
+ * (where asset_path is unchanged). So a stale tab can never approve a file it didn't
+ * review. Returns false when the upload changed under it — caller should refetch.
  */
 export async function setCollateralAssetReady(
   id: string,
   ready: boolean,
-  expectedAssetPath: string,
+  expectedUploadedAt: string,
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("campaign_collateral" as any)
     .update({ asset_ready: ready } as any)
     .eq("id", id)
-    .eq("asset_path", expectedAssetPath)
+    .eq("asset_uploaded_at", expectedUploadedAt)
     .select("id")
     .maybeSingle();
   if (error) throw new Error(error.message || "Couldn't update the brief");

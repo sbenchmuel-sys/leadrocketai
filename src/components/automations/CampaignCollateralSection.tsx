@@ -130,9 +130,9 @@ export function CampaignCollateralSection({ campaign, people, collateral, onChan
   };
 
   const onToggleReady = async (checked: boolean) => {
-    if (!row?.asset_path) return;
+    if (!row?.asset_uploaded_at) return;
     try {
-      const applied = await setCollateralAssetReady(row.id, checked, row.asset_path);
+      const applied = await setCollateralAssetReady(row.id, checked, row.asset_uploaded_at);
       if (!applied) {
         toast.error("This one-pager was changed elsewhere — re-check the box after it reloads.");
       }
