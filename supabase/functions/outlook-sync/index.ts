@@ -159,11 +159,7 @@ serve(async (req) => {
 
     if (typeof requestedAccountId === "string" && requestedAccountId.length > 0) {
       // A specific account was requested (per-lead Refresh). Look it up by id in
-      // the lead's workspace REGARDLESS of status, so we can tell "connected"
-      // (use it) apart from "expired/errored or stale" (ask the caller to
-      // reconnect) — including the common case where it's the workspace's only
-      // Outlook account and it just expired (a connected-only query would come
-      // back empty and we'd wrongly report a bare "not connected").
+      // the lead's workspace REGARDLESS of status.
       const { data: requested } = await serviceSupabase
         .from("mail_accounts")
         .select("*")
@@ -171,16 +167,26 @@ serve(async (req) => {
         .eq("workspace_id", leadData.workspace_id)
         .eq("provider", "outlook")
         .maybeSingle();
-      if (requested?.status === "connected") {
-        mailAccount = requested;
-      } else {
-        return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
-          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      if (requested) {
+        if (requested.status === "connected") {
+          mailAccount = requested;
+        } else {
+          // Found but expired/errored — it genuinely needs reconnection (covers
+          // the common case where it's the workspace's only Outlook account and
+          // just expired).
+          return new Response(JSON.stringify({ ok: false, error: "Requested Outlook account is not connected", needsReconnect: true }), {
+            status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
-    } else {
-      // No specific account (bulk / default) — the workspace's default connected
-      // Outlook account, is_default first.
+      // Absent (stale id, or an id that belongs to another workspace): do NOT
+      // signal reconnect — that would flip a perfectly healthy account into an
+      // error state on the client. Fall through to the workspace default below.
+    }
+
+    if (!mailAccount) {
+      // Default: the workspace's default connected Outlook account, is_default
+      // first. Used for the bulk path and when a requested id was absent.
       const { data: wsAccounts } = await serviceSupabase
         .from("mail_accounts")
         .select("*")
