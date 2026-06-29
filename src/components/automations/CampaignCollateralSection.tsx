@@ -1,22 +1,19 @@
 // ============================================================================
-// CAMPAIGN COLLATERAL SECTION (Outreach Unit D)
+// CAMPAIGN COLLATERAL SECTION (upload-first)
 //
-// AI-drafted, rep-editable collateral (one-pagers, technical walkthroughs) for a
-// campaign, grounded in its instructions + knowledge document. Generate, edit
-// inline, regenerate (confirm if edited), delete, and LINK a draft to an email
-// touch.
+// Reps upload the real, designed one-pager they already have — one per industry
+// on an industry campaign. The file is stored on the workspace-scoped
+// `campaign-collateral` bucket (a hosted LINK, never an attachment) and offered
+// in follow-up emails ONLY after the rep ticks "Use in this campaign's emails"
+// (asset_ready) — that gating + the email wiring is a separate, sender-touching PR.
 //
-// HONEST LABELLING: linking is a logical "shown to you when you send this email"
-// association — NOT a send-time attachment (providers can't attach files yet;
-// that's Unit C). The copy never says "attached" or implies the file is sent.
+// AI generation of collateral was removed from this screen (the drafts weren't
+// professional enough to send); the underlying generator stays in the codebase.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -24,39 +21,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Wand2, RefreshCw, Trash2, Check, FileText } from "lucide-react";
+import { Loader2, Upload, FileText, Trash2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { cumulativeDays } from "@/lib/campaignDefaults";
 import {
-  saveCollateralEdit,
-  deleteCollateral,
-  attachCollateralToStep,
+  ensureCollateralRow,
+  setCollateralAssetReady,
   type CampaignWithSteps,
   type CampaignLead,
   type CampaignCollateral,
-  type CollateralType,
 } from "@/lib/campaignQueries";
 import {
-  generateCollateral,
-  COLLATERAL_TYPES,
-} from "@/lib/generateCampaignCollateral";
+  uploadCollateralAsset,
+  removeCollateralAsset,
+  ALLOWED_COLLATERAL_MIME,
+} from "@/lib/collateralAssets";
 import {
   getIndustriesPresent,
   computePrimaryIndustry,
 } from "@/lib/generateCampaignContent";
 
 const GENERAL = "__general__";
-const UNLINKED = "__none__";
+const ACCEPT = ALLOWED_COLLATERAL_MIME.join(",");
 
 interface Props {
   campaign: CampaignWithSteps;
   people: CampaignLead[];
   // Collateral rows + a refetch trigger are owned by CampaignDetail so this
-  // section and the email-review section stay in sync (a link made here shows
-  // up there immediately).
+  // section stays in sync with the rest of the page.
   collateral: CampaignCollateral[];
   onChanged: () => void;
 }
+
+const variantKey = (v: string | null) => (v == null || v.trim() === "" ? "" : v);
 
 export function CampaignCollateralSection({ campaign, people, collateral, onChanged }: Props) {
   const isIndustry = campaign.campaign_type === "industry";
@@ -65,6 +61,8 @@ export function CampaignCollateralSection({ campaign, people, collateral, onChan
 
   const [variant, setVariant] = useState<string | null>(null);
   const variantChosen = useRef(false);
+  const [busy, setBusy] = useState<null | "upload" | "remove">(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!variantChosen.current && isIndustry && primaryIndustry) setVariant(primaryIndustry);
@@ -75,258 +73,174 @@ export function CampaignCollateralSection({ campaign, people, collateral, onChan
     setVariant(v);
   };
 
-  // Email touches a collateral can be linked to ("Email · Day N").
-  const emailTouches = useMemo(() => {
-    const active = [...campaign.steps].filter((s) => s.active).sort((a, b) => a.step_number - b.step_number);
-    const days = cumulativeDays(active);
-    return active
-      .map((s, i) => ({ stepNumber: s.step_number, day: days[i], channel: s.channel }))
-      .filter((t) => t.channel === "email");
-  }, [campaign.steps]);
+  // The one-pager row for a given variant (the only collateral type on this screen).
+  const onePagerFor = (v: string | null): CampaignCollateral | null =>
+    collateral.find(
+      (r) => r.collateral_type === "one_pager" && variantKey(r.variant_group) === variantKey(v),
+    ) ?? null;
+  const hasUpload = (v: string | null) => !!onePagerFor(v)?.asset_path;
 
-  const variantKey = (v: string | null) => (v == null || v.trim() === "" ? "" : v);
-  const rowFor = (type: CollateralType): CampaignCollateral | null =>
-    collateral.find((r) => r.collateral_type === type && variantKey(r.variant_group) === variantKey(variant)) ?? null;
+  const row = onePagerFor(variant);
+  const uploaded = !!row?.asset_path;
+
+  // Coverage across the industry slots (General is a fallback, not counted here).
+  const coverage = useMemo(() => {
+    const total = industries.length;
+    const done = industries.filter((i) => hasUpload(i.industry)).length;
+    return { total, done };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [industries, collateral]);
+
+  const onPick = () => fileRef.current?.click();
+
+  const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setBusy("upload");
+    try {
+      const id = row?.id ?? (await ensureCollateralRow(campaign.id, "one_pager", variant));
+      await uploadCollateralAsset({
+        workspaceId: campaign.workspace_id,
+        campaignId: campaign.id,
+        collateralId: id,
+        file,
+      });
+      toast.success("One-pager uploaded");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't upload that file");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onRemove = async () => {
+    if (!row?.asset_path) return;
+    if (!confirm("Remove this one-pager? It won't be offered in any emails.")) return;
+    setBusy("remove");
+    try {
+      await removeCollateralAsset(row.id, row.asset_path);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove that file");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onToggleReady = async (checked: boolean) => {
+    if (!row?.asset_uploaded_at) return;
+    try {
+      const applied = await setCollateralAssetReady(row.id, checked, row.asset_uploaded_at);
+      if (!applied) {
+        toast.error("This one-pager was changed elsewhere — re-check the box after it reloads.");
+      }
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't update the brief");
+    }
+  };
 
   return (
     <section className="space-y-3">
-      <h2 className="text-sm font-semibold text-foreground">Collateral</h2>
+      <h2 className="text-sm font-semibold text-foreground">One-pager</h2>
       <p className="text-xs text-muted-foreground">
-        Shareable drafts built from your instructions and knowledge file. Review and edit them — they’re
-        drafts you can send yourself, not auto-sent.
+        Upload the one-pager you want this campaign's follow-up emails to offer. Keep it free of
+        anything confidential — the link opens publicly.
       </p>
 
       {isIndustry && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Showing:</span>
           <Select value={variant ?? GENERAL} onValueChange={(v) => chooseVariant(v === GENERAL ? null : v)}>
-            <SelectTrigger className="h-8 w-auto min-w-[10rem] text-sm">
+            <SelectTrigger className="h-8 w-auto min-w-[12rem] text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {industries.map((ind) => (
                 <SelectItem key={ind.industry} value={ind.industry}>
-                  {ind.industry} ({ind.count}){ind.industry === primaryIndustry ? " · most common" : ""}
+                  {ind.industry} ({ind.count}){hasUpload(ind.industry) ? " ✓" : " · needed"}
                 </SelectItem>
               ))}
-              <SelectItem value={GENERAL}>Everyone else (General)</SelectItem>
+              <SelectItem value={GENERAL}>
+                Everyone else (General){hasUpload(null) ? " ✓" : ""}
+              </SelectItem>
             </SelectContent>
           </Select>
+          {coverage.total > 0 && (
+            <span className="text-xs text-muted-foreground">
+              Uploaded for {coverage.done} of {coverage.total} industries
+            </span>
+          )}
         </div>
       )}
 
-      <div className="space-y-3">
-        {COLLATERAL_TYPES.map((t) => (
-          <CollateralCard
-            key={t.type}
-            campaign={campaign}
-            type={t.type}
-            label={t.label}
-            blurb={t.blurb}
-            variant={variant}
-            content={rowFor(t.type)}
-            emailTouches={emailTouches}
-            onChanged={onChanged}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" onChange={onFile} />
 
-interface CardProps {
-  campaign: CampaignWithSteps;
-  type: CollateralType;
-  label: string;
-  blurb: string;
-  variant: string | null;
-  content: CampaignCollateral | null;
-  emailTouches: { stepNumber: number; day: number }[];
-  onChanged: () => void;
-}
-
-function CollateralCard({ campaign, type, label, blurb, variant, content, emailTouches, onChanged }: CardProps) {
-  const [busy, setBusy] = useState<null | "gen" | "save" | "del">(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ title: content?.title ?? "", body: content?.body ?? "" });
-
-  useEffect(() => {
-    setDraft({ title: content?.title ?? "", body: content?.body ?? "" });
-    setEditing(false);
-  }, [content]);
-
-  const edited = content?.is_edited === true;
-
-  const generate = async () => {
-    if (edited && !confirm("This replaces your edited version with a fresh draft. Continue?")) return;
-    setBusy("gen");
-    try {
-      await generateCollateral(campaign, type, variant);
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't generate");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const save = async () => {
-    setBusy("save");
-    try {
-      await saveCollateralEdit(campaign.id, type, variant, {
-        title: draft.title || null,
-        body: draft.body || null,
-      });
-      toast.success("Saved your edit");
-      setEditing(false);
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't save");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const remove = async () => {
-    if (!content) return;
-    if (!confirm("Delete this collateral draft?")) return;
-    setBusy("del");
-    try {
-      await deleteCollateral(content.id);
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't delete");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const link = async (value: string) => {
-    if (!content) return;
-    try {
-      await attachCollateralToStep(content.id, value === UNLINKED ? null : Number(value));
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't link");
-    }
-  };
-
-  return (
-    <Card>
-      <CardContent className="space-y-3 p-4">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium text-foreground">{label}</span>
-          {edited && (
-            <Badge variant="secondary" className="ml-1 gap-1 text-xs font-normal">
-              <Check className="h-3 w-3" />
-              edited by you
-            </Badge>
-          )}
-          <div className="ml-auto flex items-center gap-1">
-            {content && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={generate}
-                disabled={busy !== null}
-                aria-label="Regenerate"
-                title="Regenerate"
-              >
-                {busy === "gen" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {!uploaded ? (
+            <div className="flex flex-col items-start gap-2">
+              <p className="text-sm text-muted-foreground">
+                No one-pager yet{isIndustry && variant ? ` for ${variant}` : ""}.
+              </p>
+              <Button size="sm" onClick={onPick} disabled={busy !== null}>
+                {busy === "upload" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="mr-2 h-4 w-4" />
+                )}
+                Upload a one-pager
               </Button>
-            )}
-            {content && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                onClick={remove}
-                disabled={busy !== null}
-                aria-label="Delete"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {!content ? (
-          <div className="flex flex-col items-start gap-2">
-            <p className="text-sm text-muted-foreground">{blurb}</p>
-            <Button size="sm" onClick={generate} disabled={busy !== null}>
-              {busy === "gen" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
-              Generate
-            </Button>
-          </div>
-        ) : (
-          <>
-            {editing ? (
-              <div className="space-y-2">
-                <Input
-                  value={draft.title}
-                  onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-                  placeholder="Title"
-                  className="text-sm font-medium"
-                />
-                <Textarea
-                  value={draft.body}
-                  onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                  rows={12}
-                  className="resize-none text-sm"
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={busy === "save"}>
-                    Cancel
+              <p className="text-xs text-muted-foreground">PDF, PNG or JPEG · up to 10MB</p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="truncate text-sm font-medium text-foreground">
+                  {row?.asset_filename}
+                </span>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={onPick} disabled={busy !== null}>
+                    {busy === "upload" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Replace
                   </Button>
-                  <Button size="sm" onClick={save} disabled={busy === "save"}>
-                    {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Save
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={onRemove}
+                    disabled={busy !== null}
+                  >
+                    {busy === "remove" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Remove
                   </Button>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-2">
-                {content.title && <p className="text-sm font-semibold text-foreground">{content.title}</p>}
-                <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content.body}</p>
-                <button
-                  className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() => setEditing(true)}
-                >
-                  Edit
-                </button>
-              </div>
-            )}
 
-            {/* Honest link affordance — a logical association, NOT a send-time attachment. */}
-            {emailTouches.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-                <span className="text-xs text-muted-foreground">Link to an email:</span>
-                <Select
-                  value={content.attached_step_number != null ? String(content.attached_step_number) : UNLINKED}
-                  onValueChange={link}
-                >
-                  <SelectTrigger className="h-7 w-auto min-w-[9rem] text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={UNLINKED}>Not linked</SelectItem>
-                    {emailTouches.map((t) => (
-                      <SelectItem key={t.stepNumber} value={String(t.stepNumber)}>
-                        Email · Day {t.day}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <span className="text-xs text-muted-foreground">
-                  (shown to you when you write that email — not auto-attached)
-                </span>
-              </div>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border accent-primary"
+                  checked={row?.asset_ready ?? false}
+                  onChange={(e) => onToggleReady(e.target.checked)}
+                />
+                Use in this campaign's emails
+              </label>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }

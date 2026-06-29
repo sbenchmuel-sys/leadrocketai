@@ -71,7 +71,13 @@ export async function uploadCollateralAsset(params: {
   }
 
   const filename = sanitizeFilename(file.name);
-  const path = `${workspaceId}/${campaignId}/${collateralId}/${filename}`;
+  // A per-upload token segment so a replace (even same filename) writes to a NEW object
+  // instead of overwriting the live one in place. The old, reviewed object keeps serving
+  // its URL until the DB row flips to the new path, so there's never a window where the
+  // public URL serves unreviewed bytes while the row still reads asset_ready=true. The
+  // first path segment stays workspace_id, so the storage RLS isolation is unchanged.
+  const uploadToken = crypto.randomUUID();
+  const path = `${workspaceId}/${campaignId}/${collateralId}/${uploadToken}/${filename}`;
 
   // Read the target row FIRST. This (a) fails fast before we waste an upload if
   // the collateral slot is gone or RLS-hidden, and (b) gives us the previous
@@ -110,6 +116,9 @@ export async function uploadCollateralAsset(params: {
       asset_size_bytes: file.size,
       asset_uploaded_at: new Date().toISOString(),
       asset_uploaded_by: userId,
+      // A new/replaced file is a DIFFERENT asset — reset the "Use in emails" confirm
+      // so the rep must re-approve THIS file before it can reach a prospect.
+      asset_ready: false,
     } as any)
     .eq("id", collateralId)
     .select("id")
@@ -157,6 +166,9 @@ export async function removeCollateralAsset(collateralId: string, assetPath: str
       asset_size_bytes: null,
       asset_uploaded_at: null,
       asset_uploaded_by: null,
+      // No asset → not email-eligible. Clear the confirm so a later re-upload into
+      // this row can't inherit a stale "ready" flag.
+      asset_ready: false,
     } as any)
     .eq("id", collateralId)
     .eq("asset_path", assetPath)
