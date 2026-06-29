@@ -535,6 +535,7 @@ export type Database = {
           asset_filename: string | null
           asset_mime: string | null
           asset_path: string | null
+          asset_ready: boolean
           asset_size_bytes: number | null
           asset_uploaded_at: string | null
           asset_uploaded_by: string | null
@@ -554,6 +555,7 @@ export type Database = {
           asset_filename?: string | null
           asset_mime?: string | null
           asset_path?: string | null
+          asset_ready?: boolean
           asset_size_bytes?: number | null
           asset_uploaded_at?: string | null
           asset_uploaded_by?: string | null
@@ -573,6 +575,7 @@ export type Database = {
           asset_filename?: string | null
           asset_mime?: string | null
           asset_path?: string | null
+          asset_ready?: boolean
           asset_size_bytes?: number | null
           asset_uploaded_at?: string | null
           asset_uploaded_by?: string | null
