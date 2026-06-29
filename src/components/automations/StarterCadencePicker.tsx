@@ -50,7 +50,7 @@ export function StarterCadencePicker({
       </p>
 
       <div className="space-y-3">
-        {STARTER_CADENCES.map((cadence) => {
+        {STARTER_CADENCES.filter((c) => !c.hidden).map((cadence) => {
           const needsSms = cadenceUsesSms(cadence) && !smsEnabled;
           return (
             <button

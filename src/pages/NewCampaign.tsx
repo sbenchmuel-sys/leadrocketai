@@ -296,6 +296,9 @@ export default function NewCampaign() {
         workspace_id: workspaceId,
         name: finalName,
         campaign_type: starter ? "general" : campaignType,
+        // A picked starter clones in as its real motion (Inbound → warm copy);
+        // the custom path omits it and falls to "outbound_prospecting".
+        motion: starter ? starter.motion : undefined,
         default_channel: starter ? starter.default_channel : "email",
         include_meeting_cta: starter ? starter.include_meeting_cta : false,
         global_instructions: starter ? starter.global_instructions : composedInstructions,
