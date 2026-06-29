@@ -272,7 +272,18 @@ export default function LeadDetailHeader({
           Component is self-gating — renders nothing for ineligible leads. UI-only; routing comes
           from playbookResolver via streamDraft. */}
       <ReEngagementCard
-        leadId={lead.id}
+        lead={{
+          id: lead.id,
+          name: lead.name,
+          company: lead.company ?? null,
+          email: lead.email ?? null,
+          stage: lead.stage ?? null,
+          motion: (lead as any).motion ?? null,
+          next_action_key: lead.next_action_key ?? null,
+          next_action_label: (lead as any).next_action_label ?? null,
+          job_title: (lead as any).job_title ?? null,
+          industry: (lead as any).industry ?? null,
+        }}
         gate={{
           motion: (lead as any).motion ?? null,
           source_type: (lead as any).source_type ?? null,
