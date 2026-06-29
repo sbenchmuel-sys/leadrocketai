@@ -421,10 +421,32 @@ async function syncLeadEmails(
     (existingThreads || []).map((i: { gmail_thread_id: string }) => i.gmail_thread_id).filter(Boolean)
   );
 
+  // Discover the lead's conversation threads across more history than one page.
+  // messages.list returns {id, threadId} cheaply; we seed thread expansion
+  // (below) with EVERY discovered thread so old outbound-only threads (e.g. a
+  // cold sequence that never got a reply) get backfilled — not just the newest
+  // page. The per-message loop still directly processes only the newest
+  // `maxResults`; the (one-fetch-per-thread) expansion fills in the rest.
+  // ponytail: DISCOVERY_MAX / MAX_THREADS_PER_LEAD cap backfill depth per run;
+  // deeper history for very large mailboxes is a future work-queue/drain job.
+  const DISCOVERY_MAX = 200;
+  // 25 covers virtually every real B2B lead's conversation count while bounding
+  // per-run work (Refresh syncs 15 leads/batch sequentially; 15 × 25 thread
+  // fetches stays well under the function time limit). If timeouts ever appear on
+  // deep-history accounts, the next lever is a smaller Refresh batch (frontend
+  // useMailSync.syncLeads) and ultimately the work-queue/drain job.
+  const MAX_THREADS_PER_LEAD = 25;
+  // Backfilled OLD inbound must NOT re-fire guardrails — a months-old OOO /
+  // bounce / unsubscribe surfacing now would wrongly pause or permanently stop a
+  // currently-active lead. The thread-expansion loop only runs the inbound
+  // action branches for messages newer than this; the newest-page per-message
+  // loop below still handles every genuinely-live signal.
+  const BACKFILL_RECENCY_MS = 3 * 24 * 60 * 60 * 1000;
+
   // Search for emails from/to this lead
   const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
-  const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
-  
+  const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${DISCOVERY_MAX}`;
+
   const searchResponse = await fetch(searchUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -448,9 +470,20 @@ async function syncLeadEmails(
   }
 
   const searchData = await searchResponse.json();
-  const messageIds = searchData.messages || [];
-  
-  console.log(`[gmail-bulk-sync] Found ${messageIds.length} messages for ${leadEmailNorm}`);
+  const discovered = searchData.messages || [];
+  // Remember which threads were ALREADY synced before this run, so the bounded
+  // expansion below can prioritise never-synced (backfill) threads over re-
+  // fetching known ones — otherwise a lead with ≥MAX_THREADS_PER_LEAD existing
+  // threads would spend every slot re-checking known threads and never backfill.
+  const previouslySyncedThreadIds = new Set(lockedThreadIds);
+  // Seed thread expansion with every discovered thread — this is the backfill.
+  for (const m of discovered) {
+    if (m.threadId) lockedThreadIds.add(m.threadId);
+  }
+  // Direct per-message processing stays bounded to the newest page (unchanged).
+  const messageIds = discovered.slice(0, maxResults);
+
+  console.log(`[gmail-bulk-sync] Discovered ${discovered.length} messages / ${lockedThreadIds.size} threads for ${leadEmailNorm}; processing newest ${messageIds.length} directly`);
 
   // Get existing Gmail message IDs for deduplication
   const { data: existingInteractions } = await serviceSupabase
@@ -650,8 +683,14 @@ async function syncLeadEmails(
     }
   }
 
-  // Fetch messages from locked threads
-  for (const threadId of lockedThreadIds) {
+  // Fetch messages from locked threads, bounded per run. Prioritise never-synced
+  // (backfill) threads over already-synced ones — recent activity in known
+  // threads is already covered by the newest-page per-message loop above, so the
+  // scarce slots are best spent pulling threads we've never seen.
+  const threadsToExpand = Array.from(lockedThreadIds)
+    .sort((a, b) => (previouslySyncedThreadIds.has(a) ? 1 : 0) - (previouslySyncedThreadIds.has(b) ? 1 : 0))
+    .slice(0, MAX_THREADS_PER_LEAD);
+  for (const threadId of threadsToExpand) {
     try {
       const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;
       const threadResponse = await fetch(threadUrl, {
@@ -665,6 +704,11 @@ async function syncLeadEmails(
 
       for (const message of threadMessages) {
         const gmailMessageId = message.id;
+        // Skip drafts — only sync sent and received emails (mirrors the
+        // per-message loop). Discovery seeds thread IDs from list stubs that
+        // carry no labels, so an unsent draft sharing a thread must be filtered
+        // here or it would be stored as a fake sent email.
+        if (message.labelIds?.includes("DRAFT")) continue;
         const existingBody = existingBodyByMessageId.get(gmailMessageId);
         const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
         if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) continue;
@@ -685,6 +729,9 @@ async function syncLeadEmails(
         const subject = getHeader(headers, "Subject") || "(no subject)";
         const date = getHeader(headers, "Date");
         const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
+        // Backfill safety: messages older than the recency window are stored as
+        // history but must not drive the destructive guardrails (see constant).
+        const isStaleForActions = (Date.now() - new Date(occurredAt).getTime()) > BACKFILL_RECENCY_MS;
 
         const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
         const direction = isFromLead ? "inbound" : "outbound";
@@ -711,6 +758,13 @@ async function syncLeadEmails(
           subjectLowerT.includes("delivery failure")
         );
 
+        // A stale (old) bounce must not fire the destructive unsubscribe/stop,
+        // and we don't want to import an old DSN as a fake outbound — skip it.
+        if (isBounceT && isStaleForActions) {
+          existingMessageIds.add(gmailMessageId);
+          continue;
+        }
+
         if (isBounceT) {
           console.log(`[gmail-bulk-sync] Lead ${leadId}: Bounce detected in thread (subject: "${subject}") — stopping automation`);
           await serviceSupabase.from("leads").update({
@@ -731,7 +785,7 @@ async function syncLeadEmails(
         }
 
         // OOO detection in thread messages
-        if (direction === "inbound" && !isBounceT) {
+        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
           const oooResultT = isOutOfOfficeReply(headers, subject, bodyText);
           const applied = await applyOOOPause({
             supabase: serviceSupabase,
@@ -751,7 +805,7 @@ async function syncLeadEmails(
         }
 
         // ── Defer detection in thread messages ──
-        if (direction === "inbound" && !isBounceT) {
+        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,
@@ -763,7 +817,7 @@ async function syncLeadEmails(
         }
 
         // ── Meeting confirmation detection (thread messages) ──
-        if (direction === "inbound" && !isBounceT) {
+        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
           const meetingResult = detectMeetingConfirmation(subject, bodyText);
           if (meetingResult.isConfirmed) {
             // Body-aware override (EDGE_CASES #4): see gmail-sync for rationale.
