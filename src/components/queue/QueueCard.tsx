@@ -40,6 +40,7 @@ import {
   type QueueLatestInbound,
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import ReEngagementCard from "@/components/lead/ReEngagementCard";
 
 export interface QueueCardProps {
   lead: QueueLeadRow;
@@ -284,6 +285,25 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
             )}
           </Button>
         </div>
+      </div>
+
+      {/* Re-engagement prompt — only renders for warm/inbound leads whose last
+          outbound is newer than their last inbound. Self-gated; UI-only. */}
+      <div className="px-3 pb-3">
+        <ReEngagementCard
+          leadId={lead.id}
+          gate={{
+            motion: lead.motion,
+            // QueueLeadRow doesn't carry source_type; the motion check alone is
+            // a conservative subset of the resolver's inbound-context branch.
+            source_type: null,
+            last_outbound_at: lead.last_outbound_at,
+            last_inbound_at: lead.last_inbound_at,
+            next_action_key: lead.next_action_key,
+            stage: lead.stage,
+          }}
+          compact
+        />
       </div>
     </div>
   );
