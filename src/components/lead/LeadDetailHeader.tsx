@@ -18,6 +18,8 @@ import { useMailSync } from "@/hooks/useMailSync";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import ReEngagementCard from "@/components/lead/ReEngagementCard";
+import type { MilestoneItem } from "@/lib/supabaseQueries";
 
 type OriginContext = "dashboard" | "leads" | "inbox";
 
