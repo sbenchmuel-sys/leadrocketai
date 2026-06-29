@@ -40,6 +40,7 @@ import {
   type QueueLatestInbound,
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
+import ReEngagementCard from "@/components/lead/ReEngagementCard";
 
 export interface QueueCardProps {
   lead: QueueLeadRow;
