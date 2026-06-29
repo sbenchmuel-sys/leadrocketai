@@ -704,6 +704,11 @@ async function syncLeadEmails(
 
       for (const message of threadMessages) {
         const gmailMessageId = message.id;
+        // Skip drafts — only sync sent and received emails (mirrors the
+        // per-message loop). Discovery seeds thread IDs from list stubs that
+        // carry no labels, so an unsent draft sharing a thread must be filtered
+        // here or it would be stored as a fake sent email.
+        if (message.labelIds?.includes("DRAFT")) continue;
         const existingBody = existingBodyByMessageId.get(gmailMessageId);
         const shouldRestorePurgedBody = existingMessageIds.has(gmailMessageId) && (!existingBody || existingBody.trim() === "");
         if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) continue;
