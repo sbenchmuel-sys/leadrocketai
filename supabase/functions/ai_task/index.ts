@@ -2072,6 +2072,10 @@ ${customInstructionsText}
     const isFollowUp = task === "pre_email_2_followup" || task === "pre_email_3_followup" || task === "pre_email_4_breakup";
     const isBreakup = task === "pre_email_4_breakup";
 
+    // first_touch is now set correctly by the caller (campaign authoring keys it off the
+    // first EMAIL position, not raw step_number — see generateCampaignContent.isIntroTouch),
+    // so the body, the separately-generated subject, and these motion/style blocks all
+    // agree on intro-vs-follow-up. No task-based override needed here.
     const motionBlock = buildMotionBlock({ motion, first_touch: isFirstTouch });
 
     const styleParts: string[] = [];
@@ -2145,13 +2149,36 @@ ${customInstructionsText}
     if (structuredCampaignBlock) {
       console.log(`[ai_task] [8/CAMPAIGN] Structured campaign instruction injected (${structuredCampaignBlock.length} chars)`);
     }
+    // Value-led arc for COLD campaign email TEMPLATES. Scoped to authoring +
+    // outbound email tasks ONLY, so the per-lead Queue draft (no campaignAuthoring)
+    // and inbound campaigns (their own warm prompts) are untouched. A template has
+    // no lead attached, so the shared cold prompt always drops into LOW-INTEL mode
+    // and "asks one neutral use-case question" — the generic, AI-sounding output.
+    // This block overrides that with a value-led arc. (Email-1 link suppression
+    // and the follow-up meeting CTA already align with the OUTBOUND motion block,
+    // so the shared prompt/motion block are left unchanged.)
+    // Key the arc off the EMAIL TASK, not first_touch: if a rep puts a call/text/
+    // LinkedIn touch before the first email, that email is still the intro
+    // (pre_email_1_intro) even though its step_number > 1 — first_touch would
+    // wrongly hand it the follow-up arc (and vice-versa). The breakup
+    // (pre_email_4_breakup) has its own framing and gets no arc.
+    const isColdIntroEmail = task === "pre_email_1_intro";
+    const isColdFollowupEmail = task === "pre_email_2_followup" || task === "pre_email_3_followup";
+    const coldTemplateArc =
+      campaignAuthoring && motion === "outbound_prospecting" && (isColdIntroEmail || isColdFollowupEmail)
+        ? `\n\n=== CAMPAIGN EMAIL ARC (value-led — overrides any "ask one generic question" fallback) ===\n` +
+          (isColdIntroEmail
+            ? `This is EMAIL 1. Open with ONE specific, concrete observation about {Company} or their industry, then ONE short, specific, low-friction ask. Do NOT fall back to a vague "how are you handling X" / "are you looking to optimize Y" question — that reads as mass-AI. Do NOT include a meeting time or calendar link.`
+            : `This is a FOLLOW-UP email. Lead with a concrete value point or a genuinely fresh reason to reply drawn from the offer/knowledge above — never "just checking in" or a generic question. You may suggest a quick call in plain words (no calendar link or placeholder). One CTA only.`) +
+          `\n=== END CAMPAIGN EMAIL ARC ===`
+        : "";
     const campaignTemplateContract = campaignAuthoring
       ? `=== CAMPAIGN TEMPLATE OUTPUT CONTRACT ===
 This is authoring-time reusable campaign copy, not a one-off email to a specific lead.
 Use exactly these merge tokens where personalization belongs: {FirstName}, {Company}, {RepFirstName}.
 Do not use bracketed placeholders like [Name] or spaced brace placeholders like {First Name}.
 Do not invent real prospect or rep names.
-=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===`
+=== END CAMPAIGN TEMPLATE OUTPUT CONTRACT ===` + coldTemplateArc
       : "";
 
     // Build offer recommendation block for last-mile tasks

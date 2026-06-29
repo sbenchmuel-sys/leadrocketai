@@ -218,6 +218,18 @@ interface AuthoringPayload {
   knowledge_context?: string;
 }
 
+// The intro email is the FIRST active email step, even if a call/text/LinkedIn touch
+// precedes it; for non-email steps "first touch" is just step 1. This drives motion/
+// style framing for BOTH the body and the separately-generated subject (cold_email_subject),
+// so neither is framed as a follow-up when it's actually the intro email.
+function isIntroTouch(campaign: CampaignWithSteps, step: CampaignStep): boolean {
+  if (step.channel !== "email") return step.step_number === 1;
+  const firstEmail = [...campaign.steps]
+    .filter((s) => s.active && s.channel === "email")
+    .sort((a, b) => a.step_number - b.step_number)[0];
+  return !!firstEmail && firstEmail.step_number === step.step_number;
+}
+
 function authoringPayload(
   campaign: CampaignWithSteps,
   step: CampaignStep,
@@ -229,7 +241,7 @@ function authoringPayload(
     step_number: step.step_number,
     industry: industry || undefined,
     motion: campaign.motion,
-    first_touch: step.step_number === 1,
+    first_touch: isIntroTouch(campaign, step),
     channel: step.channel,
     lead_context: buildLeadContext(campaign.motion, industry),
     offer_summary: campaign.global_instructions || "",
