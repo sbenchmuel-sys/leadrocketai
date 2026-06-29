@@ -62,10 +62,9 @@ export default function ReEngagementCard({ leadId, gate, milestones, compact }: 
       if (cancelled) return;
       const qs = (dmRes.data?.unanswered_questions as string[] | null) ?? [];
       setUnansweredQs(qs);
-      if (leadRes.data && (leadRes.data as { milestones_json?: unknown }).milestones_json) {
-        setMilestonesState(
-          ((leadRes.data as { milestones_json?: MilestoneItem[] }).milestones_json as MilestoneItem[]) ?? null,
-        );
+      const ms = (leadRes.data as { milestones_json?: unknown } | null)?.milestones_json;
+      if (Array.isArray(ms)) {
+        setMilestonesState(ms as unknown as MilestoneItem[]);
       }
     })();
     return () => { cancelled = true; };
