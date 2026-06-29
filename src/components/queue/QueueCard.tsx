@@ -41,6 +41,7 @@ import {
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import ReEngagementCard from "@/components/lead/ReEngagementCard";
+import { isReEngagementCandidate } from "@/lib/reEngagement";
 
 export interface QueueCardProps {
   lead: QueueLeadRow;
@@ -154,6 +155,19 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
   });
   const ButtonIcon = buttonLabel === "Reply" ? Mail : FileText;
 
+  // Re-engagement eligibility — when shown, suppress the generic
+  // pre-generate "Draft" wand button so the rep sees a single draft
+  // action on the card.
+  const reEngagementGate = {
+    motion: lead.motion,
+    source_type: null,
+    last_outbound_at: lead.last_outbound_at,
+    last_inbound_at: lead.last_inbound_at,
+    next_action_key: lead.next_action_key,
+    stage: lead.stage,
+  };
+  const showReEngagement = isReEngagementCandidate(reEngagementGate);
+
   // Reuse the pre-generate draft queue from PriorityActions so the
   // rep gets a warm draft when they actually click into Lead Detail.
   // Per CLAUDE.md / brief hard constraints.
@@ -256,55 +270,61 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Pre-generate draft — quiet helper button on the right */}
-        <div className="ml-auto">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className={cn(
-              "h-7 w-7",
-              draftStatus?.status === "ready" && "text-success",
-            )}
-            onClick={handlePreGenerate}
-            disabled={draftStatus?.status === "generating"}
-            title={
-              draftStatus?.status === "generating"
-                ? "Generating draft…"
-                : draftStatus?.status === "ready"
-                  ? "Draft ready — open in Lead Detail"
-                  : "Pre-generate draft"
-            }
-          >
-            {draftStatus?.status === "generating" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : draftStatus?.status === "ready" ? (
-              <Check className="h-3.5 w-3.5" />
-            ) : (
-              <Wand2 className="h-3.5 w-3.5" />
-            )}
-          </Button>
-        </div>
+        {/* Pre-generate draft — quiet helper button on the right.
+            Hidden when re-engagement is eligible so the rep sees a single
+            draft action on the card. */}
+        {!showReEngagement && (
+          <div className="ml-auto">
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className={cn(
+                "h-7 w-7",
+                draftStatus?.status === "ready" && "text-success",
+              )}
+              onClick={handlePreGenerate}
+              disabled={draftStatus?.status === "generating"}
+              title={
+                draftStatus?.status === "generating"
+                  ? "Generating draft…"
+                  : draftStatus?.status === "ready"
+                    ? "Draft ready — open in Lead Detail"
+                    : "Pre-generate draft"
+              }
+            >
+              {draftStatus?.status === "generating" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : draftStatus?.status === "ready" ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Wand2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Re-engagement prompt — only renders for warm/inbound leads whose last
           outbound is newer than their last inbound. Self-gated; UI-only. */}
-      <div className="px-3 pb-3">
-        <ReEngagementCard
-          leadId={lead.id}
-          gate={{
-            motion: lead.motion,
-            // QueueLeadRow doesn't carry source_type; the motion check alone is
-            // a conservative subset of the resolver's inbound-context branch.
-            source_type: null,
-            last_outbound_at: lead.last_outbound_at,
-            last_inbound_at: lead.last_inbound_at,
-            next_action_key: lead.next_action_key,
-            stage: lead.stage,
-          }}
-          compact
-        />
-      </div>
+      {showReEngagement && (
+        <div className="px-3 pb-3">
+          <ReEngagementCard
+            lead={{
+              id: lead.id,
+              name: lead.name,
+              company: lead.company,
+              email: lead.email,
+              stage: lead.stage,
+              motion: lead.motion,
+              next_action_key: lead.next_action_key,
+              next_action_label: lead.next_action_label,
+            }}
+            gate={reEngagementGate}
+            compact
+          />
+        </div>
+      )}
     </div>
   );
 }

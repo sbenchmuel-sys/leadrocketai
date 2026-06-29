@@ -79,8 +79,8 @@ export interface ReEngagementSummaryInput {
   unanswered_questions: string[] | null | undefined;
 }
 
-function trimItem(s: string, max = 80): string {
-  const clean = s.replace(/\s+/g, " ").trim();
+function trimItem(s: string, max = 60): string {
+  const clean = s.replace(/\s+/g, " ").replace(/[?.!]+$/, "").trim();
   return clean.length > max ? clean.slice(0, max - 1).trimEnd() + "…" : clean;
 }
 
@@ -89,15 +89,23 @@ export function buildReEngagementSummaryLine(input: ReEngagementSummaryInput): s
     .filter((m) => m && m.status === "pending" && m.description)
     .map((m) => trimItem(m.description));
   const questions = (input.unanswered_questions || [])
-    .filter((q) => !!q && q.trim().length > 0)
+    .filter((q): q is string => !!q && q.trim().length > 0)
     .map((q) => trimItem(q));
 
-  const parts: string[] = [];
-  if (questions[0]) parts.push(`their ${questions[0].replace(/[?.!]+$/, "").toLowerCase().startsWith("their ") ? questions[0].replace(/^their\s+/i, "") : questions[0].replace(/[?.!]+$/, "")}`);
-  if (pendingMilestones[0]) parts.push(pendingMilestones[0]);
+  // List up to 3 open items plainly. Order: questions first (they're what
+  // they last asked), then pending milestones (what we owe them).
+  const items: string[] = [];
+  for (const q of questions) {
+    if (!items.includes(q)) items.push(q);
+    if (items.length >= 3) break;
+  }
+  for (const m of pendingMilestones) {
+    if (items.length >= 3) break;
+    if (!items.includes(m)) items.push(m);
+  }
 
-  if (parts.length === 0) {
+  if (items.length === 0) {
     return "Picking up where the thread left off.";
   }
-  return `Picking up: ${parts.slice(0, 2).join(" + ")}`;
+  return `Picking up where you left off: ${items.join(", ")}`;
 }
