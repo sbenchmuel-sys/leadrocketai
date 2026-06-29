@@ -471,6 +471,11 @@ async function syncLeadEmails(
 
   const searchData = await searchResponse.json();
   const discovered = searchData.messages || [];
+  // Remember which threads were ALREADY synced before this run, so the bounded
+  // expansion below can prioritise never-synced (backfill) threads over re-
+  // fetching known ones — otherwise a lead with ≥MAX_THREADS_PER_LEAD existing
+  // threads would spend every slot re-checking known threads and never backfill.
+  const previouslySyncedThreadIds = new Set(lockedThreadIds);
   // Seed thread expansion with every discovered thread — this is the backfill.
   for (const m of discovered) {
     if (m.threadId) lockedThreadIds.add(m.threadId);
@@ -678,9 +683,13 @@ async function syncLeadEmails(
     }
   }
 
-  // Fetch messages from locked threads. Bounded per run (existing synced threads
-  // first — Set preserves insertion order — then newest discovered threads).
-  const threadsToExpand = Array.from(lockedThreadIds).slice(0, MAX_THREADS_PER_LEAD);
+  // Fetch messages from locked threads, bounded per run. Prioritise never-synced
+  // (backfill) threads over already-synced ones — recent activity in known
+  // threads is already covered by the newest-page per-message loop above, so the
+  // scarce slots are best spent pulling threads we've never seen.
+  const threadsToExpand = Array.from(lockedThreadIds)
+    .sort((a, b) => (previouslySyncedThreadIds.has(a) ? 1 : 0) - (previouslySyncedThreadIds.has(b) ? 1 : 0))
+    .slice(0, MAX_THREADS_PER_LEAD);
   for (const threadId of threadsToExpand) {
     try {
       const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;
