@@ -272,6 +272,7 @@ Deno.serve(async (req) => {
         workspaceId: lead.workspace_id,
         mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
         subject, body, unsubscribeUrl,
+        campaignId: camp.id, leadIndustry: lead.industry,
       });
     } catch (err) {
       // A THROWN error (e.g. transient network failure invoking the provider) must

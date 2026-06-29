@@ -22,6 +22,7 @@ import { plainTextToHtml } from "./emailUtils.ts";
 import { isSendableColdEmail, isColdSuppressed } from "./coldSendFloorRules.ts";
 import { resolveStepMeetingCta } from "./campaignResolver.ts";
 import { appendMeetingCta } from "./meetingCtaLine.ts";
+import { ONE_PAGER_LINK_TOKEN, applyOnePagerToken } from "./onePagerToken.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -77,10 +78,64 @@ export async function resolveTouchContent(
   const body = await appendOwnerMeetingCta(
     supabase, campaignId, stepNumber, ownerUserId, interpolate(match.body),
   );
+  // The {{ONE_PAGER_LINK}} token is intentionally left UNRESOLVED here. It is resolved
+  // fresh inside sendColdEmailTouch, right before the provider call, so a one-pager
+  // removed/unapproved between this content resolution and the actual send (the
+  // automatic path has a multi-step gap: claim, unsubscribe token, late floor) can
+  // never deliver a stale or dead link. The sender is the SINGLE resolution point for
+  // every path (automatic, review, manual).
   return {
     subject: interpolate(match.subject || `Following up, ${first}`),
     body,
   };
+}
+
+/**
+ * Resolve (or strip) the one-pager token in a body. Used by resolveTouchContent
+ * (preview + automatic path) AND sendColdEmailTouch (the single sender every path
+ * funnels through), so a review/manual send of a rep-approved body can never deliver
+ * a literal token. Idempotent; a body with no token costs no query.
+ */
+async function resolveOnePagerInBody(
+  supabase: ServiceClient,
+  campaignId: string | null | undefined,
+  leadIndustry: string | null,
+  body: string,
+): Promise<string> {
+  if (!body.includes(ONE_PAGER_LINK_TOKEN)) return body;
+  const url = campaignId ? await lookupReadyOnePagerUrl(supabase, campaignId, leadIndustry) : null;
+  return applyOnePagerToken(body, url);
+}
+
+/**
+ * The campaign's rep-confirmed (asset_ready) one-pager URL for a lead's industry,
+ * falling back to the General/NULL variant. Case-insensitive industry match mirrors
+ * resolveTouchContent's content matching (a Finance lead never pulls a Healthcare
+ * one-pager). null when nothing ready.
+ */
+async function lookupReadyOnePagerUrl(
+  supabase: ServiceClient,
+  campaignId: string,
+  leadIndustry: string | null,
+): Promise<string | null> {
+  const { data: rows } = await supabase
+    .from("campaign_collateral")
+    .select("variant_group, asset_url, asset_ready, asset_path")
+    .eq("campaign_id", campaignId)
+    .eq("collateral_type", "one_pager");
+  const all = ((rows || []) as Array<{
+    variant_group: string | null;
+    asset_url: string | null;
+    asset_ready: boolean;
+    asset_path: string | null;
+  }>).filter((r) => r.asset_ready && r.asset_path && r.asset_url);
+  if (all.length === 0) return null;
+  const industry = (leadIndustry || "").trim().toLowerCase();
+  const match =
+    (industry && all.find((r) => (r.variant_group || "").trim().toLowerCase() === industry)) ||
+    all.find((r) => !(r.variant_group || "").trim()) ||
+    null;
+  return match?.asset_url ?? null;
 }
 
 /**
@@ -188,6 +243,11 @@ export interface SendColdEmailArgs {
   subject: string;
   body: string;
   unsubscribeUrl: string;
+  // For resolving the {{ONE_PAGER_LINK}} token at send (covers review/manual sends
+  // whose body comes straight from campaign_step_content). Optional: a body with no
+  // token never queries, and a missing campaignId strips the token (never sends it).
+  campaignId?: string;
+  leadIndustry?: string | null;
 }
 
 export interface SendColdEmailResult {
@@ -227,8 +287,16 @@ export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendC
   const postalAddress = (ws?.cold_outreach_postal_address || "").trim();
   if (!postalAddress) return { ok: false, reason: "no company postal address (CAN-SPAM)" };
 
+  // Resolve the one-pager offer HERE — the single sender every path funnels through
+  // — so a review/manual send (rep-approved body straight from campaign_step_content)
+  // can never deliver a literal {{ONE_PAGER_LINK}} token. Idempotent with the
+  // resolveTouchContent pass on the automatic path.
+  const resolvedBody = await resolveOnePagerInBody(
+    args.supabase, args.campaignId, args.leadIndustry ?? null, args.body,
+  );
+
   const footer = buildColdEmailFooter({ unsubscribeUrl: args.unsubscribeUrl, postalAddress });
-  const bodyWithFooter = args.body + footer.footerText;
+  const bodyWithFooter = resolvedBody + footer.footerText;
 
   const headers = {
     "Content-Type": "application/json",

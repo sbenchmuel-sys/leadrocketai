@@ -387,6 +387,46 @@ function flatFieldsFromOption(opt: StepContentOption) {
   };
 }
 
+// ── One-pager offer (offer the uploaded one-pager in follow-up emails) ───────
+// The literal token is the send-time contract — see
+// supabase/functions/_shared/onePagerToken.ts (duplicated across Vite/Deno).
+export const ONE_PAGER_LINK_TOKEN = "{{ONE_PAGER_LINK}}";
+
+// Which touches may carry the one-pager offer: email FOLLOW-UPS only — never the
+// first email (don't open cold with an attachment) and never the breakup.
+export function isOnePagerOfferStep(step: CampaignStep): boolean {
+  return step.channel === "email" && (step.step_type === "followup" || step.step_type === "value_add");
+}
+
+// A standalone P.S. line (its own line, so the send path can strip it cleanly when
+// no ready one-pager exists). Idempotent: never appended twice.
+function appendOnePagerOffer(body: string): string {
+  if (body.includes(ONE_PAGER_LINK_TOKEN)) return body;
+  return body + `\n\nP.S. I put together a short one-pager that might be useful — here it is: ${ONE_PAGER_LINK_TOKEN}`;
+}
+
+// Does this campaign have an uploaded, rep-confirmed one-pager for this exact
+// variant? (asset_ready = true AND a file actually present.)
+async function hasReadyOnePager(campaignId: string, variant: string | null): Promise<boolean> {
+  const { data: rows } = await supabase
+    .from("campaign_collateral" as any)
+    .select("variant_group, asset_path, asset_ready")
+    .eq("campaign_id", campaignId)
+    .eq("collateral_type", "one_pager")
+    .eq("asset_ready", true);
+  const ready = ((rows || []) as unknown as Array<{ variant_group: string | null; asset_path: string | null }>)
+    .filter((r) => r.asset_path);
+  if (ready.length === 0) return false;
+  // The exact-industry one-pager OR the General/NULL one-pager (fallback) — mirrors the
+  // send-time lookup, so an industry variant still offers a shared General one-pager
+  // instead of silently omitting the token (which send-time could then never fill).
+  const v = (variant || "").trim().toLowerCase();
+  return ready.some((r) => {
+    const rv = (r.variant_group || "").trim().toLowerCase();
+    return rv === "" || (!!v && rv === v);
+  });
+}
+
 /**
  * Generate (or regenerate) one touch+variant and persist it. Bulk generation
  * (force=false) never overwrites a touch that already has content — it only
@@ -403,6 +443,16 @@ export async function generateTouch(
   if (opts.existing && !opts.force) return false;
 
   const { options, voicemail } = await generateOptionsForTouch(campaign, step, industry);
+
+  // Append the one-pager offer (with the send-time token) to email follow-ups when
+  // a ready one-pager exists for this variant. The send path swaps the token for the
+  // current public link, or strips the line if no ready asset exists at send time.
+  if (isOnePagerOfferStep(step) && (await hasReadyOnePager(campaign.id, industry))) {
+    for (const o of options) {
+      if (o.body) o.body = appendOnePagerOffer(o.body);
+    }
+  }
+
   const first = options[0] ?? {};
 
   await upsertStepContent(campaign.id, step.step_number, industry, {
