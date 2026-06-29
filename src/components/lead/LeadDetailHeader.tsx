@@ -267,6 +267,23 @@ export default function LeadDetailHeader({
           </>
         )}
       </div>
+
+      {/* Re-engagement (warm/inbound-sourced, our last outbound is newer than their last inbound).
+          Component is self-gating — renders nothing for ineligible leads. UI-only; routing comes
+          from playbookResolver via streamDraft. */}
+      <ReEngagementCard
+        leadId={lead.id}
+        gate={{
+          motion: (lead as any).motion ?? null,
+          source_type: (lead as any).source_type ?? null,
+          last_outbound_at: lead.last_outbound_at ?? null,
+          last_inbound_at: lead.last_inbound_at ?? null,
+          next_action_key: lead.next_action_key ?? null,
+          has_future_meeting: !!lead.has_future_meeting,
+          stage: lead.stage ?? null,
+        }}
+        milestones={(lead.milestones_json as unknown as MilestoneItem[] | null) ?? null}
+      />
     </div>
   );
 }
