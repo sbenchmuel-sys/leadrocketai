@@ -154,6 +154,19 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
   });
   const ButtonIcon = buttonLabel === "Reply" ? Mail : FileText;
 
+  // Re-engagement eligibility — when shown, suppress the generic
+  // pre-generate "Draft" wand button so the rep sees a single draft
+  // action on the card.
+  const reEngagementGate = {
+    motion: lead.motion,
+    source_type: null,
+    last_outbound_at: lead.last_outbound_at,
+    last_inbound_at: lead.last_inbound_at,
+    next_action_key: lead.next_action_key,
+    stage: lead.stage,
+  };
+  const showReEngagement = isReEngagementCandidate(reEngagementGate);
+
   // Reuse the pre-generate draft queue from PriorityActions so the
   // rep gets a warm draft when they actually click into Lead Detail.
   // Per CLAUDE.md / brief hard constraints.
