@@ -41,6 +41,7 @@ import {
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import ReEngagementCard from "@/components/lead/ReEngagementCard";
+import { isReEngagementCandidate } from "@/lib/reEngagement";
 
 export interface QueueCardProps {
   lead: QueueLeadRow;
