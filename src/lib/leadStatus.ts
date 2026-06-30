@@ -9,12 +9,12 @@
 
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 
-export type LeadStatusKey = "new" | "hot" | "quiet" | "active";
+export type LeadStatusKey = "new" | "hot" | "quiet" | "active" | "in_outreach";
 
 export interface LeadStatusDisplay {
   key: LeadStatusKey;
   label: string;
-  /** Tailwind text-color class — blue (New), amber (Hot), muted (Gone quiet). */
+  /** Tailwind text-color class — blue (New), amber (Hot), muted (Gone quiet), violet (In outreach). */
   className: string;
 }
 
@@ -63,9 +63,11 @@ export function isInAutomation(lead: EnrichedLead): boolean {
 }
 
 /**
- * Derive the lead's status word. Priority: Hot (warming) → Gone quiet (stale)
- * → New (freshly added) → Active (default). Hot/Gone quiet stay visible in the
- * column even though they are not filter chips.
+ * Derive the lead's status word. Priority: Hot (warming, includes replies) →
+ * Gone quiet (stale) → In outreach (enrolled, not reply-paused) → New (freshly
+ * added) → Active (default). Replies flip revenueState to heating_up so "reply
+ * wins" naturally — an enrolled lead with a fresh inbound reads as Hot, not
+ * In outreach.
  */
 export function leadStatus(lead: EnrichedLead): LeadStatusDisplay {
   if (lead.revenueState === "heating_up") {
@@ -73,6 +75,9 @@ export function leadStatus(lead: EnrichedLead): LeadStatusDisplay {
   }
   if (lead.revenueState === "long_cycle") {
     return { key: "quiet", label: "Gone quiet", className: "text-muted-foreground" };
+  }
+  if (isEnrolled(lead) && !hasUnansweredReply(lead)) {
+    return { key: "in_outreach", label: "In outreach", className: "text-violet-600 dark:text-violet-400" };
   }
   if (lead.stage === "new") {
     return { key: "new", label: "New", className: "text-blue-600 dark:text-blue-400" };

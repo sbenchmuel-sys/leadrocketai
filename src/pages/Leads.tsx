@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
 import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
+import { fetchWorkspaceCampaigns } from "@/lib/campaignQueries";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 import { leadStatus, isInAutomation, isNewLead } from "@/lib/leadStatus";
 import { updateMotionFromTable, updateSourceFromTable, type SourcePresetKey } from "@/lib/motionUpdater";
@@ -93,6 +94,8 @@ export default function Leads() {
   const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
 
   const [leads, setLeads] = useState<EnrichedLead[]>([]);
+  // campaign_id → campaign name, for the small cadence tag under the lead row.
+  const [campaignNames, setCampaignNames] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [chip, setChip] = useState<Chip>("all");
@@ -139,9 +142,15 @@ export default function Leads() {
     try {
       // Pass the active workspace so the fetch is scoped to it (Codex PR #107) —
       // a multi-workspace member won't see leads they own in other workspaces.
-      const m = await getDashboardMetrics(workspaceId);
+      const [m, camps] = await Promise.all([
+        getDashboardMetrics(workspaceId),
+        workspaceId ? fetchWorkspaceCampaigns(workspaceId).catch(() => []) : Promise.resolve([]),
+      ]);
       if (loadTokenRef.current !== token) return; // superseded — ignore stale result
       setLeads(m.leads);
+      const map: Record<string, string> = {};
+      for (const c of camps) map[c.id] = c.name;
+      setCampaignNames(map);
     } catch {
       if (loadTokenRef.current === token) toast.error("Failed to load leads");
     } finally {
@@ -660,6 +669,11 @@ export default function Leads() {
                               {lead.name}
                             </Link>
                             <div className="text-xs text-muted-foreground">{lead.company}</div>
+                            {lead.campaign_id && campaignNames[lead.campaign_id] && (
+                              <div className="text-xs text-muted-foreground/80 truncate">
+                                ↳ {campaignNames[lead.campaign_id]}
+                              </div>
+                            )}
                             <div className="mt-1 empty:hidden">{renderDraftTag(lead)}</div>
                           </TableCell>
                           <TableCell className="py-3">

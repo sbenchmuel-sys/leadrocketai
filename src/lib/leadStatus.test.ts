@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
-import { isInAutomation, isNewLead } from "@/lib/leadStatus";
+import { isInAutomation, isNewLead, leadStatus } from "@/lib/leadStatus";
 
 function lead(partial: Partial<EnrichedLead>): EnrichedLead {
   return {
@@ -61,5 +61,26 @@ describe("isNewLead", () => {
     const l = lead({ stage: "new", campaign_id: "c1", last_inbound_at: NEWER, last_outbound_at: OLDER });
     expect(isInAutomation(l)).toBe(false); // display: paused
     expect(isNewLead(l)).toBe(false); // but not "New" — it's enrolled
+  });
+});
+
+describe("leadStatus", () => {
+  it("returns 'in_outreach' for an enrolled lead with no reply", () => {
+    expect(leadStatus(lead({ stage: "new", campaign_id: "c1" })).key).toBe("in_outreach");
+  });
+
+  it("reply wins: enrolled + unanswered reply → 'hot' (heating_up)", () => {
+    const l = lead({
+      stage: "new",
+      campaign_id: "c1",
+      revenueState: "heating_up",
+      last_inbound_at: NEWER,
+      last_outbound_at: OLDER,
+    } as Partial<EnrichedLead>);
+    expect(leadStatus(l).key).toBe("hot");
+  });
+
+  it("not enrolled + stage new → 'new' (unchanged)", () => {
+    expect(leadStatus(lead({ stage: "new" })).key).toBe("new");
   });
 });
