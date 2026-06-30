@@ -183,6 +183,49 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     } else if (touch.channel === "whatsapp" && (touch.whatsappNumber || touch.phone)) {
       window.open(whatsappLink((touch.whatsappNumber || touch.phone)!, touch.smsText || touch.body || ""), "_blank", "noopener,noreferrer");
     } else if (touch.channel === "linkedin" && touch.linkedinUrl) {
+      openLinkedinTouch();
+    }
+  }
+
+  // LinkedIn deep-link behavior, per subtype. Browsers forbid auto-pasting into
+  // another origin's input, so the most low-effort thing we can do is: open the
+  // right LinkedIn surface, copy the prepared text, and tell the rep where to
+  // paste. Same flow on desktop and mobile — LinkedIn handles app handoff via
+  // Universal/App Links automatically.
+  function openLinkedinTouch() {
+    const action = touch.linkedinAction ?? "message";
+    const text = touch.body || touch.talkingPoints || "";
+
+    if (action === "react") {
+      // Pure engagement — no message to paste. Just land on their profile so the
+      // rep can find and react to the latest post.
+      toast.success("Opening their profile — react on their latest post.");
+      window.open(touch.linkedinUrl!, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (action === "message") {
+      // LinkedIn has no public deep-link that targets a specific recipient's
+      // chat without a member ID (which we don't store), so the compose URL
+      // opens the recipient picker — the rep types the first letter or two of
+      // the name once. Body still can't be pre-filled, so we copy it.
+      const copyPromise = text ? copyToClipboard(text) : Promise.resolve(true);
+      void copyPromise.then((ok) => {
+        if (ok && text) toast.success("Message copied — paste it in the chat (⌘/Ctrl+V).");
+      });
+      window.open("https://www.linkedin.com/messaging/compose/", "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    // action === "connect" → open the profile; copy the note for the "Add a note"
+    // overlay so the rep just clicks Connect → Add a note → paste.
+    const copyPromise = text ? copyToClipboard(text) : Promise.resolve(true);
+    void copyPromise.then((ok) => {
+      if (ok && text) toast.success("Note copied — click Connect → Add a note, then paste (⌘/Ctrl+V).");
+    });
+    window.open(touch.linkedinUrl!, "_blank", "noopener,noreferrer");
+  }
+
       // Copy the prepared message silently, then open the profile to paste + send.
       void copyToClipboard(touch.body || touch.talkingPoints || "").then((ok) => {
         if (ok) toast.success("Message copied — paste it in LinkedIn");
