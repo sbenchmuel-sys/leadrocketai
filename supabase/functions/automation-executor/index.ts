@@ -1796,6 +1796,14 @@ serve(async (req) => {
             .from("rep_profiles").select("full_name")
             .eq("user_id", lead.owner_user_id).maybeSingle();
           const ownerRepFirstName = ((ownerRep as any)?.full_name || "").split(" ")[0] || "";
+          // Default rep signature for the LEAD OWNER — appended to the body before
+          // the CAN-SPAM footer so the auto-sent email matches what the rep would
+          // see/edit in the review preview (the Outreach card does the same append
+          // client-side). No-op if the owner has no default signature.
+          const { data: ownerSig } = await supabase
+            .from("rep_signatures").select("signature_text")
+            .eq("user_id", lead.owner_user_id).eq("is_default", true).maybeSingle();
+          const ownerSigText = (((ownerSig as any)?.signature_text) || "").trim();
           const content = await resolveTouchContent(
             supabase, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id,
             { lastName, company: (lead as any).company || null, industry: lead.industry || null, repFirstName: ownerRepFirstName },
@@ -1812,6 +1820,10 @@ serve(async (req) => {
               .eq("id", touch.id);
             continue;
           }
+          // Append rep signature if present and not already in the body.
+          const bodyWithSig = ownerSigText && !content.body.includes(ownerSigText)
+            ? `${content.body.trimEnd()}\n\n${ownerSigText}`
+            : content.body;
 
           // Unsubscribe link (signed token). Fail closed if the secret is unset.
           if (!unsubSecret) { console.error("[automation-executor:cold] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send (fail closed)"); continue; }
