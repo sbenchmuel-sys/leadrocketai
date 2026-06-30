@@ -238,7 +238,18 @@ export async function fetchQueueLeads(opts?: {
     throw leadsErr;
   }
 
-  const leads = (leadRows ?? []) as unknown as QueueLeadRow[];
+  // Outreach-enrolled leads belong to the dedicated "Outreach" tab — the cold
+  // cadence is driven by campaign_touch rows, not by needs_action. We only let
+  // an enrolled lead surface here when the CUSTOMER has actually replied
+  // (next_action_key === 'reply_now'), in which case it routes to "Replied".
+  // Anything else (the scheduler arming the next touch, a stale follow-up flag,
+  // etc.) stays in the Outreach tab so reactive lists aren't flooded.
+  const filteredForOutreach = (leadRows ?? []).filter((l: any) => {
+    if (!l.campaign_id) return true;
+    return l.next_action_key === "reply_now";
+  });
+
+  const leads = filteredForOutreach as unknown as QueueLeadRow[];
   if (leads.length === 0) return { leads: [], hiddenCount: 0 };
 
   // Step 2 — pull the per-lead latest intent via the shared RPC.
