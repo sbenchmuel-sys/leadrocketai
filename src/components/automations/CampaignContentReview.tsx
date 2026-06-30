@@ -95,6 +95,11 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
   const [genAll, setGenAll] = useState<GenerateAllProgress | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Authoring mode. `null` = not chosen yet (empty state shows both options).
+  // `"manual"` = rep writes from scratch, with per-touch Generate-this-one help.
+  // `"auto"` = AI builds everything (current default flow).
+  const [mode, setMode] = useState<null | "manual" | "auto">(null);
+  const [switchTo, setSwitchTo] = useState<null | "manual" | "auto">(null);
   // Whether the rep has explicitly chosen a variant. `null` is BOTH the initial
   // "not chosen" state AND the legitimate value for "Everyone else (General)",
   // so we track the choice separately rather than treating null as uninitialized.
