@@ -383,14 +383,29 @@ interface TouchCardProps {
   day: number;
   variant: string | null;
   content: StepContent | null;
+  /** Manual-mode rep is writing from scratch — start empty rows in edit mode
+   *  and show the merge-field toolbar plus per-touch "Generate this one". */
+  manualMode?: boolean;
   linkedCollateral?: CampaignCollateral[];
   onChanged: () => void;
 }
 
-function TouchCard({ campaign, step, day, variant, content, linkedCollateral, onChanged }: TouchCardProps) {
+function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCollateral, onChanged }: TouchCardProps) {
   const kind = contentKindForChannel(step.channel);
-  const [busy, setBusy] = useState<null | "rewrite" | "soften" | "save">(null);
-  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState<null | "rewrite" | "soften" | "save" | "generate">(null);
+  const emptyContent = !content || (!content.body && !content.subject && !content.talking_points && !content.sms_text);
+  const [editing, setEditing] = useState(!!manualMode && emptyContent);
+
+  // Refs for each editable field so the toolbar can insert tokens at the caret.
+  const subjectRef = useRef<MergeFieldEditorHandle>(null);
+  const bodyRef = useRef<MergeFieldEditorHandle>(null);
+  const talkingRef = useRef<MergeFieldEditorHandle>(null);
+  const voicemailRef = useRef<MergeFieldEditorHandle>(null);
+  const smsRef = useRef<MergeFieldEditorHandle>(null);
+  // Track which field was focused last so chip clicks hit the right one.
+  const activeRef = useRef<"subject" | "body" | "talking" | "voicemail" | "sms">(
+    kind === "email" ? "body" : kind === "voice" ? "talking" : kind === "sms" ? "sms" : "body",
+  );
 
   // Local draft for inline edits.
   const [draft, setDraft] = useState({
@@ -409,8 +424,32 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
       voicemail_script: content?.voicemail_script ?? "",
       sms_text: content?.sms_text ?? "",
     });
-    setEditing(false);
-  }, [content]);
+    setEditing(!!manualMode && (!content || (!content.body && !content.subject && !content.talking_points && !content.sms_text)));
+  }, [content, manualMode]);
+
+  const insertToken = (token: string) => {
+    const ref =
+      activeRef.current === "subject" ? subjectRef.current
+      : activeRef.current === "body" ? bodyRef.current
+      : activeRef.current === "talking" ? talkingRef.current
+      : activeRef.current === "voicemail" ? voicemailRef.current
+      : smsRef.current;
+    ref?.insert(token);
+  };
+
+  const generateOne = async () => {
+    setBusy("generate");
+    try {
+      await generateTouch(campaign, step, variant, { force: true });
+      toast.success("Generated");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't generate");
+    } finally {
+      setBusy(null);
+    }
+  };
+
 
   const options = Array.isArray(content?.options_json) ? content!.options_json : [];
   const selected = content?.selected_option ?? 0;
