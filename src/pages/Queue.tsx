@@ -335,11 +335,10 @@ export default function Queue() {
         /* ── Outreach tab: cold campaign touches (separate source) ── */
         <>
           {postalMissing && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="flex-1">
-                <strong className="font-medium">Add your company mailing address to start sending.</strong>{" "}
-                Required by CAN-SPAM — cold emails won't go out until it's set.
+                <strong className="font-medium text-foreground">Pilot mode:</strong> cold emails are sending without a company mailing address. Add one in Settings before opening to broader sends (CAN-SPAM).
               </div>
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/app/settings")}>
                 Open Settings

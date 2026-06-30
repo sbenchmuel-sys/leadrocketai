@@ -34,15 +34,16 @@ export function sanitizeHeaderValue(value: string): string {
  */
 export function buildColdEmailFooter(opts: { unsubscribeUrl: string; postalAddress: string }): ColdFooter {
   const url = sanitizeHeaderValue(opts.unsubscribeUrl);
-  const postal = opts.postalAddress.trim();
+  const postal = (opts.postalAddress || "").trim();
   if (!url) throw new Error("buildColdEmailFooter: unsubscribeUrl is required");
-  if (!postal) throw new Error("buildColdEmailFooter: postalAddress is required (CAN-SPAM)");
 
-  // Plain-text footer. The "---" separator renders as an <hr> via plainTextToHtml.
+  // PILOT: postal address is allowed to be blank during the closed pilot. The
+  // unsubscribe link is still always present. Set a workspace mailing address in
+  // Settings → Cold Outreach Safety before opening to broader sends (CAN-SPAM).
   const footerText =
     `\n\n---\n` +
-    `Don't want to hear from us? Unsubscribe here: ${url}\n\n` +
-    postal;
+    `Don't want to hear from us? Unsubscribe here: ${url}` +
+    (postal ? `\n\n${postal}` : ``);
 
   // RFC 2369 / RFC 8058 one-click. Per RFC 8058 the Post header value MUST be the
   // exact key/value pair "List-Unsubscribe=One-Click" — Gmail/Yahoo one-click clients
