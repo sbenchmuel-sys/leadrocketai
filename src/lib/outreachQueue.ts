@@ -214,14 +214,38 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       stepFlag: stepFlag.get(`${t.campaign_id}|${t.step_number}`) ?? null,
     });
 
+  // Lead-owner → rep first name map for {RepFirstName}. The preview must use the
+  // OWNER's name (the sender), not the viewer's, so a coworker reviewing the
+  // queue still sees what the lead will actually receive.
+  const ownerIds = [...new Set(rows.map((t) => leadOf(t).owner_user_id).filter(Boolean))] as string[];
+  const ownerFirstName = new Map<string, string>();
+  if (ownerIds.length > 0) {
+    const { data: reps } = await supabase
+      .from("rep_profiles")
+      .select("user_id, full_name")
+      .in("user_id", ownerIds);
+    for (const r of (reps || []) as any[]) {
+      const first = String(r.full_name || "").trim().split(/\s+/)[0] || "";
+      if (first) ownerFirstName.set(r.user_id, first);
+    }
+  }
+
   // `rows` is already (a) constrained to active campaigns, (b) owner-scoped via the
   // leads!inner join (no hidden-lead or blank-card rows, no buried work), and (c)
   // capped. Each row's lead is embedded.
   return rows.map((t): OutreachTouch => {
     const lead = leadOf(t);
-    const first = String(lead.name || "").split(" ")[0] || "there";
+    const firstName = String(lead.name || "").split(" ")[0] || "there";
+    const lastName = String(lead.name || "").split(" ").slice(1).join(" ");
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);
     const stepType = stepTypeMap.get(`${t.campaign_id}|${t.step_number}`) ?? null;
+    const mctx = {
+      firstName,
+      lastName,
+      company: lead.company ?? null,
+      industry: lead.industry ?? null,
+      repFirstName: ownerFirstName.get(lead.owner_user_id) ?? null,
+    };
     return {
       id: t.id,
       campaignId: t.campaign_id,
@@ -236,11 +260,11 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       phone: lead.phone ?? null,
       linkedinUrl: lead.linkedin_url ?? null,
       whatsappNumber: lead.whatsapp_number ?? null,
-      subject: interpolateName(c?.subject ?? null, first),
-      body: appendMeetingCtaLocal(interpolateName(c?.body ?? null, first), meetingLinkFor(t, lead)),
-      smsText: interpolateName(c?.sms_text ?? null, first),
-      talkingPoints: interpolateName(c?.talking_points ?? null, first),
-      voicemailScript: interpolateName(c?.voicemail_script ?? null, first),
+      subject: interpolate(c?.subject ?? null, mctx),
+      body: appendMeetingCtaLocal(interpolate(c?.body ?? null, mctx), meetingLinkFor(t, lead)),
+      smsText: interpolate(c?.sms_text ?? null, mctx),
+      talkingPoints: interpolate(c?.talking_points ?? null, mctx),
+      voicemailScript: interpolate(c?.voicemail_script ?? null, mctx),
       linkedinAction: t.channel === "linkedin" ? linkedinActionFromStepType(stepType) : undefined,
     };
   });
