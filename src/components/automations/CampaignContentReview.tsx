@@ -519,7 +519,11 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
     }
   };
 
-  const hasContent = !!content && (content.body || content.talking_points || content.sms_text || content.subject);
+  const hasContent = !!content && (content.body || content.talking_points || content.voicemail_script || content.sms_text || content.subject);
+  // Allow re-editing any row the rep has already touched, even if they cleared
+  // every field — without this the pencil disappears for calls/LinkedIn whose
+  // only populated field (voicemail_script, body) got wiped, leaving them stuck.
+  const canEdit = hasContent || !!content;
 
   return (
     <Card>
