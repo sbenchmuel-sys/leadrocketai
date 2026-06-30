@@ -808,7 +808,123 @@ export async function enrollLeadsInCampaign(
     }
   }
 
+  // Promote the FIRST DUE touch of each new enrollment to 'queued' inline so the
+  // card appears in the Outreach tab immediately, instead of waiting up to 5 min
+  // for campaign-touch-scheduler. Mirrors the scheduler's step-1 gates exactly
+  // (same send_mode / auto-send / channel-reachability checks) so behavior is
+  // identical to what the next cron tick would have done — just sooner.
+  //
+  // Scope is intentionally narrow: step 1 only, eligible_at <= now, and we leave
+  // anything the scheduler would have left alone (automatic email under a fully-
+  // gated workspace → owned by automation-executor; manual touch where the lead
+  // can't receive the channel → let cron auto-skip+advance through the proper
+  // helper). Everything else (steps 2+, staggered starts, max-age, reply bridge)
+  // continues to flow through the 5-min cron unchanged.
+  //
+  // Best-effort: any error here is swallowed — the lead is correctly enrolled
+  // and cron will promote on its next pass.
+  try {
+    await promoteFirstDueTouches(
+      campaignId,
+      workspaceId,
+      ((insertedEnrollments || []) as any[]).map((e) => e.id as string),
+      stampedLeads,
+    );
+  } catch (err) {
+    console.warn("[enrollLeadsInCampaign] inline promotion skipped:", err);
+  }
+
   return { enrolled: stampedLeads.length, skips, channelSkips, capacity };
+}
+
+/**
+ * Mirror of campaign-touch-scheduler's step-1 promotion logic — see comment at
+ * the call site in enrollLeadsInCampaign.
+ */
+async function promoteFirstDueTouches(
+  campaignId: string,
+  workspaceId: string,
+  enrollmentIds: string[],
+  enrolledLeads: EnrollCandidateLead[],
+): Promise<void> {
+  if (enrollmentIds.length === 0) return;
+
+  // Need send_mode (per campaign) + workspace auto-send gate (per workspace) to
+  // know whether step-1 EMAIL touches should be left for automation-executor.
+  const [{ data: camp }, { data: ws }, { data: autoSettings }] = await Promise.all([
+    supabase.from("campaigns").select("send_mode").eq("id", campaignId).maybeSingle(),
+    supabase
+      .from("workspaces")
+      .select("timezone, cold_outreach_postal_address")
+      .eq("id", workspaceId)
+      .maybeSingle(),
+    supabase
+      .from("workspace_automation_settings" as any)
+      .select("auto_send_enabled")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle(),
+  ]);
+  const sendMode = (camp as any)?.send_mode ?? "review";
+  const hasTimezone = !!(ws as any)?.timezone;
+  const hasPostal =
+    !!((ws as any)?.cold_outreach_postal_address &&
+      String((ws as any).cold_outreach_postal_address).trim());
+  const autoSendOn = (autoSettings as any)?.auto_send_enabled === true;
+  const autoEmailOwnedByExecutor = sendMode === "automatic" && autoSendOn && hasTimezone && hasPostal;
+
+  // Fetch the actual step-1 touch rows we just inserted (need ids + eligible_at).
+  const { data: touches } = await supabase
+    .from("campaign_touch" as any)
+    .select("id, enrollment_id, lead_id, channel, eligible_at, status")
+    .eq("campaign_id", campaignId)
+    .eq("step_number", 1)
+    .in("enrollment_id", enrollmentIds);
+  const rows = (touches || []) as any[];
+  if (rows.length === 0) return;
+
+  const nowMs = Date.now();
+  const leadById = new Map(enrolledLeads.map((l) => [l.id, l]));
+
+  const touchIdsToPromote: string[] = [];
+  const enrollmentIdsToActivate = new Set<string>();
+  for (const t of rows) {
+    if (t.status !== "scheduled") continue;
+    if (t.eligible_at && new Date(t.eligible_at).getTime() > nowMs) continue; // staggered start — wait for cron
+    const lead = leadById.get(t.lead_id);
+    if (!lead) continue;
+    if (lead.unsubscribed) continue; // belt-and-suspenders
+
+    if (t.channel === "email") {
+      if (autoEmailOwnedByExecutor) continue; // executor owns it
+    } else {
+      // Manual channel: skip if lead can't receive — let cron's auto-skip+advance
+      // (advanceColdEnrollment) handle that path rather than duplicating it here.
+      const ok =
+        (t.channel === "voice" && !!lead.phone) ||
+        (t.channel === "sms" && !!lead.phone) ||
+        (t.channel === "whatsapp" && !!(lead.whatsapp_number || lead.phone)) ||
+        (t.channel === "linkedin" && !!lead.linkedin_url);
+      if (!ok) continue;
+    }
+
+    touchIdsToPromote.push(t.id);
+    enrollmentIdsToActivate.add(t.enrollment_id);
+  }
+
+  if (touchIdsToPromote.length === 0) return;
+
+  await supabase
+    .from("campaign_touch" as any)
+    .update({ status: "queued" })
+    .in("id", touchIdsToPromote)
+    .eq("status", "scheduled"); // don't clobber if cron raced us
+  if (enrollmentIdsToActivate.size > 0) {
+    await supabase
+      .from("campaign_enrollment" as any)
+      .update({ status: "active" })
+      .in("id", [...enrollmentIdsToActivate])
+      .eq("status", "scheduled");
+  }
 }
 
 /**
