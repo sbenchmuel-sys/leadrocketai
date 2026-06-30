@@ -28,6 +28,7 @@ import {
   buildUnsubscribeUrl,
   repliedSinceEnrollment,
 } from "../_shared/coldOutreach.ts";
+import { interpolateMergeFields } from "../_shared/mergeFieldInterpolate.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 
 const corsHeaders = {
