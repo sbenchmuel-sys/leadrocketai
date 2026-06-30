@@ -730,7 +730,27 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
             )}
 
             {kind === "other" && (
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.body}</p>
+              <div>
+                {editing ? (
+                  <div onFocus={() => (activeRef.current = "body")}>
+                    <MergeFieldEditor
+                      ref={bodyRef}
+                      channel={step.channel}
+                      value={draft.body}
+                      onChange={(v) => setDraft((d) => ({ ...d, body: v }))}
+                      rows={4}
+                      placeholder={
+                        step.channel === "linkedin"
+                          ? "Write your LinkedIn message (kept short — connect notes are limited to ~300 characters)"
+                          : "Write the message"
+                      }
+                      className="resize-none text-sm"
+                    />
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.body}</p>
+                )}
+              </div>
             )}
 
             {/* Advisory spam heads-up (email only) — never blocks */}
