@@ -226,13 +226,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     window.open(touch.linkedinUrl!, "_blank", "noopener,noreferrer");
   }
 
-      // Copy the prepared message silently, then open the profile to paste + send.
-      void copyToClipboard(touch.body || touch.talkingPoints || "").then((ok) => {
-        if (ok) toast.success("Message copied — paste it in LinkedIn");
-      });
-      window.open(touch.linkedinUrl, "_blank", "noopener,noreferrer");
-    }
-  }
+
 
   const channelMeta: Record<string, { label: string; icon: ReactNode }> = {
     voice: { label: "Call", icon: <Phone className="mr-1.5 h-4 w-4" /> },
