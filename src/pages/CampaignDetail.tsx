@@ -219,6 +219,38 @@ export default function CampaignDetail() {
     return () => { cancelled = true; };
   }, [campaign?.workspace_id]);
 
+  // Count the campaign's step-content rows. Drives the Launch button's enabled
+  // state — drafts with no content can't go active (the sender would have
+  // nothing to send), and the gate is rev-bumped after a steps edit so a
+  // reconciled save re-checks. Re-fetched on campaign change AND on stepsRev.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setContentRowCount(null);
+    supabase
+      .from("campaign_step_content" as any)
+      .select("campaign_id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .then(({ count }) => { if (!cancelled) setContentRowCount(count ?? 0); });
+    return () => { cancelled = true; };
+  }, [id, stepsRev]);
+
+  const handleLaunch = async () => {
+    if (!id || !campaign) return;
+    setStatusBusy(true);
+    try {
+      await launchCampaign(id);
+      setCampaign({ ...campaign, status: "active" });
+      toast.success("Outreach launched — touches will start surfacing in Queue → Outreach");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't launch");
+    } finally {
+      setStatusBusy(false);
+      setConfirmLaunch(false);
+    }
+  };
+
+
   const handleSaveInstructions = async () => {
     if (!id) return;
     setSavingInstructions(true);
