@@ -352,7 +352,22 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
           </DialogHeader>
           <div className="space-y-3">
             <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
-            <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} placeholder="Email body" />
+            <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} placeholder="Email body" />
+            {hasSignature === false && (
+              <p className="text-[11px] text-muted-foreground">
+                No signature set ·{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground"
+                  onClick={() => { setReviewOpen(false); navigate("/app/settings"); }}
+                >
+                  Add one in Settings
+                </button>
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              A CAN-SPAM footer with your company address and an unsubscribe link is added automatically.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setReviewOpen(false)}>Cancel</Button>
