@@ -551,12 +551,12 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
             </Badge>
           )}
           <div className="ml-auto flex items-center gap-1">
-            {hasContent && !editing && (
+            {canEdit && !editing && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(true)} aria-label="Edit">
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
             )}
-            {hasContent && (
+            {canEdit && (
               <Button
                 variant="ghost"
                 size="icon"
