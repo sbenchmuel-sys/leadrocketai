@@ -55,6 +55,10 @@ import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachCard } from "@/components/queue/OutreachCard";
 import { fetchOutreachQueue, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useNavigate } from "react-router-dom";
+import { AlertTriangle } from "lucide-react";
 
 const PAGE_SIZE = 25; // mirrors LeadTable.tsx — brief §5 ("reuse pagination")
 const MOBILE_BREAKPOINT_PX = 640;
