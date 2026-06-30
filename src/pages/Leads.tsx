@@ -578,7 +578,7 @@ export default function Leads() {
                 </span>
                 <div className="flex items-center gap-2">
                   <Button size="sm" disabled={bulkBusy} onClick={() => setAddToAutomationOpen(true)}>
-                    Add to automation
+                    Add to outreach
                   </Button>
                   <Button size="sm" variant="outline" disabled={bulkBusy} onClick={handleDraftEmails}>
                     Draft emails
