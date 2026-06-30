@@ -1,68 +1,90 @@
 ## Goal
 
-Make LinkedIn a first-class cadence channel reps can add/edit in a campaign, and make the Queue's LinkedIn touch as low-effort as the browser allows (open the right URL + copy the right text + clear paste hint). Calls/SMS/WhatsApp stay exactly as they are today.
+On the campaign content step (the "Build the messages" screen), give reps a second path: **Write my own**. Empty touches up front, full inline editing, merge fields they can insert with one click or by typing `{{`, and a "Generate this one" button per touch if they want AI help on a single message. The existing "Build the messages" flow stays exactly as is.
+
+This is a **small change**. We already have all the plumbing:
+- `saveStepEdit()` writes manual content per step.
+- `generateTouch()` already exists for single-touch generation.
+- `ai_task` already normalises tokens like `{FirstName}`, `{Company}`, `{RepFirstName}` at send time, so any tokens the rep types just flow through the existing live-send pipeline.
+
+No DB migration, no edge-function change. Frontend only.
 
 ---
 
-## Part A — Surface LinkedIn as a cadence channel (authoring)
+## UX
 
-### A1. `src/pages/NewCampaign.tsx`
-- Add `linkedin` to `OPTIONAL_CHANNELS` with label "LinkedIn" and a one-line helper: "Manual touch — opens the lead's profile and copies the message for you to paste."
-- Include it in the channel chooser shown on the cadence step so reps can opt in alongside Email / SMS / WhatsApp / Call.
-- When LinkedIn is selected, seed defaults from the existing `src/lib/campaignDefaults.ts` LinkedIn plan (Connect, React, Message).
+**Empty state (current "Build the messages" card)** — add a secondary option:
 
-### A2. `src/lib/campaignDefaults.ts`
-- Extend `EDITABLE_CHANNELS` to include `linkedin` so the step editor lets reps add a LinkedIn step or switch an existing step's channel to LinkedIn.
-- Keep the three existing LinkedIn step subtypes available: **connection request**, **reaction**, **message**. These already exist in the defaults; just make sure the editor surfaces them as a subtype picker when channel = linkedin.
+```text
+[ Build the messages ]   or   Write my own
+```
 
-### A3. `src/components/automations/CampaignScript.tsx`
-- Render LinkedIn steps with the same card shape as other manual channels (Linkedin icon from `lucide-react`, label "LinkedIn", subtype chip: "Connect" / "React" / "Message").
-- Body editor: same Textarea as SMS/WhatsApp. For "React" the body is optional (no message to paste — just a hint to react on the latest post).
+`Write my own` flips the section into manual mode and renders one `TouchCard` per active step in **edit mode** with empty fields. The rep saves each one with the existing Save button (already wired to `saveStepEdit`).
 
-### A4. Skip-when-missing (already done — verify only)
-- `supabase/functions/campaign-touch-scheduler/index.ts` already gates on `canReceive("linkedin")` (lead has `linkedin_url`). Confirm and leave alone.
-- `OutreachCard.tsx` already gates the action with `linkedinNeedsUrl` → "No profile" disabled state. Leave alone.
+**Per-touch toolbar (edit mode only):**
 
----
+- Chip row above the body: `First name` `Company` `Industry` `Rep first name` `Meeting link` — click inserts the token at the cursor.
+- Typing `{{` inside subject/body/talking-points/sms opens a small popover with the same tokens (filtered as you type), Enter inserts. Esc closes.
+- Tokens use the format the resolver already accepts: `{FirstName}`, `{LastName}`, `{Company}`, `{Industry}`, `{RepFirstName}`, `{MeetingLink}`. Meeting-link token only shown for email steps where the rep can also toggle "Include a meeting link" (existing per-step flag).
+- One-line helper under the toolbar: *"Fields fill in automatically when each message sends."*
 
-## Part B — Make the Queue's LinkedIn action low-effort (runtime)
+**Per-touch "Generate this one" button** (manual mode, when the body is empty):
+- Calls existing `generateTouch(campaign, step, variant)`, then reloads. Same path the AI flow uses.
+- After generation, the rep can still edit freely; the row gets the standard "edited by you" badge as soon as they save changes.
 
-### B1. Per-subtype URL + clipboard, in `src/components/queue/OutreachCard.tsx` → `openChannelApp()` LinkedIn branch
-Today: always opens `touch.linkedinUrl` (profile) and copies `body || talkingPoints`.
-
-Replace with subtype-aware behavior, reading the subtype from the touch (we already have step metadata; expose `touch.linkedinAction: "connect" | "react" | "message"` on `OutreachTouch` in `src/lib/outreachQueue.ts`, defaulting to `"connect"` for back-compat):
-
-- **connect** → open profile URL; copy the note body to clipboard. Toast: *"Note copied — click Connect → Add a note, then paste (⌘/Ctrl+V)."*
-- **react** → open profile URL; do NOT copy anything. Toast: *"Opening their profile — react on their latest post."*
-- **message** → open `https://www.linkedin.com/messaging/compose/`; copy the message body. Toast: *"Message copied — paste it in the chat (⌘/Ctrl+V)."* Fall back to the profile URL if compose isn't reachable (we don't store member IDs, so the compose page lands on the recipient picker — acceptable: rep types the name once).
-
-Same behavior on desktop and mobile — LinkedIn handles app handoff via Universal/App Links automatically. No device branching.
-
-### B2. `src/lib/outreachQueue.ts`
-- Add `linkedinAction?: "connect" | "react" | "message"` to `OutreachTouch`.
-- Populate it from `campaign_steps` step metadata in the existing loader (the field already exists in the defaults; just thread it through).
-
-### B3. Clipboard fallback already covered
-`src/lib/outreachDeepLinks.ts` → `copyToClipboard()` already handles the `navigator.clipboard` → `execCommand` fallback. No change.
+**Mode switch / overwrite** (per the user's answer):
+- A small mode pill at the top of the section: `Write my own` ⇄ `Use the builder`.
+- Clicking the other mode when content already exists opens a confirm: *"Switching to the builder will replace your messages with AI-written ones. Continue?"* On confirm, run `generateAllTouches(..., { force: true })`. Going the other direction (builder → manual) confirms the same way and clears existing rows for the current variant via `saveStepEdit` with empty fields.
+- Mode is **local UI state** only — no schema change. The mode pill is hidden once content exists and matches the path it came from; it just controls the initial empty-state affordance and the confirm copy.
 
 ---
 
-## Part C — Out of scope (explicitly, per your confirmation)
+## Files touched
 
-- **No auto-paste** into LinkedIn's textbox — browsers forbid cross-origin paste. Not fixable.
-- **No pre-filled message body** via URL — LinkedIn has no such parameter.
-- **No changes to SMS, WhatsApp, or voice** paths. Desktop SMS/WhatsApp continue to open the rep's own apps via `sms:` / `wa.me`; desktop voice continues to use the in-app Twilio browser call; mobile continues to use native dialer / Messages / WhatsApp. No workspace toggle added.
-- **No targeting a specific LinkedIn post** for the "react" step — we don't store post IDs.
+1. **`src/components/automations/CampaignContentReview.tsx`**
+   - Empty-state card: add `Write my own` secondary button next to `Build the messages` (or per-variant equivalent). Sets `mode = "manual"` and seeds empty `StepContent` rows for the variant so each `TouchCard` renders in edit mode.
+   - Mode pill at the top once `mode` is set; confirm dialog on switch.
+   - Pass a new `onGenerateOne` prop down to `TouchCard` that calls `generateTouch` + `onChanged`.
+
+2. **`src/components/automations/CampaignContentReview.tsx` → `TouchCard`**
+   - When `editing` is true, render a new `<MergeFieldToolbar />` above the subject/body/talking-points/sms textarea.
+   - Wire each `Textarea`/`Input` through a shared `useMergeFieldEditor` hook that:
+     - tracks the active textarea ref + caret,
+     - inserts a token at the caret on chip click,
+     - watches for `{{` and opens a small `<Popover>` of token suggestions; Enter/click inserts, Esc/blur closes.
+   - Show `Generate this one` button when the row is empty in manual mode.
+
+3. **New: `src/components/automations/MergeFieldToolbar.tsx`** (~60 lines)
+   - Small presentational component: chips + helper line. Exports the canonical token list so the autocomplete and chips stay in sync.
+
+4. **New: `src/lib/mergeFields.ts`** (~40 lines)
+   - `MERGE_FIELDS` constant: `[{ token: "{FirstName}", label: "First name" }, …]`.
+   - `insertAtCursor(el, text)` helper (works for `<input>` and `<textarea>`, preserves selection).
+   - Pure, easy to unit test.
+
+5. **`src/lib/generateCampaignContent.ts`**
+   - No changes needed — `generateTouch` already exists and is exported. Just consumed by the new "Generate this one" button.
+
+6. **Tests** (`src/lib/__tests__/mergeFields.test.ts`)
+   - Insert at caret in middle / start / end of value.
+   - `{{` trigger detection.
+
+No backend migration, no edge-function change, no `types.ts` change.
 
 ---
 
-## Verification
+## Technical notes for reviewers
 
-1. New campaign wizard: LinkedIn appears in the channel chooser; selecting it seeds Connect + React + Message steps with editable bodies.
-2. Campaign editor: can add a LinkedIn step, switch subtype between Connect / React / Message, edit body.
-3. Lead without `linkedin_url`: LinkedIn touch shows "No profile" disabled state in the Queue (existing behavior, confirm unchanged).
-4. Lead with `linkedin_url`:
-   - **Connect** → profile opens in new tab, note in clipboard, toast matches.
-   - **React** → profile opens, no clipboard write, toast matches.
-   - **Message** → messaging compose opens, body in clipboard, toast matches.
-5. Existing tests pass: `src/lib/__tests__/linkedinCadence.test.ts`. Add a small unit test for the subtype→URL/clipboard picker.
+- The token format (`{FirstName}` etc.) is the same one `ai_task` already normalises in `normalizeCampaignTemplatePlaceholders`, so manual templates flow through the live-send pipeline without special-casing.
+- `saveStepEdit` already sets `is_edited = true` on the row, which prevents the option picker / Rewrite from silently overwriting the rep's wording — the same protection we built for the AI flow applies automatically.
+- The `{{` autocomplete is a controlled popover anchored to the textarea; we keep it inside the existing card to avoid z-index issues with the dialog stack.
+- Variant-awareness: when the rep is on a specific industry variant and chooses `Write my own`, only that variant gets seeded blank rows. Other variants stay untouched (same scoping the builder already uses).
+- Mode is not persisted — if the rep leaves and comes back after writing anything, the section just shows their content with the normal edit/rewrite controls; the mode pill only matters in the empty state.
+
+---
+
+## Out of scope
+
+- Saving custom templates as a reusable library (could be a follow-up).
+- Rich text / HTML email composition (we stay on plain text like the rest of the platform).
+- Importing a `.docx` / Gmail draft as a template (separate ask).
