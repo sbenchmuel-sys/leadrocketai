@@ -585,8 +585,33 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
           </div>
         )}
 
-        {!hasContent ? (
-          <p className="text-sm text-muted-foreground">Not written yet — use “Fill in the rest”.</p>
+        {!hasContent && !editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-muted-foreground">
+              {manualMode ? "Empty — write it below." : "Not written yet — use “Fill in the rest”."}
+            </p>
+            {manualMode && (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                  Write it
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={generateOne}
+                  disabled={busy !== null}
+                >
+                  {busy === "generate" ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Generate this one
+                </Button>
+              </>
+            )}
+          </div>
         ) : (
           <>
             {/* Option picker — hidden once the rep has edited (picking must never wipe edits) */}
@@ -607,23 +632,35 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
               </div>
             )}
 
+            {/* Merge-field toolbar — visible whenever the rep is editing. */}
+            {editing && <MergeFieldToolbar channel={step.channel} onInsert={insertToken} />}
+
             {/* Channel-shaped content */}
             {kind === "email" && (
               <div className="space-y-2">
                 {editing ? (
                   <>
-                    <Input
-                      value={draft.subject}
-                      onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
-                      placeholder="Subject"
-                      className="text-sm font-medium"
-                    />
-                    <Textarea
-                      value={draft.body}
-                      onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                      rows={7}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "subject")}>
+                      <MergeFieldEditor
+                        ref={subjectRef}
+                        asInput
+                        channel={step.channel}
+                        value={draft.subject}
+                        onChange={(v) => setDraft((d) => ({ ...d, subject: v }))}
+                        placeholder="Subject"
+                        className="text-sm font-medium"
+                      />
+                    </div>
+                    <div onFocus={() => (activeRef.current = "body")}>
+                      <MergeFieldEditor
+                        ref={bodyRef}
+                        channel={step.channel}
+                        value={draft.body}
+                        onChange={(v) => setDraft((d) => ({ ...d, body: v }))}
+                        rows={7}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   </>
                 ) : (
                   <>
@@ -640,24 +677,32 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
               <div className="space-y-3">
                 <Field label="Talking points">
                   {editing ? (
-                    <Textarea
-                      value={draft.talking_points}
-                      onChange={(e) => setDraft((d) => ({ ...d, talking_points: e.target.value }))}
-                      rows={4}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "talking")}>
+                      <MergeFieldEditor
+                        ref={talkingRef}
+                        channel={step.channel}
+                        value={draft.talking_points}
+                        onChange={(v) => setDraft((d) => ({ ...d, talking_points: v }))}
+                        rows={4}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   ) : (
                     <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.talking_points}</p>
                   )}
                 </Field>
                 <Field label="Voicemail (if no answer)">
                   {editing ? (
-                    <Textarea
-                      value={draft.voicemail_script}
-                      onChange={(e) => setDraft((d) => ({ ...d, voicemail_script: e.target.value }))}
-                      rows={3}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "voicemail")}>
+                      <MergeFieldEditor
+                        ref={voicemailRef}
+                        channel={step.channel}
+                        value={draft.voicemail_script}
+                        onChange={(v) => setDraft((d) => ({ ...d, voicemail_script: v }))}
+                        rows={3}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   ) : (
                     <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.voicemail_script}</p>
                   )}
@@ -668,12 +713,16 @@ function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCo
             {kind === "sms" && (
               <div>
                 {editing ? (
-                  <Textarea
-                    value={draft.sms_text}
-                    onChange={(e) => setDraft((d) => ({ ...d, sms_text: e.target.value }))}
-                    rows={2}
-                    className="resize-none text-sm"
-                  />
+                  <div onFocus={() => (activeRef.current = "sms")}>
+                    <MergeFieldEditor
+                      ref={smsRef}
+                      channel={step.channel}
+                      value={draft.sms_text}
+                      onChange={(v) => setDraft((d) => ({ ...d, sms_text: v }))}
+                      rows={2}
+                      className="resize-none text-sm"
+                    />
+                  </div>
                 ) : (
                   <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.sms_text}</p>
                 )}
