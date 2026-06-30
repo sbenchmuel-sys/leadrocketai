@@ -15,6 +15,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { resolveStepMeetingCta } from "@/lib/campaignResolver";
+import { interpolateMergeFields } from "@/lib/mergeFieldInterpolate";
 
 // Mirrors buildMeetingCtaLine in supabase/functions/_shared/meetingCtaLine.ts —
 // keep the wording in sync so the review preview matches the live send byte for byte.
