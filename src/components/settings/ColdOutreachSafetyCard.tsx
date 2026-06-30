@@ -65,16 +65,27 @@ export function ColdOutreachSafetyCard() {
   const handleSaveAddress = async () => {
     if (!workspaceId) return;
     setSavingAddress(true);
-    const { error } = await (supabase as any)
+    // .select() forces PostgREST to return the updated row(s). If RLS or a stale
+    // workspaceId silently filters the UPDATE to 0 rows, error is null but data
+    // is []. Without this check the toast says "saved" while nothing persisted —
+    // exactly what happened during the pilot.
+    const { data, error } = await (supabase as any)
       .from("workspaces")
       .update({ cold_outreach_postal_address: address.trim() || null })
-      .eq("id", workspaceId);
+      .eq("id", workspaceId)
+      .select("cold_outreach_postal_address");
     setSavingAddress(false);
     if (error) {
       toast.error(`Couldn't save the address: ${error.message}`);
       return;
     }
-    setStoredAddress(address.trim());
+    if (!Array.isArray(data) || data.length === 0) {
+      toast.error("Save didn't persist — you may not be an admin on this workspace, or the workspace changed. Refresh and try again.");
+      return;
+    }
+    const saved = (data[0]?.cold_outreach_postal_address as string | null) ?? "";
+    setStoredAddress(saved);
+    setAddress(saved);
     toast.success("Company mailing address saved");
   };
 
