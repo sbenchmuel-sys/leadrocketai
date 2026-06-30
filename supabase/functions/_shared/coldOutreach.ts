@@ -285,14 +285,15 @@ export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendC
   const floor = await coldSendFloor(args.supabase, args.lead.id, args.workspaceId);
   if (!floor.ok) return { ok: false, reason: floor.reason || "blocked by send floor" };
 
-  // (2) CAN-SPAM postal address — read from the workspace, required non-blank.
+  // (2) CAN-SPAM postal address — read from the workspace. PILOT: allowed to be
+  // blank during the closed pilot so reps can test send flows; the footer omits
+  // the address line when missing. Re-enable the hard block before opening up.
   const { data: ws } = await args.supabase
     .from("workspaces")
     .select("cold_outreach_postal_address")
     .eq("id", args.workspaceId)
     .maybeSingle();
   const postalAddress = (ws?.cold_outreach_postal_address || "").trim();
-  if (!postalAddress) return { ok: false, reason: "no company postal address (CAN-SPAM)" };
 
   // Resolve the one-pager offer HERE — the single sender every path funnels through
   // — so a review/manual send (rep-approved body straight from campaign_step_content)
