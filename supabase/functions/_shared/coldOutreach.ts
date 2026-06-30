@@ -47,6 +47,10 @@ export async function resolveTouchContent(
   leadIndustry: string | null,
   leadFirstName: string,
   ownerUserId: string | null = null,
+  // Extra merge context. Optional so legacy callers compile; without it only the
+  // first-name token resolves (the original behaviour) — every NEW call site that
+  // wants {Company} / {RepFirstName} substitution must pass mergeCtx.
+  mergeCtx?: Omit<MergeContext, "firstName">,
 ): Promise<TouchContent | null> {
   const { data: rows } = await supabase
     .from("campaign_step_content")
@@ -70,11 +74,13 @@ export async function resolveTouchContent(
 
   const first = (leadFirstName || "there").trim() || "there";
   const interpolate = (s: string) =>
-    s
-      .replace(/\{first[_\s]*name\}/gi, first)
-      .replace(/\[first[_\s]*name\]/gi, first)
-      .replace(/\{name\}/gi, first)
-      .replace(/\[name\]/gi, first);
+    interpolateMergeFields(s, {
+      firstName: first,
+      lastName: mergeCtx?.lastName ?? null,
+      company: mergeCtx?.company ?? null,
+      industry: leadIndustry ?? null,
+      repFirstName: mergeCtx?.repFirstName ?? null,
+    });
 
   const body = await appendOwnerMeetingCta(
     supabase, campaignId, stepNumber, ownerUserId, interpolate(match.body),
