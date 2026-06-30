@@ -13,8 +13,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -22,6 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Loader2,
   Pencil,
@@ -33,6 +41,7 @@ import {
   Check,
   FileText,
   Calendar,
+  PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
@@ -50,6 +59,7 @@ import {
 import { collateralLabel } from "@/lib/generateCampaignCollateral";
 import {
   generateAllTouches,
+  generateTouch,
   rewriteTouch,
   softenTouch,
   ingestCampaignKnowledge,
@@ -60,6 +70,8 @@ import {
   MAX_REASONABLE_INDUSTRIES,
   type GenerateAllProgress,
 } from "@/lib/generateCampaignContent";
+import { MergeFieldToolbar } from "@/components/automations/MergeFieldToolbar";
+import { MergeFieldEditor, type MergeFieldEditorHandle } from "@/components/automations/MergeFieldEditor";
 
 const GENERAL = "__general__"; // Select value for the null/General variant
 
