@@ -20,6 +20,7 @@ import {
   Paperclip,
   Loader2,
   Users,
+  Linkedin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -67,7 +68,9 @@ interface OptionalChannel {
 const OPTIONAL_CHANNELS: OptionalChannel[] = [
   { channel: "voice", label: "Calls", icon: PhoneCall },
   { channel: "sms", label: "Texts", icon: Phone },
+  { channel: "linkedin", label: "LinkedIn", icon: Linkedin },
 ];
+
 
 // Client-side filter over the already-loaded lead list — no new query. Matches
 // the typed text against name, company, and email (case-insensitive, trimmed).
