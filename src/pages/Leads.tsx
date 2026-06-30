@@ -94,6 +94,8 @@ export default function Leads() {
   const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
 
   const [leads, setLeads] = useState<EnrichedLead[]>([]);
+  // campaign_id → campaign name, for the small cadence tag under the lead row.
+  const [campaignNames, setCampaignNames] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [chip, setChip] = useState<Chip>("all");
