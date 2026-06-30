@@ -1690,7 +1690,7 @@ serve(async (req) => {
           if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) continue;
 
           const { data: lead } = await supabase.from("leads")
-            .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting, city, state, country")
+            .select("id, name, email, owner_user_id, workspace_id, industry, company, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting, city, state, country")
             .eq("id", touch.lead_id).maybeSingle();
           if (!lead) continue;
           // Unsubscribed (via the unsubscribe endpoint, a bounce, or an admin/keyword
