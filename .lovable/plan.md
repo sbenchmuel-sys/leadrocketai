@@ -1,38 +1,29 @@
-## Upcoming touches strip — grouped by campaign
+## Two small fixes
 
-Add a new section above the lead list in the Outreach tab of the Queue page that surfaces scheduled (not-yet-queued) touches, so reps can see leads that are "parked" waiting for their next eligibility window instead of them disappearing from view.
+### 1. Rename the "In automation" chip → "In outreach"
 
-### Behavior
+The chip on `/app/leads` currently reads `In automation · N`, but it counts everything enrolled in a campaign OR a legacy automation_mode (`isInAutomation` in `src/lib/leadStatus.ts`). With the new outreach campaigns, a lead can be enrolled in **manual-send** mode and still be counted — which is what's confusing the user (1 auto + 1 manual = 2, but the label says both are "in automation").
 
-- One collapsed row per **campaign** (not per lead). Example:
-  - `MFUC26 — 87 leads scheduled · next ready tomorrow 9:00 AM`
-  - Sub-line: `12 missing LinkedIn URL · 3 missing phone` (only shown if there are auto-skip reasons in the preceding step).
-- Click a row → expands inline to show individual leads (virtualised list, capped at 50 visible with a "Show all" link that opens a drawer/page for the full set).
-- Each lead row inside the expansion shows: lead name + company, next channel icon, humanized "Ready at" (e.g. "Tomorrow 9:00 AM"), and inferred auto-skip reason for the previous step if any.
-- Empty state: hide the strip entirely when no scheduled touches exist.
-- Sorting: campaigns sorted by soonest `next_ready_at` ascending.
+**Change:**
+- `src/pages/Leads.tsx` line 566: label becomes `In outreach · {chipCounts.automation}`.
+- Update the surrounding comments in `src/lib/leadStatus.ts` and `src/lib/dashboardUtils.ts` so future readers know the chip means "enrolled in an outreach campaign (auto or manual) or a legacy sequence/nurture", not specifically auto-send.
+- Keep the underlying predicate (`isInAutomation`) and chip key (`"automation"`) unchanged — purely a wording fix, no behavior or filtering change.
 
-### Scope rules
+The "Auto" column on the same table is unaffected — it correctly shows On/Off based on auto-send vs manual.
 
-- Only show touches with `status = 'scheduled'` belonging to **active** enrollments (`campaign_enrollment.status = 'active'`).
-- Exclude touches where the lead is already represented in the main Outreach list (status `queued`) — the strip is strictly forward-looking.
-- Workspace-scoped via existing RLS.
+### 2. LinkedIn URLs from the uploaded XLSX weren't imported
 
-### Files
+The file's header is **`LinkedIn Profile URL`**. After normalization (`src/lib/parseLeadFile.ts` → `normalizeRow`) this becomes `linkedin profile url`, which is **not** in `KEY_ALIASES`. The map only knows `linkedin url`, `linkedin`, `person linkedin url`, `person linkedin`, `linkedin_url` — so the column was silently dropped to `raw_import_json` and `lead.linkedin_url` stayed empty.
 
-- New: `src/components/queue/UpcomingTouchesStrip.tsx` — the grouped/collapsible component.
-- New: `src/lib/upcomingTouchesQueries.ts` — single query that groups by `campaign_id`, returns `{ campaign_id, campaign_name, lead_count, next_ready_at, skip_reasons[], leads[] }`.
-- Edit: `src/pages/Queue.tsx` — mount the strip at the top of the Outreach tab content, above the existing list.
+**Change in `src/lib/parseLeadFile.ts` KEY_ALIASES:**
+- `"linkedin profile url"` → `linkedin_url`
+- `"linkedin profile"` → `linkedin_url`
+- `"profile url"` → `linkedin_url` (defensive)
+- `"contact linkedin"` / `"contact linkedin url"` → `linkedin_url` (defensive)
+- Also add `"street address"` → `street` (same file uses it; currently only `street` / `company street` / `address` are mapped) so the address column isn't lost either.
 
-### Technical details
-
-- Query: select from `campaign_touch` join `campaign_enrollment` join `campaigns` and `leads`, filtered by workspace, `enrollment.status='active'`, `touch.status='scheduled'`, ordered by `scheduled_for asc`. Group client-side by `campaign_id`.
-- Skip-reason inference: for each campaign, look up the immediately preceding `campaign_touch` rows with `status='skipped'` per lead and bucket by `skip_reason` (`missing_linkedin_url`, `missing_phone`, `unsubscribed`, etc.). Count and surface the top 2-3.
-- Virtualisation: use the existing list virtualisation pattern if already present in Queue, otherwise simple `.slice(0, 50)` + "Show all" button that toggles a full drawer (Sheet from shadcn).
-- No backend changes, no migrations. Pure read-side surfacing.
+No backfill of already-imported leads — user can re-import the file (existing leads are matched by email and updated) or we can add a one-shot backfill if they want. Will confirm after the fix lands.
 
 ### Out of scope
-
-- Bulk actions on scheduled touches (skip-all, reschedule).
-- Editing the draft content before its scheduled time (already available via campaign editor).
-- Dedicated `/outreach/upcoming` page — drawer is enough for now.
+- No change to the auto-send / manual-send logic or the executor.
+- No DB migration; the fix is parser + label only.

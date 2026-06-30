@@ -563,7 +563,7 @@ export default function Leads() {
                 onClick={() => setChip("automation")}
                 className={chipClass(chip === "automation")}
               >
-                In automation · {chipCounts.automation}
+                In outreach · {chipCounts.automation}
               </button>
               <button type="button" onClick={() => setChip("all")} className={chipClass(chip === "all")}>
                 All · {chipCounts.all}
