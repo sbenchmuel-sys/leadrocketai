@@ -1,90 +1,56 @@
-## Goal
+## What's going on
 
-On the campaign content step (the "Build the messages" screen), give reps a second path: **Write my own**. Empty touches up front, full inline editing, merge fields they can insert with one click or by typing `{{`, and a "Generate this one" button per touch if they want AI help on a single message. The existing "Build the messages" flow stays exactly as is.
+**Both issues have the same root cause: no campaign has ever been launched.**
 
-This is a **small change**. We already have all the plumbing:
-- `saveStepEdit()` writes manual content per step.
-- `generateTouch()` already exists for single-touch generation.
-- `ai_task` already normalises tokens like `{FirstName}`, `{Company}`, `{RepFirstName}` at send time, so any tokens the rep types just flow through the existing live-send pipeline.
+### 1. Why all 3 campaigns show "Draft"
 
-No DB migration, no edge-function change. Frontend only.
+Checked the DB for your Binah workspace:
 
----
+| Name | status | send_mode | enrollments |
+|---|---|---|---|
+| TEST 2 | draft | review | 0 |
+| Test | draft | review | 0 |
+| Inbound Intro 3 | draft | review | 8 |
 
-## UX
+Every campaign is created with `status='draft'` (by design — `campaignQueries.ts:226`), and there is currently **no UI anywhere that flips a campaign to `active`**. `CampaignDetail.tsx` only has a Pause ↔ Resume toggle, and it explicitly refuses to act unless the campaign is already `active` or `paused` (line 277, "otherwise Pause-then-Resume would activate a draft bypassing launch checks"). The launch button that comment refers to was never built.
 
-**Empty state (current "Build the messages" card)** — add a secondary option:
+So drafts are a one-way street today.
 
-```text
-[ Build the messages ]   or   Write my own
-```
+### 2. Why "Bob the Builder" doesn't show up in Queue → Outreach
 
-`Write my own` flips the section into manual mode and renders one `TouchCard` per active step in **edit mode** with empty fields. The rep saves each one with the existing Save button (already wired to `saveStepEdit`).
+Two reasons stack on top of each other:
 
-**Per-touch toolbar (edit mode only):**
+a. **No lead named Bob exists in the Binah workspace.** The 10 most recent leads are `Achyutagrawal`, `Kino`, `Techsales`, `Nishant Chaturvedi`, `Keith Teh`, `Bar Talya`, `Takayuki Tonsho`, `Paolo Agnelli`, `Mwangai`, `Gregg Jackson` — no Bob, no "Test2". The Add-leads dialog likely errored or matched no rows; worth retrying and watching for a toast.
 
-- Chip row above the body: `First name` `Company` `Industry` `Rep first name` `Meeting link` — click inserts the token at the cursor.
-- Typing `{{` inside subject/body/talking-points/sms opens a small popover with the same tokens (filtered as you type), Enter inserts. Esc closes.
-- Tokens use the format the resolver already accepts: `{FirstName}`, `{LastName}`, `{Company}`, `{Industry}`, `{RepFirstName}`, `{MeetingLink}`. Meeting-link token only shown for email steps where the rep can also toggle "Include a meeting link" (existing per-step flag).
-- One-line helper under the toolbar: *"Fields fill in automatically when each message sends."*
+b. **Even if Bob were added, he still wouldn't appear.** `fetchOutreachQueue` (`src/lib/outreachQueue.ts:114-120`) only loads touches whose campaign is `status='active'`, and `campaign-touch-scheduler` only creates touches for active campaigns. Enrollment itself doesn't check status, so a draft campaign happily accepts leads — they just sit invisible forever. That's exactly what happened to the 8 leads enrolled in `Inbound Intro 3`.
 
-**Per-touch "Generate this one" button** (manual mode, when the body is empty):
-- Calls existing `generateTouch(campaign, step, variant)`, then reloads. Same path the AI flow uses.
-- After generation, the rep can still edit freely; the row gets the standard "edited by you" badge as soon as they save changes.
+## Fix
 
-**Mode switch / overwrite** (per the user's answer):
-- A small mode pill at the top of the section: `Write my own` ⇄ `Use the builder`.
-- Clicking the other mode when content already exists opens a confirm: *"Switching to the builder will replace your messages with AI-written ones. Continue?"* On confirm, run `generateAllTouches(..., { force: true })`. Going the other direction (builder → manual) confirms the same way and clears existing rows for the current variant via `saveStepEdit` with empty fields.
-- Mode is **local UI state** only — no schema change. The mode pill is hidden once content exists and matches the path it came from; it just controls the initial empty-state affordance and the confirm copy.
+Add the missing **Launch** action on the campaign detail page so a rep can move a draft to active. Minimum viable, no behavior changes anywhere else.
 
----
+### Scope
 
-## Files touched
+- **`src/pages/CampaignDetail.tsx`**
+  - When `campaign.status === 'draft'`, render a primary `Launch outreach` button next to the existing Pause/Resume slot (which stays hidden for drafts as it is today).
+  - Click → small `AlertDialog` confirm ("Start sending? Enrolled leads will begin receiving touches on schedule. Send mode: Review / Automatic.") → on confirm, `UPDATE campaigns SET status='active'` via a new `launchCampaign(id)` helper in `src/lib/outreachQueue.ts` (sits next to `pauseCampaign` / `resumeCampaign`). Optimistically update local state and toast `Outreach launched`.
+  - Guard: require at least one active step AND at least one row in `campaign_step_content` for the campaign before allowing launch; if missing, the button is disabled with a tooltip "Add message content first." (Matches the existing safety posture — no silent activation.)
+- **`src/pages/Automations.tsx`** (the list in the screenshot)
+  - No behavior change. The "Draft" badge will simply disappear for campaigns the rep launches.
 
-1. **`src/components/automations/CampaignContentReview.tsx`**
-   - Empty-state card: add `Write my own` secondary button next to `Build the messages` (or per-variant equivalent). Sets `mode = "manual"` and seeds empty `StepContent` rows for the variant so each `TouchCard` renders in edit mode.
-   - Mode pill at the top once `mode` is set; confirm dialog on switch.
-   - Pass a new `onGenerateOne` prop down to `TouchCard` that calls `generateTouch` + `onChanged`.
+### Why this is small and safe
 
-2. **`src/components/automations/CampaignContentReview.tsx` → `TouchCard`**
-   - When `editing` is true, render a new `<MergeFieldToolbar />` above the subject/body/talking-points/sms textarea.
-   - Wire each `Textarea`/`Input` through a shared `useMergeFieldEditor` hook that:
-     - tracks the active textarea ref + caret,
-     - inserts a token at the caret on chip click,
-     - watches for `{{` and opens a small `<Popover>` of token suggestions; Enter/click inserts, Esc/blur closes.
-   - Show `Generate this one` button when the row is empty in manual mode.
+- No schema change, no edge function change, no scheduler change. The scheduler and `fetchOutreachQueue` already do the right thing once `status='active'`.
+- Honors the existing automation-consent rule (explicit confirm dialog before any outbound goes live).
+- Pause/Resume continues to work unchanged for active campaigns.
 
-3. **New: `src/components/automations/MergeFieldToolbar.tsx`** (~60 lines)
-   - Small presentational component: chips + helper line. Exports the canonical token list so the autocomplete and chips stay in sync.
+### What you should see after the fix
 
-4. **New: `src/lib/mergeFields.ts`** (~40 lines)
-   - `MERGE_FIELDS` constant: `[{ token: "{FirstName}", label: "First name" }, …]`.
-   - `insertAtCursor(el, text)` helper (works for `<input>` and `<textarea>`, preserves selection).
-   - Pure, easy to unit test.
+1. Open `Test` → click `Launch outreach` → confirm.
+2. Add Bob the Builder via "Add people" (and check the toast — if it says 0 enrolled, the lead row wasn't created, which is a separate Add-leads issue I'd dig into next).
+3. Bob's first touch (delay_days=0 step) appears in **Queue → Outreach** within seconds. Subsequent touches surface as their `eligible_at` is reached by the 5-min `campaign-touch-scheduler` cron.
 
-5. **`src/lib/generateCampaignContent.ts`**
-   - No changes needed — `generateTouch` already exists and is exported. Just consumed by the new "Generate this one" button.
+### Out of scope (call out if you want them too)
 
-6. **Tests** (`src/lib/__tests__/mergeFields.test.ts`)
-   - Insert at caret in middle / start / end of value.
-   - `{{` trigger detection.
-
-No backend migration, no edge-function change, no `types.ts` change.
-
----
-
-## Technical notes for reviewers
-
-- The token format (`{FirstName}` etc.) is the same one `ai_task` already normalises in `normalizeCampaignTemplatePlaceholders`, so manual templates flow through the live-send pipeline without special-casing.
-- `saveStepEdit` already sets `is_edited = true` on the row, which prevents the option picker / Rewrite from silently overwriting the rep's wording — the same protection we built for the AI flow applies automatically.
-- The `{{` autocomplete is a controlled popover anchored to the textarea; we keep it inside the existing card to avoid z-index issues with the dialog stack.
-- Variant-awareness: when the rep is on a specific industry variant and chooses `Write my own`, only that variant gets seeded blank rows. Other variants stay untouched (same scoping the builder already uses).
-- Mode is not persisted — if the rep leaves and comes back after writing anything, the section just shows their content with the normal edit/rewrite controls; the mode pill only matters in the empty state.
-
----
-
-## Out of scope
-
-- Saving custom templates as a reusable library (could be a follow-up).
-- Rich text / HTML email composition (we stay on plain text like the rest of the platform).
-- Importing a `.docx` / Gmail draft as a template (separate ask).
+- A bulk "Launch" affordance on the Outreach list page.
+- Auto-backfilling touches for leads that were enrolled into `Inbound Intro 3` while it was still a draft — those 8 enrollments may need a one-time refresh; I'd verify behavior after launch and decide.
+- Investigating the Add-leads dialog failure for "Bob the Builder" — needs a repro to see the error.
