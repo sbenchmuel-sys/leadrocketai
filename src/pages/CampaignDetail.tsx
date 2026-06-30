@@ -100,6 +100,11 @@ export default function CampaignDetail() {
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
+  const [confirmLaunch, setConfirmLaunch] = useState(false);
+  // Number of campaign_step_content rows for this campaign. Drafts can't launch
+  // until at least one exists (otherwise the sender has no copy to send).
+  // null = unknown yet.
+  const [contentRowCount, setContentRowCount] = useState<number | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
   // ── Structural step editing (draft-only) ──
   // Whether this campaign already has live cadence rows (enrollments/touches).
