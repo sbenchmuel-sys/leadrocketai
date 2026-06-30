@@ -1,37 +1,38 @@
-## Problem
+## Upcoming touches strip — grouped by campaign
 
-After a rep clicks Skip / Sent it / Done on an Outreach card, the next step in the cadence doesn't show up in the Queue until the 5-minute `campaign-touch-scheduler` cron fires.
+Add a new section above the lead list in the Outreach tab of the Queue page that surfaces scheduled (not-yet-queued) touches, so reps can see leads that are "parked" waiting for their next eligibility window instead of them disappearing from view.
 
-## Root cause
+### Behavior
 
-`advanceColdEnrollment` (`supabase/functions/_shared/coldOutreach.ts`) does three things on completion:
-1. Marks the completed touch `sent` / `skipped`.
-2. Re-anchors the NEXT touch's `eligible_at` (delay_days = 0 → essentially "now", snapped to send window).
-3. Advances the enrollment cursor and sets `campaign_enrollment.status = 'active'`.
+- One collapsed row per **campaign** (not per lead). Example:
+  - `MFUC26 — 87 leads scheduled · next ready tomorrow 9:00 AM`
+  - Sub-line: `12 missing LinkedIn URL · 3 missing phone` (only shown if there are auto-skip reasons in the preceding step).
+- Click a row → expands inline to show individual leads (virtualised list, capped at 50 visible with a "Show all" link that opens a drawer/page for the full set).
+- Each lead row inside the expansion shows: lead name + company, next channel icon, humanized "Ready at" (e.g. "Tomorrow 9:00 AM"), and inferred auto-skip reason for the previous step if any.
+- Empty state: hide the strip entirely when no scheduled touches exist.
+- Sorting: campaigns sorted by soonest `next_ready_at` ascending.
 
-What it does NOT do: flip the next touch's `campaign_touch.status` from `'scheduled'` to `'queued'`.
+### Scope rules
 
-But `fetchOutreachQueue` (`src/lib/outreachQueue.ts`) only surfaces touches with `status = 'queued' AND eligible_at <= now`. So even though the next touch is due immediately, the Outreach tab is blind to it until `campaign-touch-scheduler` cron promotes scheduled→queued (every 5 min).
+- Only show touches with `status = 'scheduled'` belonging to **active** enrollments (`campaign_enrollment.status = 'active'`).
+- Exclude touches where the lead is already represented in the main Outreach list (status `queued`) — the strip is strictly forward-looking.
+- Workspace-scoped via existing RLS.
 
-`promoteFirstDueTouches` in `src/lib/campaignEnrollment.ts` already solved this exact problem for **step 1** at enrollment time — we just never applied the same trick on subsequent advances.
+### Files
 
-## Fix (minimal, server-side, mirrors existing logic)
+- New: `src/components/queue/UpcomingTouchesStrip.tsx` — the grouped/collapsible component.
+- New: `src/lib/upcomingTouchesQueries.ts` — single query that groups by `campaign_id`, returns `{ campaign_id, campaign_name, lead_count, next_ready_at, skip_reasons[], leads[] }`.
+- Edit: `src/pages/Queue.tsx` — mount the strip at the top of the Outreach tab content, above the existing list.
 
-In `supabase/functions/_shared/coldOutreach.ts`, extend `advanceColdEnrollment` so that after re-anchoring the next touch and advancing the cursor, if the next touch is **due now** we promote it scheduled → queued inline, using the same gating rules `promoteFirstDueTouches` uses:
+### Technical details
 
-- If `nextEligible > now` → leave `scheduled` (staggered start, cron handles it later).
-- If `next.channel === 'email'` AND campaign `send_mode = 'automatic'` AND workspace `auto_send_enabled` AND has timezone AND has postal address → leave `scheduled` (executor owns it). Otherwise promote to `queued` (review-mode email card).
-- If `next.channel` is a manual channel (voice/sms/whatsapp/linkedin) AND the lead has the required handle (phone / whatsapp_number || phone / linkedin_url) → promote to `queued`. Otherwise leave `scheduled` and let `campaign-touch-scheduler`'s auto-skip+advance path handle the missing-handle case (don't duplicate the skip logic here — keeps one source of truth for "lead can't receive this channel").
-- Also guard the promote with `.eq('status', 'scheduled')` so we never clobber a cron race.
+- Query: select from `campaign_touch` join `campaign_enrollment` join `campaigns` and `leads`, filtered by workspace, `enrollment.status='active'`, `touch.status='scheduled'`, ordered by `scheduled_for asc`. Group client-side by `campaign_id`.
+- Skip-reason inference: for each campaign, look up the immediately preceding `campaign_touch` rows with `status='skipped'` per lead and bucket by `skip_reason` (`missing_linkedin_url`, `missing_phone`, `unsubscribed`, etc.). Count and surface the top 2-3.
+- Virtualisation: use the existing list virtualisation pattern if already present in Queue, otherwise simple `.slice(0, 50)` + "Show all" button that toggles a full drawer (Sheet from shadcn).
+- No backend changes, no migrations. Pure read-side surfacing.
 
-Lead handle check uses a small `leads` lookup by `touch.lead_id` (id, phone, whatsapp_number, linkedin_url, unsubscribed); also bail if `unsubscribed`.
+### Out of scope
 
-No schema changes. No client changes. No new RPC. No change to the cron — it stays as a safety net for staggered/late touches.
-
-## Result
-
-When a rep skips/completes a touch on a same-day cadence (delay_days = 0 or already past due), the next manual touch or review email shows up in the Outreach tab immediately on the next render. No 5-minute wait.
-
-## Files touched
-
-- `supabase/functions/_shared/coldOutreach.ts` — extend `advanceColdEnrollment` with the inline promote-next block; redeploy `outreach-touch-action` and `automation-executor` (both import the shared function).
+- Bulk actions on scheduled touches (skip-all, reschedule).
+- Editing the draft content before its scheduled time (already available via campaign editor).
+- Dedicated `/outreach/upcoming` page — drawer is enough for now.
