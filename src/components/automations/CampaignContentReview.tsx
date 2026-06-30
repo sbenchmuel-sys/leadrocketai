@@ -13,8 +13,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -22,6 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Loader2,
   Pencil,
@@ -33,6 +41,7 @@ import {
   Check,
   FileText,
   Calendar,
+  PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { touchVerb, cumulativeDays } from "@/lib/campaignDefaults";
@@ -50,6 +59,7 @@ import {
 import { collateralLabel } from "@/lib/generateCampaignCollateral";
 import {
   generateAllTouches,
+  generateTouch,
   rewriteTouch,
   softenTouch,
   ingestCampaignKnowledge,
@@ -60,6 +70,8 @@ import {
   MAX_REASONABLE_INDUSTRIES,
   type GenerateAllProgress,
 } from "@/lib/generateCampaignContent";
+import { MergeFieldToolbar } from "@/components/automations/MergeFieldToolbar";
+import { MergeFieldEditor, type MergeFieldEditorHandle } from "@/components/automations/MergeFieldEditor";
 
 const GENERAL = "__general__"; // Select value for the null/General variant
 
@@ -83,6 +95,11 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
   const [genAll, setGenAll] = useState<GenerateAllProgress | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Authoring mode. `null` = not chosen yet (empty state shows both options).
+  // `"manual"` = rep writes from scratch, with per-touch Generate-this-one help.
+  // `"auto"` = AI builds everything (current default flow).
+  const [mode, setMode] = useState<null | "manual" | "auto">(null);
+  const [switchTo, setSwitchTo] = useState<null | "manual" | "auto">(null);
   // Whether the rep has explicitly chosen a variant. `null` is BOTH the initial
   // "not chosen" state AND the legitimate value for "Everyone else (General)",
   // so we track the choice separately rather than treating null as uninitialized.
@@ -219,6 +236,25 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
         </div>
       )}
 
+      {/* Mode pill — once the rep has picked an authoring path. */}
+      {mode && anyContentForVariant && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Authoring:</span>
+          <Badge variant="secondary" className="gap-1 font-normal">
+            {mode === "manual" ? <PenLine className="h-3 w-3" /> : <Wand2 className="h-3 w-3" />}
+            {mode === "manual" ? "Write my own" : "AI builder"}
+          </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => setSwitchTo(mode === "manual" ? "auto" : "manual")}
+          >
+            Switch to {mode === "manual" ? "AI builder" : "Write my own"}
+          </Button>
+        </div>
+      )}
+
       {/* Generate / progress */}
       {busy ? (
         <Card>
@@ -229,29 +265,44 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
             </span>
           </CardContent>
         </Card>
-      ) : !anyContentForVariant ? (
+      ) : !anyContentForVariant && mode !== "manual" ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <Sparkles className="h-5 w-5 text-muted-foreground" />
             <p className="max-w-sm text-sm text-muted-foreground">
               {isIndustry && variant
-                ? `No messages for ${variant} yet. Build them when you're ready.`
-                : "No messages yet. Build the whole script from your instructions and knowledge file."}
+                ? `No messages for ${variant} yet. Build them when you're ready — or write your own.`
+                : "No messages yet. Build the whole script from your instructions and knowledge file — or write your own."}
             </p>
-            <Button onClick={() => handleGenerateAll(false)} disabled={loading}>
-              <Wand2 className="mr-2 h-4 w-4" />
-              {isIndustry && variant ? `Build for ${variant}` : "Build the messages"}
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                onClick={() => {
+                  setMode("auto");
+                  handleGenerateAll(false);
+                }}
+                disabled={loading}
+              >
+                <Wand2 className="mr-2 h-4 w-4" />
+                {isIndustry && variant ? `Build for ${variant}` : "Build the messages"}
+              </Button>
+              <span className="text-xs text-muted-foreground">or</span>
+              <Button variant="outline" onClick={() => setMode("manual")} disabled={loading}>
+                <PenLine className="mr-2 h-4 w-4" />
+                Write my own
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
         <>
-          <div className="flex justify-end">
-            <Button variant="ghost" size="sm" onClick={() => handleGenerateAll(false)}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Fill in the rest
-            </Button>
-          </div>
+          {mode !== "manual" && (
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" onClick={() => handleGenerateAll(false)}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Fill in the rest
+              </Button>
+            </div>
+          )}
           <div className="space-y-3">
             {activeSteps.map((step, i) => (
               <TouchCard
@@ -261,6 +312,7 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
                 day={days[i]}
                 variant={variant}
                 content={rowFor(step.step_number)}
+                manualMode={mode === "manual"}
                 linkedCollateral={(collateral ?? []).filter(
                   (c) =>
                     c.attached_step_number === step.step_number &&
@@ -272,6 +324,54 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
           </div>
         </>
       )}
+
+      <AlertDialog open={switchTo !== null} onOpenChange={(o) => !o && setSwitchTo(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {switchTo === "auto" ? "Replace your messages with AI-written ones?" : "Clear AI-written messages?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {switchTo === "auto"
+                ? "Switching to the AI builder rewrites every touch for this variant. Your current wording will be replaced."
+                : "Switching to Write my own clears the current messages for this variant so you can write them yourself."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                const target = switchTo;
+                setSwitchTo(null);
+                if (!target) return;
+                if (target === "auto") {
+                  setMode("auto");
+                  await handleGenerateAll(true);
+                } else {
+                  // Clear current variant's content by saving empty fields per step.
+                  try {
+                    for (const s of activeSteps) {
+                      await saveStepEdit(campaign.id, s.step_number, variant, {
+                        subject: null,
+                        body: null,
+                        talking_points: null,
+                        voicemail_script: null,
+                        sms_text: null,
+                      });
+                    }
+                    setMode("manual");
+                    reload();
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Couldn't clear");
+                  }
+                }
+              }}
+            >
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
@@ -283,14 +383,29 @@ interface TouchCardProps {
   day: number;
   variant: string | null;
   content: StepContent | null;
+  /** Manual-mode rep is writing from scratch — start empty rows in edit mode
+   *  and show the merge-field toolbar plus per-touch "Generate this one". */
+  manualMode?: boolean;
   linkedCollateral?: CampaignCollateral[];
   onChanged: () => void;
 }
 
-function TouchCard({ campaign, step, day, variant, content, linkedCollateral, onChanged }: TouchCardProps) {
+function TouchCard({ campaign, step, day, variant, content, manualMode, linkedCollateral, onChanged }: TouchCardProps) {
   const kind = contentKindForChannel(step.channel);
-  const [busy, setBusy] = useState<null | "rewrite" | "soften" | "save">(null);
-  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState<null | "rewrite" | "soften" | "save" | "generate">(null);
+  const emptyContent = !content || (!content.body && !content.subject && !content.talking_points && !content.sms_text);
+  const [editing, setEditing] = useState(!!manualMode && emptyContent);
+
+  // Refs for each editable field so the toolbar can insert tokens at the caret.
+  const subjectRef = useRef<MergeFieldEditorHandle>(null);
+  const bodyRef = useRef<MergeFieldEditorHandle>(null);
+  const talkingRef = useRef<MergeFieldEditorHandle>(null);
+  const voicemailRef = useRef<MergeFieldEditorHandle>(null);
+  const smsRef = useRef<MergeFieldEditorHandle>(null);
+  // Track which field was focused last so chip clicks hit the right one.
+  const activeRef = useRef<"subject" | "body" | "talking" | "voicemail" | "sms">(
+    kind === "email" ? "body" : kind === "voice" ? "talking" : kind === "sms" ? "sms" : "body",
+  );
 
   // Local draft for inline edits.
   const [draft, setDraft] = useState({
@@ -309,8 +424,32 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
       voicemail_script: content?.voicemail_script ?? "",
       sms_text: content?.sms_text ?? "",
     });
-    setEditing(false);
-  }, [content]);
+    setEditing(!!manualMode && (!content || (!content.body && !content.subject && !content.talking_points && !content.sms_text)));
+  }, [content, manualMode]);
+
+  const insertToken = (token: string) => {
+    const ref =
+      activeRef.current === "subject" ? subjectRef.current
+      : activeRef.current === "body" ? bodyRef.current
+      : activeRef.current === "talking" ? talkingRef.current
+      : activeRef.current === "voicemail" ? voicemailRef.current
+      : smsRef.current;
+    ref?.insert(token);
+  };
+
+  const generateOne = async () => {
+    setBusy("generate");
+    try {
+      await generateTouch(campaign, step, variant, { force: true });
+      toast.success("Generated");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't generate");
+    } finally {
+      setBusy(null);
+    }
+  };
+
 
   const options = Array.isArray(content?.options_json) ? content!.options_json : [];
   const selected = content?.selected_option ?? 0;
@@ -446,8 +585,33 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
           </div>
         )}
 
-        {!hasContent ? (
-          <p className="text-sm text-muted-foreground">Not written yet — use “Fill in the rest”.</p>
+        {!hasContent && !editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-muted-foreground">
+              {manualMode ? "Empty — write it below." : "Not written yet — use “Fill in the rest”."}
+            </p>
+            {manualMode && (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                  Write it
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={generateOne}
+                  disabled={busy !== null}
+                >
+                  {busy === "generate" ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Generate this one
+                </Button>
+              </>
+            )}
+          </div>
         ) : (
           <>
             {/* Option picker — hidden once the rep has edited (picking must never wipe edits) */}
@@ -468,23 +632,35 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
               </div>
             )}
 
+            {/* Merge-field toolbar — visible whenever the rep is editing. */}
+            {editing && <MergeFieldToolbar channel={step.channel} onInsert={insertToken} />}
+
             {/* Channel-shaped content */}
             {kind === "email" && (
               <div className="space-y-2">
                 {editing ? (
                   <>
-                    <Input
-                      value={draft.subject}
-                      onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
-                      placeholder="Subject"
-                      className="text-sm font-medium"
-                    />
-                    <Textarea
-                      value={draft.body}
-                      onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                      rows={7}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "subject")}>
+                      <MergeFieldEditor
+                        ref={subjectRef}
+                        asInput
+                        channel={step.channel}
+                        value={draft.subject}
+                        onChange={(v) => setDraft((d) => ({ ...d, subject: v }))}
+                        placeholder="Subject"
+                        className="text-sm font-medium"
+                      />
+                    </div>
+                    <div onFocus={() => (activeRef.current = "body")}>
+                      <MergeFieldEditor
+                        ref={bodyRef}
+                        channel={step.channel}
+                        value={draft.body}
+                        onChange={(v) => setDraft((d) => ({ ...d, body: v }))}
+                        rows={7}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   </>
                 ) : (
                   <>
@@ -501,24 +677,32 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
               <div className="space-y-3">
                 <Field label="Talking points">
                   {editing ? (
-                    <Textarea
-                      value={draft.talking_points}
-                      onChange={(e) => setDraft((d) => ({ ...d, talking_points: e.target.value }))}
-                      rows={4}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "talking")}>
+                      <MergeFieldEditor
+                        ref={talkingRef}
+                        channel={step.channel}
+                        value={draft.talking_points}
+                        onChange={(v) => setDraft((d) => ({ ...d, talking_points: v }))}
+                        rows={4}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   ) : (
                     <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.talking_points}</p>
                   )}
                 </Field>
                 <Field label="Voicemail (if no answer)">
                   {editing ? (
-                    <Textarea
-                      value={draft.voicemail_script}
-                      onChange={(e) => setDraft((d) => ({ ...d, voicemail_script: e.target.value }))}
-                      rows={3}
-                      className="resize-none text-sm"
-                    />
+                    <div onFocus={() => (activeRef.current = "voicemail")}>
+                      <MergeFieldEditor
+                        ref={voicemailRef}
+                        channel={step.channel}
+                        value={draft.voicemail_script}
+                        onChange={(v) => setDraft((d) => ({ ...d, voicemail_script: v }))}
+                        rows={3}
+                        className="resize-none text-sm"
+                      />
+                    </div>
                   ) : (
                     <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.voicemail_script}</p>
                   )}
@@ -529,12 +713,16 @@ function TouchCard({ campaign, step, day, variant, content, linkedCollateral, on
             {kind === "sms" && (
               <div>
                 {editing ? (
-                  <Textarea
-                    value={draft.sms_text}
-                    onChange={(e) => setDraft((d) => ({ ...d, sms_text: e.target.value }))}
-                    rows={2}
-                    className="resize-none text-sm"
-                  />
+                  <div onFocus={() => (activeRef.current = "sms")}>
+                    <MergeFieldEditor
+                      ref={smsRef}
+                      channel={step.channel}
+                      value={draft.sms_text}
+                      onChange={(v) => setDraft((d) => ({ ...d, sms_text: v }))}
+                      rows={2}
+                      className="resize-none text-sm"
+                    />
+                  </div>
                 ) : (
                   <p className="whitespace-pre-wrap text-sm text-muted-foreground">{content?.sms_text}</p>
                 )}
