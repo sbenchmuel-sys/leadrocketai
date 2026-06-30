@@ -53,6 +53,7 @@ import { NewItemsBanner } from "@/components/queue/NewItemsBanner";
 import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
 import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachCard } from "@/components/queue/OutreachCard";
+import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
 import { fetchOutreachQueue, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -345,6 +346,7 @@ export default function Queue() {
               </Button>
             </div>
           )}
+          <UpcomingTouchesStrip refreshKey={outreachTouches.length} />
           {outreachLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => (
