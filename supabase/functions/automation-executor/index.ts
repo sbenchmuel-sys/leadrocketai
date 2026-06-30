@@ -1890,7 +1890,7 @@ serve(async (req) => {
             lead: { id: lead.id, email: lead.email, owner_user_id: lead.owner_user_id },
             workspaceId: lead.workspace_id,
             mailProvider: mailAcct.provider as "gmail" | "outlook", mailAccountId: mailAcct.id,
-            subject: content.subject, body: content.body, unsubscribeUrl,
+            subject: content.subject, body: bodyWithSig, unsubscribeUrl,
             campaignId: camp.id, leadIndustry: lead.industry,
           });
 
