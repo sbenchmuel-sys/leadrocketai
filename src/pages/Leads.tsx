@@ -669,6 +669,11 @@ export default function Leads() {
                               {lead.name}
                             </Link>
                             <div className="text-xs text-muted-foreground">{lead.company}</div>
+                            {lead.campaign_id && campaignNames[lead.campaign_id] && (
+                              <div className="text-xs text-muted-foreground/80 truncate">
+                                ↳ {campaignNames[lead.campaign_id]}
+                              </div>
+                            )}
                             <div className="mt-1 empty:hidden">{renderDraftTag(lead)}</div>
                           </TableCell>
                           <TableCell className="py-3">
