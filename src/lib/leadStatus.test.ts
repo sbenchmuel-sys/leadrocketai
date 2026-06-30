@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
-import { isInAutomation, isNewLead } from "@/lib/leadStatus";
+import { isInAutomation, isNewLead, leadStatus } from "@/lib/leadStatus";
 
 function lead(partial: Partial<EnrichedLead>): EnrichedLead {
   return {
