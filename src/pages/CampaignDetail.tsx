@@ -56,7 +56,7 @@ import {
   type CampaignCollateral,
   type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
-import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
+import { pauseCampaign, resumeCampaign, launchCampaign } from "@/lib/outreachQueue";
 import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
 import {
   insertStep,
