@@ -407,7 +407,7 @@ export async function advanceColdEnrollment(
   // closes that window.
   const { data: next } = await supabase
     .from("campaign_touch")
-    .select("id, step_number, eligible_at, max_age_at")
+    .select("id, step_number, channel, eligible_at, max_age_at")
     .eq("enrollment_id", touch.enrollment_id)
     .eq("step_number", touch.step_number + 1)
     .maybeSingle();
@@ -453,6 +453,86 @@ export async function advanceColdEnrollment(
     .from("campaign_enrollment")
     .update({ current_step_number: touch.step_number, status: "active" })
     .eq("id", touch.enrollment_id);
+
+  // ── Inline promote scheduled→queued for IMMEDIATELY-DUE next touch ──────────
+  // Without this, a same-day cadence (delay_days = 0) waits up to 5 min for the
+  // campaign-touch-scheduler cron to flip status='queued', so the next card
+  // never shows up right after the rep clicks Skip / Sent it. Mirrors the
+  // gating in src/lib/campaignEnrollment.ts → promoteFirstDueTouches so review
+  // emails surface here while AUTOMATIC-mode emails stay owned by the executor,
+  // and manual touches surface only when the lead actually has the handle
+  // (otherwise the cron's auto-skip+advance path handles the missing handle —
+  // we don't duplicate that logic here).
+  if (nextEligible.getTime() <= Date.now()) {
+    try {
+      const [{ data: camp }, { data: lead }] = await Promise.all([
+        supabase
+          .from("campaigns")
+          .select("send_mode, workspace_id")
+          .eq("id", touch.campaign_id)
+          .maybeSingle(),
+        supabase
+          .from("leads")
+          .select("phone, whatsapp_number, linkedin_url, unsubscribed")
+          .eq("id", touch.lead_id)
+          .maybeSingle(),
+      ]);
+      const workspaceId = (camp as any)?.workspace_id ?? null;
+      const sendMode = (camp as any)?.send_mode ?? "review";
+
+      let executorOwnsEmail = false;
+      if (next.channel === "email" && sendMode === "automatic" && workspaceId) {
+        const [{ data: ws }, { data: autoSettings }] = await Promise.all([
+          supabase
+            .from("workspaces")
+            .select("timezone, cold_outreach_postal_address")
+            .eq("id", workspaceId)
+            .maybeSingle(),
+          supabase
+            .from("workspace_automation_settings")
+            .select("auto_send_enabled")
+            .eq("workspace_id", workspaceId)
+            .maybeSingle(),
+        ]);
+        const hasTimezone = !!(ws as any)?.timezone;
+        const hasPostal = !!(
+          (ws as any)?.cold_outreach_postal_address &&
+          String((ws as any).cold_outreach_postal_address).trim()
+        );
+        const autoSendOn = (autoSettings as any)?.auto_send_enabled === true;
+        executorOwnsEmail = autoSendOn && hasTimezone && hasPostal;
+      }
+
+      let canPromote = false;
+      if ((lead as any)?.unsubscribed) {
+        canPromote = false;
+      } else if (next.channel === "email") {
+        canPromote = !executorOwnsEmail;
+      } else if (next.channel === "voice" || next.channel === "sms") {
+        canPromote = !!(lead as any)?.phone;
+      } else if (next.channel === "whatsapp") {
+        canPromote = !!((lead as any)?.whatsapp_number || (lead as any)?.phone);
+      } else if (next.channel === "linkedin") {
+        canPromote = !!(lead as any)?.linkedin_url;
+      }
+
+      if (canPromote) {
+        // .eq("status", "scheduled") guard so a racing scheduler/executor
+        // run can't be clobbered by us.
+        await supabase
+          .from("campaign_touch")
+          .update({ status: "queued" })
+          .eq("id", next.id)
+          .eq("status", "scheduled");
+      }
+    } catch (err) {
+      // Non-fatal: cron will promote on its next pass.
+      console.warn(
+        `[coldOutreach] inline promote-next failed for touch ${next.id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 }
 
 /**
