@@ -142,9 +142,15 @@ export default function Leads() {
     try {
       // Pass the active workspace so the fetch is scoped to it (Codex PR #107) —
       // a multi-workspace member won't see leads they own in other workspaces.
-      const m = await getDashboardMetrics(workspaceId);
+      const [m, camps] = await Promise.all([
+        getDashboardMetrics(workspaceId),
+        workspaceId ? fetchWorkspaceCampaigns(workspaceId).catch(() => []) : Promise.resolve([]),
+      ]);
       if (loadTokenRef.current !== token) return; // superseded — ignore stale result
       setLeads(m.leads);
+      const map: Record<string, string> = {};
+      for (const c of camps) map[c.id] = c.name;
+      setCampaignNames(map);
     } catch {
       if (loadTokenRef.current === token) toast.error("Failed to load leads");
     } finally {
