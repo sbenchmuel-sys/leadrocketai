@@ -162,6 +162,11 @@ export interface QueueLeadRow {
   wa_opted_in: boolean | null;
   sms_opted_in: boolean | null;
   country: string | null;
+  // Active campaign enrollment — when set, the lead's cold cadence is handled
+  // from the Outreach tab; we hide it from Replied/Follow-up unless the
+  // customer actually replied (next_action_key === 'reply_now'). Outreach
+  // volume must not flood the reactive lists.
+  campaign_id: string | null;
 }
 
 export interface QueueLatestInbound {
@@ -179,7 +184,8 @@ const QUEUE_LEAD_COLUMNS = `
   last_inbound_at, last_outbound_at,
   action_dismissed_at, action_permanently_dismissed, action_resurfaced_at,
   motion, stage,
-  whatsapp_number, phone, wa_opted_in, sms_opted_in, country
+  whatsapp_number, phone, wa_opted_in, sms_opted_in, country,
+  campaign_id
 `;
 
 // ── List fetch ─────────────────────────────────────────────────────
