@@ -30,6 +30,8 @@ import { telLink, smsLink, whatsappLink, copyToClipboard } from "@/lib/outreachD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useBrowserCall } from "@/components/call/BrowserCallProvider";
 import { fetchRepCallerNumber } from "@/lib/repCallerNumber";
+import { getDefaultSignature } from "@/lib/repProfileQueries";
+import { useNavigate } from "react-router-dom";
 
 interface OutreachCardProps {
   touch: OutreachTouch;
