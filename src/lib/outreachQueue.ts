@@ -283,3 +283,21 @@ export async function resumeCampaign(campaignId: string): Promise<void> {
   const { error } = await supabase.from("campaigns").update({ status: "active" } as any).eq("id", campaignId);
   if (error) throw new Error(error.message || "Couldn't resume the outreach");
 }
+
+/**
+ * Launch a draft outreach — flips status from 'draft' to 'active'. Once active,
+ * the campaign-touch-scheduler creates per-step touch rows for enrolled leads,
+ * and fetchOutreachQueue surfaces due touches in the rep's Outreach tab.
+ *
+ * Caller is responsible for the safety check (at least one active step + at
+ * least one campaign_step_content row); we still narrow the update to the
+ * draft state so we can never silently re-activate a paused/completed campaign.
+ */
+export async function launchCampaign(campaignId: string): Promise<void> {
+  const { error } = await supabase
+    .from("campaigns")
+    .update({ status: "active" } as any)
+    .eq("id", campaignId)
+    .eq("status", "draft");
+  if (error) throw new Error(error.message || "Couldn't launch the outreach");
+}
