@@ -23,6 +23,7 @@ import { isSendableColdEmail, isColdSuppressed } from "./coldSendFloorRules.ts";
 import { resolveStepMeetingCta } from "./campaignResolver.ts";
 import { appendMeetingCta } from "./meetingCtaLine.ts";
 import { ONE_PAGER_LINK_TOKEN, applyOnePagerToken } from "./onePagerToken.ts";
+import { interpolateMergeFields, type MergeContext } from "./mergeFieldInterpolate.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
