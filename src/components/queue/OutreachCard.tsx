@@ -47,6 +47,29 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [subject, setSubject] = useState(touch.subject || "");
   const [body, setBody] = useState(touch.body || "");
+  const [hasSignature, setHasSignature] = useState<boolean | null>(null);
+  const navigate = useNavigate();
+
+  // Load the rep's default signature once and append it to the editable body so
+  // the rep sees exactly what will be sent (draft + signature). The CAN-SPAM
+  // footer is added server-side by coldOutreach.ts on top of this.
+  useEffect(() => {
+    let cancelled = false;
+    void getDefaultSignature()
+      .then((sig) => {
+        if (cancelled) return;
+        const sigText = (sig?.signature_text || "").trim();
+        setHasSignature(!!sigText);
+        if (!sigText) return;
+        setBody((prev) => {
+          if (!prev) return prev;
+          if (prev.includes(sigText)) return prev; // idempotent — don't double-append
+          return `${prev.trimEnd()}\n\n${sigText}`;
+        });
+      })
+      .catch(() => { if (!cancelled) setHasSignature(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Device-aware calling: on a computer the Call button dials in the browser
   // (reusing the same Twilio browser-call engine as Lead Detail); on a phone it
