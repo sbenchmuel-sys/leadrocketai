@@ -91,13 +91,20 @@ export function linkedinActionFromStepType(stepType: string | null | undefined):
 // touches — a busy shared workspace can't push their work past it.
 export const OUTREACH_SURFACE_CAP = 50;
 
-function interpolateName(s: string | null, first: string): string | null {
+// Thin wrapper around the shared canonical-token interpolator. We keep the same
+// signature the call-site already uses (string | null), but route ALL token
+// substitution — {FirstName}, {Company}, {RepFirstName}, etc. — through the one
+// helper so the preview matches the wire-side render exactly.
+interface PreviewMergeCtx {
+  firstName: string;
+  lastName?: string | null;
+  company?: string | null;
+  industry?: string | null;
+  repFirstName?: string | null;
+}
+function interpolate(s: string | null, ctx: PreviewMergeCtx): string | null {
   if (!s) return s;
-  return s
-    .replace(/\{first[_\s]*name\}/gi, first)
-    .replace(/\[first[_\s]*name\]/gi, first)
-    .replace(/\{name\}/gi, first)
-    .replace(/\[name\]/gi, first);
+  return interpolateMergeFields(s, ctx);
 }
 
 /**
