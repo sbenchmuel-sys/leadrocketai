@@ -333,21 +333,35 @@ export default function Queue() {
 
       {tab === "outreach" ? (
         /* ── Outreach tab: cold campaign touches (separate source) ── */
-        outreachLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
-            ))}
-          </div>
-        ) : outreachTouches.length === 0 ? (
-          <QueueEmptyState variant="no_matches" />
-        ) : (
-          <div className="space-y-2">
-            {outreachTouches.map((t) => (
-              <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
-            ))}
-          </div>
-        )
+        <>
+          {postalMissing && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="flex-1">
+                <strong className="font-medium">Add your company mailing address to start sending.</strong>{" "}
+                Required by CAN-SPAM — cold emails won't go out until it's set.
+              </div>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/app/settings")}>
+                Open Settings
+              </Button>
+            </div>
+          )}
+          {outreachLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
+              ))}
+            </div>
+          ) : outreachTouches.length === 0 ? (
+            <QueueEmptyState variant="no_matches" />
+          ) : (
+            <div className="space-y-2">
+              {outreachTouches.map((t) => (
+                <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
+              ))}
+            </div>
+          )}
+        </>
       ) : (
         <>
       {/* Show-all toggle (intent-hidden header) */}
