@@ -30,6 +30,8 @@ import { telLink, smsLink, whatsappLink, copyToClipboard } from "@/lib/outreachD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useBrowserCall } from "@/components/call/BrowserCallProvider";
 import { fetchRepCallerNumber } from "@/lib/repCallerNumber";
+import { getDefaultSignature } from "@/lib/repProfileQueries";
+import { useNavigate } from "react-router-dom";
 
 interface OutreachCardProps {
   touch: OutreachTouch;
@@ -45,6 +47,29 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [subject, setSubject] = useState(touch.subject || "");
   const [body, setBody] = useState(touch.body || "");
+  const [hasSignature, setHasSignature] = useState<boolean | null>(null);
+  const navigate = useNavigate();
+
+  // Load the rep's default signature once and append it to the editable body so
+  // the rep sees exactly what will be sent (draft + signature). The CAN-SPAM
+  // footer is added server-side by coldOutreach.ts on top of this.
+  useEffect(() => {
+    let cancelled = false;
+    void getDefaultSignature()
+      .then((sig) => {
+        if (cancelled) return;
+        const sigText = (sig?.signature_text || "").trim();
+        setHasSignature(!!sigText);
+        if (!sigText) return;
+        setBody((prev) => {
+          if (!prev) return prev;
+          if (prev.includes(sigText)) return prev; // idempotent — don't double-append
+          return `${prev.trimEnd()}\n\n${sigText}`;
+        });
+      })
+      .catch(() => { if (!cancelled) setHasSignature(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Device-aware calling: on a computer the Call button dials in the browser
   // (reusing the same Twilio browser-call engine as Lead Detail); on a phone it
@@ -120,7 +145,15 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     setBusy(false);
     if (!res.ok) {
       onRestore(touch.id);
-      toast.error(res.error || "Couldn't send");
+      const err = res.error || "Couldn't send";
+      if (/postal address/i.test(err) || /CAN-SPAM/i.test(err)) {
+        toast.error("Add your company mailing address to send (required by CAN-SPAM).", {
+          action: { label: "Open Settings", onClick: () => navigate("/app/settings") },
+          duration: 8000,
+        });
+      } else {
+        toast.error(err);
+      }
       return;
     }
     toast.success("Sent");
@@ -319,7 +352,22 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
           </DialogHeader>
           <div className="space-y-3">
             <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
-            <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} placeholder="Email body" />
+            <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} placeholder="Email body" />
+            {hasSignature === false && (
+              <p className="text-[11px] text-muted-foreground">
+                No signature set ·{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground"
+                  onClick={() => { setReviewOpen(false); navigate("/app/settings"); }}
+                >
+                  Add one in Settings
+                </button>
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              A CAN-SPAM footer with your company address and an unsubscribe link is added automatically.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setReviewOpen(false)}>Cancel</Button>

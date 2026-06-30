@@ -55,6 +55,10 @@ import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachCard } from "@/components/queue/OutreachCard";
 import { fetchOutreachQueue, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useNavigate } from "react-router-dom";
+import { AlertTriangle } from "lucide-react";
 
 const PAGE_SIZE = 25; // mirrors LeadTable.tsx — brief §5 ("reuse pagination")
 const MOBILE_BREAKPOINT_PX = 640;
@@ -128,6 +132,28 @@ export default function Queue() {
   }, [tab, loadOutreach]);
   const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
+
+  // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
+  // Surface that as a banner above the Outreach tab so the rep isn't surprised by
+  // a CAN-SPAM error after clicking Send.
+  const { workspaceId } = useWorkspace();
+  const navigate = useNavigate();
+  const [postalMissing, setPostalMissing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!workspaceId) { setPostalMissing(false); return; }
+    void supabase
+      .from("workspaces")
+      .select("cold_outreach_postal_address")
+      .eq("id", workspaceId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const addr = ((data as any)?.cold_outreach_postal_address || "").trim();
+        setPostalMissing(!addr);
+      });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
@@ -307,21 +333,35 @@ export default function Queue() {
 
       {tab === "outreach" ? (
         /* ── Outreach tab: cold campaign touches (separate source) ── */
-        outreachLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
-            ))}
-          </div>
-        ) : outreachTouches.length === 0 ? (
-          <QueueEmptyState variant="no_matches" />
-        ) : (
-          <div className="space-y-2">
-            {outreachTouches.map((t) => (
-              <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
-            ))}
-          </div>
-        )
+        <>
+          {postalMissing && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="flex-1">
+                <strong className="font-medium">Add your company mailing address to start sending.</strong>{" "}
+                Required by CAN-SPAM — cold emails won't go out until it's set.
+              </div>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/app/settings")}>
+                Open Settings
+              </Button>
+            </div>
+          )}
+          {outreachLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
+              ))}
+            </div>
+          ) : outreachTouches.length === 0 ? (
+            <QueueEmptyState variant="no_matches" />
+          ) : (
+            <div className="space-y-2">
+              {outreachTouches.map((t) => (
+                <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
+              ))}
+            </div>
+          )}
+        </>
       ) : (
         <>
       {/* Show-all toggle (intent-hidden header) */}
