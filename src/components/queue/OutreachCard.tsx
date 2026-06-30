@@ -228,12 +228,19 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
 
 
 
+  // Per-subtype label for LinkedIn so the rep knows WHICH LinkedIn action will fire.
+  const linkedinLabel =
+    touch.linkedinAction === "connect" ? "Connect" :
+    touch.linkedinAction === "react" ? "React" :
+    "Message";
+
   const channelMeta: Record<string, { label: string; icon: ReactNode }> = {
     voice: { label: "Call", icon: <Phone className="mr-1.5 h-4 w-4" /> },
     sms: { label: "Text", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
     whatsapp: { label: "WhatsApp", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
-    linkedin: { label: "Open LinkedIn", icon: <Linkedin className="mr-1.5 h-4 w-4" /> },
+    linkedin: { label: linkedinLabel, icon: <Linkedin className="mr-1.5 h-4 w-4" /> },
   };
+
 
   return (
     <div className="rounded-lg border border-border bg-card p-3 transition-colors hover:bg-card/80">
