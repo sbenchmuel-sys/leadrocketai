@@ -168,16 +168,27 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     );
   };
 
-  // Per-rep meeting CTA (Unit 3): show the booking link in the review body so the
-  // rep SEES it (and can edit/remove it) before approving — the send ships the
-  // reviewed body verbatim, never mutating it afterward. Mirrors the server append
-  // (resolveTouchContent/meetingCtaLine.ts) so the preview matches the live send.
-  // PER-REP, FAIL-CLOSED: only the CURRENT user's OWN link is shown, and only on a
-  // touch whose lead THEY own — never another rep's link, even in an admin view.
+  // Always pull each due step's metadata — step_type (drives LinkedIn subtype
+  // for ALL reps) plus include_meeting_cta (only used when the rep owns the
+  // lead and has their own booking link). One query, used for both.
+  const stepFlag = new Map<string, boolean | null>();
+  const stepTypeMap = new Map<string, string | null>();
+  {
+    const { data: steps } = await supabase
+      .from("campaign_steps" as any)
+      .select("campaign_id, step_number, step_type, include_meeting_cta")
+      .in("campaign_id", campaignIds)
+      .is("variant_group", null);
+    for (const s of (steps || []) as any[]) {
+      const key = `${s.campaign_id}|${s.step_number}`;
+      stepFlag.set(key, s.include_meeting_cta ?? null);
+      stepTypeMap.set(key, s.step_type ?? null);
+    }
+  }
+
   const { data: authData } = await supabase.auth.getUser();
   const meId = authData?.user?.id ?? null;
   let myCalLink: string | null = null;
-  const stepFlag = new Map<string, boolean | null>();
   if (meId) {
     const { data: prof } = await supabase
       .from("rep_profiles")
@@ -185,16 +196,6 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       .eq("user_id", meId)
       .maybeSingle();
     myCalLink = ((prof as any)?.calendar_link ?? "").trim() || null;
-    if (myCalLink) {
-      const { data: steps } = await supabase
-        .from("campaign_steps" as any)
-        .select("campaign_id, step_number, include_meeting_cta")
-        .in("campaign_id", campaignIds)
-        .is("variant_group", null);
-      for (const s of (steps || []) as any[]) {
-        stepFlag.set(`${s.campaign_id}|${s.step_number}`, s.include_meeting_cta ?? null);
-      }
-    }
   }
   const meetingLinkFor = (t: any, lead: any): string | null =>
     previewMeetingLink({
@@ -212,6 +213,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     const lead = leadOf(t);
     const first = String(lead.name || "").split(" ")[0] || "there";
     const c = resolveContent(t.campaign_id, t.step_number, lead.industry);
+    const stepType = stepTypeMap.get(`${t.campaign_id}|${t.step_number}`) ?? null;
     return {
       id: t.id,
       campaignId: t.campaign_id,
@@ -231,9 +233,11 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       smsText: interpolateName(c?.sms_text ?? null, first),
       talkingPoints: interpolateName(c?.talking_points ?? null, first),
       voicemailScript: interpolateName(c?.voicemail_script ?? null, first),
+      linkedinAction: t.channel === "linkedin" ? linkedinActionFromStepType(stepType) : undefined,
     };
   });
 }
+
 
 // ── Rep actions (all funnel through the edge function → shared helpers) ────────
 
