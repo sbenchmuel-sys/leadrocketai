@@ -1788,7 +1788,18 @@ serve(async (req) => {
           }
 
           const firstName = (lead.name || "").split(" ")[0] || "there";
-          const content = await resolveTouchContent(supabase, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id);
+          const lastName = (lead.name || "").split(" ").slice(1).join(" ");
+          // Rep first name for {RepFirstName} — must come from the LEAD OWNER's rep
+          // profile, not the executor's, so a co-worker's name never lands in a cold
+          // email signature.
+          const { data: ownerRep } = await supabase
+            .from("rep_profiles").select("full_name")
+            .eq("user_id", lead.owner_user_id).maybeSingle();
+          const ownerRepFirstName = ((ownerRep as any)?.full_name || "").split(" ")[0] || "";
+          const content = await resolveTouchContent(
+            supabase, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id,
+            { lastName, company: (lead as any).company || null, industry: lead.industry || null, repFirstName: ownerRepFirstName },
+          );
           if (!content) {
             console.warn(`[automation-executor:cold] no content for campaign ${camp.id} step ${touch.step_number} — deferring touch ${touch.id}`);
             // No generated content for this step (generation pending/failed or the row was
