@@ -563,8 +563,64 @@ export default function CampaignDetail() {
             </Button>
           </div>
           )}
+          {/* Launch — draft-only. Flips status to 'active' so the scheduler
+              creates touches and the Outreach tab surfaces them. Disabled
+              until the campaign has at least one active step AND at least one
+              row of message content (otherwise the sender has nothing to send). */}
+          {campaign.status === "draft" && (() => {
+            const hasActiveStep = campaign.steps.some((s) => s.active);
+            const hasContent = (contentRowCount ?? 0) > 0;
+            const canLaunch = hasActiveStep && hasContent;
+            const reason = !hasActiveStep
+              ? "Add at least one active step first."
+              : !hasContent
+                ? "Add message content first (Build the messages or Write my own)."
+                : null;
+            return (
+              <div className="flex items-center justify-between border-t border-border pt-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Not launched yet</p>
+                  <p className="text-xs text-muted-foreground">
+                    {reason ?? "Launch to start surfacing touches in Queue → Outreach."}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={statusBusy || !canLaunch}
+                  title={reason ?? undefined}
+                  onClick={() => setConfirmLaunch(true)}
+                >
+                  {statusBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                  Launch outreach
+                </Button>
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
+
+      <AlertDialog open={confirmLaunch} onOpenChange={setConfirmLaunch}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Launch this outreach?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Enrolled leads will start receiving touches on schedule.{" "}
+              {campaign.send_mode === "automatic"
+                ? "Emails will send automatically (subject to your workspace safety checks)."
+                : "You'll approve each email from Queue → Outreach before it sends."}{" "}
+              You can pause anytime.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not yet</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleLaunch()}>
+              Launch outreach
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
 
       <AlertDialog open={confirmAuto} onOpenChange={setConfirmAuto}>
         <AlertDialogContent>
