@@ -133,6 +133,28 @@ export default function Queue() {
   const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
 
+  // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
+  // Surface that as a banner above the Outreach tab so the rep isn't surprised by
+  // a CAN-SPAM error after clicking Send.
+  const { workspaceId } = useWorkspace();
+  const navigate = useNavigate();
+  const [postalMissing, setPostalMissing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!workspaceId) { setPostalMissing(false); return; }
+    void supabase
+      .from("workspaces")
+      .select("cold_outreach_postal_address")
+      .eq("id", workspaceId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const addr = ((data as any)?.cold_outreach_postal_address || "").trim();
+        setPostalMissing(!addr);
+      });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
+
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
   const [latestInbounds, setLatestInbounds] = useState<Map<string, QueueLatestInbound>>(new Map());
