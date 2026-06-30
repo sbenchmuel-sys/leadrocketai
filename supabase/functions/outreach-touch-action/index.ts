@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
   // trusted — they run the scheduler/executor as service_role.
   const { data: lead } = await admin
     .from("leads")
-    .select("id, name, email, owner_user_id, workspace_id, industry, unsubscribed, last_inbound_at")
+    .select("id, name, email, owner_user_id, workspace_id, industry, company, unsubscribed, last_inbound_at")
     .eq("id", touch.lead_id)
     .maybeSingle();
   if (!lead) return json({ ok: false, error: "Lead not found" }, 404);
