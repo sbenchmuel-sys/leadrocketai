@@ -162,6 +162,11 @@ export interface QueueLeadRow {
   wa_opted_in: boolean | null;
   sms_opted_in: boolean | null;
   country: string | null;
+  // Active campaign enrollment — when set, the lead's cold cadence is handled
+  // from the Outreach tab; we hide it from Replied/Follow-up unless the
+  // customer actually replied (next_action_key === 'reply_now'). Outreach
+  // volume must not flood the reactive lists.
+  campaign_id: string | null;
 }
 
 export interface QueueLatestInbound {
@@ -179,7 +184,8 @@ const QUEUE_LEAD_COLUMNS = `
   last_inbound_at, last_outbound_at,
   action_dismissed_at, action_permanently_dismissed, action_resurfaced_at,
   motion, stage,
-  whatsapp_number, phone, wa_opted_in, sms_opted_in, country
+  whatsapp_number, phone, wa_opted_in, sms_opted_in, country,
+  campaign_id
 `;
 
 // ── List fetch ─────────────────────────────────────────────────────
@@ -232,7 +238,18 @@ export async function fetchQueueLeads(opts?: {
     throw leadsErr;
   }
 
-  const leads = (leadRows ?? []) as unknown as QueueLeadRow[];
+  // Outreach-enrolled leads belong to the dedicated "Outreach" tab — the cold
+  // cadence is driven by campaign_touch rows, not by needs_action. We only let
+  // an enrolled lead surface here when the CUSTOMER has actually replied
+  // (next_action_key === 'reply_now'), in which case it routes to "Replied".
+  // Anything else (the scheduler arming the next touch, a stale follow-up flag,
+  // etc.) stays in the Outreach tab so reactive lists aren't flooded.
+  const filteredForOutreach = (leadRows ?? []).filter((l: any) => {
+    if (!l.campaign_id) return true;
+    return l.next_action_key === "reply_now";
+  });
+
+  const leads = filteredForOutreach as unknown as QueueLeadRow[];
   if (leads.length === 0) return { leads: [], hiddenCount: 0 };
 
   // Step 2 — pull the per-lead latest intent via the shared RPC.
