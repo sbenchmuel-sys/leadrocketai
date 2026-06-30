@@ -236,6 +236,25 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
         </div>
       )}
 
+      {/* Mode pill — once the rep has picked an authoring path. */}
+      {mode && anyContentForVariant && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Authoring:</span>
+          <Badge variant="secondary" className="gap-1 font-normal">
+            {mode === "manual" ? <PenLine className="h-3 w-3" /> : <Wand2 className="h-3 w-3" />}
+            {mode === "manual" ? "Write my own" : "AI builder"}
+          </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => setSwitchTo(mode === "manual" ? "auto" : "manual")}
+          >
+            Switch to {mode === "manual" ? "AI builder" : "Write my own"}
+          </Button>
+        </div>
+      )}
+
       {/* Generate / progress */}
       {busy ? (
         <Card>
@@ -246,29 +265,44 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
             </span>
           </CardContent>
         </Card>
-      ) : !anyContentForVariant ? (
+      ) : !anyContentForVariant && mode !== "manual" ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <Sparkles className="h-5 w-5 text-muted-foreground" />
             <p className="max-w-sm text-sm text-muted-foreground">
               {isIndustry && variant
-                ? `No messages for ${variant} yet. Build them when you're ready.`
-                : "No messages yet. Build the whole script from your instructions and knowledge file."}
+                ? `No messages for ${variant} yet. Build them when you're ready — or write your own.`
+                : "No messages yet. Build the whole script from your instructions and knowledge file — or write your own."}
             </p>
-            <Button onClick={() => handleGenerateAll(false)} disabled={loading}>
-              <Wand2 className="mr-2 h-4 w-4" />
-              {isIndustry && variant ? `Build for ${variant}` : "Build the messages"}
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                onClick={() => {
+                  setMode("auto");
+                  handleGenerateAll(false);
+                }}
+                disabled={loading}
+              >
+                <Wand2 className="mr-2 h-4 w-4" />
+                {isIndustry && variant ? `Build for ${variant}` : "Build the messages"}
+              </Button>
+              <span className="text-xs text-muted-foreground">or</span>
+              <Button variant="outline" onClick={() => setMode("manual")} disabled={loading}>
+                <PenLine className="mr-2 h-4 w-4" />
+                Write my own
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
         <>
-          <div className="flex justify-end">
-            <Button variant="ghost" size="sm" onClick={() => handleGenerateAll(false)}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Fill in the rest
-            </Button>
-          </div>
+          {mode !== "manual" && (
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" onClick={() => handleGenerateAll(false)}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Fill in the rest
+              </Button>
+            </div>
+          )}
           <div className="space-y-3">
             {activeSteps.map((step, i) => (
               <TouchCard
@@ -278,6 +312,7 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
                 day={days[i]}
                 variant={variant}
                 content={rowFor(step.step_number)}
+                manualMode={mode === "manual"}
                 linkedCollateral={(collateral ?? []).filter(
                   (c) =>
                     c.attached_step_number === step.step_number &&
@@ -289,6 +324,54 @@ export function CampaignContentReview({ campaign, people, collateral }: Props) {
           </div>
         </>
       )}
+
+      <AlertDialog open={switchTo !== null} onOpenChange={(o) => !o && setSwitchTo(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {switchTo === "auto" ? "Replace your messages with AI-written ones?" : "Clear AI-written messages?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {switchTo === "auto"
+                ? "Switching to the AI builder rewrites every touch for this variant. Your current wording will be replaced."
+                : "Switching to Write my own clears the current messages for this variant so you can write them yourself."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                const target = switchTo;
+                setSwitchTo(null);
+                if (!target) return;
+                if (target === "auto") {
+                  setMode("auto");
+                  await handleGenerateAll(true);
+                } else {
+                  // Clear current variant's content by saving empty fields per step.
+                  try {
+                    for (const s of activeSteps) {
+                      await saveStepEdit(campaign.id, s.step_number, variant, {
+                        subject: null,
+                        body: null,
+                        talking_points: null,
+                        voicemail_script: null,
+                        sms_text: null,
+                      });
+                    }
+                    setMode("manual");
+                    reload();
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Couldn't clear");
+                  }
+                }
+              }}
+            >
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
