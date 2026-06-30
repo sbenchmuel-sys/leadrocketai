@@ -47,6 +47,9 @@ export function previewMeetingLink(args: {
 
 export type OutreachChannel = "email" | "voice" | "sms" | "whatsapp" | "linkedin";
 
+/** Subtype of a LinkedIn touch — drives URL + clipboard + toast on the card. */
+export type LinkedinAction = "connect" | "react" | "message";
+
 export interface OutreachTouch {
   id: string;
   campaignId: string;
@@ -68,7 +71,19 @@ export interface OutreachTouch {
   smsText: string | null;       // sms / whatsapp prefilled message
   talkingPoints: string | null; // call
   voicemailScript: string | null;
+  // LinkedIn-only: which kind of touch (connect/react/message), derived from the
+  // step's step_type. Undefined for non-linkedin touches.
+  linkedinAction?: LinkedinAction;
 }
+
+/** Map a step_type to a LinkedIn touch subtype. Mirrors touchLabel() in
+ *  campaignDefaults.ts (intro → Connect, value_add → React, else → Message). */
+export function linkedinActionFromStepType(stepType: string | null | undefined): LinkedinAction {
+  if (stepType === "intro") return "connect";
+  if (stepType === "value_add") return "react";
+  return "message";
+}
+
 
 // Keep the surfaced list workable; excess waits for the next render. The query is
 // owner-scoped server-side (leads!inner), so this cap applies to the rep's OWN due
