@@ -1,41 +1,37 @@
-## Problem 1 — "no company postal address (CAN-SPAM)" error on Send
+## Problem
 
-The cold outreach send path (`supabase/functions/_shared/coldOutreach.ts`) refuses to send any email when the workspace row's `cold_outreach_postal_address` is blank. This is a legal floor (CAN-SPAM), so we do **not** bypass it. Your Binah.ai workspace currently has that field empty, so every Send/auto-send fails with this 400.
+After a rep clicks Skip / Sent it / Done on an Outreach card, the next step in the cadence doesn't show up in the Queue until the 5-minute `campaign-touch-scheduler` cron fires.
 
-This field is user-entered only (never AI-populated) and lives in **Settings → Cold Outreach Safety → Company mailing address** (`src/components/settings/ColdOutreachSafetyCard.tsx`).
+## Root cause
 
-### Fix
-1. **You enter the address once** in Settings → Cold Outreach Safety. After saving, Sends will go through.
-2. **Better error surfacing** in `src/components/queue/OutreachCard.tsx`: when the edge function returns `"no company postal address (CAN-SPAM)"`, show a toast with a "Open Settings" action that deep-links to `/app/settings#cold-outreach-safety`, instead of the generic "edge function returned a non-2xx" error overlay.
-3. **Pre-flight check** in the Outreach tab: if the workspace has no postal address, show a small inline banner above the Outreach list ("Add your company mailing address to start sending — required by CAN-SPAM") with the same Settings link. This stops reps from clicking Send and seeing a red error.
+`advanceColdEnrollment` (`supabase/functions/_shared/coldOutreach.ts`) does three things on completion:
+1. Marks the completed touch `sent` / `skipped`.
+2. Re-anchors the NEXT touch's `eligible_at` (delay_days = 0 → essentially "now", snapped to send window).
+3. Advances the enrollment cursor and sets `campaign_enrollment.status = 'active'`.
 
-No schema, no edge function logic changes — the floor stays exactly where it is.
+What it does NOT do: flip the next touch's `campaign_touch.status` from `'scheduled'` to `'queued'`.
 
-## Problem 2 — Signature is not shown before Send and not appended
+But `fetchOutreachQueue` (`src/lib/outreachQueue.ts`) only surfaces touches with `status = 'queued' AND eligible_at <= now`. So even though the next touch is due immediately, the Outreach tab is blind to it until `campaign-touch-scheduler` cron promotes scheduled→queued (every 5 min).
 
-Today: `rep_signatures` exists (Settings → Signatures) but **nothing in the outreach send path reads it**. The preview body in `OutreachCard` is the AI draft only, and `outreach-touch-action` sends that body verbatim — so the signature never appears in the sent email and the rep can't see/edit it before sending.
+`promoteFirstDueTouches` in `src/lib/campaignEnrollment.ts` already solved this exact problem for **step 1** at enrollment time — we just never applied the same trick on subsequent advances.
 
-### Fix (keep it simple — one path, visible in preview)
-1. **Client-side append on load** in `OutreachCard.tsx`:
-   - Fetch the rep's **default** signature via the existing `getSignatures()` helper (`src/lib/repProfileQueries.ts`) once when the card mounts.
-   - Initialize `body` state as `draftBody + "\n\n" + defaultSignature.signature_text` (only if a default exists and the body doesn't already end with it — simple suffix check).
-   - The rep sees the full email (draft + signature) in the existing editable `<Textarea>` and can tweak either part before clicking Send.
-2. **Server stays unchanged.** `outreach-touch-action` already sends the body string the client gives it; appending in the client means the signature is part of what gets sent, and the CAN-SPAM footer is still added on top by `coldOutreach.ts`. No risk of double-append.
-3. **Auto-send path** (`automation-executor`): mirror the same append — load the campaign owner's default `rep_signatures` row alongside the existing `rep_profiles` lookup, and concatenate `signature_text` to the resolved body before calling `sendColdEmailTouch`. One small block, no new tables.
-4. **Empty case**: if the rep has no default signature, behavior is unchanged (no signature appended, no error). A subtle hint under the Textarea — "No signature set · Add one in Settings" — links to Settings → Signatures.
+## Fix (minimal, server-side, mirrors existing logic)
 
-### Order of sent email (unchanged structure, signature is new)
-```text
-{AI draft body}
+In `supabase/functions/_shared/coldOutreach.ts`, extend `advanceColdEnrollment` so that after re-anchoring the next touch and advancing the cursor, if the next touch is **due now** we promote it scheduled → queued inline, using the same gating rules `promoteFirstDueTouches` uses:
 
-{Rep signature — NEW, visible in preview}
+- If `nextEligible > now` → leave `scheduled` (staggered start, cron handles it later).
+- If `next.channel === 'email'` AND campaign `send_mode = 'automatic'` AND workspace `auto_send_enabled` AND has timezone AND has postal address → leave `scheduled` (executor owns it). Otherwise promote to `queued` (review-mode email card).
+- If `next.channel` is a manual channel (voice/sms/whatsapp/linkedin) AND the lead has the required handle (phone / whatsapp_number || phone / linkedin_url) → promote to `queued`. Otherwise leave `scheduled` and let `campaign-touch-scheduler`'s auto-skip+advance path handle the missing-handle case (don't duplicate the skip logic here — keeps one source of truth for "lead can't receive this channel").
+- Also guard the promote with `.eq('status', 'scheduled')` so we never clobber a cron race.
 
-— CAN-SPAM footer (postal address + unsubscribe), added by coldOutreach.ts
-```
+Lead handle check uses a small `leads` lookup by `touch.lead_id` (id, phone, whatsapp_number, linkedin_url, unsubscribed); also bail if `unsubscribed`.
+
+No schema changes. No client changes. No new RPC. No change to the cron — it stays as a safety net for staggered/late touches.
+
+## Result
+
+When a rep skips/completes a touch on a same-day cadence (delay_days = 0 or already past due), the next manual touch or review email shows up in the Outreach tab immediately on the next render. No 5-minute wait.
 
 ## Files touched
-- `src/components/queue/OutreachCard.tsx` — load default signature, append into editable body, better CAN-SPAM toast, "No signature" hint.
-- `src/pages/Queue.tsx` (or wherever the Outreach tab list lives) — missing-postal-address banner.
-- `supabase/functions/automation-executor/index.ts` — append default signature on the auto-send branch.
 
-No DB migrations. No changes to the CAN-SPAM floor or footer code.
+- `supabase/functions/_shared/coldOutreach.ts` — extend `advanceColdEnrollment` with the inline promote-next block; redeploy `outreach-touch-action` and `automation-executor` (both import the shared function).
