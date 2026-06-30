@@ -216,11 +216,10 @@ export function cumulativeDays(steps: { delay_days: number }[]): number[] {
 }
 
 // ── Cadence touch editor — pure plan mutations ──────────────────────
-// The editor only lets a rep add/switch between the three plain channels they
-// understand: an email, a call, or a text. (LinkedIn touches come from the
-// default plan and are reordered, never authored here — calls/texts are manual
-// touches and adding them never routes them into the auto-send path, which
-// filters to email.)
+// The editor lets a rep add/switch between the channels they understand: email,
+// call, text, and LinkedIn (manual). LinkedIn touches are run by hand from the
+// Queue (open profile, paste prepared message) — adding one never routes it
+// into the auto-send path, which filters to email.
 
 /** A channel a rep can add or switch a touch to, with its plain-English verb. */
 export interface EditableChannelOption {
@@ -232,7 +231,9 @@ export const EDITABLE_CHANNELS: EditableChannelOption[] = [
   { channel: "email", label: "email" },
   { channel: "voice", label: "call" },
   { channel: "sms", label: "text" },
+  { channel: "linkedin", label: "LinkedIn touch" },
 ];
+
 
 // Default gap (days after the previous touch) for a freshly added touch.
 const NEW_TOUCH_GAP = 2;
