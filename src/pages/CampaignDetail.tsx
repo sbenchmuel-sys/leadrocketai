@@ -56,7 +56,7 @@ import {
   type CampaignCollateral,
   type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
-import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
+import { pauseCampaign, resumeCampaign, launchCampaign } from "@/lib/outreachQueue";
 import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
 import {
   insertStep,
@@ -100,6 +100,11 @@ export default function CampaignDetail() {
   const [addOpen, setAddOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
+  const [confirmLaunch, setConfirmLaunch] = useState(false);
+  // Number of campaign_step_content rows for this campaign. Drafts can't launch
+  // until at least one exists (otherwise the sender has no copy to send).
+  // null = unknown yet.
+  const [contentRowCount, setContentRowCount] = useState<number | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
   // ── Structural step editing (draft-only) ──
   // Whether this campaign already has live cadence rows (enrollments/touches).
@@ -213,6 +218,38 @@ export default function CampaignDetail() {
       .then(({ data }) => { if (!cancelled) setSmsEnabled(data?.sms_enabled ?? false); });
     return () => { cancelled = true; };
   }, [campaign?.workspace_id]);
+
+  // Count the campaign's step-content rows. Drives the Launch button's enabled
+  // state — drafts with no content can't go active (the sender would have
+  // nothing to send), and the gate is rev-bumped after a steps edit so a
+  // reconciled save re-checks. Re-fetched on campaign change AND on stepsRev.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setContentRowCount(null);
+    supabase
+      .from("campaign_step_content" as any)
+      .select("campaign_id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .then(({ count }) => { if (!cancelled) setContentRowCount(count ?? 0); });
+    return () => { cancelled = true; };
+  }, [id, stepsRev]);
+
+  const handleLaunch = async () => {
+    if (!id || !campaign) return;
+    setStatusBusy(true);
+    try {
+      await launchCampaign(id);
+      setCampaign({ ...campaign, status: "active" });
+      toast.success("Outreach launched — touches will start surfacing in Queue → Outreach");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't launch");
+    } finally {
+      setStatusBusy(false);
+      setConfirmLaunch(false);
+    }
+  };
+
 
   const handleSaveInstructions = async () => {
     if (!id) return;
@@ -526,8 +563,64 @@ export default function CampaignDetail() {
             </Button>
           </div>
           )}
+          {/* Launch — draft-only. Flips status to 'active' so the scheduler
+              creates touches and the Outreach tab surfaces them. Disabled
+              until the campaign has at least one active step AND at least one
+              row of message content (otherwise the sender has nothing to send). */}
+          {campaign.status === "draft" && (() => {
+            const hasActiveStep = campaign.steps.some((s) => s.active);
+            const hasContent = (contentRowCount ?? 0) > 0;
+            const canLaunch = hasActiveStep && hasContent;
+            const reason = !hasActiveStep
+              ? "Add at least one active step first."
+              : !hasContent
+                ? "Add message content first (Build the messages or Write my own)."
+                : null;
+            return (
+              <div className="flex items-center justify-between border-t border-border pt-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Not launched yet</p>
+                  <p className="text-xs text-muted-foreground">
+                    {reason ?? "Launch to start surfacing touches in Queue → Outreach."}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={statusBusy || !canLaunch}
+                  title={reason ?? undefined}
+                  onClick={() => setConfirmLaunch(true)}
+                >
+                  {statusBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                  Launch outreach
+                </Button>
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
+
+      <AlertDialog open={confirmLaunch} onOpenChange={setConfirmLaunch}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Launch this outreach?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Enrolled leads will start receiving touches on schedule.{" "}
+              {campaign.send_mode === "automatic"
+                ? "Emails will send automatically (subject to your workspace safety checks)."
+                : "You'll approve each email from Queue → Outreach before it sends."}{" "}
+              You can pause anytime.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not yet</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleLaunch()}>
+              Launch outreach
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
 
       <AlertDialog open={confirmAuto} onOpenChange={setConfirmAuto}>
         <AlertDialogContent>
