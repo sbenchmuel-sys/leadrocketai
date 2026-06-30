@@ -204,10 +204,10 @@ export default function Leads() {
   }, [filteredLeads]);
 
   const allVisibleSelected =
-    filteredLeads.length > 0 && filteredLeads.every((l) => selectedIds.has(l.id));
+    pageLeads.length > 0 && pageLeads.every((l) => selectedIds.has(l.id));
 
   const toggleSelectAll = () => {
-    setSelectedIds(allVisibleSelected ? new Set() : new Set(filteredLeads.map((l) => l.id)));
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(pageLeads.map((l) => l.id)));
   };
 
   const toggleSelect = (id: string) => {
