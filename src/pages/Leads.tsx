@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
 import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
+import { fetchWorkspaceCampaigns } from "@/lib/campaignQueries";
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 import { leadStatus, isInAutomation, isNewLead } from "@/lib/leadStatus";
 import { updateMotionFromTable, updateSourceFromTable, type SourcePresetKey } from "@/lib/motionUpdater";
