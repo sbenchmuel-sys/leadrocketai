@@ -145,7 +145,15 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     setBusy(false);
     if (!res.ok) {
       onRestore(touch.id);
-      toast.error(res.error || "Couldn't send");
+      const err = res.error || "Couldn't send";
+      if (/postal address/i.test(err) || /CAN-SPAM/i.test(err)) {
+        toast.error("Add your company mailing address to send (required by CAN-SPAM).", {
+          action: { label: "Open Settings", onClick: () => navigate("/app/settings") },
+          duration: 8000,
+        });
+      } else {
+        toast.error(err);
+      }
       return;
     }
     toast.success("Sent");
