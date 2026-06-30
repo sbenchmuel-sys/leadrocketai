@@ -9,12 +9,12 @@
 
 import type { EnrichedLead } from "@/lib/dashboardUtils";
 
-export type LeadStatusKey = "new" | "hot" | "quiet" | "active";
+export type LeadStatusKey = "new" | "hot" | "quiet" | "active" | "in_outreach";
 
 export interface LeadStatusDisplay {
   key: LeadStatusKey;
   label: string;
-  /** Tailwind text-color class — blue (New), amber (Hot), muted (Gone quiet). */
+  /** Tailwind text-color class — blue (New), amber (Hot), muted (Gone quiet), violet (In outreach). */
   className: string;
 }
 
