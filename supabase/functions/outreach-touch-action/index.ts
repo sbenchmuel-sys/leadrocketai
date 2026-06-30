@@ -223,13 +223,39 @@ Deno.serve(async (req) => {
     // never leaves the touch claimed.
     let subject = (payload.subject || "").trim();
     let body = (payload.body || "").trim();
+    // Look up the rep's first name once — needed both for interpolating any rep-
+    // edited body (the rep can paste a template with {RepFirstName}) and as the
+    // mergeCtx for any server-resolved fallback content.
+    const { data: repProfile } = await admin
+      .from("rep_profiles")
+      .select("full_name")
+      .eq("user_id", lead.owner_user_id)
+      .maybeSingle();
+    const repFirstName = ((repProfile as any)?.full_name || "").split(" ")[0] || "";
+    const leadFirstName = (lead.name || "").split(" ")[0] || "there";
+    const leadLastName = (lead.name || "").split(" ").slice(1).join(" ");
+    const mergeCtx = {
+      firstName: leadFirstName,
+      lastName: leadLastName,
+      company: (lead as any).company || null,
+      industry: lead.industry || null,
+      repFirstName,
+    };
     if (!subject || !body) {
-      const firstName = (lead.name || "").split(" ")[0] || "there";
-      const content = await resolveTouchContent(admin, camp.id, touch.step_number, lead.industry, firstName, lead.owner_user_id);
+      const content = await resolveTouchContent(
+        admin, camp.id, touch.step_number, lead.industry, leadFirstName, lead.owner_user_id,
+        { lastName: leadLastName, company: (lead as any).company || null, industry: lead.industry || null, repFirstName },
+      );
       if (!content) return json({ ok: false, error: "No content to send for this touch" }, 400);
       subject = subject || content.subject;
       body = body || content.body;
     }
+    // ALWAYS interpolate — covers the path where the rep edited the preview and is
+    // sending a template they pasted in (e.g. "...at {Company}..."). Without this
+    // the literal "{Company}" leaks to the recipient. Idempotent: a body that's
+    // already been resolved has no remaining tokens for the helper to touch.
+    subject = interpolateMergeFields(subject, mergeCtx);
+    body = interpolateMergeFields(body, mergeCtx);
 
     // Sender: require the LEAD OWNER's OWN connected mailbox (user_id = owner). The
     // cold model is owner-centric end to end — gmail-send sends from the owner's
