@@ -297,6 +297,11 @@ export function skipTouch(touchId: string): Promise<ActionResult> {
   return invokeAction({ action: "mark_skipped", touchId });
 }
 
+/** Snooze this touch — push its eligible_at forward N days, keep it queued. */
+export function snoozeTouch(touchId: string, days: 3 | 5 | 7): Promise<ActionResult> {
+  return invokeAction({ action: "snooze_touch", touchId, days });
+}
+
 /** Record a call outcome (shapes the next draft). Does not advance. */
 export function setCallOutcome(touchId: string, outcome: "got_them" | "no_answer"): Promise<ActionResult> {
   return invokeAction({ action: "set_call_outcome", touchId, outcome });

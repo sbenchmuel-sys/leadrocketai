@@ -1,56 +1,63 @@
-## Goal
+## Problems
 
-In the All-leads table, replace the misleading "New" status for leads that are already enrolled in an outreach cadence. Show **"In outreach"** instead, and surface which cadence they came from. Replied leads keep behaving the way they already do (they move to the Replied queue tab + flip to Hot).
+**1. Only "Skip" on Call & LinkedIn touches** — no way to snooze (defer to later) and the wording "Skip" feels destructive. Reps want the same **Mark as handled** + **Snooze 3/5/7 days** pattern they already use in the Replied / Follow up tabs.
 
-## Why "New" shows today
+**2. Content is invisible before acting** — on a Call touch the talking points only appear *after* the rep clicks Call; on a LinkedIn touch the message/note the rep is supposed to paste is never shown on the card at all. The rep has to trust the clipboard blindly.
 
-`leadStatus()` in `src/lib/leadStatus.ts` decides the colored status word using only the lead's `revenueState` + `stage`. It has no knowledge of `campaign_id` / `automation_mode`. So an enrolled lead whose stage is still `new` (e.g. Ann Balosky — enrolled but never engaged) renders as **New** in the Status column, even though the "In outreach" chip already counts her correctly.
+---
 
-The chip uses `isInAutomation()` (campaign_id or automation_mode, minus reply-paused). The Status column needs to use the same signal.
+## Fix
 
-## Changes
+### A. OutreachCard action row — align with QueueCard
 
-### 1. `src/lib/leadStatus.ts` — add a new status key
+Replace the lone "Skip" ghost link with the same two-button pattern used in the other Queue tabs:
 
-- Add `"in_outreach"` to `LeadStatusKey`.
-- New priority order inside `leadStatus(lead)`:
-  1. `hot` — revenueState `heating_up` (unchanged; e.g. replies)
-  2. `quiet` — revenueState `long_cycle` (unchanged)
-  3. **`in_outreach`** — `isEnrolled(lead) && !hasUnansweredReply(lead)` → label **"In outreach"**, class `text-violet-600 dark:text-violet-400` (distinct from blue "New" and amber "Hot"; matches the existing outreach iconography elsewhere).
-  4. `new` — stage `new` (unchanged)
-  5. `active` — default
-
-Replied leads naturally fall through to `hot` first (revenueState flips to `heating_up` on inbound), so "reply wins" is preserved with zero extra logic. The cadence stays linked via `campaign_id` even after the reply — used for the tag below.
-
-### 2. `src/lib/leadStatus.ts` — export cadence-name helper
-
-Add `leadCadenceName(lead): string | null` that returns the campaign name if `lead.campaign_id` is set (campaign name already lives on `EnrichedLead` via the dashboard metrics join — verify; if not, expose it through `getDashboardMetrics`).
-
-### 3. `src/pages/Leads.tsx` — render cadence tag under the lead name
-
-Below the company line in the Lead column, add a small muted line:
-
-```
-Ann Balosky
-Ace Hardware Corporation
-↳ MFUC26                     ← only when leadCadenceName(lead) is non-null
+```text
+[ primary channel action ]  [ Mark as handled ]  [ Snooze ▾ ]
+                                                    ├ Snooze 3 days
+                                                    ├ Snooze 5 days
+                                                    └ Snooze 7 days
 ```
 
-Single line, `text-xs text-muted-foreground`, truncated. Shown for both currently-enrolled leads AND replied-but-previously-enrolled leads — that's the "tag from which cadence" the user asked for.
+Semantics for outreach touches:
+- **Mark as handled** → advances the cadence exactly like today's "Sent it" (calls existing `markTouchSent`). Used when the rep did the touch outside the app, or genuinely wants to move on. Same optimistic-remove + toast behavior.
+- **Snooze N days** → pushes THIS touch's `eligible_at` forward by N days and keeps `status = 'queued'`, so it disappears from today's Outreach list and re-surfaces on day N. No cadence advance, no skip. Implemented as a new `snooze_touch` action in the existing `outreach-touch-action` edge function (single-line UPDATE, RLS already scopes by owner). One new client helper `snoozeTouch(touchId, days)` in `src/lib/outreachQueue.ts`.
+- **Skip** stays available but demoted into the Snooze dropdown as "Skip this step" (destructive styling) — keeps the escape hatch without cluttering the row.
 
-### 4. `isNewLead()` — no change needed
+Post-call outcome buttons ("Got them / No answer" + "Sent it") are unchanged — they only appear after a call is actually placed, which is a separate flow.
 
-Already excludes enrolled leads, so the **New** chip count stays accurate. The numbers in the screenshot ("New · 96" vs "In outreach · 9") will not shift; only the per-row Status word changes for the 9 enrolled leads.
+### B. Show the content on the card, before the rep acts
 
-### 5. Tests
+Add a lightweight **preview block** inside the card body, above the action buttons. Content shown depends on channel:
 
-Add a case to `src/lib/leadStatus.test.ts`:
-- Enrolled + no reply → `in_outreach`
-- Enrolled + unanswered reply → `hot` (reply wins)
-- Not enrolled + stage new → `new` (unchanged)
+- **Call**: talking points + voicemail script (labeled), always visible when present — not gated on "opened" like today.
+- **LinkedIn**:
+  - `connect` → labeled "Connection note" — shows `body`.
+  - `message` → labeled "Message to paste" — shows `body`.
+  - `react` → shows a one-line hint ("Open profile and react to their latest post — no message needed").
+- **SMS / WhatsApp**: shows the prefilled `smsText` (already deep-linked, but reps asked to see it).
+- **Email**: unchanged — the review dialog already shows subject + body.
 
-## Out of scope
+Preview styling: same muted small-text treatment already used for talking points (`whitespace-pre-wrap text-xs text-muted-foreground`), inside a subtle bordered box, capped at ~6 lines with a "Show more" toggle for long copy so the card doesn't grow unbounded. A small "Copy" icon button in the corner (reuses `copyToClipboard`) so the rep can re-copy if the auto-copy on Open didn't land.
 
-- Queue tab routing for replies — already works as the user described (replied outreach leads appear in Replied, not Outreach).
-- "Last reply" column, Auto column — unchanged.
-- Cadence-name backfill on the campaign join — only add to the metrics query if it isn't already there.
+### C. Nothing else changes
+
+- Email review dialog, browser-call flow, LinkedIn deep-link + auto-copy, "No content / No profile" disabled states, and cadence advancement all keep working exactly as they do today.
+- No changes to `campaign_touch` schema, no changes to the scheduler, no changes to `advanceColdEnrollment`.
+
+---
+
+## Technical bits
+
+- `supabase/functions/outreach-touch-action/index.ts` — add `snooze_touch` action: verifies the row belongs to the caller's workspace (existing pattern), then `UPDATE campaign_touch SET eligible_at = now() + interval 'N days' WHERE id = $1 AND status = 'queued'` for N in {3,5,7}.
+- `src/lib/outreachQueue.ts` — add `snoozeTouch(touchId, days)`.
+- `src/components/queue/OutreachCard.tsx` — replace the action column with the QueueCard-style trio (channel action + Mark handled + Snooze dropdown), add the preview block above.
+- No migration, no type regen (no new columns).
+
+## Improvement ideas (optional, not in this PR unless you say yes)
+
+1. **Undo toast on Mark as handled** — 5-second undo, mirrors what the Replied tab does. Prevents "oops, wrong button" from burning a cadence step.
+2. **"Snooze until tomorrow morning"** as a fourth option — most common ask for call touches when the rep runs out of time in the day. Snaps to 9am workspace-local.
+3. **Sticky preview on hover for the collapsed Upcoming touches strip** — same preview component, so managers/reps can sanity-check tomorrow's copy without expanding every row.
+
+Say the word and I'll fold any of these in.
