@@ -27,7 +27,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Phone, MessageSquare, Send, Loader2, Linkedin, Check, MoreVertical, Copy } from "lucide-react";
+import { Phone, MessageSquare, Send, Loader2, Linkedin, Check, Clock, Copy } from "lucide-react";
 import { toast } from "sonner";
 import type { OutreachTouch } from "@/lib/outreachQueue";
 import { sendReviewEmail, markTouchSent, skipTouch, snoozeTouch, setCallOutcome } from "@/lib/outreachQueue";
@@ -254,10 +254,10 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     "Message";
 
   const channelMeta: Record<string, { label: string; icon: ReactNode }> = {
-    voice: { label: "Call", icon: <Phone className="mr-1.5 h-4 w-4" /> },
-    sms: { label: "Text", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
-    whatsapp: { label: "WhatsApp", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
-    linkedin: { label: linkedinLabel, icon: <Linkedin className="mr-1.5 h-4 w-4" /> },
+    voice: { label: "Call", icon: <Phone className="h-4 w-4" /> },
+    sms: { label: "Text", icon: <MessageSquare className="h-4 w-4" /> },
+    whatsapp: { label: "WhatsApp", icon: <MessageSquare className="h-4 w-4" /> },
+    linkedin: { label: linkedinLabel, icon: <Linkedin className="h-4 w-4" /> },
   };
 
   // Build the previews the rep sees BEFORE they act. Content varies by channel.
@@ -286,7 +286,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const primaryAction = (() => {
     if (!actionable) {
       return (
-        <Button size="sm" variant="outline" className="h-8 text-xs" disabled
+        <Button size="sm" variant="outline" className="h-9 sm:h-8 text-xs" disabled
           title={linkedinNeedsUrl
             ? "No LinkedIn profile on this lead yet — add their LinkedIn URL to use this touch."
             : "No content for this lead's industry yet — add a General variant or this industry's copy in the campaign."}>
@@ -296,33 +296,85 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     }
     if (touch.channel === "email") {
       return (
-        <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
-          <Send className="mr-1.5 h-4 w-4" /> Send
+        <Button size="sm" className="h-9 sm:h-8 text-xs gap-1.5" disabled={busy} onClick={() => setReviewOpen(true)}>
+          <Send className="h-4 w-4" /> <span className="hidden sm:inline">Send</span>
         </Button>
       );
     }
     const voiceBusy = touch.channel === "voice" && (callPrep || callInProgress);
+    const label = voiceBusy ? (callInProgress ? "In call" : "Connecting…") : channelMeta[touch.channel]?.label;
     return (
-      <Button size="sm" className="h-8 text-xs" disabled={busy || voiceBusy} onClick={openChannelApp}>
-        {voiceBusy ? (
-          <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />{callInProgress ? "In call" : "Connecting…"}</>
-        ) : (
-          <>{channelMeta[touch.channel]?.icon}{channelMeta[touch.channel]?.label}</>
-        )}
+      <Button
+        size="sm"
+        className="h-9 sm:h-8 text-xs gap-1.5"
+        disabled={busy || voiceBusy}
+        onClick={openChannelApp}
+        title={label}
+      >
+        {voiceBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : channelMeta[touch.channel]?.icon}
+        <span className="hidden sm:inline">{label}</span>
       </Button>
     );
   })();
 
   return (
     <div className="rounded-lg border border-border bg-card p-3 transition-colors hover:bg-card/80">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium text-foreground">{touch.leadName}</span>
             <Badge variant="secondary" className="shrink-0 text-[10px]">{touch.campaignName}</Badge>
           </div>
           <div className="truncate text-xs text-muted-foreground">{touch.company || "—"}</div>
+        </div>
 
+        <div className="flex shrink-0 items-center gap-1 ml-auto">
+          {primaryAction}
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 sm:h-8 sm:w-8"
+            disabled={busy}
+            onClick={handleMarkHandled}
+            title="Mark as handled"
+            aria-label="Mark as handled"
+          >
+            <Check className="h-4 w-4" />
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 sm:h-8 sm:w-8"
+                disabled={busy}
+                onClick={(e) => e.stopPropagation()}
+                title="Snooze"
+                aria-label="Snooze"
+              >
+                <Clock className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleSnooze(3)}>Snooze 3 days</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSnooze(5)}>Snooze 5 days</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSnooze(7)}>Snooze 7 days</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleSkip}
+                className="text-destructive focus:text-destructive"
+              >
+                Skip this step
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="basis-full min-w-0">
           {/* Preview block(s) — visible immediately so the rep sees the copy. */}
           {actionable && previews.map((p) => (
             <PreviewBlock key={p.label} label={p.label} text={p.text} />
@@ -336,54 +388,8 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
             </div>
           )}
         </div>
-
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          {primaryAction}
-
-          <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs"
-              disabled={busy}
-              onClick={handleMarkHandled}
-              title="Advance to the next step"
-            >
-              <Check className="mr-1 h-3 w-3" />
-              Mark as handled
-            </Button>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={busy}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  Snooze
-                  <MoreVertical className="ml-1 h-3 w-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleSnooze(3)}>Snooze 3 days</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleSnooze(5)}>Snooze 5 days</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleSnooze(7)}>Snooze 7 days</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={handleSkip}
-                  className="text-destructive focus:text-destructive"
-                >
-                  Skip this step
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
       </div>
+
 
       {/* Review-mode email preview + send */}
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
