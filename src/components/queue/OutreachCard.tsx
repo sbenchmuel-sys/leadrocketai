@@ -27,7 +27,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Phone, MessageSquare, Send, Loader2, Linkedin, Check, MoreVertical, Copy } from "lucide-react";
+import { Phone, MessageSquare, Send, Loader2, Linkedin, Check, Clock, Copy } from "lucide-react";
 import { toast } from "sonner";
 import type { OutreachTouch } from "@/lib/outreachQueue";
 import { sendReviewEmail, markTouchSent, skipTouch, snoozeTouch, setCallOutcome } from "@/lib/outreachQueue";
