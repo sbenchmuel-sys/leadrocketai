@@ -192,6 +192,26 @@ Deno.serve(async (req) => {
     return json({ ok: true });
   }
 
+  // ── snooze_touch: push this touch's eligible_at forward N days; do NOT advance.
+  // The touch stays 'queued' so it re-surfaces on day N. No cadence progression,
+  // no send, no side effects on the enrollment. Fail-closed on N (must be 1..30).
+  if (action === "snooze_touch") {
+    const days = Number((payload as any).days);
+    if (!Number.isFinite(days) || days < 1 || days > 30) {
+      return json({ ok: false, error: "days must be between 1 and 30" }, 400);
+    }
+    const nextAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const { data: updated, error } = await admin
+      .from("campaign_touch")
+      .update({ eligible_at: nextAt })
+      .eq("id", touch.id)
+      .eq("status", "queued")
+      .select("id");
+    if (error) return json({ ok: false, error: error.message }, 500);
+    if (!(updated || []).length) return json({ ok: true, alreadyHandled: true });
+    return json({ ok: true, snoozedUntil: nextAt });
+  }
+
   // ── mark_sent: rep sent via their own app (manual channels) — claim + advance ──
   if (action === "mark_sent") {
     // Manual channels ONLY. An email touch must go through send_review_email (which
