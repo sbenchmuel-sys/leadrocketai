@@ -254,10 +254,10 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     "Message";
 
   const channelMeta: Record<string, { label: string; icon: ReactNode }> = {
-    voice: { label: "Call", icon: <Phone className="mr-1.5 h-4 w-4" /> },
-    sms: { label: "Text", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
-    whatsapp: { label: "WhatsApp", icon: <MessageSquare className="mr-1.5 h-4 w-4" /> },
-    linkedin: { label: linkedinLabel, icon: <Linkedin className="mr-1.5 h-4 w-4" /> },
+    voice: { label: "Call", icon: <Phone className="h-4 w-4" /> },
+    sms: { label: "Text", icon: <MessageSquare className="h-4 w-4" /> },
+    whatsapp: { label: "WhatsApp", icon: <MessageSquare className="h-4 w-4" /> },
+    linkedin: { label: linkedinLabel, icon: <Linkedin className="h-4 w-4" /> },
   };
 
   // Build the previews the rep sees BEFORE they act. Content varies by channel.
@@ -286,7 +286,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const primaryAction = (() => {
     if (!actionable) {
       return (
-        <Button size="sm" variant="outline" className="h-8 text-xs" disabled
+        <Button size="sm" variant="outline" className="h-9 sm:h-8 text-xs" disabled
           title={linkedinNeedsUrl
             ? "No LinkedIn profile on this lead yet — add their LinkedIn URL to use this touch."
             : "No content for this lead's industry yet — add a General variant or this industry's copy in the campaign."}>
@@ -296,19 +296,23 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     }
     if (touch.channel === "email") {
       return (
-        <Button size="sm" className="h-8 text-xs" disabled={busy} onClick={() => setReviewOpen(true)}>
-          <Send className="mr-1.5 h-4 w-4" /> Send
+        <Button size="sm" className="h-9 sm:h-8 text-xs gap-1.5" disabled={busy} onClick={() => setReviewOpen(true)}>
+          <Send className="h-4 w-4" /> <span className="hidden sm:inline">Send</span>
         </Button>
       );
     }
     const voiceBusy = touch.channel === "voice" && (callPrep || callInProgress);
+    const label = voiceBusy ? (callInProgress ? "In call" : "Connecting…") : channelMeta[touch.channel]?.label;
     return (
-      <Button size="sm" className="h-8 text-xs" disabled={busy || voiceBusy} onClick={openChannelApp}>
-        {voiceBusy ? (
-          <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />{callInProgress ? "In call" : "Connecting…"}</>
-        ) : (
-          <>{channelMeta[touch.channel]?.icon}{channelMeta[touch.channel]?.label}</>
-        )}
+      <Button
+        size="sm"
+        className="h-9 sm:h-8 text-xs gap-1.5"
+        disabled={busy || voiceBusy}
+        onClick={openChannelApp}
+        title={label}
+      >
+        {voiceBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : channelMeta[touch.channel]?.icon}
+        <span className="hidden sm:inline">{label}</span>
       </Button>
     );
   })();
