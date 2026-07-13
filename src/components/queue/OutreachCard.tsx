@@ -130,14 +130,21 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const linkedinNeedsUrl = touch.channel === "linkedin" && !touch.linkedinUrl;
   const actionable = hasContent && !linkedinNeedsUrl;
 
-  async function run(fn: () => Promise<{ ok: boolean; error?: string }>, successMsg: string) {
+  async function run(
+    fn: () => Promise<{ ok: boolean; error?: string; terminal?: boolean }>,
+    successMsg: string,
+  ) {
     setBusy(true);
     onDone(touch.id);
     const res = await fn();
     setBusy(false);
     if (!res.ok) {
-      onRestore(touch.id);
-      toast.error(res.error || "Something went wrong");
+      // Terminal = enrollment gone (replied / inactive / opted out). Don't restore
+      // the card only to fail again on the next tap — leave it dismissed.
+      if (!res.terminal) onRestore(touch.id);
+      const msg = res.error || "Something went wrong";
+      if (res.terminal) toast.info(msg);
+      else toast.error(msg);
       return;
     }
     toast.success(successMsg);
