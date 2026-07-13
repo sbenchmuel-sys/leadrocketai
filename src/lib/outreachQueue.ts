@@ -14,6 +14,7 @@
 // ============================================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { resolveStepMeetingCta } from "@/lib/campaignResolver";
 import { interpolateMergeFields } from "@/lib/mergeFieldInterpolate";
 
