@@ -130,14 +130,21 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const linkedinNeedsUrl = touch.channel === "linkedin" && !touch.linkedinUrl;
   const actionable = hasContent && !linkedinNeedsUrl;
 
-  async function run(fn: () => Promise<{ ok: boolean; error?: string }>, successMsg: string) {
+  async function run(
+    fn: () => Promise<{ ok: boolean; error?: string; terminal?: boolean }>,
+    successMsg: string,
+  ) {
     setBusy(true);
     onDone(touch.id);
     const res = await fn();
     setBusy(false);
     if (!res.ok) {
-      onRestore(touch.id);
-      toast.error(res.error || "Something went wrong");
+      // Terminal = enrollment gone (replied / inactive / opted out). Don't restore
+      // the card only to fail again on the next tap — leave it dismissed.
+      if (!res.terminal) onRestore(touch.id);
+      const msg = res.error || "Something went wrong";
+      if (res.terminal) toast.info(msg);
+      else toast.error(msg);
       return;
     }
     toast.success(successMsg);
@@ -160,13 +167,15 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
     const res = await sendReviewEmail(touch.id, subject.trim(), body.trim());
     setBusy(false);
     if (!res.ok) {
-      onRestore(touch.id);
+      if (!res.terminal) onRestore(touch.id);
       const err = res.error || "Couldn't send";
       if (/postal address/i.test(err) || /CAN-SPAM/i.test(err)) {
         toast.error("Add your company mailing address to send (required by CAN-SPAM).", {
           action: { label: "Open Settings", onClick: () => navigate("/app/settings") },
           duration: 8000,
         });
+      } else if (res.terminal) {
+        toast.info(err);
       } else {
         toast.error(err);
       }
