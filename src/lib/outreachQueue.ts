@@ -274,11 +274,38 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
 
 // ── Rep actions (all funnel through the edge function → shared helpers) ────────
 
-type ActionResult = { ok: boolean; error?: string };
+type ActionResult = {
+  ok: boolean;
+  error?: string;
+  /** Enrollment is gone/locked (replied / inactive / opted out) — don't restore the card. */
+  terminal?: boolean;
+};
 
 async function invokeAction(body: Record<string, unknown>): Promise<ActionResult> {
   const { data, error } = await supabase.functions.invoke("outreach-touch-action", { body });
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    // `supabase.functions.invoke` throws away the response body on any non-2xx;
+    // the edge function deliberately returns rich JSON at 400/403/404/409
+    // (`{ ok:false, error:"...", replied?/inactive?/optedOut? }`). Pull it back
+    // out so reps see the real reason instead of the generic wrapper string.
+    let msg = error.message;
+    let terminal = false;
+    if (error instanceof FunctionsHttpError) {
+      try {
+        const parsed = await error.context.clone().json();
+        if (parsed?.error) msg = String(parsed.error);
+        if (parsed?.replied || parsed?.inactive || parsed?.optedOut) terminal = true;
+      } catch {
+        /* keep generic message if the body isn't JSON */
+      }
+    }
+    // Mobile app-switch (LinkedIn / WhatsApp / etc.) can drop the Supabase session;
+    // surface something the rep can actually act on.
+    if (/JWT|token|Not authenticated|401|Unauthorized/i.test(msg)) {
+      msg = "Your session expired — sign in again.";
+    }
+    return { ok: false, error: msg, terminal };
+  }
   if (data && (data as any).ok === false) return { ok: false, error: (data as any).error };
   return { ok: true };
 }
