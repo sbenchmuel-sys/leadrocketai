@@ -687,13 +687,24 @@ export function buildLeadUpdate(
   const hasActiveOOO = !!currentLeadState?.ooo_until && new Date(currentLeadState.ooo_until).getTime() > Date.now();
   const hasActiveAutomation = hasActiveSequence || hasActiveNurture;
 
+  // `reply_now` is a human prompt, not an automated send, so an armed cadence
+  // touch (hasActiveSequence) or an active nurture must NOT blank it out. Before
+  // this carve-out, an outreach-enrolled lead with a scheduled next touch had its
+  // reply_now overwritten with null on every sync — so the customer's reply never
+  // reached the Queue's Replied tab. Mirrors the consent-gate carve-out above,
+  // which also leaves reply_now intact.
+  const isHumanPromptKey = finalAction.next_action_key === "reply_now";
+  const suppressForAutomation = hasActiveAutomation && !isHumanPromptKey;
+
   const leadUpdate: LeadUpdate = {
     stage,
-    needs_action: hasActiveAutomation ? currentLeadState!.needs_action : finalAction.needs_action,
-    next_action_key: hasActiveAutomation ? null : finalAction.next_action_key,
-    next_action_label: hasActiveAutomation ? null : finalAction.next_action_label,
+    needs_action: suppressForAutomation ? currentLeadState!.needs_action : finalAction.needs_action,
+    next_action_key: suppressForAutomation ? null : finalAction.next_action_key,
+    next_action_label: suppressForAutomation ? null : finalAction.next_action_label,
+    // eligible_at intentionally still follows hasActiveAutomation — the cadence
+    // anchor for outbound timing is unchanged by a reply prompt.
     eligible_at: hasActiveAutomation ? currentLeadState!.eligible_at : finalAction.eligible_at,
-    action_reason_code: hasActiveAutomation ? null : finalAction.action_reason_code,
+    action_reason_code: suppressForAutomation ? null : finalAction.action_reason_code,
     first_outbound_at: metrics.first_outbound_at,
     last_outbound_at: metrics.last_outbound_at,
     last_inbound_at: hasActiveOOO ? null : metrics.last_inbound_at,
