@@ -2,7 +2,7 @@
 // Twilio Voice Token — generates short-lived Access Tokens
 // with a Voice Grant so the browser SDK can make/receive calls
 // ============================================================
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveUser } from "../_shared/authz.ts";
 import { logger } from "../_shared/logger.ts";
 
 const corsHeaders = {
@@ -78,9 +78,6 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
   const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const twilioApiKey = Deno.env.get("TWILIO_API_KEY");
