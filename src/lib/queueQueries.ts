@@ -239,15 +239,25 @@ export async function fetchQueueLeads(opts?: {
   }
 
   // Outreach-enrolled leads belong to the dedicated "Outreach" tab — the cold
-  // cadence is driven by campaign_touch rows, not by needs_action. We only let
-  // an enrolled lead surface here when the CUSTOMER has actually replied
-  // (next_action_key === 'reply_now'), in which case it routes to "Replied".
-  // Anything else (the scheduler arming the next touch, a stale follow-up flag,
-  // etc.) stays in the Outreach tab so reactive lists aren't flooded.
+  // cadence is driven by campaign_touch rows, not by needs_action. Two ways an
+  // enrolled lead earns a spot in the reactive tabs:
+  //   1. next_action_key === 'reply_now'  → routes to "Replied".
+  //   2. the customer has an UNANSWERED inbound (last_inbound_at is newer than
+  //      last_outbound_at) → the lead is no longer purely cold, so the reactive
+  //      tabs own it even if the derived action key is something else
+  //      (post-meeting recap, closing follow-up, back-from-away, …).
+  // Rule 2 is the safety net: if the server-side derivation ever fails to write
+  // `reply_now` (rate-limit guardrails, an armed cadence touch), the reply is
+  // still visible here instead of vanishing. Purely cold leads — no inbound at
+  // all — stay in the Outreach tab so reactive lists aren't flooded.
   const filteredForOutreach = (leadRows ?? []).filter((l: any) => {
     if (!l.campaign_id) return true;
-    return l.next_action_key === "reply_now";
+    if (l.next_action_key === "reply_now") return true;
+    if (!l.last_inbound_at) return false;
+    if (!l.last_outbound_at) return true;
+    return new Date(l.last_inbound_at).getTime() > new Date(l.last_outbound_at).getTime();
   });
+
 
   const leads = filteredForOutreach as unknown as QueueLeadRow[];
   if (leads.length === 0) return { leads: [], hiddenCount: 0 };
