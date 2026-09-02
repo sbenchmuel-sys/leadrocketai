@@ -19,7 +19,11 @@
 // widths. Tested visually at 375px (iPhone SE).
 // ============================================================
 
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
+import { fetchLatestInboundBody } from "@/lib/queueQueries";
+
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -181,6 +185,31 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     void enqueue(lead.id);
   };
 
+  // Full inbound email, fetched on demand (see fetchLatestInboundBody).
+  const [fullBody, setFullBody] = useState<string | null>(null);
+  const [loadingBody, setLoadingBody] = useState(false);
+
+  const handleToggleFullBody = async () => {
+    if (fullBody) {
+      setFullBody(null);
+      return;
+    }
+    setLoadingBody(true);
+    try {
+      const body = await fetchLatestInboundBody(lead.id);
+      if (!body) {
+        toast.info("The full text of this email is no longer stored — showing the summary.");
+      } else {
+        setFullBody(body);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't load the full email");
+    } finally {
+      setLoadingBody(false);
+    }
+  };
+
+
   return (
     <div className="rounded-lg border border-border bg-card transition-colors hover:bg-card/80">
       {/* Tap-through region — name, why-now, body */}
@@ -221,6 +250,31 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
           </p>
         )}
       </Link>
+
+      {/* Full inbound email — the card body is a summary/500-char snippet, so
+          reps can pull the whole message in place before replying. */}
+      {!!latestInbound && (
+        <div className="px-4 pb-2">
+          {fullBody && (
+            <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">
+              {fullBody}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleToggleFullBody}
+            disabled={loadingBody}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+          >
+            {loadingBody
+              ? "Loading…"
+              : fullBody
+                ? "Hide full email"
+                : "Show full email"}
+          </button>
+        </div>
+      )}
+
 
       {/* Action row — own button hit areas, not part of the tap-through */}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 px-3 py-2">

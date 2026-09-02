@@ -481,3 +481,25 @@ export function queueButtonLabel(input: {
   if (bucket === "replied") return "Reply";
   return "Follow up";
 }
+
+// ── Full inbound email body (reply bridge) ────────────────────────
+//
+// Queue cards render a 500-char snippet (or the AI summary). Reps often need
+// the whole email before replying, so this fetches the full stored body of the
+// lead's most recent inbound email on demand. `interactions.body_text` keeps
+// the full text for 30 days (message-cleanup purges it after that, gated on the
+// classifier having written a durable ai_summary) — past that we return null
+// and the card keeps showing the summary.
+export async function fetchLatestInboundBody(leadId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("interactions")
+    .select("body_text, occurred_at")
+    .eq("lead_id", leadId)
+    .eq("direction", "inbound")
+    .not("body_text", "is", null)
+    .order("occurred_at", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(error.message || "Couldn't load the full email");
+  const body = (data?.[0]?.body_text ?? "").trim();
+  return body.length > 0 ? body : null;
+}
