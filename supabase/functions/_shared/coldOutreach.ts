@@ -490,7 +490,7 @@ export async function advanceColdEnrollment(
             .maybeSingle(),
           supabase
             .from("workspace_automation_settings")
-            .select("auto_send_enabled")
+            .select("cold_auto_send_enabled")
             .eq("workspace_id", workspaceId)
             .maybeSingle(),
         ]);
@@ -499,7 +499,9 @@ export async function advanceColdEnrollment(
           (ws as any)?.cold_outreach_postal_address &&
           String((ws as any).cold_outreach_postal_address).trim()
         );
-        const autoSendOn = (autoSettings as any)?.auto_send_enabled === true;
+        // Same gate column the scheduler/executor read (BUG-012: a misspelled
+        // column reads as "off" and parks automatic emails as review cards).
+        const autoSendOn = (autoSettings as any)?.cold_auto_send_enabled === true;
         executorOwnsEmail = autoSendOn && hasTimezone && hasPostal;
       }
 

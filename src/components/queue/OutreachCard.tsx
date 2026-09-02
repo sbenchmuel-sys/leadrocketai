@@ -340,6 +340,9 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
         <div className="flex shrink-0 items-center gap-1 ml-auto">
           {primaryAction}
 
+          {/* Email touches must actually be SENT (the server rejects mark_sent for
+              them) — so no "handled" tick on email cards; Skip lives in the menu. */}
+          {touch.channel !== "email" && (
           <Button
             type="button"
             variant="ghost"
@@ -352,6 +355,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
           >
             <Check className="h-4 w-4" />
           </Button>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

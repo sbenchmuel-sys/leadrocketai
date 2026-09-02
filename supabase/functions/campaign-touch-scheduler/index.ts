@@ -260,6 +260,9 @@ Deno.serve(async (req) => {
     .in("campaign_id", activeCampIds)
     .not("max_age_at", "is", null)
     .lt("max_age_at", nowIso)
+    // A SNOOZED card has eligible_at in the future — it is not stale, it is parked.
+    // Defense in depth alongside the snooze path shifting max_age_at (BUG-013).
+    .lte("eligible_at", nowIso)
     .limit(BATCH)).data;
   for (const t of (staleQueued || [])) {
     const { data: enr } = await supabase.from("campaign_enrollment")

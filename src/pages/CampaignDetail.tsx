@@ -56,8 +56,8 @@ import {
   type CampaignCollateral,
   type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
-import { pauseCampaign, resumeCampaign, launchCampaign } from "@/lib/outreachQueue";
-import { unenrollLeadFromCampaign } from "@/lib/campaignEnrollment";
+import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
+import { unenrollLeadFromCampaign, launchCampaignWithSchedule } from "@/lib/campaignEnrollment";
 import {
   insertStep,
   removeStep,
@@ -239,9 +239,13 @@ export default function CampaignDetail() {
     if (!id || !campaign) return;
     setStatusBusy(true);
     try {
-      await launchCampaign(id);
+      const { reanchored } = await launchCampaignWithSchedule(id);
       setCampaign({ ...campaign, status: "active" });
-      toast.success("Outreach launched — touches will start surfacing in Queue → Outreach");
+      toast.success(
+        reanchored > 0
+          ? `Outreach launched — ${reanchored} ${reanchored === 1 ? "person's" : "people's"} schedule starts today`
+          : "Outreach launched — touches will start surfacing in Queue → Outreach",
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't launch");
     } finally {

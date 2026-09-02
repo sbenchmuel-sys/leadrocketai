@@ -12,7 +12,14 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   profile: { onboarding_done: boolean; role: string } | null;
   refreshProfile: () => Promise<void>;
+  /** True when isLoading has been stuck past AUTH_STALL_MS — the auth client can
+   *  hang forever (cross-tab lock, pending refresh); routes show a way out instead
+   *  of a bare spinner (BUG-014). */
+  authStalled: boolean;
 }
+
+// How long the initial session/profile load may spin before we offer Reload / Sign in.
+const AUTH_STALL_MS = 10_000;
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -21,6 +28,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [profile, setProfile] = useState<{ onboarding_done: boolean; role: string } | null>(null);
+  const [authStalled, setAuthStalled] = useState(false);
+
+  // Stall detector: arm while loading, disarm as soon as loading resolves.
+  useEffect(() => {
+    if (!isLoading) { setAuthStalled(false); return; }
+    const t = setTimeout(() => setAuthStalled(true), AUTH_STALL_MS);
+    return () => clearTimeout(t);
+  }, [isLoading]);
 
   useEffect(() => {
     let isMounted = true;
@@ -121,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, isLoading, signUp, signIn, signOut, profile, refreshProfile }}>
+    <AuthContext.Provider value={{ user, session, isLoading, signUp, signIn, signOut, profile, refreshProfile, authStalled }}>
       {children}
     </AuthContext.Provider>
   );

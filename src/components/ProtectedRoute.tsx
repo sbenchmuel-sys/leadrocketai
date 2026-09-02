@@ -2,9 +2,12 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AuthStalledCard } from "@/components/AuthStalledCard";
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, profile, refreshProfile, signOut } = useAuth();
+  const { user, isLoading, profile, refreshProfile, signOut, authStalled } = useAuth();
+
+  if (isLoading && authStalled) return <AuthStalledCard />;
 
   if (isLoading) {
     return (

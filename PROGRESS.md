@@ -8,6 +8,19 @@ Working state of major in-flight features.
 
 When a phase fully ships, move it to a `## Completed` section at the bottom of the file or remove it entirely. Don't let ✅ checklists pile up forever — `CLAUDE.md` covers durable knowledge; this file is just the working board.
 
+
+## Outreach Sprint 1 — correctness fixes (branch `fix/outreach-sprint-1`, 2026-09-02)
+
+From the outreach audit (project doc `claude/outreach-audit-2026-09-02.md`). All five are small, additive, test-backed; see BUGS.md BUG-011…015.
+
+- ✅ Launch re-dates the not-started schedule from launch time (`launchCampaignWithSchedule` / `reanchorScheduleForLaunch` / pure `planRelaunch`). Draft campaigns no longer promote step-1 cards.
+- ✅ Gate column `cold_auto_send_enabled` in both inline promotion paths + static guard test.
+- ✅ Snooze shifts `max_age_at`; stale-queued sweep ignores future `eligible_at`.
+- ✅ Auth stall fallback (`AuthStalledCard`) after 10s.
+- ✅ No ✓ on email cards.
+- ⬜ **Lovable:** no migration in this sprint — nothing to apply. Deploy edge functions `outreach-touch-action`, `campaign-touch-scheduler` (and `_shared/coldOutreach.ts` consumers: `automation-executor`, `outreach-touch-action`).
+- ⬜ Sprint 2 (legibility): due-since + step label on cards, per-person status on the campaign page, auto-skip timeline notes, call outcome completes the touch, LinkedIn message link, Outreach count/paging.
+
 ## Merge Dashboard + Leads (Unit A, started 2026-06-22)
 
 - 🚧 Unit A — `/app/dashboard` ("Revenue Engine") merged into `/app/leads` behind a To-do / All-leads toggle (To-do is a placeholder this unit). Sidebar "Dashboard" item removed; `/app/dashboard` redirects to `/app/leads`. The page now reads one source (`getDashboardMetrics`) with a non-admin owner filter.
