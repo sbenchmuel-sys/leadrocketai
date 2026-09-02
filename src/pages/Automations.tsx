@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Megaphone, ShieldOff, Loader2, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -11,6 +12,8 @@ import {
   type Campaign,
 } from "@/lib/campaignQueries";
 import { SuppressionListDialog } from "@/components/automations/SuppressionListDialog";
+import { OutreachStatsTab } from "@/components/automations/OutreachStatsTab";
+
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
