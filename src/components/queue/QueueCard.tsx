@@ -222,6 +222,31 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
         )}
       </Link>
 
+      {/* Full inbound email — the card body is a summary/500-char snippet, so
+          reps can pull the whole message in place before replying. */}
+      {!!latestInbound && (
+        <div className="px-4 pb-2">
+          {fullBody && (
+            <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">
+              {fullBody}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleToggleFullBody}
+            disabled={loadingBody}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+          >
+            {loadingBody
+              ? "Loading…"
+              : fullBody
+                ? "Hide full email"
+                : "Show full email"}
+          </button>
+        </div>
+      )}
+
+
       {/* Action row — own button hit areas, not part of the tap-through */}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 px-3 py-2">
         <Button
