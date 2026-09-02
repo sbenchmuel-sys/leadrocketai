@@ -2,7 +2,7 @@
 // Twilio Voice Token — generates short-lived Access Tokens
 // with a Voice Grant so the browser SDK can make/receive calls
 // ============================================================
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveUser } from "../_shared/authz.ts";
 import { logger } from "../_shared/logger.ts";
 
 const corsHeaders = {
@@ -79,9 +79,6 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-
   const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const twilioApiKey = Deno.env.get("TWILIO_API_KEY");
   const twilioApiSecret = Deno.env.get("TWILIO_API_SECRET");
@@ -96,28 +93,18 @@ Deno.serve(async (req) => {
   });
 
   // ---- Authenticate user ----
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
+  // ponytail: reuse the shared resolveUser (getUser via the Auth API). getClaims
+  // needs JWKS resolution, which fails under the signing-keys setup and 401s.
+  const authed = await resolveUser(req);
+  if (!authed) {
+    logger.error("twilio_voice_token_auth_failed");
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  const userClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const token = authHeader.replace(/^Bearer\s+/i, "");
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims?.sub) {
-    logger.error("twilio_voice_token_auth_failed", { error: claimsErr?.message });
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  const userId = claimsData.claims.sub;
+  const userId = authed.userId;
 
   if (!twilioAccountSid || !twilioApiKey || !twilioApiSecret || !twimlAppSid) {
     logger.error("twilio_voice_token_missing_config");
