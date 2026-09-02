@@ -96,28 +96,18 @@ Deno.serve(async (req) => {
   });
 
   // ---- Authenticate user ----
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
+  // ponytail: reuse the shared resolveUser (getUser via the Auth API). getClaims
+  // needs JWKS resolution, which fails under the signing-keys setup and 401s.
+  const authed = await resolveUser(req);
+  if (!authed) {
+    logger.error("twilio_voice_token_auth_failed");
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  const userClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const token = authHeader.replace(/^Bearer\s+/i, "");
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims?.sub) {
-    logger.error("twilio_voice_token_auth_failed", { error: claimsErr?.message });
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  const userId = claimsData.claims.sub;
+  const userId = authed.userId;
 
   if (!twilioAccountSid || !twilioApiKey || !twilioApiSecret || !twimlAppSid) {
     logger.error("twilio_voice_token_missing_config");
