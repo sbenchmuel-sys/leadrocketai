@@ -181,6 +181,31 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     void enqueue(lead.id);
   };
 
+  // Full inbound email, fetched on demand (see fetchLatestInboundBody).
+  const [fullBody, setFullBody] = useState<string | null>(null);
+  const [loadingBody, setLoadingBody] = useState(false);
+
+  const handleToggleFullBody = async () => {
+    if (fullBody) {
+      setFullBody(null);
+      return;
+    }
+    setLoadingBody(true);
+    try {
+      const body = await fetchLatestInboundBody(lead.id);
+      if (!body) {
+        toast.info("The full text of this email is no longer stored — showing the summary.");
+      } else {
+        setFullBody(body);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't load the full email");
+    } finally {
+      setLoadingBody(false);
+    }
+  };
+
+
   return (
     <div className="rounded-lg border border-border bg-card transition-colors hover:bg-card/80">
       {/* Tap-through region — name, why-now, body */}
