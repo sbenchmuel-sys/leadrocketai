@@ -407,6 +407,34 @@ export function deriveAction(
     return { needs_action: false, next_action_key: "wait_reply_threshold", next_action_label: "Waiting for reply threshold", eligible_at: null, action_reason_code: null };
   }
 
+  // A) REPLY PENDING — evaluated BEFORE the send guardrails.
+  //
+  // `reply_now` is a PROMPT FOR THE HUMAN, never a scheduled outbound (see the
+  // OUTBOUND_SEND_KEYS set in buildLeadUpdate — the executor only fires on
+  // send_* keys). Running it after the guardrails meant an unanswered customer
+  // reply was silently swallowed whenever the lead was inside a rate limit —
+  // which for a cold-outreach cadence is the normal state (dense recent sends
+  // trip max_emails_per_lead_per_7d / min_gap_hours / same_day_send_allowed).
+  // That's exactly how outreach replies went missing from the Queue's Replied
+  // tab. The pause_when_meeting_scheduled branch above already inlines this
+  // decision for the same reason. Guardrails still gate every send_* branch
+  // below, so no send path is opened by this reorder.
+  if (metrics.last_inbound_at) {
+    const inboundTime = new Date(metrics.last_inbound_at).getTime();
+    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+    if (inboundTime > outboundTime) {
+      const elapsed = now - inboundTime;
+      const thresholdMs = modeSettings.reply_pending_hours * HOUR;
+      if (elapsed > thresholdMs) {
+        const jitter = getDeterministicJitter(leadId, "reply_now", guardrails.jitter_percent);
+        const eligibleAt = new Date(inboundTime + thresholdMs * (1 + jitter));
+        return { needs_action: true, next_action_key: "reply_now", next_action_label: "Reply to customer", eligible_at: eligibleAt.toISOString(), action_reason_code: "REPLY_PENDING" };
+      }
+      // Still inside the threshold — fall through so the guardrails and the
+      // STOP RULES below can decide (unchanged behaviour for that window).
+    }
+  }
+
   // GUARDRAILS
   if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
     return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
@@ -429,20 +457,6 @@ export function deriveAction(
     }
   }
 
-  // A) REPLY PENDING
-  if (metrics.last_inbound_at) {
-    const inboundTime = new Date(metrics.last_inbound_at).getTime();
-    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    if (inboundTime > outboundTime) {
-      const elapsed = now - inboundTime;
-      const thresholdMs = modeSettings.reply_pending_hours * HOUR;
-      if (elapsed > thresholdMs) {
-        const jitter = getDeterministicJitter(leadId, "reply_now", guardrails.jitter_percent);
-        const eligibleAt = new Date(inboundTime + thresholdMs * (1 + jitter));
-        return { needs_action: true, next_action_key: "reply_now", next_action_label: "Reply to customer", eligible_at: eligibleAt.toISOString(), action_reason_code: "REPLY_PENDING" };
-      }
-    }
-  }
 
   // STOP RULES
   if (stopPauseRules.stop_on_any_reply && metrics.last_inbound_at) {
