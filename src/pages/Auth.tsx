@@ -36,10 +36,24 @@ export default function Auth() {
     }
   }, [isLoading, user, profile?.onboarding_done, navigate]);
 
+  // Auth errors sometimes arrive as bare objects (gateway timeouts, network drops),
+  // which rendered as "{}" in the toast. Always produce readable text.
+  const authErrorMessage = (error: unknown, fallback: string) => {
+    const raw =
+      (error as { message?: string } | null)?.message ??
+      (typeof error === "string" ? error : "");
+    const msg = String(raw || "").trim();
+    if (!msg || msg === "{}" || msg === "[object Object]") return fallback;
+    if (/failed to fetch|network|timeout|504|gateway/i.test(msg)) {
+      return "Couldn't reach the server. Check your connection and try again.";
+    }
+    return msg;
+  };
+
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
-      const { error } = await lovable.auth.signInWithOAuth("google", {
+      const { error, redirected } = await lovable.auth.signInWithOAuth("google", {
         redirect_uri: window.location.origin,
       });
       if (error) {
@@ -48,11 +62,12 @@ export default function Auth() {
           setMergeEmail(email || "");
           setShowMergeDialog(true);
         } else {
-          toast.error(msg || "Google sign-in failed");
+          toast.error(authErrorMessage(error, "Google sign-in failed"));
         }
       }
-    } catch (err: any) {
-      toast.error(err.message || "Google sign-in failed");
+      if (redirected) return; // browser is navigating away; keep the button disabled
+    } catch (err) {
+      toast.error(authErrorMessage(err, "Google sign-in failed"));
     } finally {
       setIsGoogleLoading(false);
     }
@@ -63,7 +78,7 @@ export default function Auth() {
     setIsSubmitting(true);
     const { error } = await signIn(email, password);
     setIsSubmitting(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) { toast.error(authErrorMessage(error, "Sign-in failed. Please try again.")); return; }
     toast.success("Welcome back!");
   };
 
@@ -72,7 +87,7 @@ export default function Auth() {
     setIsSubmitting(true);
     const { error } = await signUp(email, password);
     setIsSubmitting(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) { toast.error(authErrorMessage(error, "Sign-up failed. Please try again.")); return; }
     toast.success("Account created! Welcome aboard.");
   };
 
