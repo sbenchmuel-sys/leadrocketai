@@ -63,29 +63,29 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 
 ## BUG-011 — Outreach touches dated from "Add people", not from Launch
 - **Severity:** P1 (main path — root cause of "everything in the Queue is overdue")
-- **Status:** fixed (2026-09-02, branch `fix/outreach-sprint-1`) — Launch now calls `launchCampaignWithSchedule` → `reanchorScheduleForLaunch` (re-runs the staggered-start drip from launch time for every not-started enrollment and UPSERTs its touch rows), then flips status, then promotes the first due cards. `promoteFirstDueTouches` no longer promotes for non-active campaigns. Test: `planRelaunch` cases in `src/lib/campaignEnrollment.test.ts`.
+- **Status:** verified (2026-09-03, code audit) — Launch now calls `launchCampaignWithSchedule` → `reanchorScheduleForLaunch` (re-runs the staggered-start drip from launch time for every not-started enrollment and UPSERTs its touch rows), then flips status, then promotes the first due cards. `promoteFirstDueTouches` no longer promotes for non-active campaigns. Test: `planRelaunch` cases in `src/lib/campaignEnrollment.test.ts`. Verified present in `src/lib/campaignEnrollment.ts` (commit f7f3b15).
 - **Found:** 2026-09-02, outreach audit (see project doc `claude/outreach-audit-2026-09-02.md`)
 - **What happens:** enrollment wrote `started_at = now` and every touch's `eligible_at` from it, even on a draft; `launchCampaign` only flipped status. Launching a day later made every step-1 touch already due → all cards flooded in at once, the drip was defeated, the Upcoming strip showed past times.
 
 ## BUG-012 — Automatic emails parked as review cards (wrong gate column)
 - **Severity:** P1 (automatic mode never auto-sends the first / same-day-next email)
-- **Status:** fixed (2026-09-02, `fix/outreach-sprint-1`) — `campaignEnrollment.ts:promoteFirstDueTouches` and `_shared/coldOutreach.ts:advanceColdEnrollment` read `auto_send_enabled` (column does not exist); now `cold_auto_send_enabled`, same as scheduler/executor. Guard test: `src/test/coldAutoSendGate.test.ts`.
+- **Status:** verified (2026-09-03, code audit) — `campaignEnrollment.ts:promoteFirstDueTouches`, `automation-executor/index.ts`, and `campaign-touch-scheduler/index.ts` all consistently use `cold_auto_send_enabled`. Guard test: `src/test/coldAutoSendGate.test.ts`. Verified in place (commit f7f3b15).
 - **What happens:** the failed select read as "auto-send off" → email touch set to `queued` (review card); the executor only sends `scheduled` touches, so the email never left on its own.
 
 ## BUG-013 — Snoozing a manual touch auto-skips it
 - **Severity:** P1 (silent data loss of the rep's intent)
-- **Status:** fixed (2026-09-02, `fix/outreach-sprint-1`) — `outreach-touch-action` snooze shifts `max_age_at` by the same delta (floored just after the new due time); scheduler stale-queued sweep also requires `eligible_at <= now`.
+- **Status:** verified (2026-09-03, code audit) — `outreach-touch-action` snooze shifts `max_age_at` by the same delta (floored just after the new due time); scheduler stale-queued sweep also requires `eligible_at <= now`. Logic verified in place (commit f7f3b15).
 - **What happens:** snooze moved `eligible_at` only; the scheduler's stale sweep saw `max_age_at < now` and auto-skipped the card on its next 5-minute tick.
 
 ## BUG-014 — App hangs forever on the loading spinner
 - **Severity:** P1 (reliability; observed live on drivepilot.app 2026-09-02)
-- **Status:** fixed (2026-09-02, `fix/outreach-sprint-1`) — `AuthContext.authStalled` flips after 10s of loading; `ProtectedRoute` / `ProtectedOnboardingRoute` render `AuthStalledCard` (Reload / Sign in again, which clears `sb-*` local session keys without going through the possibly-stuck auth client).
+- **Status:** verified (2026-09-03, code audit) — `AuthContext.authStalled` flips after 10s of loading; `ProtectedRoute` / `ProtectedOnboardingRoute` render `AuthStalledCard` (Reload / Sign in again, which clears `sb-*` local session keys). Verified in `src/contexts/AuthContext.tsx`, `src/components/AuthStalledCard.tsx`, `src/components/ProtectedRoute.tsx`, `src/components/ProtectedOnboardingRoute.tsx` (commit f7f3b15).
 - **What happens:** Supabase auth calls (`/auth/v1/token`, `/auth/v1/user`) stayed pending indefinitely (multi-tab lock / stuck refresh); `initializeAuth` awaited `getSession()` with no timeout → blank page + spinner, every tab.
 - **Still to look at:** root cause of the pending auth requests (supabase-js lock). Consider upgrading supabase-js and configuring a lock timeout.
 
 ## BUG-015 — Email cards show a "Mark as handled" tick that always errors
 - **Severity:** P2 (UX)
-- **Status:** fixed (2026-09-02, `fix/outreach-sprint-1`) — ✓ hidden on email touches in `OutreachCard.tsx` (server correctly rejects `mark_sent` for email; Skip remains in the clock menu).
+- **Status:** verified (2026-09-03, code audit) — ✓ hidden on email touches in `OutreachCard.tsx` (server correctly rejects `mark_sent` for email; Skip remains in the clock menu). Verified in place (commit f7f3b15).
 
 ---
 
