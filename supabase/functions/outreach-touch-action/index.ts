@@ -200,10 +200,26 @@ Deno.serve(async (req) => {
     if (!Number.isFinite(days) || days < 1 || days > 30) {
       return json({ ok: false, error: "days must be between 1 and 30" }, 400);
     }
-    const nextAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const shiftMs = days * 24 * 60 * 60 * 1000;
+    const nextAt = new Date(Date.now() + shiftMs).toISOString();
+    // Shift the auto-skip deadline by the same amount (manual touches only; email
+    // touches carry max_age_at NULL). Leaving max_age_at behind lets the scheduler's
+    // stale-queued sweep auto-skip the snoozed card on its next tick — the rep asked
+    // for "later", not "never" (BUG-013). Mirrors advanceColdEnrollment's re-anchor.
+    const { data: cur } = await admin
+      .from("campaign_touch")
+      .select("max_age_at")
+      .eq("id", touch.id)
+      .maybeSingle();
+    const patch: Record<string, string> = { eligible_at: nextAt };
+    if (cur?.max_age_at) {
+      const shiftedMaxAge = new Date(cur.max_age_at).getTime() + shiftMs;
+      // Never let the deadline land before the new due time.
+      patch.max_age_at = new Date(Math.max(shiftedMaxAge, new Date(nextAt).getTime() + 60_000)).toISOString();
+    }
     const { data: updated, error } = await admin
       .from("campaign_touch")
-      .update({ eligible_at: nextAt })
+      .update(patch)
       .eq("id", touch.id)
       .eq("status", "queued")
       .select("id");

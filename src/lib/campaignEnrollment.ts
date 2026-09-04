@@ -29,6 +29,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
 import { isValidEmail } from "@/lib/emailValidation";
+import { launchCampaign } from "@/lib/outreachQueue";
 
 // A touch's auto-skip horizon for MANUAL touches when the campaign has no later
 // touch to bound it (a stuck manual touch must never stall the cadence forever).
@@ -841,18 +842,20 @@ export async function enrollLeadsInCampaign(
  * Mirror of campaign-touch-scheduler's step-1 promotion logic — see comment at
  * the call site in enrollLeadsInCampaign.
  */
+type PromotableLead = Pick<EnrollCandidateLead, "id" | "phone" | "whatsapp_number" | "linkedin_url" | "unsubscribed">;
+
 async function promoteFirstDueTouches(
   campaignId: string,
   workspaceId: string,
   enrollmentIds: string[],
-  enrolledLeads: EnrollCandidateLead[],
+  enrolledLeads: PromotableLead[],
 ): Promise<void> {
   if (enrollmentIds.length === 0) return;
 
   // Need send_mode (per campaign) + workspace auto-send gate (per workspace) to
   // know whether step-1 EMAIL touches should be left for automation-executor.
   const [{ data: camp }, { data: ws }, { data: autoSettings }] = await Promise.all([
-    supabase.from("campaigns").select("send_mode").eq("id", campaignId).maybeSingle(),
+    supabase.from("campaigns").select("send_mode, status").eq("id", campaignId).maybeSingle(),
     supabase
       .from("workspaces")
       .select("timezone, cold_outreach_postal_address")
@@ -860,16 +863,24 @@ async function promoteFirstDueTouches(
       .maybeSingle(),
     supabase
       .from("workspace_automation_settings" as any)
-      .select("auto_send_enabled")
+      .select("cold_auto_send_enabled")
       .eq("workspace_id", workspaceId)
       .maybeSingle(),
   ]);
+  // Only a LIVE outreach surfaces cards. A DRAFT's touches are re-anchored at
+  // Launch (reanchorScheduleForLaunch) and promoted then; promoting them here
+  // would leave step-1 cards dated from "add people" (BUG-011). Paused/completed:
+  // the scheduler won't surface them either — stay consistent with it.
+  if ((camp as any)?.status !== "active") return;
   const sendMode = (camp as any)?.send_mode ?? "review";
   const hasTimezone = !!(ws as any)?.timezone;
   const hasPostal =
     !!((ws as any)?.cold_outreach_postal_address &&
       String((ws as any).cold_outreach_postal_address).trim());
-  const autoSendOn = (autoSettings as any)?.auto_send_enabled === true;
+  // cold_auto_send_enabled — the SAME gate column campaign-touch-scheduler and
+  // automation-executor read. (A misspelled column here silently reads as "off"
+  // and parks automatic emails as review cards — see BUG-012.)
+  const autoSendOn = (autoSettings as any)?.cold_auto_send_enabled === true;
   const autoEmailOwnedByExecutor = sendMode === "automatic" && autoSendOn && hasTimezone && hasPostal;
 
   // Fetch the actual step-1 touch rows we just inserted (need ids + eligible_at).
@@ -925,6 +936,159 @@ async function promoteFirstDueTouches(
       .in("id", [...enrollmentIdsToActivate])
       .eq("status", "scheduled");
   }
+}
+
+// ── Launch: re-anchor the schedule of everyone who hasn't started ─────────────
+
+export interface RelaunchPlan {
+  /** New start day per enrollment (same order as input). */
+  starts: { enrollmentId: string; startedAt: string }[];
+  /** Full touch rows for every not-started enrollment, status 'scheduled'. */
+  touchRows: {
+    enrollment_id: string; campaign_id: string; lead_id: string;
+    step_number: number; channel: CadenceStep["channel"]; status: "scheduled";
+    eligible_at: string; max_age_at: string | null;
+  }[];
+}
+
+/**
+ * Pure planner behind reanchorScheduleForLaunch: re-run the staggered-start drip
+ * from `anchor` (the launch moment) for enrollments whose cadence has not started,
+ * and lay each one's touches out again from its new start day. Same helpers the
+ * original enrollment used, so Launch produces exactly the schedule "add people"
+ * would have produced had it happened at launch time.
+ */
+export function planRelaunch(
+  campaignId: string,
+  enrollments: { id: string; lead_id: string }[],
+  steps: CadenceStep[],
+  dailyCap: number,
+  initialLoad: Record<number, number>,
+  anchor: Date = new Date(),
+): RelaunchPlan {
+  const starts = computeStaggeredStarts(enrollments.length, emailOffsets(steps), dailyCap, initialLoad);
+  const plan: RelaunchPlan = { starts: [], touchRows: [] };
+  enrollments.forEach((enr, i) => {
+    const startedAt = addBusinessDays(anchor, starts[i]);
+    plan.starts.push({ enrollmentId: enr.id, startedAt: startedAt.toISOString() });
+    for (const t of buildTouchSchedule(startedAt, steps)) {
+      plan.touchRows.push({
+        enrollment_id: enr.id, campaign_id: campaignId, lead_id: enr.lead_id,
+        step_number: t.step_number, channel: t.channel, status: "scheduled",
+        eligible_at: t.eligible_at, max_age_at: t.max_age_at,
+      });
+    }
+  });
+  return plan;
+}
+
+/**
+ * Re-date every NOT-STARTED enrollment of a campaign from now. Called by Launch.
+ *
+ * Why: "Add people" schedules from the moment people are added — fine for a live
+ * outreach, wrong for a draft. A draft launched days later would otherwise dump
+ * every first touch into the Queue already overdue and defeat the drip (BUG-011).
+ *
+ * Safe on a draft: the scheduler and executor only act on ACTIVE campaigns, so
+ * nothing can race these rows while status is still 'draft'. Touch rows are
+ * UPSERTed on (enrollment_id, step_number) — one request, no delete window.
+ * Enrollments that already started (current_step_number > 0) are left alone.
+ */
+export async function reanchorScheduleForLaunch(campaignId: string): Promise<{ reanchored: number }> {
+  const { data: enrRows, error: enrErr } = await supabase
+    .from("campaign_enrollment" as any)
+    .select("id, lead_id")
+    .eq("campaign_id", campaignId)
+    .eq("current_step_number", 0)
+    .in("status", ["scheduled", "active"]);
+  if (enrErr) throw new Error(enrErr.message || "Couldn't read the outreach schedule");
+  const enrollments = (enrRows || []) as unknown as { id: string; lead_id: string }[];
+  if (enrollments.length === 0) return { reanchored: 0 };
+
+  const { data: stepRows } = await supabase
+    .from("campaign_steps")
+    .select("step_number, channel, delay_days, active")
+    .eq("campaign_id", campaignId)
+    .order("step_number", { ascending: true });
+  const steps: CadenceStep[] = (stepRows || [])
+    .filter((s: any) => s.active !== false)
+    .map((s: any) => ({ step_number: s.step_number, channel: s.channel, delay_days: s.delay_days ?? 0 }));
+  if (steps.length === 0) throw new Error("This outreach has no active touches to schedule.");
+
+  // Seed the drip with OTHER outreaches' booked email days (this campaign's own
+  // rows are the ones being rewritten). Mirrors enrollLeadsInCampaign.
+  const anchor = new Date();
+  const { data: otherEmailTouches } = await supabase
+    .from("campaign_touch" as any)
+    .select("eligible_at")
+    .eq("channel", "email")
+    .in("status", ["scheduled", "queued"])
+    .neq("campaign_id", campaignId)
+    .not("eligible_at", "is", null);
+  const initialLoad: Record<number, number> = {};
+  for (const et of (otherEmailTouches || []) as any[]) {
+    const off = businessDayOffset(anchor, new Date(et.eligible_at));
+    initialLoad[off] = (initialLoad[off] ?? 0) + 1;
+  }
+
+  const plan = planRelaunch(campaignId, enrollments, steps, await fetchDailyCap(), initialLoad, anchor);
+
+  const { error: touchErr } = await supabase
+    .from("campaign_touch" as any)
+    .upsert(plan.touchRows as any, { onConflict: "enrollment_id,step_number" });
+  if (touchErr) throw new Error(touchErr.message || "Couldn't re-date the outreach touches");
+
+  // Per-row started_at differs, so one update per enrollment, in small parallel
+  // chunks. ponytail: O(n) round-trips — fine for pilot lists (hundreds); the
+  // upgrade path is a single SQL function doing the whole re-anchor server-side.
+  const CHUNK = 25;
+  for (let i = 0; i < plan.starts.length; i += CHUNK) {
+    await Promise.all(
+      plan.starts.slice(i, i + CHUNK).map((st) =>
+        supabase
+          .from("campaign_enrollment" as any)
+          .update({ started_at: st.startedAt, status: "scheduled" } as any)
+          .eq("id", st.enrollmentId),
+      ),
+    );
+  }
+  return { reanchored: enrollments.length };
+}
+
+/**
+ * Launch a draft outreach the right way: re-date the not-started schedule from
+ * now, flip status to 'active', then surface the first due cards immediately
+ * (same gates the scheduler applies) instead of waiting for the next cron tick.
+ */
+export async function launchCampaignWithSchedule(campaignId: string): Promise<{ reanchored: number }> {
+  const result = await reanchorScheduleForLaunch(campaignId);
+  await launchCampaign(campaignId);
+
+  // Best-effort inline promotion — cron catches anything this misses.
+  try {
+    const { data: camp } = await supabase.from("campaigns").select("workspace_id").eq("id", campaignId).maybeSingle();
+    const { data: enrRows } = await supabase
+      .from("campaign_enrollment" as any)
+      .select("id, lead_id")
+      .eq("campaign_id", campaignId)
+      .eq("current_step_number", 0);
+    const enrs = (enrRows || []) as unknown as { id: string; lead_id: string }[];
+    if (camp && enrs.length > 0) {
+      const { data: leadRows } = await supabase
+        .from("leads")
+        .select("id, phone, whatsapp_number, linkedin_url, unsubscribed")
+        .in("id", enrs.map((e) => e.lead_id));
+      await promoteFirstDueTouches(
+        campaignId,
+        (camp as any).workspace_id,
+        enrs.map((e) => e.id),
+        (leadRows || []) as PromotableLead[],
+      );
+    }
+  } catch (err) {
+    console.warn("[launchCampaignWithSchedule] inline promotion skipped:", err);
+  }
+  return result;
 }
 
 /**

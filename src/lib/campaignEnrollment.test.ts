@@ -12,6 +12,7 @@ import {
   canReceiveChannel,
   isLiveRelationship,
   stepScheduleFingerprint,
+  planRelaunch,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -342,5 +343,42 @@ describe("stepScheduleFingerprint — concurrent step-edit guard", () => {
     // channel change
     const rechanneled = STEPS.map((s, i) => (i === 2 ? { ...s, channel: "email" as const } : s));
     expect(stepScheduleFingerprint(rechanneled)).not.toBe(base);
+  });
+});
+
+describe("planRelaunch — Launch re-dates a draft's schedule from now (BUG-011)", () => {
+  // Wednesday 09:00 local: a plain business day so offsets are easy to reason about.
+  const launch = new Date(2026, 8, 2, 9, 0, 0);
+  const enrollments = Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, lead_id: `l${i}` }));
+
+  it("lays every touch out from the launch day, never earlier", () => {
+    const plan = planRelaunch("c1", enrollments, STEPS, 40, {}, launch);
+    expect(plan.starts).toHaveLength(5);
+    expect(plan.touchRows).toHaveLength(5 * STEPS.length);
+    const dayStart = new Date(launch); dayStart.setHours(0, 0, 0, 0);
+    for (const t of plan.touchRows) {
+      expect(new Date(t.eligible_at).getTime()).toBeGreaterThanOrEqual(dayStart.getTime());
+      expect(t.status).toBe("scheduled");
+    }
+    // With headroom under the cap, everyone starts on launch day (step 1 due now).
+    for (const st of plan.starts) expect(new Date(st.startedAt).toDateString()).toBe(launch.toDateString());
+  });
+
+  it("still drips when the cap is tight, seeded by other outreaches' load", () => {
+    // Cap 3 emails/day, 3 email touches per person, day 0 already carries 2 → the
+    // first person can't fully fit on day 0 without overflowing later days only if
+    // headroom exists; the planner must spread starts across days, in order.
+    const plan = planRelaunch("c1", enrollments, STEPS, 3, { 0: 2 }, launch);
+    const days = plan.starts.map((s) => new Date(s.startedAt).getTime());
+    for (let i = 1; i < days.length; i++) expect(days[i]).toBeGreaterThanOrEqual(days[i - 1]);
+    expect(new Set(days).size).toBeGreaterThan(1);
+  });
+
+  it("keeps manual touches' expiry after their due time", () => {
+    const plan = planRelaunch("c1", enrollments.slice(0, 1), STEPS, 40, {}, launch);
+    for (const t of plan.touchRows) {
+      if (t.channel === "email") expect(t.max_age_at).toBeNull();
+      else expect(new Date(t.max_age_at!).getTime()).toBeGreaterThan(new Date(t.eligible_at).getTime());
+    }
   });
 });
