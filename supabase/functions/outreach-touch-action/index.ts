@@ -14,8 +14,9 @@
 //   mark_sent         — manual "Sent it": the rep sent via their own phone/app
 //                       (call/SMS/WhatsApp/LinkedIn). No email is sent — just advance.
 //   mark_skipped      — skip this touch and advance.
-//   set_call_outcome  — record "got_them" / "no_answer" (shapes the next draft;
-//                       does NOT advance — the rep still taps "Sent it").
+//   set_call_outcome  — record "got_them" / "no_answer" on a CALL touch and
+//                       complete it (claim + advance), like mark_sent. The
+//                       outcome also shapes the next draft.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -101,14 +102,6 @@ Deno.serve(async (req) => {
       _user_id: auth.userId!,
     });
     if (!isAdmin) return json({ ok: false, error: "Only the lead owner can act on this outreach." }, 403);
-  }
-
-  // ── set_call_outcome: record the outcome only (no advance) ──
-  if (action === "set_call_outcome") {
-    const outcome = payload.outcome;
-    if (outcome !== "got_them" && outcome !== "no_answer") return json({ ok: false, error: "Invalid outcome" }, 400);
-    await admin.from("campaign_touch").update({ call_outcome: outcome }).eq("id", touch.id);
-    return json({ ok: true });
   }
 
   // The remaining actions ADVANCE the cadence — only valid on an ACTIVE outreach.
@@ -226,6 +219,24 @@ Deno.serve(async (req) => {
     if (error) return json({ ok: false, error: error.message }, 500);
     if (!(updated || []).length) return json({ ok: true, alreadyHandled: true });
     return json({ ok: true, snoozedUntil: nextAt });
+  }
+
+  // ── set_call_outcome: log how the call went AND complete the touch ──
+  // The call IS the touch: a rep who dials, reaches (or misses) the lead and taps
+  // "Got them" / "No answer" has DONE step N. Recording the outcome without
+  // advancing left the card sitting in the Queue until they also tapped the ✓ —
+  // most never did, so the cadence stalled on a call nobody could see was made.
+  // Same claim-then-advance path as mark_sent, so a double-tap can't double-advance.
+  if (action === "set_call_outcome") {
+    const outcome = payload.outcome;
+    if (outcome !== "got_them" && outcome !== "no_answer") return json({ ok: false, error: "Invalid outcome" }, 400);
+    if (touch.channel !== "voice") return json({ ok: false, error: "Not a call touch" }, 400);
+    // Stamp the outcome BEFORE claiming: it shapes the next step's draft, so it must
+    // be on the row even if the claim then loses the race to a concurrent tap.
+    await admin.from("campaign_touch").update({ call_outcome: outcome }).eq("id", touch.id);
+    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
+    await advanceColdEnrollment(admin, exec, touch, "sent");
+    return json({ ok: true });
   }
 
   // ── mark_sent: rep sent via their own app (manual channels) — claim + advance ──

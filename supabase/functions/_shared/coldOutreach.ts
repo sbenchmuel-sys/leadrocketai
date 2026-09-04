@@ -24,6 +24,7 @@ import { resolveStepMeetingCta } from "./campaignResolver.ts";
 import { appendMeetingCta } from "./meetingCtaLine.ts";
 import { ONE_PAGER_LINK_TOKEN, applyOnePagerToken } from "./onePagerToken.ts";
 import { interpolateMergeFields, type MergeContext } from "./mergeFieldInterpolate.ts";
+import { projectTimelineItem } from "./timelineProjector.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -389,7 +390,7 @@ export async function advanceColdEnrollment(
   execSettings: ExecutionSettings,
   touch: { id: string; enrollment_id: string; campaign_id: string; lead_id: string; step_number: number },
   completion: TouchCompletion,
-  opts?: { automationLogId?: string | null },
+  opts?: { automationLogId?: string | null; skipReason?: string },
 ): Promise<void> {
   const patch: Record<string, unknown> = { status: completion };
   if (completion === "sent") {
@@ -397,6 +398,46 @@ export async function advanceColdEnrollment(
     if (opts?.automationLogId) patch.automation_log_id = opts.automationLogId;
   }
   await supabase.from("campaign_touch").update(patch).eq("id", touch.id);
+
+  // An AUTO-skip is the one completion no human asked for, and until now it left
+  // no trace anywhere the rep looks — the step just vanished and the cadence moved
+  // on. Write it to the lead's timeline. Done HERE, at the single choke point both
+  // scheduler auto-skip paths funnel through, rather than at each call site.
+  // Never fatal: a failed note must not stall the cadence advance below.
+  if (completion === "auto_skipped") {
+    try {
+      const { data: ld } = await supabase
+        .from("leads").select("workspace_id").eq("id", touch.lead_id).maybeSingle();
+      const workspaceId = (ld as any)?.workspace_id ?? null;
+      if (workspaceId) {
+        const reason = opts?.skipReason || "the step's window passed";
+        await projectTimelineItem(supabase, {
+          workspace_id: workspaceId,
+          lead_id: touch.lead_id,
+          channel: "system",
+          provider: "automation",
+          event_type: "system_note",
+          occurred_at: new Date().toISOString(),
+          source_table: "campaign_touch",
+          source_id: touch.id,
+          snippet_text: `⏭️ Outreach step ${touch.step_number} was skipped automatically — ${reason}. The cadence moved on to the next step.`,
+          // snippet_text is purged at 72h (see CLAUDE.md retention); metadata is
+          // kept indefinitely, so the machine-readable reason lives there too.
+          metadata_json: {
+            auto_skip_reason: reason,
+            campaign_id: touch.campaign_id,
+            step_number: touch.step_number,
+          },
+          dedupe_key: `cold_auto_skip_${touch.id}`,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[coldOutreach] auto-skip note failed for touch ${touch.id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 
   // Read the next touch BEFORE exposing the cursor. The cursor advance is deliberately
   // LAST: a touch becomes "ready" only when step_number === current_step_number + 1, so

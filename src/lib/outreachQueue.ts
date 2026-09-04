@@ -87,10 +87,12 @@ export function linkedinActionFromStepType(stepType: string | null | undefined):
 }
 
 
-// Keep the surfaced list workable; excess waits for the next render. The query is
-// owner-scoped server-side (leads!inner), so this cap applies to the rep's OWN due
-// touches — a busy shared workspace can't push their work past it.
-export const OUTREACH_SURFACE_CAP = 50;
+// How many due touches one page shows. The query is owner-scoped server-side
+// (leads!inner), so this applies to the rep's OWN due touches — a busy shared
+// workspace can't push their work past it. Beyond one page the rep pages through
+// with "Show more"; the true total always comes back alongside (see fetchOutreachQueue),
+// so the tab badge reads "312", never a silent "50".
+export const OUTREACH_PAGE_SIZE = 50;
 
 // Thin wrapper around the shared canonical-token interpolator. We keep the same
 // signature the call-site already uses (string | null), but route ALL token
@@ -108,16 +110,29 @@ function interpolate(s: string | null, ctx: PreviewMergeCtx): string | null {
   return interpolateMergeFields(s, ctx);
 }
 
+export interface OutreachQueuePage {
+  touches: OutreachTouch[];
+  /** Every due touch matching the query, NOT just the ones on this page. */
+  total: number;
+}
+
 /**
  * Load the due cold touches for the Outreach tab, oldest-due first, with each
  * touch's resolved (industry-variant + name-interpolated) content attached so
  * the card's deep-links and review preview are ready without extra round-trips.
+ *
+ * `limit` is a GROWING window, not an offset page: "Show more" re-requests
+ * 100/150/… from the top. ponytail: re-fetching the pages already on screen costs
+ * one extra query at these sizes and buys us no append/merge/dedupe state, and no
+ * stale-page drift when the scheduler queues a touch mid-session. Ceiling: a rep
+ * paging into the thousands re-reads it all — swap to keyset paging on eligible_at
+ * if that ever shows up.
  */
-export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
+export async function fetchOutreachQueue(limit = OUTREACH_PAGE_SIZE): Promise<OutreachQueuePage> {
   const nowIso = new Date().toISOString();
 
   // Resolve ACTIVE campaigns FIRST (RLS scopes this to the rep's workspace), then
-  // constrain the touch query to them BEFORE applying OUTREACH_SURFACE_CAP — so a
+  // constrain the touch query to them BEFORE applying the page limit — so a
   // paused campaign's stale queued rows can't consume the page and hide active,
   // currently-due work that sits beyond the cap.
   const { data: activeCamps } = await supabase
@@ -126,7 +141,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
     .eq("status", "active");
   const campaignMap = new Map(((activeCamps || []) as any[]).map((c) => [c.id, c]));
   const activeIds = [...campaignMap.keys()];
-  if (activeIds.length === 0) return [];
+  if (activeIds.length === 0) return { touches: [], total: 0 };
 
   // Scope the touch query to leads this rep can actually SEE by INNER-joining leads:
   // PostgREST applies the leads table's own RLS (owner-or-admin) to the embedded rows,
@@ -135,19 +150,24 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
   // owner-scoped) — a busy shared workspace can't bury the rep's own due work behind a
   // page of coworkers' (hidden) touches, and there are no blank "—" cards. The lead's
   // card fields come back embedded, so no second round-trip.
-  const { data: touches } = await supabase
+  // `count: "exact"` rides along on the SAME request — PostgREST reports how many
+  // rows matched BEFORE the limit, so the badge and "Show more" get the real total
+  // without a second round-trip.
+  const { data: touches, count } = await supabase
     .from("campaign_touch" as any)
     .select(
       "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
         "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry, owner_user_id)",
+      { count: "exact" },
     )
     .eq("status", "queued")
     .in("campaign_id", activeIds)
     .lte("eligible_at", nowIso)
     .order("eligible_at", { ascending: true })
-    .limit(OUTREACH_SURFACE_CAP);
+    .limit(limit);
   const rows = (touches || []) as any[];
-  if (rows.length === 0) return [];
+  const total = count ?? rows.length;
+  if (rows.length === 0) return { touches: [], total };
   const leadOf = (t: any) => (Array.isArray(t.leads) ? t.leads[0] : t.leads) || {};
 
   const campaignIds = [...new Set(rows.map((t) => t.campaign_id))];
@@ -234,7 +254,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
   // `rows` is already (a) constrained to active campaigns, (b) owner-scoped via the
   // leads!inner join (no hidden-lead or blank-card rows, no buried work), and (c)
   // capped. Each row's lead is embedded.
-  return rows.map((t): OutreachTouch => {
+  const mapped = rows.map((t): OutreachTouch => {
     const lead = leadOf(t);
     const firstName = String(lead.name || "").split(" ")[0] || "there";
     const lastName = String(lead.name || "").split(" ").slice(1).join(" ");
@@ -269,6 +289,7 @@ export async function fetchOutreachQueue(): Promise<OutreachTouch[]> {
       linkedinAction: t.channel === "linkedin" ? linkedinActionFromStepType(stepType) : undefined,
     };
   });
+  return { touches: mapped, total };
 }
 
 

@@ -61,6 +61,42 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Repro:** grep edge functions for `from("interactions").insert` that has no adjacent `projectTimelineItem`/`createCanonicalInteraction` → the two automation-executor sites.
 - **Claude Code prompt:** "Route the two automation-executor system-note inserts (lines ~193 OOO-return and ~688 unsubscribe) through `createCanonicalInteraction` so they also land in `lead_timeline_items`; preserve dedupe_key; add `workspace_id` to the source queries so projection fires."
 
+## BUG-016 — A logged call outcome didn't finish the step, and vanished on a mobile reload
+- **Severity:** P2 (cadence stalls silently)
+- **Status:** fixed (2026-09-04, Sprint 2 #6, branch `fix/outreach-sprint-2`)
+- **What happens:** "Got them" / "No answer" only wrote `call_outcome`; the touch stayed `queued` until the rep ALSO tapped the ✓, which most never did, so the cadence sat on a call that had already been made. Worse, the buttons were gated on a local React flag set when the rep tapped **Call** — switching to the dialer and back reloads the mobile tab, so the flag (and the buttons) were gone by the time they had something to log.
+- **Fix:** `set_call_outcome` now stamps the outcome, then claims + `advanceColdEnrollment` exactly like `mark_sent`; its branch moved BELOW the replied / inactive / opt-out backstops (it advances now, so it must pass the same guards) and is voice-only. Client-side the outcome buttons are always visible on a voice card — no local "did they tap Call?" state left to lose. Guard: `src/test/outreachLegibilityGuards.test.ts`.
+
+## BUG-017 — Outreach tab silently capped at 50 cards, badge showed "50" for any backlog
+- **Severity:** P2 (work invisible at scale)
+- **Status:** fixed (2026-09-04, Sprint 2 #7, branch `fix/outreach-sprint-2`)
+- **What happens:** `fetchOutreachQueue` hard-limited 50 rows and returned a bare array, so the tab badge counted the PAGE, not the backlog. A rep with 300 due touches saw "Outreach 50" and no way to reach the rest.
+- **Fix:** the same query now carries `count: "exact"` (no extra round-trip) and returns `{ touches, total }`; the badge reads `total`, and a "Showing N of M · Show more" control grows the window a page at a time. `OUTREACH_SURFACE_CAP` → `OUTREACH_PAGE_SIZE`.
+
+## BUG-018 — Auto-skipped steps left no trace anywhere the rep looks
+- **Severity:** P2 (silent automated decision)
+- **Status:** fixed (2026-09-04, Sprint 2 #9, branch `fix/outreach-sprint-2`)
+- **What happens:** when the scheduler auto-skipped a manual touch (window expired, or the lead had no phone / LinkedIn URL), the step just disappeared and the cadence moved on. The only hint was an italic note in the Upcoming strip, and only for the missing-handle case.
+- **Fix:** `advanceColdEnrollment` — the single choke point both auto-skip paths funnel through — writes a `system_note` timeline item naming the step and the reason (also in `metadata_json`, which survives the 72h snippet purge). The scheduler passes the reason via a new `opts.skipReason`. Per-campaign and per-person auto-skip counts now show on the campaign's People list (see BUG-019).
+
+## BUG-019 — Campaign People list showed names and nothing else
+- **Severity:** P3
+- **Status:** fixed (2026-09-04, Sprint 2 #13, branch `fix/outreach-sprint-2`)
+- **What happens:** no way to tell an untouched lead from one on step 7, one who replied, or one whose steps were being auto-skipped.
+- **Fix:** `fetchCampaignCadence` + pure `deriveCadenceStatus` (tested in `src/lib/campaignCadenceStatus.test.ts`) render "Step 3 of 9 · Call · due Tomorrow 9:00 AM" per person, terminal states in plain words, and an auto-skip count per person and per campaign. Reads the enrollment cursor (+1), the same lock-step rule the sender uses — not the first unsent row.
+
+## BUG-020 — Cadence due times rendered in the browser's timezone, and cards showed no step or due time
+- **Severity:** P2 (two reps see different times for the same touch)
+- **Status:** fixed (2026-09-04, Sprint 2 #10, branch `fix/outreach-sprint-2`)
+- **What happens:** `UpcomingTouchesStrip.formatReadyAt` used `toLocaleTimeString`/`toDateString`, so "Today 9:00 AM" meant the viewer's clock; a rep in a different timezone from the workspace saw a different — and sometimes a different-DAY — due time. Outreach cards showed neither which step they were nor when the touch was due.
+- **Fix:** `formatReadyAt` deleted; `formatDueAt` added to `eligibleAtFormat.ts` (the module that exists for exactly this), comparing calendar DAY KEYS in workspace time so Today/Tomorrow is right across timezones and DST. Outreach cards gained a "Step N · due …" line. Guard: no `toLocale*Time/Date` left in the cadence surfaces.
+
+## BUG-021 — LinkedIn "Message" opened an empty compose window, not the person
+- **Severity:** P2
+- **Status:** fixed (2026-09-04, Sprint 2 #11, branch `fix/outreach-sprint-2`)
+- **What happens:** the touch opened `linkedin.com/messaging/compose/` with no recipient — the rep had to search for the lead by hand after every LinkedIn message step.
+- **Fix:** it opens the lead's profile (like Connect and React already did), where "Message" is one click and already addressed; the copied-message toast says so. LinkedIn has no supported URL that opens a composer addressed to someone.
+
 ## BUG-011 — Outreach touches dated from "Add people", not from Launch
 - **Severity:** P1 (main path — root cause of "everything in the Queue is overdue")
 - **Status:** verified (2026-09-03, code audit) — Launch now calls `launchCampaignWithSchedule` → `reanchorScheduleForLaunch` (re-runs the staggered-start drip from launch time for every not-started enrollment and UPSERTs its touch rows), then flips status, then promotes the first due cards. `promoteFirstDueTouches` no longer promotes for non-active campaigns. Test: `planRelaunch` cases in `src/lib/campaignEnrollment.test.ts`. Verified present in `src/lib/campaignEnrollment.ts` (commit f7f3b15).
