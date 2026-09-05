@@ -272,29 +272,59 @@ export interface SendColdEmailResult {
  * The FAIL-CLOSED FLOOR lives HERE, inside the single sender, so it is
  * structurally impossible for ANY caller — the executor's automatic path,
  * PR 3's review-mode "Send" / manual "Sent it", or any future path — to email a
- * suppressed or unsubscribed lead, or to send a cold email with no physical
- * postal address:
- *   1. coldSendFloor (suppression list + leads.unsubscribed), and
+ * suppressed or unsubscribed lead:
+ *   1. coldSendFloor (suppression list + leads.unsubscribed) — ALWAYS enforced, and
  *   2. the company postal address, read from the workspace HERE (not trusted from
- *      the caller) and required non-blank (CAN-SPAM).
- * Callers should keep their own pre-checks too (defense in depth), but this is the
+ *      the caller). Required non-blank ONLY when COLD_REQUIRE_POSTAL_ADDRESS is on
+ *      — see requirePostalAddress() below. During the closed pilot it is off and a
+ *      blank address merely omits the address line from the footer.
+ * Callers should keep their own pre-checks too (defense in depth), but (1) is the
  * last line that cannot be bypassed. Returns { ok:false, reason } instead of
  * sending when the floor blocks.
  */
+/**
+ * CAN-SPAM postal-address enforcement switch.
+ *
+ * CAN-SPAM requires a physical postal address in commercial email. The hard
+ * refusal was relaxed during the closed pilot (commit dfc2f6e, 2026-06-30) so reps
+ * could exercise the send flow before their workspace had an address — the footer
+ * simply omits the address line. That relaxation lived only in a code comment, and
+ * the test that used to guard it went stale and red for months.
+ *
+ * It is now an explicit switch. Set the edge-function secret
+ * COLD_REQUIRE_POSTAL_ADDRESS=true to restore the hard refusal — no deploy, no
+ * code change. DO THIS BEFORE COLD OUTREACH OPENS BEYOND INVITED PILOT
+ * WORKSPACES. Tracked in CLEANUP.md; coldSendFloor.test.ts covers BOTH sides.
+ *
+ * Only the exact string "true" (any case) turns it on — a typo leaves the pilot
+ * behaviour rather than silently blocking every rep's sends, same discipline as
+ * the scheduler's BOUNCE_RATE_THRESHOLD parsing.
+ *
+ * Scope: this affects the REP-APPROVED review/manual send only. The AUTOMATIC path
+ * has always required a postal address to auto-send, and still does, gated
+ * independently in campaign-touch-scheduler and automation-executor.
+ */
+export function requirePostalAddress(): boolean {
+  return (Deno.env.get("COLD_REQUIRE_POSTAL_ADDRESS") ?? "").trim().toLowerCase() === "true";
+}
+
 export async function sendColdEmailTouch(args: SendColdEmailArgs): Promise<SendColdEmailResult> {
   // (1) opt-out / suppression — fail closed.
   const floor = await coldSendFloor(args.supabase, args.lead.id, args.workspaceId);
   if (!floor.ok) return { ok: false, reason: floor.reason || "blocked by send floor" };
 
-  // (2) CAN-SPAM postal address — read from the workspace. PILOT: allowed to be
-  // blank during the closed pilot so reps can test send flows; the footer omits
-  // the address line when missing. Re-enable the hard block before opening up.
+  // (2) CAN-SPAM postal address — read from the workspace (never trusted from the
+  // caller). Whether a blank address REFUSES the send or just omits the footer's
+  // address line is the requirePostalAddress() switch above.
   const { data: ws } = await args.supabase
     .from("workspaces")
     .select("cold_outreach_postal_address")
     .eq("id", args.workspaceId)
     .maybeSingle();
   const postalAddress = (ws?.cold_outreach_postal_address || "").trim();
+  if (!postalAddress && requirePostalAddress()) {
+    return { ok: false, reason: "no company postal address (CAN-SPAM)" };
+  }
 
   // Resolve the one-pager offer HERE — the single sender every path funnels through
   // — so a review/manual send (rep-approved body straight from campaign_step_content)

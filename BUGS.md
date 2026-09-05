@@ -61,6 +61,15 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Repro:** grep edge functions for `from("interactions").insert` that has no adjacent `projectTimelineItem`/`createCanonicalInteraction` → the two automation-executor sites.
 - **Claude Code prompt:** "Route the two automation-executor system-note inserts (lines ~193 OOO-return and ~688 unsubscribe) through `createCanonicalInteraction` so they also land in `lead_timeline_items`; preserve dedupe_key; add `workspace_id` to the source queries so projection fires."
 
+## BUG-022 — CAN-SPAM postal-address block silently off since June; its test went stale and red
+- **Severity:** P2 today (invited pilot only), P0 the day cold outreach opens up
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`) — behaviour unchanged for the pilot, but no longer implicit.
+- **Found:** 2026-09-05, running `npm run test:edge` for the Sprint 2 merge gate.
+- **What happens:** `sendColdEmailTouch` used to refuse any cold email whose workspace had no physical postal address — the CAN-SPAM floor. Lovable commit `dfc2f6e` (2026-06-30) relaxed it to a code comment ("PILOT: allowed to be blank … re-enable the hard block before opening up") and the footer just omits the address line. `coldSendFloor.test.ts` (written 2026-06-21) still asserted the refusal, so `npm run test:edge` had been failing on `main` for 72 commits and nobody was reading it. `sendColdEmailTouch`'s own docblock still claimed the address was "required non-blank" and "cannot be bypassed".
+- **Scope:** rep-approved review/manual sends only. AUTOMATIC sends have always required a postal address and still do (`campaign-touch-scheduler` + `automation-executor` gates), so no cold email has ever gone out automatically without one.
+- **Fix:** the relaxation is now an explicit switch — `requirePostalAddress()` reads the edge-function secret `COLD_REQUIRE_POSTAL_ADDRESS`; only an exact "true" turns the refusal back on, so a typo leaves pilot behaviour rather than silently blocking every rep. Docblock corrected, both sides covered by tests, and the re-enable is tracked in CLEANUP.md as a pre-launch gate.
+- **Still to do:** set `COLD_REQUIRE_POSTAL_ADDRESS=true` before cold outreach opens beyond invited pilot workspaces.
+
 ## BUG-016 — A logged call outcome didn't finish the step, and vanished on a mobile reload
 - **Severity:** P2 (cadence stalls silently)
 - **Status:** fixed (2026-09-04, Sprint 2 #6, branch `fix/outreach-sprint-2`)
