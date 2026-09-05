@@ -48,4 +48,35 @@ describe("a logged call outcome completes the touch (#6)", () => {
     expect(src.indexOf('if (action === "set_call_outcome")'))
       .toBeGreaterThan(src.indexOf("OPT-OUT BACKSTOP"));
   });
+
+  it("stamps call_outcome inside the same guarded claim as the status flip (BUG-023)", () => {
+    // A double-tap / two open tabs used to run an unconditional `call_outcome`
+    // update BEFORE the status-guarded claim, so the loser could overwrite the
+    // outcome the winner just recorded even though only the winner's claim
+    // succeeded. Fix: call_outcome travels in the claimTouch(...) call itself,
+    // so only the request that wins the queued->sent flip ever writes it.
+    const branch = src.slice(src.indexOf('if (action === "set_call_outcome")'));
+    const body = branch.slice(0, branch.indexOf("\n  }\n") + 4);
+    expect(/claimTouch\(\s*"sent"\s*,\s*\{\s*call_outcome:\s*outcome\s*\}\s*\)/.test(body)).toBe(true);
+    // No separate unconditional call_outcome write should remain ahead of the claim.
+    const claimIdx = body.indexOf("claimTouch(");
+    const preClaim = body.slice(0, claimIdx);
+    expect(/\.update\(\s*\{\s*call_outcome/.test(preClaim)).toBe(false);
+  });
+});
+
+describe("campaign cadence status never truncates a lead mid-cadence (#13 paging)", () => {
+  // A flat step_number-ordered read capped at a row count could cut a lead off
+  // mid-cadence: its cursor would then point past the last row actually fetched,
+  // and deriveCadenceStatus would report "completed" for a lead who wasn't.
+  // fetchCampaignCadence must page in whole leads instead (order by lead_id first).
+  it("orders touch pages by lead_id before step_number, so a lead is never split", () => {
+    const src2 = read("src/lib/campaignQueries.ts");
+    const fn = src2.slice(src2.indexOf("export async function fetchCampaignCadence"));
+    const body = fn.slice(0, fn.indexOf("\nexport ", 1) === -1 ? fn.length : fn.indexOf("\nexport ", 1));
+    const leadOrderIdx = body.indexOf('order("lead_id"');
+    const stepOrderIdx = body.indexOf('order("step_number"');
+    expect(leadOrderIdx).toBeGreaterThan(-1);
+    expect(stepOrderIdx).toBeGreaterThan(leadOrderIdx);
+  });
 });

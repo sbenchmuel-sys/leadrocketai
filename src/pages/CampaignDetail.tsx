@@ -296,7 +296,11 @@ export default function CampaignDetail() {
       // Stop their schedule (delete enrollment → touches cascade) AND clear
       // campaign_id — clearing campaign_id alone would leave the cadence running.
       await unenrollLeadFromCampaign(id, leadId);
-      setPeople((prev) => prev.filter((p) => p.id !== leadId));
+      // Re-fetch people + cadence together rather than just filtering local state:
+      // the removed person's touches (including any auto-skipped ones) are gone
+      // from the DB now, so the campaign's auto-skip total and everyone else's
+      // per-person counts need to reflect that, not just the shorter people list.
+      loadPeople();
       refreshCadenceGate(); // removing the last enrolled person may re-open editing
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove that person");

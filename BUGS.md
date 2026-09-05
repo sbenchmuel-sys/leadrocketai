@@ -70,6 +70,27 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Fix:** the relaxation is now an explicit switch — `requirePostalAddress()` reads the edge-function secret `COLD_REQUIRE_POSTAL_ADDRESS`; only an exact "true" turns the refusal back on, so a typo leaves pilot behaviour rather than silently blocking every rep. Docblock corrected, both sides covered by tests, and the re-enable is tracked in CLEANUP.md as a pre-launch gate.
 - **Still to do:** set `COLD_REQUIRE_POSTAL_ADDRESS=true` before cold outreach opens beyond invited pilot workspaces.
 
+## BUG-025 — Removing a person left the campaign's auto-skip total stale
+- **Severity:** P3 (cosmetic, but confusing on a busy campaign)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** `unenrollLeadFromCampaign` deletes the person's enrollment and touch rows (including any auto-skipped ones), but `handleRemovePerson` only filtered them out of local `people` state — it never re-ran `fetchCampaignCadence`. The People-list header kept showing the old "N steps auto-skipped" total, including steps that belonged to the person just removed, until the page was reloaded.
+- **Fix:** `handleRemovePerson` now calls the same `loadPeople()` used on initial load, which re-fetches both the people list and the cadence/auto-skip totals together, instead of hand-patching just the array.
+
+## BUG-024 — Campaign cadence status could truncate a lead mid-cadence on large campaigns
+- **Severity:** P2 (wrong status shown, not just missing)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** `fetchCampaignCadence` read the campaign's `campaign_touch` rows ordered by `step_number` alone, capped at `TOUCH_ROW_CAP` (5000). Past 5000 rows this returned early steps for many leads rather than complete cadences for a bounded set of leads — a lead whose cursor pointed past the highest step actually fetched then read as "completed" (nothing wrong, all done) when in fact its later rows were simply never fetched. Auto-skip counts were undercounted the same way.
+- **Fix:** paging now orders by `(lead_id, step_number)` and pages through in batches, capped at `TOUCH_LEAD_CAP` (2000) *leads* rather than rows. A lead's rows always accumulate fully across page boundaries, so every lead in the map is either completely represented or (past the lead cap) entirely absent — never partially read as something it isn't. Guard: `src/test/outreachLegibilityGuards.test.ts`.
+
+## BUG-023 — set_call_outcome could let a losing double-tap overwrite the recorded outcome
+- **Severity:** P2 (data race, rare but silent)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** `set_call_outcome` wrote `call_outcome` with an unconditional update, THEN ran the status-guarded `queued → sent` claim separately. Two concurrent requests for the same touch (a double tap, or two open tabs) could both win the unconditional `call_outcome` write even though only one of them then won the claim — so the loser's outcome could land on the touch AFTER the winner's claim already advanced the cadence on the (correct, at the time) outcome, and the loser's response said `alreadyHandled` while having silently changed the stored outcome.
+- **Fix:** `call_outcome` now travels inside the same status-guarded `claimTouch(...)` update as the `queued → sent` flip, so only the request that actually wins the claim can write it. A losing request matches 0 rows and changes nothing. Guard: `src/test/outreachLegibilityGuards.test.ts`.
+
 ## BUG-016 — A logged call outcome didn't finish the step, and vanished on a mobile reload
 - **Severity:** P2 (cadence stalls silently)
 - **Status:** fixed (2026-09-04, Sprint 2 #6, branch `fix/outreach-sprint-2`)

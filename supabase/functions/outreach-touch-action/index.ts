@@ -168,10 +168,13 @@ Deno.serve(async (req) => {
   // on status='queued'. The DB guarantees only one concurrent request wins, so a
   // double-click / retry / two open tabs can never double-send or double-advance —
   // the loser matches 0 rows and bails. This is the race fix.
-  const claimTouch = async (claimStatus: string): Promise<boolean> => {
+  const claimTouch = async (
+    claimStatus: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<boolean> => {
     const { data } = await admin
       .from("campaign_touch")
-      .update({ status: claimStatus })
+      .update({ status: claimStatus, ...extra })
       .eq("id", touch.id)
       .eq("status", "queued")
       .select("id");
@@ -231,10 +234,13 @@ Deno.serve(async (req) => {
     const outcome = payload.outcome;
     if (outcome !== "got_them" && outcome !== "no_answer") return json({ ok: false, error: "Invalid outcome" }, 400);
     if (touch.channel !== "voice") return json({ ok: false, error: "Not a call touch" }, 400);
-    // Stamp the outcome BEFORE claiming: it shapes the next step's draft, so it must
-    // be on the row even if the claim then loses the race to a concurrent tap.
-    await admin.from("campaign_touch").update({ call_outcome: outcome }).eq("id", touch.id);
-    if (!(await claimTouch("sent"))) return json({ ok: true, alreadyHandled: true });
+    // Outcome and claim happen in the SAME status-guarded update: only the request
+    // that actually wins the queued→sent claim gets to write call_outcome. A losing
+    // request (double-tap, two open tabs) matches 0 rows and changes nothing, so it
+    // can never stomp the outcome already recorded by the winner.
+    if (!(await claimTouch("sent", { call_outcome: outcome }))) {
+      return json({ ok: true, alreadyHandled: true });
+    }
     await advanceColdEnrollment(admin, exec, touch, "sent");
     return json({ ok: true });
   }

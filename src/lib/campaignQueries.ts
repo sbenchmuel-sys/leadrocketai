@@ -861,36 +861,59 @@ export function deriveCadenceStatus(
  * auto-skip count. Two queries, folded client-side — PostgREST has no GROUP BY, and
  * a per-lead round-trip would be N+1.
  *
- * ponytail: one un-paged read of the campaign's touch rows (leads × steps, so ~900
- * for a 100-lead default cadence), capped at TOUCH_ROW_CAP. Past the cap the trailing
- * leads read as "not started" rather than wrong-but-confident. Upgrade path when
- * campaigns get big: a SQL view returning one pre-folded row per enrollment.
+ * ponytail: paged reads of the campaign's touch rows (leads × steps, so ~900 for a
+ * 100-lead default cadence), ordered by (lead_id, step_number) so pages accumulate
+ * into a complete row set per lead even when a lead's own rows straddle a page. A
+ * lead is only ever fully represented or entirely absent — never partial — capped
+ * at TOUCH_LEAD_CAP distinct leads. (Previously a single step_number-ordered read
+ * capped at a flat row count could cut a lead off mid-cadence, making its cursor
+ * read as past the last fetched row — reported "completed" when it wasn't.) Past
+ * the lead cap the trailing leads are simply absent — the caller falls back to
+ * "Not in the cadence yet" rather than a wrong-but-confident state. Upgrade path
+ * when campaigns get big: a SQL view returning one pre-folded row per enrollment.
  */
-const TOUCH_ROW_CAP = 5000;
+const TOUCH_PAGE_SIZE = 1000;
+const TOUCH_LEAD_CAP = 2000;
 
 export async function fetchCampaignCadence(campaignId: string): Promise<{
   byLead: Map<string, LeadCadenceStatus>;
   autoSkippedTotal: number;
 }> {
   type EnrollmentRow = { lead_id: string; status: string; current_step_number: number | null };
-  const [{ data: enrollments }, { data: touches }] = await Promise.all([
+  type TouchRow = CadenceTouchRow & { lead_id: string };
+
+  const [{ data: enrollments }] = await Promise.all([
     supabase
       .from("campaign_enrollment" as never)
       .select("lead_id, status, current_step_number")
       .eq("campaign_id", campaignId),
-    supabase
+  ]);
+
+  // Page through every touch row, ordered by lead so pages accumulate into complete
+  // per-lead lists even when one lead's rows straddle a page boundary. Stop once a
+  // page comes back short (fewer rows than requested — no more data) or once
+  // TOUCH_LEAD_CAP distinct leads have been seen. Unlike a flat step_number-ordered
+  // cap, no lead is ever left with a partial cadence: a lead is either complete or
+  // entirely absent from the map.
+  const touchesByLead = new Map<string, TouchRow[]>();
+  let from = 0;
+  for (;;) {
+    const { data: page } = await supabase
       .from("campaign_touch" as never)
       .select("lead_id, step_number, channel, status, eligible_at")
       .eq("campaign_id", campaignId)
+      .order("lead_id", { ascending: true })
       .order("step_number", { ascending: true })
-      .limit(TOUCH_ROW_CAP),
-  ]);
-
-  const touchesByLead = new Map<string, CadenceTouchRow[]>();
-  for (const t of ((touches || []) as unknown as (CadenceTouchRow & { lead_id: string })[])) {
-    const list = touchesByLead.get(t.lead_id) || [];
-    list.push(t);
-    touchesByLead.set(t.lead_id, list);
+      .range(from, from + TOUCH_PAGE_SIZE - 1);
+    const rows = (page || []) as unknown as TouchRow[];
+    for (const t of rows) {
+      const list = touchesByLead.get(t.lead_id) || [];
+      list.push(t);
+      touchesByLead.set(t.lead_id, list);
+    }
+    if (rows.length < TOUCH_PAGE_SIZE) break;
+    if (touchesByLead.size >= TOUCH_LEAD_CAP) break;
+    from += TOUCH_PAGE_SIZE;
   }
 
   const byLead = new Map<string, LeadCadenceStatus>();
