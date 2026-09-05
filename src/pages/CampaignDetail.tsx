@@ -252,6 +252,11 @@ export default function CampaignDetail() {
     try {
       const { reanchored } = await launchCampaignWithSchedule(id);
       setCampaign({ ...campaign, status: "active" });
+      // launchCampaignWithSchedule re-anchors every not-started touch's eligible_at
+      // to today and may promote the first step straight to "queued" — the People
+      // list's cadence line (due dates, due-now state) was built from the pre-launch
+      // read and would otherwise keep showing stale dates until a manual reload.
+      loadPeople();
       toast.success(
         reanchored > 0
           ? `Outreach launched — ${reanchored} ${reanchored === 1 ? "person's" : "people's"} schedule starts today`

@@ -68,6 +68,33 @@ describe("deriveCadenceStatus", () => {
     expect(deriveCadenceStatus({ status: "active", current_step_number: 2 }, plan(["sent", "auto_skipped", "queued"])).autoSkipped).toBe(1);
     expect(deriveCadenceStatus({ status: "replied", current_step_number: 2 }, plan(["auto_skipped", "auto_skipped", "scheduled"])).autoSkipped).toBe(2);
   });
+
+  it("treats a SNOOZED touch as waiting, not due — snooze_touch keeps status='queued' but moves eligible_at forward (BUG-026)", () => {
+    // Same plan as the "due" test above, except step 2's eligible_at (set by
+    // snooze_touch) is now in the future relative to `now`.
+    const snoozedPlan = plan(["sent", "queued", "scheduled"]);
+    snoozedPlan[1] = { ...snoozedPlan[1], eligible_at: "2026-06-01T09:00:00Z" };
+    const now = new Date("2026-05-20T00:00:00Z");
+    const s = deriveCadenceStatus({ status: "active", current_step_number: 1 }, snoozedPlan, now);
+    expect(s.state).toBe("waiting");
+    expect(s.dueAt).toBe("2026-06-01T09:00:00Z");
+  });
+
+  it("treats a queued touch whose eligible_at has already passed as due", () => {
+    const now = new Date("2026-05-23T00:00:00Z");
+    const s = deriveCadenceStatus(
+      { status: "active", current_step_number: 1 },
+      plan(["sent", "queued", "scheduled"]),
+      now,
+    );
+    expect(s.state).toBe("due");
+  });
+
+  it("treats a queued touch with no eligible_at as due (never snoozed)", () => {
+    const rows = plan(["sent", "queued", "scheduled"]);
+    rows[1] = { ...rows[1], eligible_at: null };
+    expect(deriveCadenceStatus({ status: "active", current_step_number: 1 }, rows).state).toBe("due");
+  });
 });
 
 describe("cadenceStatusLabel", () => {

@@ -829,6 +829,7 @@ export interface CadenceTouchRow {
 export function deriveCadenceStatus(
   enrollment: { status: string; current_step_number: number | null } | null,
   touches: CadenceTouchRow[],
+  now: Date = new Date(),
 ): LeadCadenceStatus {
   const autoSkipped = touches.filter((t) => t.status === "auto_skipped").length;
   const base = { totalSteps: touches.length, autoSkipped };
@@ -847,9 +848,13 @@ export function deriveCadenceStatus(
   if (!next) {
     return { ...base, state: "completed", stepNumber: null, channel: null, dueAt: null };
   }
+  // "queued" alone isn't "due now": snooze_touch deliberately leaves a touch queued
+  // while pushing eligible_at days into the future (the Outreach query itself still
+  // excludes it until then), so a snoozed touch must still read "waiting" here too.
+  const isDue = next.status === "queued" && (!next.eligible_at || new Date(next.eligible_at) <= now);
   return {
     ...base,
-    state: next.status === "queued" ? "due" : "waiting",
+    state: isDue ? "due" : "waiting",
     stepNumber: next.step_number,
     channel: next.channel,
     dueAt: next.eligible_at,
@@ -882,12 +887,17 @@ export async function fetchCampaignCadence(campaignId: string): Promise<{
   type EnrollmentRow = { lead_id: string; status: string; current_step_number: number | null };
   type TouchRow = CadenceTouchRow & { lead_id: string };
 
-  const [{ data: enrollments }] = await Promise.all([
+  const [{ data: enrollments, error: enrollmentsError }] = await Promise.all([
     supabase
       .from("campaign_enrollment" as never)
       .select("lead_id, status, current_step_number")
       .eq("campaign_id", campaignId),
   ]);
+  // A Supabase query failure resolves as { data: null, error }, it does not reject.
+  // Folding a null `data` silently would read as "no enrollments" (not_started for
+  // everyone) rather than "the query failed" — throw so the caller's existing
+  // .catch() leaves the previous (stale but not confidently wrong) cadence in place.
+  if (enrollmentsError) throw new Error(enrollmentsError.message || "Failed to load campaign enrollments");
 
   // Page through every touch row, ordered by lead so pages accumulate into complete
   // per-lead lists even when one lead's rows straddle a page boundary. Stop once a
@@ -898,13 +908,16 @@ export async function fetchCampaignCadence(campaignId: string): Promise<{
   const touchesByLead = new Map<string, TouchRow[]>();
   let from = 0;
   for (;;) {
-    const { data: page } = await supabase
+    const { data: page, error: touchesError } = await supabase
       .from("campaign_touch" as never)
       .select("lead_id, step_number, channel, status, eligible_at")
       .eq("campaign_id", campaignId)
       .order("lead_id", { ascending: true })
       .order("step_number", { ascending: true })
       .range(from, from + TOUCH_PAGE_SIZE - 1);
+    // Same reasoning as above: a failed page must not be folded as "no more touches"
+    // — that reads as "everyone's finished" instead of "we don't actually know".
+    if (touchesError) throw new Error(touchesError.message || "Failed to load campaign touches");
     const rows = (page || []) as unknown as TouchRow[];
     for (const t of rows) {
       const list = touchesByLead.get(t.lead_id) || [];

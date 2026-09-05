@@ -70,6 +70,27 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Fix:** the relaxation is now an explicit switch — `requirePostalAddress()` reads the edge-function secret `COLD_REQUIRE_POSTAL_ADDRESS`; only an exact "true" turns the refusal back on, so a typo leaves pilot behaviour rather than silently blocking every rep. Docblock corrected, both sides covered by tests, and the re-enable is tracked in CLEANUP.md as a pre-launch gate.
 - **Still to do:** set `COLD_REQUIRE_POSTAL_ADDRESS=true` before cold outreach opens beyond invited pilot workspaces.
 
+## BUG-028 — Cadence query failures silently rendered as confidently wrong statuses
+- **Severity:** P2 (wrong data shown, not just missing)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** Supabase query failures resolve as `{ data: null, error }` — they do not reject. `fetchCampaignCadence` discarded both queries' `error` values, so a failed touches query folded as "no touches" (everyone reads as "Finished the cadence") and a failed enrollments query folded as "no enrollments" (everyone reads as "Not started"). The caller's `.catch()` never ran because nothing threw, and nothing re-fetched, so a transient or permissions error left confidently incorrect statuses on the page indefinitely.
+- **Fix:** both queries' `error` are now checked and thrown before folding, so the existing `.catch(() => {})` at the call site actually does its job — the page keeps its last-known (stale but not confidently wrong) cadence data instead of overwriting it with a false "everyone's done" or "no one's started".
+
+## BUG-027 — Launching a campaign didn't refresh the People list's due dates
+- **Severity:** P2 (stale UI right after the action that should change it)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** `launchCampaignWithSchedule` re-anchors every not-started touch's `eligible_at` to today and can promote the first step straight to `queued` — but `handleLaunch` only patched local `campaign` state, never reloaded cadence. The People list's new per-person status line (BUG-019/#13) kept showing pre-launch due dates, and could still say "waiting" for a step the launch just made "due now", until a manual page reload.
+- **Fix:** `handleLaunch` calls `loadPeople()` (people + cadence together) after a successful launch, same as every other action that changes cadence state.
+
+## BUG-026 — Snoozed touches read as "due now" on the People list
+- **Severity:** P2 (contradicts the Outreach queue, which correctly hides it)
+- **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
+- **Found:** Codex review on the Sprint 2 PR.
+- **What happens:** `snooze_touch` deliberately keeps a touch's status as `queued` while pushing `eligible_at` days into the future — the Outreach query itself excludes it correctly until then. But `deriveCadenceStatus` classified ANY `queued` touch as `"due"`, so the campaign People list told the rep a snoozed step was due right now, disagreeing with the Queue that correctly wasn't showing it.
+- **Fix:** `deriveCadenceStatus` now also checks `eligible_at` against `now` (parameterized for testing, defaults to `new Date()`) — a queued touch only reads "due" once its due time has actually arrived; otherwise it reads "waiting" with the (future) due date, same as any other step. Tests: `src/lib/campaignCadenceStatus.test.ts`.
+
 ## BUG-025 — Removing a person left the campaign's auto-skip total stale
 - **Severity:** P3 (cosmetic, but confusing on a busy campaign)
 - **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`)
