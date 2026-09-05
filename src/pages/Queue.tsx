@@ -54,7 +54,7 @@ import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
 import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachCard } from "@/components/queue/OutreachCard";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
-import { fetchOutreachQueue, type OutreachTouch } from "@/lib/outreachQueue";
+import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -106,6 +106,10 @@ export default function Queue() {
 
   // ── Outreach (cold campaign touches) — separate data source for the tab ──
   const [outreachTouches, setOutreachTouches] = useState<OutreachTouch[]>([]);
+  // Due touches that exist server-side, which is what the tab badge must show —
+  // outreachTouches is only the page currently on screen.
+  const [outreachTotal, setOutreachTotal] = useState(0);
+  const [outreachLimit, setOutreachLimit] = useState(OUTREACH_PAGE_SIZE);
   const [outreachLoading, setOutreachLoading] = useState(true);
   // Monotonic request id: the mount load and the tab-open refresh can be in flight at
   // once, and fetchOutreachQueue calls can resolve OUT OF ORDER. Only the latest call's
@@ -116,14 +120,17 @@ export default function Queue() {
     const reqId = ++outreachReqId.current;
     setOutreachLoading(true);
     try {
-      const data = await fetchOutreachQueue();
-      if (reqId === outreachReqId.current) setOutreachTouches(data);
+      const page = await fetchOutreachQueue(outreachLimit);
+      if (reqId === outreachReqId.current) {
+        setOutreachTouches(page.touches);
+        setOutreachTotal(page.total);
+      }
     } catch {
       /* non-fatal — the reactive lists still render */
     } finally {
       if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
-  }, []);
+  }, [outreachLimit]);
   useEffect(() => { void loadOutreach(); }, [loadOutreach]);
   // Refresh whenever the Outreach tab is (re-)opened. The scheduler queues new cold
   // touches over time, so without this the one-shot mount load would leave the list —
@@ -131,7 +138,10 @@ export default function Queue() {
   useEffect(() => {
     if (tab === "outreach") void loadOutreach();
   }, [tab, loadOutreach]);
-  const removeTouch = (id: string) => setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
+  const removeTouch = (id: string) => {
+    setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
+    setOutreachTotal((n) => Math.max(0, n - 1));
+  };
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
 
   // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
@@ -188,9 +198,9 @@ export default function Queue() {
     () => ({
       replied: chipCounts.replied,
       followup: chipCounts.followup_due,
-      outreach: outreachTouches.length,
+      outreach: outreachTotal,
     }),
-    [chipCounts, outreachTouches.length],
+    [chipCounts, outreachTotal],
   );
 
   // ── Persist tab / page changes ─────────────────────────────────
@@ -360,6 +370,21 @@ export default function Queue() {
               {outreachTouches.map((t) => (
                 <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
               ))}
+              {outreachTouches.length < outreachTotal && (
+                <div className="flex items-center justify-center gap-3 pt-1">
+                  <span className="text-xs text-muted-foreground">
+                    Showing {outreachTouches.length} of {outreachTotal}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    onClick={() => setOutreachLimit((n) => n + OUTREACH_PAGE_SIZE)}
+                  >
+                    Show more
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </>

@@ -129,3 +129,59 @@ export function formatEligibleAt(
   const rel = formatEligibleAtRelative(iso, now);
   return `${abs} (${rel})`;
 }
+
+// ── Due-time rendering for cadence surfaces (Outreach cards, Upcoming strip) ──
+// Same contract as the formatters above: the workspace's clock, never the
+// browser's. Lives here rather than in upcomingTouchesQueries.ts so there is ONE
+// timezone-aware formatter module — a second, browser-TZ copy is exactly the bug
+// this file's docblock warns about.
+
+/** Calendar day in `tz`, as YYYY-MM-DD. `en-CA` yields that shape, so plain
+ *  string equality answers "same day for this workspace?". */
+function dayKey(d: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** The calendar day after `key`. Pure calendar arithmetic on the day key (not
+ *  now + 24h), so a DST shift can't skip or repeat "tomorrow". */
+function nextDayKey(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * "Today 9:00 AM" / "Tomorrow 2:30 PM" / "Mon, Jul 6 9:00 AM" — in WORKSPACE time.
+ * Used for cadence due times (campaign_touch.eligible_at), which are stored UTC.
+ */
+export function formatDueAt(
+  iso: string | null | undefined,
+  workspaceTz: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  const d = parseIso(iso);
+  if (!d) return "—";
+  const tz = resolveTz(workspaceTz);
+  const time = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+
+  const todayKey = dayKey(now, tz);
+  const key = dayKey(d, tz);
+  if (key === todayKey) return `Today ${time}`;
+  if (key === nextDayKey(todayKey)) return `Tomorrow ${time}`;
+
+  const date = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(d);
+  return `${date} ${time}`;
+}

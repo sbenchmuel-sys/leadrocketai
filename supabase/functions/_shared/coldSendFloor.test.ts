@@ -6,8 +6,9 @@
 // blocked condition must FAIL CLOSED (return ok:false / refuse to send), and the
 // happy path must pass. The pure sub-rules (email-validity, suppression matching)
 // are additionally unit-tested in src/lib/__tests__/coldSendFloorRules.test.ts.
-import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
-import { coldSendFloor, sendColdEmailTouch } from "./coldOutreach.ts";
+import { assertEquals, assertNotEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
+import { coldSendFloor, sendColdEmailTouch, requirePostalAddress } from "./coldOutreach.ts";
+import { buildColdEmailFooter } from "./coldEmailFooter.ts";
 
 type Resp = { data: unknown; error: unknown };
 
@@ -133,14 +134,69 @@ Deno.test("sendColdEmailTouch refuses (no send) when the floor blocks", async ()
   assertEquals(c.calls.includes("workspaces"), false);
 });
 
-Deno.test("sendColdEmailTouch refuses when the workspace has no postal address (CAN-SPAM)", async () => {
-  const c = mockClient({
+// CAN-SPAM postal address. The hard refusal was relaxed for the closed pilot and
+// is now the explicit COLD_REQUIRE_POSTAL_ADDRESS switch (see requirePostalAddress
+// in coldOutreach.ts). Both sides are covered here, so flipping the secret needs no
+// test change — and leaving it off can never again go unnoticed.
+const blankPostalWorkspace = () =>
+  mockClient({
     leads: { data: { email: "lead@acme.com", unsubscribed: false }, error: null },
     campaign_suppression_list: noSuppression,
     workspaces: { data: { cold_outreach_postal_address: "" }, error: null },
   });
+
+Deno.test("PILOT (switch off): a blank postal address does NOT refuse the send", async () => {
+  Deno.env.delete("COLD_REQUIRE_POSTAL_ADDRESS");
+  const c = blankPostalWorkspace();
   // deno-lint-ignore no-explicit-any
   const res = await sendColdEmailTouch(sendArgs(c) as any);
-  assertEquals(res.ok, false);
-  assertEquals(res.reason, "no company postal address (CAN-SPAM)");
+  // It read the workspace and carried on past the postal check — whatever stops it
+  // next (here: no connected Gmail in the mock), it is NOT the postal address.
+  assertEquals(c.calls.includes("workspaces"), true);
+  assertNotEquals(res.reason, "no company postal address (CAN-SPAM)");
+});
+
+Deno.test("switch ON: a blank postal address refuses the send (CAN-SPAM)", async () => {
+  Deno.env.set("COLD_REQUIRE_POSTAL_ADDRESS", "true");
+  try {
+    const c = blankPostalWorkspace();
+    // deno-lint-ignore no-explicit-any
+    const res = await sendColdEmailTouch(sendArgs(c) as any);
+    assertEquals(res.ok, false);
+    assertEquals(res.reason, "no company postal address (CAN-SPAM)");
+    // Proof it short-circuited before any send path.
+    assertEquals(c.calls.includes("gmail_connections"), false);
+  } finally {
+    Deno.env.delete("COLD_REQUIRE_POSTAL_ADDRESS");
+  }
+});
+
+Deno.test("the switch needs an explicit \"true\" — a typo leaves the pilot behaviour, never a silent block", () => {
+  try {
+    for (const on of ["true", "TRUE", " True "]) {
+      Deno.env.set("COLD_REQUIRE_POSTAL_ADDRESS", on);
+      assertEquals(requirePostalAddress(), true);
+    }
+    for (const off of ["", "1", "yes", "false", "ture"]) {
+      Deno.env.set("COLD_REQUIRE_POSTAL_ADDRESS", off);
+      assertEquals(requirePostalAddress(), false);
+    }
+    Deno.env.delete("COLD_REQUIRE_POSTAL_ADDRESS");
+    assertEquals(requirePostalAddress(), false);
+  } finally {
+    Deno.env.delete("COLD_REQUIRE_POSTAL_ADDRESS");
+  }
+});
+
+// The footer is the actual CAN-SPAM mechanism, so lock what it emits either way:
+// the unsubscribe link is unconditional; the address line appears only when set.
+Deno.test("footer always carries the unsubscribe link, and the address line only when present", () => {
+  const withAddr = buildColdEmailFooter({ unsubscribeUrl: "http://x/u?t=1", postalAddress: "1 Main St, Springfield" });
+  assertEquals(withAddr.footerText.includes("http://x/u?t=1"), true);
+  assertEquals(withAddr.footerText.includes("1 Main St, Springfield"), true);
+
+  const blank = buildColdEmailFooter({ unsubscribeUrl: "http://x/u?t=1", postalAddress: "" });
+  assertEquals(blank.footerText.includes("http://x/u?t=1"), true);
+  // No empty address line, no placeholder — just absent.
+  assertEquals(blank.footerText.trimEnd().endsWith("http://x/u?t=1"), true);
 });

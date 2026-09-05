@@ -44,6 +44,8 @@ import { toast } from "sonner";
 import {
   fetchCampaignById,
   fetchCampaignLeads,
+  fetchCampaignCadence,
+  cadenceStatusLabel,
   fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
@@ -54,9 +56,12 @@ import {
   type CampaignLead,
   type SendMode,
   type CampaignCollateral,
+  type LeadCadenceStatus,
   type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
 import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
+import { formatDueAt } from "@/lib/eligibleAtFormat";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { unenrollLeadFromCampaign, launchCampaignWithSchedule } from "@/lib/campaignEnrollment";
 import {
   insertStep,
@@ -93,6 +98,9 @@ export default function CampaignDetail() {
 
   const [campaign, setCampaign] = useState<CampaignWithSteps | null>(null);
   const [people, setPeople] = useState<CampaignLead[]>([]);
+  const [cadence, setCadence] = useState<Map<string, LeadCadenceStatus>>(new Map());
+  const [autoSkipped, setAutoSkipped] = useState(0);
+  const { workspaceTimezone } = useWorkspace();
   const [loading, setLoading] = useState(true);
   const [instructions, setInstructions] = useState("");
   const [instructionsOpen, setInstructionsOpen] = useState(false);
@@ -135,6 +143,9 @@ export default function CampaignDetail() {
   const loadPeople = useCallback(() => {
     if (!id) return;
     fetchCampaignLeads(id).then(setPeople).catch(() => {});
+    fetchCampaignCadence(id)
+      .then(({ byLead, autoSkippedTotal }) => { setCadence(byLead); setAutoSkipped(autoSkippedTotal); })
+      .catch(() => {});
   }, [id]);
 
   // Collateral is owned here so the Collateral section and the email-review
@@ -763,6 +774,11 @@ export default function CampaignDetail() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">
             People {people.length > 0 && <span className="text-muted-foreground">({people.length})</span>}
+            {autoSkipped > 0 && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {autoSkipped} {autoSkipped === 1 ? "step" : "steps"} auto-skipped
+              </span>
+            )}
           </h2>
           <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
             <UserPlus className="mr-2 h-4 w-4" />
@@ -789,6 +805,12 @@ export default function CampaignDetail() {
                       <div className="truncate text-sm font-medium text-foreground">{p.name}</div>
                       <div className="truncate text-xs text-muted-foreground">
                         {[p.company, p.email].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {cadenceStatusLabel(cadence.get(p.id), (iso) => formatDueAt(iso, workspaceTimezone))}
+                        {(cadence.get(p.id)?.autoSkipped ?? 0) > 0 && (
+                          <span> · {cadence.get(p.id)!.autoSkipped} auto-skipped</span>
+                        )}
                       </div>
                     </div>
                     <Button
