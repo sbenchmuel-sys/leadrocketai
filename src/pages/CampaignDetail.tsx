@@ -70,6 +70,8 @@ import {
   changeStepChannel,
   setStepGap,
   setStepMeetingCta,
+  setStepCondition,
+  type StepCondition,
   type DraftStep,
 } from "@/lib/campaignDefaults";
 import { canEditCampaignSteps, effectiveOrigStepNumber } from "@/lib/campaignStepReconcile";
@@ -368,6 +370,7 @@ export default function CampaignDetail() {
       custom_instructions: s.custom_instructions ?? "",
       active: s.active,
       include_meeting_cta: s.include_meeting_cta ?? null,
+      condition: s.condition ?? null,
       orig_step_number: s.step_number,
       orig_channel: s.channel,
     }));
@@ -395,6 +398,8 @@ export default function CampaignDetail() {
     setDraftPlan((p) => insertStep(p, atIndex, channel));
   const onToggleMeeting = (index: number, value: boolean) =>
     setDraftPlan((p) => setStepMeetingCta(p, index, value));
+  const onChangeCondition = (index: number, condition: StepCondition | null) =>
+    setDraftPlan((p) => setStepCondition(p, index, condition));
 
   const doSaveSteps = async () => {
     if (!id || !campaign) return;
@@ -410,6 +415,7 @@ export default function CampaignDetail() {
         custom_instructions: s.custom_instructions,
         active: s.active,
         include_meeting_cta: s.include_meeting_cta ?? null,
+        condition: s.condition ?? null,
         variant_group: null,
         // effective identity: a step whose channel no longer matches its saved
         // copy sends null (copy dropped, starts blank); an undone channel change
@@ -696,6 +702,7 @@ export default function CampaignDetail() {
               onChangeChannel={onChangeChannel}
               onInsert={onInsert}
               onToggleMeeting={onToggleMeeting}
+              onChangeCondition={onChangeCondition}
             />
             <div className="flex items-center justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={cancelEditingSteps} disabled={savingSteps}>
