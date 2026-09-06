@@ -1720,7 +1720,14 @@ serve(async (req) => {
           // met when it comes due is auto-skipped (reason on the timeline) and the
           // cadence moves on — the scheduler does the same for the touches it owns.
           {
-            const unmet = await stepConditionUnmetReason(supabase, touch);
+            let unmet: string | null;
+            try {
+              unmet = await stepConditionUnmetReason(supabase, touch);
+            } catch (err) {
+              // Unverified condition → do NOT send; the touch stays scheduled for next tick.
+              console.warn(`[automation-executor:cold] condition check failed for touch ${touch.id}, leaving pending:`, err instanceof Error ? err.message : String(err));
+              continue;
+            }
             if (unmet) {
               await advanceColdEnrollment(supabase, await loadExecutionSettings(lead.owner_user_id, supabase), touch, "auto_skipped", { skipReason: unmet });
               console.log(`[automation-executor:cold] auto-skipped touch ${touch.id} — condition not met`);

@@ -48,21 +48,27 @@ type ServiceClient = any;
  * Returns null when the touch may run; otherwise the reason to auto-skip it.
  * One extra read for the common (unconditional) case; signals are only fetched
  * when a condition exists.
+ *
+ * FAILS CLOSED on a read error: supabase-js resolves `{ data: null, error }`
+ * rather than throwing, and a swallowed error here would read as "no
+ * condition" — i.e. send an automatic email whose condition was never checked.
+ * So any query error THROWS; callers leave the touch pending for the next tick.
  */
 export async function stepConditionUnmetReason(
   supabase: ServiceClient,
   touch: { campaign_id: string; step_number: number; enrollment_id: string; lead_id: string },
 ): Promise<string | null> {
-  const { data: step } = await supabase
+  const stepRes = await supabase
     .from("campaign_steps")
     .select("condition")
     .eq("campaign_id", touch.campaign_id)
     .eq("step_number", touch.step_number)
     .maybeSingle();
-  const condition = (step as { condition?: string | null } | null)?.condition ?? null;
+  if (stepRes.error) throw new Error(`step condition read failed: ${stepRes.error.message}`);
+  const condition = (stepRes.data as { condition?: string | null } | null)?.condition ?? null;
   if (!condition) return null;
 
-  const [{ data: lead }, { data: answered }] = await Promise.all([
+  const [leadRes, answeredRes] = await Promise.all([
     supabase.from("leads").select("linkedin_connected_at").eq("id", touch.lead_id).maybeSingle(),
     supabase
       .from("campaign_touch")
@@ -72,8 +78,10 @@ export async function stepConditionUnmetReason(
       .eq("call_outcome", "got_them")
       .limit(1),
   ]);
+  if (leadRes.error) throw new Error(`condition signal read failed: ${leadRes.error.message}`);
+  if (answeredRes.error) throw new Error(`condition signal read failed: ${answeredRes.error.message}`);
   return evaluateStepCondition(condition, {
-    linkedinAccepted: !!(lead as { linkedin_connected_at?: string | null } | null)?.linkedin_connected_at,
-    callAnswered: ((answered as unknown[] | null) || []).length > 0,
+    linkedinAccepted: !!(leadRes.data as { linkedin_connected_at?: string | null } | null)?.linkedin_connected_at,
+    callAnswered: ((answeredRes.data as unknown[] | null) || []).length > 0,
   });
 }

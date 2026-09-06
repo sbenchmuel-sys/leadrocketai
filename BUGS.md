@@ -61,6 +61,15 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Repro:** grep edge functions for `from("interactions").insert` that has no adjacent `projectTimelineItem`/`createCanonicalInteraction` → the two automation-executor sites.
 - **Claude Code prompt:** "Route the two automation-executor system-note inserts (lines ~193 OOO-return and ~688 unsubscribe) through `createCanonicalInteraction` so they also land in `lead_timeline_items`; preserve dedupe_key; add `workspace_id` to the source queries so projection fires."
 
+## BUG-030 — Sprint 3 Codex findings (PR #136, first pass)
+- **Severity:** P1 (one), P2 (three)
+- **Status:** fixed (2026-09-07, branch `fix/outreach-sprint-3`)
+- **Found:** Codex review on the Sprint 3 PR.
+- **P1 — condition lookup failed open.** `stepConditionUnmetReason` discarded the query `error`, so a failed `campaign_steps` read looked like "no condition" and an automatic email whose condition was never verified could send. Now any read error throws; scheduler and executor leave the touch `scheduled` for the next tick (never surface or skip unverified), the inline promote simply doesn't promote. Deno test with a stub client.
+- **P2 — `startOfDayInTz` used the offset at the UTC-midnight guess**, wrong by an hour on DST-switch days (e.g. Australia/Sydney 2026-04-05 / 2026-10-04). Now re-reads the offset at the candidate instant and corrects once. Tests for Sydney both ways + New York spring-forward.
+- **P2 — digest skipped yesterday's auto-skip notes when no campaign was active today** (rep paused their last one). The notes query is historical and now always runs; only the forward-looking reads need an active campaign.
+- **P2 — digest presented capped (500-row, unordered) reads as exact totals.** Overdue now uses exact per-channel HEAD counts (same filters as the queue); later-today and skip-note reads are ordered and carry `…Truncated` flags rendered as "500+" / "first 500 shown".
+
 ## BUG-029 — Enrollment and Launch were multi-request browser sequences that could half-commit
 - **Severity:** P2 (data integrity — a lead could be stamped into an outreach with no cadence, or enrolled with no touches)
 - **Status:** fixed (2026-09-06, branch `fix/outreach-sprint-3`) — audit item #8.

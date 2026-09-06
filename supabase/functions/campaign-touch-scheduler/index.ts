@@ -230,7 +230,16 @@ Deno.serve(async (req) => {
     // automatic emails are checked by the executor itself (it's the one that would
     // send them), so the scheduler leaves those alone here too.
     if (!(t.channel === "email" && autoSendable)) {
-      const unmet = await stepConditionUnmetReason(supabase, t);
+      let unmet: string | null;
+      try {
+        unmet = await stepConditionUnmetReason(supabase, t);
+      } catch (err) {
+        // Couldn't verify the condition → leave the touch 'scheduled' for the next
+        // tick rather than guessing either way (never surface OR skip unverified).
+        console.warn(`[campaign-touch-scheduler] condition check failed for touch ${t.id}, leaving pending:`, err instanceof Error ? err.message : String(err));
+        counters.skipped++;
+        continue;
+      }
       if (unmet) {
         const exec = await getExec(lead.owner_user_id);
         await advanceColdEnrollment(supabase, exec, t, "auto_skipped", { skipReason: unmet });

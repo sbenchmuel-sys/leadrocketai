@@ -70,9 +70,9 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
         {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         <span className="font-medium text-foreground">Today</span>
         <span className="truncate text-muted-foreground">
-          {dueNowTotal} due now{laterTotal > 0 ? ` · ${laterTotal} later today` : ""}
+          {dueNowTotal} due now{laterTotal > 0 ? ` · ${laterTotal}${digest?.laterTodayTruncated ? "+" : ""} later today` : ""}
           {overdueTotal > 0 ? ` · ${overdueTotal} overdue` : ""}
-          {skippedTotal > 0 ? ` · ${skippedTotal} auto-skipped yesterday` : ""}
+          {skippedTotal > 0 ? ` · ${skippedTotal}${digest?.skippedYesterdayTruncated ? "+" : ""} auto-skipped yesterday` : ""}
         </span>
       </button>
 
@@ -83,7 +83,7 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
             <div>
               <span className="text-foreground">Due now:</span> {channelSummary(dueNow)}
               {digest && laterTotal > 0 && (
-                <> · <span className="text-foreground">later today:</span> {channelSummary(digest.laterToday)}</>
+                <> · <span className="text-foreground">later today:</span> {channelSummary(digest.laterToday)}{digest.laterTodayTruncated ? " (first 500 shown)" : ""}</>
               )}
             </div>
           </div>
@@ -114,6 +114,7 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
               <span className="text-foreground">Auto-skipped yesterday:</span>{" "}
               {digest == null ? "…" : skippedTotal === 0 ? "nothing." : (
                 <ul className="mt-0.5 space-y-0.5">
+                  {digest.skippedYesterdayTruncated && <li>More than 500 — showing the most recent 500.</li>}
                   {digest.skippedYesterday.map((g) => (
                     <li key={g.reason}>
                       {g.count} {g.count === 1 ? "step" : "steps"} — {g.reason}
