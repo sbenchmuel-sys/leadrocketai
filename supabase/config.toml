@@ -90,6 +90,9 @@ verify_jwt = false
 [functions.enrich-company-search]
 verify_jwt = false
 
+[functions.enrich-lead-linkedin]
+verify_jwt = true
+
 [functions.generate-personalized-suggestions]
 verify_jwt = false
 

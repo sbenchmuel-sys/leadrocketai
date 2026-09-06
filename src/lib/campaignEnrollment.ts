@@ -348,7 +348,7 @@ const CHANNEL_REASON: Record<string, string> = {
   voice: "no phone — they'll skip the call touches",
   sms: "no phone — they'll skip the text touches",
   whatsapp: "no WhatsApp number — they'll skip the WhatsApp touches",
-  linkedin: "no LinkedIn — they'll skip the LinkedIn touches",
+  linkedin: "no LinkedIn — we'll look their profiles up when they're added; anyone still missing skips the LinkedIn touches",
 };
 
 /** Summarize, per channel used in the cadence, how many leads can't receive it. */
@@ -458,6 +458,8 @@ export interface EnrollmentResult {
   skips: EnrollmentSkips;
   channelSkips: ChannelSkipSummary;
   capacity: CapacityPlan;
+  /** Enrolled leads we sent for a LinkedIn-profile lookup (cadence has a LinkedIn step, lead had no URL). */
+  linkedinLookups: number;
 }
 
 /** The honest plan shown BEFORE committing (no writes). */
@@ -693,6 +695,7 @@ export async function enrollLeadsInCampaign(
       enrolled: 0, skips: emptySkips,
       channelSkips: { byChannel: {}, lines: [] },
       capacity: computeCapacityPlan({ leadCount: 0, emailTouchesPerLead: 0, dailyCap: DEFAULT_DAILY_CAP }),
+      linkedinLookups: 0,
     };
   }
 
@@ -700,7 +703,7 @@ export async function enrollLeadsInCampaign(
     await gatherEnrollmentContext(campaignId, leadIds, opts?.dailyCap);
 
   if (enrollable.length === 0) {
-    return { enrolled: 0, skips, channelSkips, capacity };
+    return { enrolled: 0, skips, channelSkips, capacity, linkedinLookups: 0 };
   }
 
   // Staggered start day per lead. Seed the planner with the EXISTING scheduled/
@@ -738,7 +741,7 @@ export async function enrollLeadsInCampaign(
   // guarded stamp used for a concurrent claim.
   skips.alreadyEnrolled += skippedCount;
   if (enrolledIds.length === 0) {
-    return { enrolled: 0, skips, channelSkips, capacity };
+    return { enrolled: 0, skips, channelSkips, capacity, linkedinLookups: 0 };
   }
   const enrolledSet = new Set(enrolledIds);
   const stampedLeads = enrollable.filter((l) => enrolledSet.has(l.id));
@@ -774,7 +777,29 @@ export async function enrollLeadsInCampaign(
     console.warn("[enrollLeadsInCampaign] inline promotion skipped:", err);
   }
 
-  return { enrolled: stampedLeads.length, skips, channelSkips, capacity };
+  // Enrichment pass: the cadence has a LinkedIn step and some of these people have
+  // no profile URL — look them up now (enrich-lead-linkedin, fail-closed matcher)
+  // instead of letting the scheduler auto-skip every LinkedIn touch later for a
+  // missing handle. Fire-and-forget: the cadence's first LinkedIn touch is a day
+  // or more out, and the scheduler reads the lead fresh when it's due.
+  const linkedinLookups = requestLinkedinLookups(steps, stampedLeads);
+
+  return { enrolled: stampedLeads.length, skips, channelSkips, capacity, linkedinLookups };
+}
+
+// Matches MAX_LEADS_PER_CALL in supabase/functions/enrich-lead-linkedin.
+const LINKEDIN_LOOKUP_CHUNK = 50;
+
+/** Kick off LinkedIn-profile lookups for leads that need one. Returns how many were sent. */
+export function requestLinkedinLookups(steps: CadenceStep[], leads: LeadContactInfo[]): number {
+  if (!steps.some((s) => s.channel === "linkedin")) return 0;
+  const ids = leads.filter((l) => !l.linkedin_url).map((l) => l.id);
+  for (let i = 0; i < ids.length; i += LINKEDIN_LOOKUP_CHUNK) {
+    void supabase.functions
+      .invoke("enrich-lead-linkedin", { body: { leadIds: ids.slice(i, i + LINKEDIN_LOOKUP_CHUNK) } })
+      .catch((err) => console.warn("[enrollLeadsInCampaign] LinkedIn lookup not started:", err));
+  }
+  return ids.length;
 }
 
 /**
