@@ -330,6 +330,7 @@ export default function NewCampaign() {
       // already in another outreach, no email) — report the ACTUAL reason so the rep
       // gets the right remediation, not a blanket "already in another outreach".
       const skipLines: string[] = [];
+      let linkedinLookups = 0;
       if (selectedLeads.size > 0) {
         // Route creation-time recipients through the SAME enrollment path as the
         // add-people dialog, so they get campaign_enrollment + campaign_touch rows
@@ -345,6 +346,7 @@ export default function NewCampaign() {
           if (s.alreadyEnrolled) skipLines.push(`${s.alreadyEnrolled} already in another outreach`);
           if (s.missingEmail) skipLines.push(`${s.missingEmail} have no email address`);
           if (s.activeOrCustomer) skipLines.push(`${s.activeOrCustomer} skipped — already a customer or closed deal, have a meeting booked, or recently replied`);
+          linkedinLookups = result.linkedinLookups;
         } catch (enrollErr) {
           await deleteCampaign(campaignId).catch(() => {
             /* best-effort cleanup; surface the ORIGINAL enrollment error below */
@@ -378,6 +380,9 @@ export default function NewCampaign() {
       }
       if (skipLines.length > 0) {
         toast.info(`Some people weren't added — ${skipLines.join("; ")}.`);
+      }
+      if (linkedinLookups > 0) {
+        toast.info(`Looking up LinkedIn profiles for ${linkedinLookups} ${linkedinLookups === 1 ? "person" : "people"} in the background.`);
       }
       navigate(`/app/automations/${campaignId}`);
     } catch (err) {

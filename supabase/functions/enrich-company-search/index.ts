@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
+import { runSearch, type SearchResult } from "../_shared/webSearch.ts";
 
 // ---- CORS ----
 const corsHeaders = {
@@ -8,73 +9,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
-
-// ---- Provider abstraction ----
-
-interface SearchResult {
-  title: string;
-  snippet: string;
-  link: string;
-}
-
-const provider = Deno.env.get("ENRICHMENT_PROVIDER") ?? "serpapi";
-
-async function runSearch(query: string): Promise<SearchResult[]> {
-  if (provider === "serpapi") return runSerpApi(query);
-  if (provider === "google_cse") return runGoogleCSE(query);
-  throw new Error(`Invalid ENRICHMENT_PROVIDER: ${provider}`);
-}
-
-async function runSerpApi(query: string): Promise<SearchResult[]> {
-  const key = Deno.env.get("SERPAPI_API_KEY");
-  if (!key) throw new Error("Missing SERPAPI_API_KEY");
-
-  const url = new URL("https://serpapi.com/search.json");
-  url.searchParams.set("q", query);
-  url.searchParams.set("engine", "google");
-  url.searchParams.set("api_key", key);
-  url.searchParams.set("num", "5");
-
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    logger.error("serpapi_error", { status: res.status, error: errText });
-    throw new Error(`SerpAPI failed: ${res.status}`);
-  }
-
-  const json = await res.json();
-  return (json.organic_results ?? []).map((r: Record<string, string>) => ({
-    title: r.title ?? "",
-    snippet: r.snippet ?? "",
-    link: r.link ?? "",
-  }));
-}
-
-async function runGoogleCSE(query: string): Promise<SearchResult[]> {
-  const key = Deno.env.get("GOOGLE_CSE_API_KEY");
-  const cx = Deno.env.get("GOOGLE_CSE_ID");
-  if (!key || !cx) throw new Error("Missing Google CSE config (GOOGLE_CSE_API_KEY / GOOGLE_CSE_ID)");
-
-  const url = new URL("https://www.googleapis.com/customsearch/v1");
-  url.searchParams.set("q", query);
-  url.searchParams.set("key", key);
-  url.searchParams.set("cx", cx);
-  url.searchParams.set("num", "5");
-
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    logger.error("google_cse_error", { status: res.status, error: errText });
-    throw new Error(`Google CSE failed: ${res.status}`);
-  }
-
-  const json = await res.json();
-  return (json.items ?? []).map((r: Record<string, string>) => ({
-    title: r.title ?? "",
-    snippet: r.snippet ?? "",
-    link: r.link ?? "",
-  }));
-}
 
 // ---- Signal extraction (deterministic, keyword-based) ----
 

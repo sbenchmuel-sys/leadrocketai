@@ -96,6 +96,11 @@ export function AddToAutomationDialog({
       } else {
         toast.success(
           `Added ${result.enrolled} ${result.enrolled === 1 ? "lead" : "leads"} to automation`,
+          {
+            description: result.linkedinLookups > 0
+              ? `Looking up LinkedIn profiles for ${result.linkedinLookups} of them in the background.`
+              : undefined,
+          },
         );
       }
       onEnrolled();
