@@ -13,6 +13,7 @@ import {
   isLiveRelationship,
   stepScheduleFingerprint,
   planRelaunch,
+  planEnrollment,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -380,5 +381,39 @@ describe("planRelaunch — Launch re-dates a draft's schedule from now (BUG-011)
       if (t.channel === "email") expect(t.max_age_at).toBeNull();
       else expect(new Date(t.max_age_at!).getTime()).toBeGreaterThan(new Date(t.eligible_at).getTime());
     }
+  });
+});
+
+describe("planEnrollment — the one payload enroll_campaign_leads writes atomically (#8)", () => {
+  const anchor = new Date(2026, 8, 2, 9, 0, 0); // Wednesday
+  const leadIds = ["l0", "l1", "l2", "l3", "l4"];
+
+  it("one entry per lead, every touch of the cadence, in step order", () => {
+    const plan = planEnrollment(leadIds, STEPS, 40, {}, anchor);
+    expect(plan.map((p) => p.lead_id)).toEqual(leadIds);
+    for (const p of plan) {
+      expect(p.touches.map((t) => t.step_number)).toEqual(STEPS.map((s) => s.step_number));
+      // Touch 1 lands on the start day; later touches never run backwards.
+      expect(new Date(p.touches[0].eligible_at).toDateString()).toBe(new Date(p.started_at).toDateString());
+      for (let i = 1; i < p.touches.length; i++) {
+        expect(new Date(p.touches[i].eligible_at).getTime())
+          .toBeGreaterThanOrEqual(new Date(p.touches[i - 1].eligible_at).getTime());
+      }
+    }
+  });
+
+  it("staggers start days under a tight cap, seeded with already-booked load", () => {
+    const plan = planEnrollment(leadIds, STEPS, 3, { 0: 2 }, anchor);
+    const days = plan.map((p) => new Date(p.started_at).getTime());
+    for (let i = 1; i < days.length; i++) expect(days[i]).toBeGreaterThanOrEqual(days[i - 1]);
+    expect(new Set(days).size).toBeGreaterThan(1);
+  });
+
+  it("matches what planRelaunch would produce for the same leads (Launch = 'add people' at launch time)", () => {
+    const enroll = planEnrollment(leadIds, STEPS, 3, { 0: 2 }, anchor);
+    const relaunch = planRelaunch("c1", leadIds.map((id) => ({ id: `e-${id}`, lead_id: id })), STEPS, 3, { 0: 2 }, anchor);
+    expect(enroll.map((p) => p.started_at)).toEqual(relaunch.starts.map((s) => s.startedAt));
+    expect(enroll.flatMap((p) => p.touches.map((t) => t.eligible_at)))
+      .toEqual(relaunch.touchRows.map((t) => t.eligible_at));
   });
 });

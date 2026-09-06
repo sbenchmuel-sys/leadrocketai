@@ -1,0 +1,2 @@
+# Migrations applied (in order) on top of supabase/tests/fixture_schema.sql by scripts/test-sql.sh.
+20260907000000_transactional_enrollment_rpcs.sql
