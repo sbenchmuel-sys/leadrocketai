@@ -112,9 +112,13 @@ function interpolate(s: string | null, ctx: PreviewMergeCtx): string | null {
 
 export interface OutreachQueuePage {
   touches: OutreachTouch[];
-  /** Every due touch matching the query, NOT just the ones on this page. */
+  /** Every due touch matching the query (channel filter included), NOT just this page. */
   total: number;
+  /** Due touches per channel across the WHOLE backlog — the Today view's group counts. */
+  byChannel: Record<OutreachChannel, number>;
 }
+
+export const OUTREACH_CHANNELS: OutreachChannel[] = ["email", "voice", "sms", "whatsapp", "linkedin"];
 
 /**
  * Load the due cold touches for the Outreach tab, oldest-due first, with each
@@ -128,8 +132,13 @@ export interface OutreachQueuePage {
  * paging into the thousands re-reads it all — swap to keyset paging on eligible_at
  * if that ever shows up.
  */
-export async function fetchOutreachQueue(limit = OUTREACH_PAGE_SIZE): Promise<OutreachQueuePage> {
+export async function fetchOutreachQueue(
+  limit = OUTREACH_PAGE_SIZE,
+  opts?: { channel?: OutreachChannel | null },
+): Promise<OutreachQueuePage> {
   const nowIso = new Date().toISOString();
+  const emptyByChannel = (): Record<OutreachChannel, number> =>
+    ({ email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 });
 
   // Resolve ACTIVE campaigns FIRST (RLS scopes this to the rep's workspace), then
   // constrain the touch query to them BEFORE applying the page limit — so a
@@ -141,7 +150,7 @@ export async function fetchOutreachQueue(limit = OUTREACH_PAGE_SIZE): Promise<Ou
     .eq("status", "active");
   const campaignMap = new Map(((activeCamps || []) as any[]).map((c) => [c.id, c]));
   const activeIds = [...campaignMap.keys()];
-  if (activeIds.length === 0) return { touches: [], total: 0 };
+  if (activeIds.length === 0) return { touches: [], total: 0, byChannel: emptyByChannel() };
 
   // Scope the touch query to leads this rep can actually SEE by INNER-joining leads:
   // PostgREST applies the leads table's own RLS (owner-or-admin) to the embedded rows,
@@ -153,21 +162,34 @@ export async function fetchOutreachQueue(limit = OUTREACH_PAGE_SIZE): Promise<Ou
   // `count: "exact"` rides along on the SAME request — PostgREST reports how many
   // rows matched BEFORE the limit, so the badge and "Show more" get the real total
   // without a second round-trip.
-  const { data: touches, count } = await supabase
-    .from("campaign_touch" as any)
-    .select(
-      "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
-        "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry, owner_user_id)",
-      { count: "exact" },
-    )
-    .eq("status", "queued")
-    .in("campaign_id", activeIds)
-    .lte("eligible_at", nowIso)
-    .order("eligible_at", { ascending: true })
-    .limit(limit);
-  const rows = (touches || []) as any[];
-  const total = count ?? rows.length;
-  if (rows.length === 0) return { touches: [], total };
+  const dueBase = (select: string, options?: { count: "exact"; head?: boolean }) =>
+    supabase
+      .from("campaign_touch" as any)
+      .select(select, options)
+      .eq("status", "queued")
+      .in("campaign_id", activeIds)
+      .lte("eligible_at", nowIso);
+  let pageQ = dueBase(
+    "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
+      "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry, owner_user_id)",
+    { count: "exact" },
+  );
+  if (opts?.channel) pageQ = pageQ.eq("channel", opts.channel);
+  // Per-channel totals ride along as HEAD counts (no rows come back) under the
+  // SAME owner-scoped filters as the page, so the Today view's group counts and
+  // the page never disagree. ponytail: five small requests in parallel rather
+  // than a GROUP BY RPC; swap if the Outreach tab ever gets a sixth channel.
+  const [pageRes, ...countRes] = await Promise.all([
+    pageQ.order("eligible_at", { ascending: true }).limit(limit),
+    ...OUTREACH_CHANNELS.map((ch) =>
+      dueBase("id, leads!inner(id)", { count: "exact", head: true }).eq("channel", ch),
+    ),
+  ]);
+  const byChannel = emptyByChannel();
+  OUTREACH_CHANNELS.forEach((ch, i) => { byChannel[ch] = countRes[i].count ?? 0; });
+  const rows = (pageRes.data || []) as any[];
+  const total = pageRes.count ?? rows.length;
+  if (rows.length === 0) return { touches: [], total, byChannel };
   const leadOf = (t: any) => (Array.isArray(t.leads) ? t.leads[0] : t.leads) || {};
 
   const campaignIds = [...new Set(rows.map((t) => t.campaign_id))];
@@ -289,7 +311,7 @@ export async function fetchOutreachQueue(limit = OUTREACH_PAGE_SIZE): Promise<Ou
       linkedinAction: t.channel === "linkedin" ? linkedinActionFromStepType(stepType) : undefined,
     };
   });
-  return { touches: mapped, total };
+  return { touches: mapped, total, byChannel };
 }
 
 
