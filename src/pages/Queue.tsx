@@ -52,9 +52,9 @@ import { ShowAllToggle } from "@/components/queue/ShowAllToggle";
 import { NewItemsBanner } from "@/components/queue/NewItemsBanner";
 import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
 import { QueueCard } from "@/components/queue/QueueCard";
-import { OutreachCard } from "@/components/queue/OutreachCard";
+import { OutreachToday } from "@/components/queue/OutreachToday";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
-import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachTouch } from "@/lib/outreachQueue";
+import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachChannel, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -109,6 +109,12 @@ export default function Queue() {
   // Due touches that exist server-side, which is what the tab badge must show —
   // outreachTouches is only the page currently on screen.
   const [outreachTotal, setOutreachTotal] = useState(0);
+  // Backlog per channel (server counts) — the Today view's chip numbers; the tab
+  // badge is their sum so it never depends on which channel is selected.
+  const [outreachByChannel, setOutreachByChannel] = useState<Record<OutreachChannel, number>>(
+    { email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 },
+  );
+  const [outreachChannel, setOutreachChannel] = useState<OutreachChannel | null>(null);
   const [outreachLimit, setOutreachLimit] = useState(OUTREACH_PAGE_SIZE);
   const [outreachLoading, setOutreachLoading] = useState(true);
   // Monotonic request id: the mount load and the tab-open refresh can be in flight at
@@ -120,18 +126,24 @@ export default function Queue() {
     const reqId = ++outreachReqId.current;
     setOutreachLoading(true);
     try {
-      const page = await fetchOutreachQueue(outreachLimit);
+      const page = await fetchOutreachQueue(outreachLimit, { channel: outreachChannel });
       if (reqId === outreachReqId.current) {
         setOutreachTouches(page.touches);
         setOutreachTotal(page.total);
+        setOutreachByChannel(page.byChannel);
       }
     } catch {
       /* non-fatal — the reactive lists still render */
     } finally {
       if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
-  }, [outreachLimit]);
+  }, [outreachLimit, outreachChannel]);
   useEffect(() => { void loadOutreach(); }, [loadOutreach]);
+  // Switching channel restarts the page window.
+  const selectOutreachChannel = useCallback((ch: OutreachChannel | null) => {
+    setOutreachChannel(ch);
+    setOutreachLimit(OUTREACH_PAGE_SIZE);
+  }, []);
   // Refresh whenever the Outreach tab is (re-)opened. The scheduler queues new cold
   // touches over time, so without this the one-shot mount load would leave the list —
   // and its tab count — frozen at the page-load snapshot until a full page reload.
@@ -139,10 +151,17 @@ export default function Queue() {
     if (tab === "outreach") void loadOutreach();
   }, [tab, loadOutreach]);
   const removeTouch = (id: string) => {
-    setOutreachTouches((prev) => prev.filter((t) => t.id !== id));
+    setOutreachTouches((prev) => {
+      const gone = prev.find((t) => t.id === id);
+      if (gone) {
+        setOutreachByChannel((c) => ({ ...c, [gone.channel]: Math.max(0, c[gone.channel] - 1) }));
+      }
+      return prev.filter((t) => t.id !== id);
+    });
     setOutreachTotal((n) => Math.max(0, n - 1));
   };
   const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
+  const showMoreOutreach = useCallback(() => setOutreachLimit((n) => n + OUTREACH_PAGE_SIZE), []);
 
   // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
   // Surface that as a banner above the Outreach tab so the rep isn't surprised by
@@ -198,9 +217,9 @@ export default function Queue() {
     () => ({
       replied: chipCounts.replied,
       followup: chipCounts.followup_due,
-      outreach: outreachTotal,
+      outreach: Object.values(outreachByChannel).reduce((a, b) => a + b, 0),
     }),
-    [chipCounts, outreachTotal],
+    [chipCounts, outreachByChannel],
   );
 
   // ── Persist tab / page changes ─────────────────────────────────
@@ -357,36 +376,17 @@ export default function Queue() {
             </div>
           )}
           <UpcomingTouchesStrip refreshKey={outreachTouches.length} />
-          {outreachLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
-              ))}
-            </div>
-          ) : outreachTouches.length === 0 ? (
-            <QueueEmptyState variant="no_matches" />
-          ) : (
-            <div className="space-y-2">
-              {outreachTouches.map((t) => (
-                <OutreachCard key={t.id} touch={t} onDone={removeTouch} onRestore={restoreTouch} />
-              ))}
-              {outreachTouches.length < outreachTotal && (
-                <div className="flex items-center justify-center gap-3 pt-1">
-                  <span className="text-xs text-muted-foreground">
-                    Showing {outreachTouches.length} of {outreachTotal}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 text-xs"
-                    onClick={() => setOutreachLimit((n) => n + OUTREACH_PAGE_SIZE)}
-                  >
-                    Show more
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
+          <OutreachToday
+            touches={outreachTouches}
+            total={outreachTotal}
+            byChannel={outreachByChannel}
+            loading={outreachLoading}
+            channel={outreachChannel}
+            onSelectChannel={selectOutreachChannel}
+            onShowMore={outreachTouches.length < outreachTotal ? showMoreOutreach : null}
+            onDone={removeTouch}
+            onRestore={restoreTouch}
+          />
         </>
       ) : (
         <>
