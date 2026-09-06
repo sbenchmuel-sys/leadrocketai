@@ -209,8 +209,17 @@ export function startOfDayInTz(date: Date, workspaceTz: string | null | undefine
   let key = dayKey(date, tz);
   for (let i = 0; i < dayDelta; i++) key = nextDayKey(key);
   for (let i = 0; i > dayDelta; i--) key = prevDayKey(key);
+  // The zone's offset can differ between the UTC-midnight guess and the local
+  // midnight we're solving for (a DST switch on that day). Apply the offset,
+  // then re-read the offset AT the candidate and correct once — converges
+  // because offsets change at most once per day.
   const guess = new Date(`${key}T00:00:00Z`);
-  return new Date(guess.getTime() - tzOffsetMs(guess, tz));
+  let candidate = new Date(guess.getTime() - tzOffsetMs(guess, tz));
+  const offsetAtCandidate = tzOffsetMs(candidate, tz);
+  if (candidate.getTime() !== guess.getTime() - offsetAtCandidate) {
+    candidate = new Date(guess.getTime() - offsetAtCandidate);
+  }
+  return candidate;
 }
 
 /** The calendar day before `key` — counterpart of nextDayKey. */

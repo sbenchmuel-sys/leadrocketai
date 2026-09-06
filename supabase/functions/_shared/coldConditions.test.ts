@@ -4,7 +4,7 @@
 // unconditional / unknown step always runs, and the exact reason wording that
 // lands on the lead's timeline when a step is skipped for an unmet condition.
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
-import { evaluateStepCondition, CONDITION_UNMET_REASON } from "./coldConditions.ts";
+import { evaluateStepCondition, stepConditionUnmetReason, CONDITION_UNMET_REASON } from "./coldConditions.ts";
 
 const none = { linkedinAccepted: false, callAnswered: false };
 const both = { linkedinAccepted: true, callAnswered: true };
@@ -26,4 +26,45 @@ Deno.test("call_answered / no_call_answered are exact opposites on the call sign
   assertEquals(evaluateStepCondition("call_answered", both), null);
   assertEquals(evaluateStepCondition("no_call_answered", none), null);
   assertEquals(evaluateStepCondition("no_call_answered", both), CONDITION_UNMET_REASON.no_call_answered);
+});
+
+// A tiny chainable stub: every table read resolves to the canned result.
+function fakeClient(results: Record<string, { data: unknown; error: { message: string } | null }>) {
+  const chain = (table: string) => {
+    const res = results[table] ?? { data: null, error: null };
+    const q: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "limit"]) q[m] = () => q;
+    q.maybeSingle = () => Promise.resolve(res);
+    q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve(res).then(ok, ko);
+    return q;
+  };
+  return { from: chain };
+}
+
+Deno.test("stepConditionUnmetReason fails CLOSED when a read errors (Codex P1 on PR #136)", async () => {
+  const touch = { campaign_id: "c", step_number: 2, enrollment_id: "e", lead_id: "l" };
+  // Step read errors → throw, never "unconditional".
+  let threw = false;
+  try {
+    await stepConditionUnmetReason(fakeClient({ campaign_steps: { data: null, error: { message: "boom" } } }), touch);
+  } catch { threw = true; }
+  assertEquals(threw, true);
+  // Signal read errors → throw too.
+  threw = false;
+  try {
+    await stepConditionUnmetReason(fakeClient({
+      campaign_steps: { data: { condition: "call_answered" }, error: null },
+      leads: { data: { linkedin_connected_at: null }, error: null },
+      campaign_touch: { data: null, error: { message: "boom" } },
+    }), touch);
+  } catch { threw = true; }
+  assertEquals(threw, true);
+  // Healthy reads still evaluate.
+  const unmet = await stepConditionUnmetReason(fakeClient({
+    campaign_steps: { data: { condition: "call_answered" }, error: null },
+    leads: { data: { linkedin_connected_at: null }, error: null },
+    campaign_touch: { data: [], error: null },
+  }), touch);
+  assertEquals(unmet, CONDITION_UNMET_REASON.call_answered);
+  assertEquals(await stepConditionUnmetReason(fakeClient({ campaign_steps: { data: { condition: null }, error: null } }), touch), null);
 });

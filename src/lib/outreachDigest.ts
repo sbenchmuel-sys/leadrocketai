@@ -30,12 +30,16 @@ export interface SkipReasonGroup {
 export interface OutreachDigest {
   /** Next-in-line touches due later today (not yet surfaced), per channel. */
   laterToday: Record<OutreachChannel, number>;
-  /** Queued touches whose due time fell before today started, per channel. */
+  /** True when the scheduled-today read hit ROW_CAP — laterToday is a floor, not an exact count. */
+  laterTodayTruncated: boolean;
+  /** Queued touches whose due time fell before today started, per channel (exact server counts). */
   overdue: Record<OutreachChannel, number>;
   overdueTotal: number;
   /** Auto-skips from yesterday's calendar day, grouped by reason. */
   skippedYesterday: SkipReasonGroup[];
   skippedYesterdayTotal: number;
+  /** True when the notes read hit ROW_CAP — the groups cover the first ROW_CAP notes only. */
+  skippedYesterdayTruncated: boolean;
 }
 
 const emptyCounts = (): Record<OutreachChannel, number> =>
@@ -43,12 +47,17 @@ const emptyCounts = (): Record<OutreachChannel, number> =>
 
 const NAMES_PER_REASON = 3;
 
+// Bound each row read; a digest is a summary, not a ledger. When a read hits the
+// cap the digest SAYS so (truncated flags → "500+" in the UI) instead of passing
+// a partial page off as the total. Overdue uses exact server-side counts.
+export const ROW_CAP = 500;
+
 /** Raw inputs the digest is folded from — the shape the queries return. */
 export interface DigestInputs {
   /** Scheduled touches with eligible_at ≤ end of today, with their enrollment cursor. */
   scheduledToday: { channel: string; step_number: number; current_step_number: number; enrollment_status: string }[];
-  /** Queued touches with eligible_at < start of today. */
-  overdueRows: { channel: string }[];
+  /** Queued touches with eligible_at < start of today — exact count per channel. */
+  overdueByChannel: Record<OutreachChannel, number>;
   /** Auto-skip notes from yesterday. */
   skipNotes: { reason: string | null; lead_name: string | null }[];
 }
@@ -64,10 +73,7 @@ export function buildDigest(input: DigestInputs): OutreachDigest {
     if ((OUTREACH_CHANNELS as string[]).includes(t.channel)) laterToday[t.channel as OutreachChannel]++;
   }
 
-  const overdue = emptyCounts();
-  for (const t of input.overdueRows) {
-    if ((OUTREACH_CHANNELS as string[]).includes(t.channel)) overdue[t.channel as OutreachChannel]++;
-  }
+  const overdue = { ...emptyCounts(), ...input.overdueByChannel };
   const overdueTotal = OUTREACH_CHANNELS.reduce((n, ch) => n + overdue[ch], 0);
 
   const byReason = new Map<string, SkipReasonGroup>();
@@ -84,17 +90,14 @@ export function buildDigest(input: DigestInputs): OutreachDigest {
 
   return {
     laterToday,
+    laterTodayTruncated: input.scheduledToday.length >= ROW_CAP,
     overdue,
     overdueTotal,
     skippedYesterday,
     skippedYesterdayTotal: skippedYesterday.reduce((n, g) => n + g.count, 0),
+    skippedYesterdayTruncated: input.skipNotes.length >= ROW_CAP,
   };
 }
-
-// Bound each read; a digest is a summary, not a ledger. ponytail: a rep with more
-// than 500 next-in-line touches due in ONE day is already past the daily cap's
-// design point — swap to HEAD counts per channel if that ever shows up.
-const ROW_CAP = 500;
 
 export async function fetchOutreachDigest(
   workspaceTz: string | null | undefined,
@@ -107,24 +110,20 @@ export async function fetchOutreachDigest(
 
   const { data: activeCamps } = await supabase.from("campaigns").select("id").eq("status", "active");
   const activeIds = ((activeCamps || []) as { id: string }[]).map((c) => c.id);
-  const emptyInputs: DigestInputs = { scheduledToday: [], overdueRows: [], skipNotes: [] };
-  if (activeIds.length === 0) return buildDigest(emptyInputs);
 
-  const [scheduledRes, overdueRes, notesRes] = await Promise.all([
-    supabase
+  // Yesterday's skip notes are history — they still count with no campaign active
+  // today (the rep may have paused their last one since). Only the forward-looking
+  // reads need an active campaign.
+  const none = Promise.resolve({ data: null, count: null });
+  const [scheduledRes, notesRes, ...overdueRes] = await Promise.all([
+    activeIds.length === 0 ? none : supabase
       .from("campaign_touch" as any)
       .select("channel, step_number, leads!inner(id), campaign_enrollment!inner(current_step_number, status)")
       .eq("status", "scheduled")
       .in("campaign_id", activeIds)
       .gt("eligible_at", nowIso)
       .lt("eligible_at", startTomorrow)
-      .limit(ROW_CAP),
-    supabase
-      .from("campaign_touch" as any)
-      .select("channel, leads!inner(id)")
-      .eq("status", "queued")
-      .in("campaign_id", activeIds)
-      .lt("eligible_at", startToday)
+      .order("eligible_at", { ascending: true })
       .limit(ROW_CAP),
     supabase
       .from("lead_timeline_items")
@@ -133,8 +132,21 @@ export async function fetchOutreachDigest(
       .like("dedupe_key", "cold_auto_skip_%")
       .gte("occurred_at", startYesterday)
       .lt("occurred_at", startToday)
+      .order("occurred_at", { ascending: false })
       .limit(ROW_CAP),
+    // Overdue: exact HEAD counts per channel, same filters as the queue.
+    ...OUTREACH_CHANNELS.map((ch) =>
+      activeIds.length === 0 ? none : supabase
+        .from("campaign_touch" as any)
+        .select("id, leads!inner(id)", { count: "exact", head: true })
+        .eq("status", "queued")
+        .eq("channel", ch)
+        .in("campaign_id", activeIds)
+        .lt("eligible_at", startToday),
+    ),
   ]);
+  const overdueByChannel = emptyCounts();
+  OUTREACH_CHANNELS.forEach((ch, i) => { overdueByChannel[ch] = (overdueRes[i] as { count: number | null }).count ?? 0; });
   const one = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? v[0] ?? null : v ?? null);
 
   return buildDigest({
@@ -147,7 +159,7 @@ export async function fetchOutreachDigest(
         enrollment_status: enr.status ?? "",
       };
     }),
-    overdueRows: ((overdueRes.data || []) as any[]).map((t) => ({ channel: t.channel })),
+    overdueByChannel,
     skipNotes: ((notesRes.data || []) as any[]).map((n) => ({
       reason: n.metadata_json?.auto_skip_reason ?? null,
       lead_name: one<any>(n.leads)?.name ?? null,
