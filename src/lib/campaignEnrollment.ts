@@ -29,7 +29,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
 import { isValidEmail } from "@/lib/emailValidation";
-import { launchCampaign } from "@/lib/outreachQueue";
 
 // A touch's auto-skip horizon for MANUAL touches when the campaign has no later
 // touch to bound it (a stuck manual touch must never stall the cadence forever).
@@ -631,6 +630,36 @@ export async function fetchDailyCap(): Promise<number> {
   }
 }
 
+/** One lead's planned enrollment — the wire shape enroll_campaign_leads takes. */
+export interface PlannedEnrollment {
+  lead_id: string;
+  started_at: string; // ISO
+  touches: PlannedTouch[];
+}
+
+/**
+ * Pure planner behind enrollLeadsInCampaign: staggered start day per lead
+ * (seeded with the mailbox's already-booked email days), then each lead's full
+ * touch schedule from its start day. Deterministic → unit-testable.
+ */
+export function planEnrollment(
+  leadIds: string[],
+  steps: CadenceStep[],
+  dailyCap: number,
+  initialLoad: Record<number, number>,
+  anchor: Date = new Date(),
+): PlannedEnrollment[] {
+  const starts = computeStaggeredStarts(leadIds.length, emailOffsets(steps), dailyCap, initialLoad);
+  return leadIds.map((lead_id, i) => {
+    const startedAt = addBusinessDays(anchor, starts[i]);
+    return {
+      lead_id,
+      started_at: startedAt.toISOString(),
+      touches: buildTouchSchedule(startedAt, steps),
+    };
+  });
+}
+
 /**
  * Enroll leads into a campaign: fail-closed on opt-out / suppression / double
  * scheduling, then lay down a staggered, business-day-aware cadence.
@@ -644,10 +673,14 @@ export async function fetchDailyCap(): Promise<number> {
  *  - has a syntactically present email (contains "@"). (Strict validation lands
  *    at import in PR 4; here we just refuse to schedule an unsendable address.)
  *
- * The leads.campaign_id stamp is guarded to the campaign's own workspace and to
- * campaign_id IS NULL (reusing the Unit A two-filter pattern), so a multi-
- * workspace rep can't pull a cross-workspace lead in and we never steal a lead
- * out of an outreach it already belongs to.
+ * The WRITE is one transaction: the `enroll_campaign_leads` RPC stamps
+ * leads.campaign_id (guarded to the campaign's workspace, to an unassigned lead,
+ * and to the caller's own leads or admin), inserts the enrollment row and every
+ * touch row, and re-checks the opt-out / do-not-contact / already-enrolled gates
+ * at write time. A failure anywhere rolls the whole call back — a lead can never
+ * be left stamped-but-unscheduled or enrolled-with-no-cadence (#8). It also
+ * refuses if the step fingerprint changed since the plan was built (a concurrent
+ * draft step-edit), so touches are never written against a stale numbering.
  */
 export async function enrollLeadsInCampaign(
   campaignId: string,
@@ -670,39 +703,10 @@ export async function enrollLeadsInCampaign(
     return { enrolled: 0, skips, channelSkips, capacity };
   }
 
-  // Existing members of THIS campaign are already stamped — schedule them directly.
-  const members = enrollable.filter((l) => l.campaign_id === campaignId);
-  // Unassigned leads need their campaign_id stamped, guarded (workspace + IS NULL),
-  // so a multi-workspace rep can't pull a cross-workspace lead in and a lead claimed
-  // by a concurrent enrollment between our read and write is excluded.
-  const toStampIds = enrollable.filter((l) => l.campaign_id == null).map((l) => l.id);
-  const stampedLeads: EnrollCandidateLead[] = [...members];
-  // IDs whose campaign_id THIS call set (excludes pre-existing members). Only these
-  // may be cleared on rollback — clearing members would evict them from the outreach.
-  const newlyStampedIds: string[] = [];
-  if (toStampIds.length > 0) {
-    const { data: stampedRows, error: stampErr } = await supabase
-      .from("leads")
-      .update({ campaign_id: campaignId } as any)
-      .in("id", toStampIds)
-      .eq("workspace_id", workspaceId)
-      .is("campaign_id", null)
-      .select("id");
-    if (stampErr) throw new Error(stampErr.message || "Failed to enroll people");
-    const stampedIds = new Set(((stampedRows || []) as any[]).map((r) => r.id));
-    skips.alreadyEnrolled += toStampIds.length - stampedIds.size; // claimed concurrently
-    newlyStampedIds.push(...stampedIds);
-    stampedLeads.push(...enrollable.filter((l) => stampedIds.has(l.id)));
-  }
-  if (stampedLeads.length === 0) {
-    return { enrolled: 0, skips, channelSkips, capacity };
-  }
-
   // Staggered start day per lead. Seed the planner with the EXISTING scheduled/
-  // queued email-touch load for this campaign so adding people to a RUNNING outreach
-  // doesn't pile new follow-ups onto business days already at the daily cap.
+  // queued email-touch load so adding people to a RUNNING outreach doesn't pile new
+  // follow-ups onto business days already at the daily cap.
   const anchor = opts?.anchor ?? new Date();
-  const offsets = emailOffsets(steps);
   // Seed from the mailbox's WHOLE scheduled/queued email-touch load, not just this
   // campaign — the daily cap is per-mailbox and spans every outreach, so other
   // campaigns' booked email days must count too. RLS scopes this to the rep's
@@ -719,95 +723,25 @@ export async function enrollLeadsInCampaign(
     const off = businessDayOffset(anchor, new Date(et.eligible_at));
     initialLoad[off] = (initialLoad[off] ?? 0) + 1;
   }
-  const starts = computeStaggeredStarts(stampedLeads.length, offsets, dailyCap, initialLoad);
+  const plan = planEnrollment(enrollable.map((l) => l.id), steps, dailyCap, initialLoad, anchor);
 
-  const enrollmentRows = stampedLeads.map((lead, i) => ({
-    campaign_id: campaignId,
-    lead_id: lead.id,
-    status: "scheduled",
-    current_step_number: 0,
-    started_at: addBusinessDays(anchor, starts[i]).toISOString(),
-  }));
-  const { data: insertedEnrollments, error: enrErr } = await supabase
-    .from("campaign_enrollment" as any)
-    .insert(enrollmentRows as any)
-    .select("id, lead_id, started_at");
-  if (enrErr) {
-    // Roll back ONLY the campaign_id values this call stamped — never members that
-    // were already in the outreach before this call.
-    if (newlyStampedIds.length > 0) {
-      await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
-    }
-    throw new Error(enrErr.message || "Failed to create enrollments");
+  const { data, error } = await supabase.rpc("enroll_campaign_leads" as any, {
+    _campaign_id: campaignId,
+    _step_fingerprint: stepScheduleFingerprint(steps),
+    _enrollments: plan,
+  });
+  if (error) throw new Error(error.message || "Failed to enroll people");
+  const enrolledIds: string[] = ((data as any)?.enrolled ?? []) as string[];
+  const skippedCount: number = ((data as any)?.skipped ?? []).length;
+  // A lead the database refused at write time (claimed concurrently, opted out
+  // since the preview, …) reads as "already enrolled" — same bucket the old
+  // guarded stamp used for a concurrent claim.
+  skips.alreadyEnrolled += skippedCount;
+  if (enrolledIds.length === 0) {
+    return { enrolled: 0, skips, channelSkips, capacity };
   }
-
-  // Guard the schedule against a concurrent DRAFT step-edit
-  // (replace_campaign_steps_reconciled) that renumbered the cadence between our
-  // step read (gatherEnrollmentContext) and these touch inserts. Writing touches
-  // against a stale numbering is exactly the corruption the edit RPC's guard is
-  // meant to prevent; the RPC's pre-check can't see our enrollment until it
-  // commits, so we re-read the step fingerprint here and bail if it changed. The
-  // edit side has the symmetric post-write re-check, so whichever commits second
-  // loses — never a mismatch.
-  const { data: stepsNowRows } = await supabase
-    .from("campaign_steps")
-    .select("step_number, channel, delay_days, active")
-    .eq("campaign_id", campaignId)
-    .order("step_number", { ascending: true });
-  const stepsNow: CadenceStep[] = (stepsNowRows || [])
-    .filter((s: any) => s.active !== false)
-    .map((s: any) => ({ step_number: s.step_number, channel: s.channel, delay_days: s.delay_days ?? 0 }));
-  if (stepScheduleFingerprint(stepsNow) !== stepScheduleFingerprint(steps)) {
-    // Roll back this enrollment to its pre-call state (same as the touch-insert
-    // failure path): delete the enrollment rows we just created and clear ONLY
-    // the campaign_id values this call stamped (members keep theirs).
-    const enrIds = ((insertedEnrollments || []) as any[]).map((e) => e.id);
-    if (enrIds.length > 0) {
-      await supabase.from("campaign_enrollment" as any).delete().in("id", enrIds);
-    }
-    if (newlyStampedIds.length > 0) {
-      await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
-    }
-    throw new Error("The outreach steps changed while you were enrolling. Please try again.");
-  }
-
-  // Touch rows for every enrollment.
-  const touchRows: any[] = [];
-  for (const enr of (insertedEnrollments || []) as any[]) {
-    const schedule = buildTouchSchedule(new Date(enr.started_at), steps);
-    for (const t of schedule) {
-      touchRows.push({
-        enrollment_id: enr.id,
-        campaign_id: campaignId,
-        lead_id: enr.lead_id,
-        step_number: t.step_number,
-        channel: t.channel,
-        status: "scheduled",
-        eligible_at: t.eligible_at,
-        max_age_at: t.max_age_at,
-      });
-    }
-  }
-  if (touchRows.length > 0) {
-    const { error: touchErr } = await supabase
-      .from("campaign_touch" as any)
-      .insert(touchRows as any);
-    if (touchErr) {
-      // Atomicity: a touch-insert failure would otherwise strand leads as enrolled
-      // with NO cadence (and a later retry skips them as already-enrolled). Roll the
-      // enrollment back to its pre-call state: delete the enrollment rows we just
-      // created and clear ONLY the campaign_id values this call stamped (members keep
-      // theirs). Any partial touch rows cascade-delete with their enrollment.
-      const enrIds = ((insertedEnrollments || []) as any[]).map((e) => e.id);
-      if (enrIds.length > 0) {
-        await supabase.from("campaign_enrollment" as any).delete().in("id", enrIds);
-      }
-      if (newlyStampedIds.length > 0) {
-        await supabase.from("leads").update({ campaign_id: null } as any).in("id", newlyStampedIds);
-      }
-      throw new Error(touchErr.message || "Failed to schedule touches");
-    }
-  }
+  const enrolledSet = new Set(enrolledIds);
+  const stampedLeads = enrollable.filter((l) => enrolledSet.has(l.id));
 
   // Promote the FIRST DUE touch of each new enrollment to 'queued' inline so the
   // card appears in the Outreach tab immediately, instead of waiting up to 5 min
@@ -825,10 +759,15 @@ export async function enrollLeadsInCampaign(
   // Best-effort: any error here is swallowed — the lead is correctly enrolled
   // and cron will promote on its next pass.
   try {
+    const { data: enrRows } = await supabase
+      .from("campaign_enrollment" as any)
+      .select("id")
+      .eq("campaign_id", campaignId)
+      .in("lead_id", enrolledIds);
     await promoteFirstDueTouches(
       campaignId,
       workspaceId,
-      ((insertedEnrollments || []) as any[]).map((e) => e.id as string),
+      ((enrRows || []) as any[]).map((e) => e.id as string),
       stampedLeads,
     );
   } catch (err) {
@@ -868,7 +807,7 @@ async function promoteFirstDueTouches(
       .maybeSingle(),
   ]);
   // Only a LIVE outreach surfaces cards. A DRAFT's touches are re-anchored at
-  // Launch (reanchorScheduleForLaunch) and promoted then; promoting them here
+  // Launch (launchCampaignWithSchedule) and promoted then; promoting them here
   // would leave step-1 cards dated from "add people" (BUG-011). Paused/completed:
   // the scheduler won't surface them either — stay consistent with it.
   if ((camp as any)?.status !== "active") return;
@@ -952,7 +891,7 @@ export interface RelaunchPlan {
 }
 
 /**
- * Pure planner behind reanchorScheduleForLaunch: re-run the staggered-start drip
+ * Pure planner behind launchCampaignWithSchedule: re-run the staggered-start drip
  * from `anchor` (the launch moment) for enrollments whose cadence has not started,
  * and lay each one's touches out again from its new start day. Same helpers the
  * original enrollment used, so Launch produces exactly the schedule "add people"
@@ -983,28 +922,26 @@ export function planRelaunch(
 }
 
 /**
- * Re-date every NOT-STARTED enrollment of a campaign from now. Called by Launch.
+ * Launch a draft outreach the right way, in ONE transaction: re-date every
+ * not-started enrollment's schedule from now, then flip status to 'active'.
  *
- * Why: "Add people" schedules from the moment people are added — fine for a live
- * outreach, wrong for a draft. A draft launched days later would otherwise dump
- * every first touch into the Queue already overdue and defeat the drip (BUG-011).
+ * Why re-date: "Add people" schedules from the moment people are added — fine for
+ * a live outreach, wrong for a draft. A draft launched days later would otherwise
+ * dump every first touch into the Queue already overdue and defeat the drip
+ * (BUG-011). Enrollments that already started (current_step_number > 0) are left
+ * alone.
  *
- * Safe on a draft: the scheduler and executor only act on ACTIVE campaigns, so
- * nothing can race these rows while status is still 'draft'. Touch rows are
- * UPSERTed on (enrollment_id, step_number) — one request, no delete window.
- * Enrollments that already started (current_step_number > 0) are left alone.
+ * The client plans (planRelaunch — the same helpers enrollment used, so Launch
+ * produces exactly the schedule "add people" would have produced at launch time);
+ * the `launch_campaign_with_schedule` RPC writes the touches, the new
+ * started_at values and the status flip together, and refuses if people were
+ * added between our read and the call (we re-plan and retry once). No phase can
+ * commit without the others (#8).
+ *
+ * After commit, the first due cards are surfaced immediately (same gates the
+ * scheduler applies) instead of waiting for the next cron tick.
  */
-export async function reanchorScheduleForLaunch(campaignId: string): Promise<{ reanchored: number }> {
-  const { data: enrRows, error: enrErr } = await supabase
-    .from("campaign_enrollment" as any)
-    .select("id, lead_id")
-    .eq("campaign_id", campaignId)
-    .eq("current_step_number", 0)
-    .in("status", ["scheduled", "active"]);
-  if (enrErr) throw new Error(enrErr.message || "Couldn't read the outreach schedule");
-  const enrollments = (enrRows || []) as unknown as { id: string; lead_id: string }[];
-  if (enrollments.length === 0) return { reanchored: 0 };
-
+export async function launchCampaignWithSchedule(campaignId: string): Promise<{ reanchored: number }> {
   const { data: stepRows } = await supabase
     .from("campaign_steps")
     .select("step_number, channel, delay_days, active")
@@ -1014,55 +951,67 @@ export async function reanchorScheduleForLaunch(campaignId: string): Promise<{ r
     .filter((s: any) => s.active !== false)
     .map((s: any) => ({ step_number: s.step_number, channel: s.channel, delay_days: s.delay_days ?? 0 }));
   if (steps.length === 0) throw new Error("This outreach has no active touches to schedule.");
+  const dailyCap = await fetchDailyCap();
 
-  // Seed the drip with OTHER outreaches' booked email days (this campaign's own
-  // rows are the ones being rewritten). Mirrors enrollLeadsInCampaign.
-  const anchor = new Date();
-  const { data: otherEmailTouches } = await supabase
-    .from("campaign_touch" as any)
-    .select("eligible_at")
-    .eq("channel", "email")
-    .in("status", ["scheduled", "queued"])
-    .neq("campaign_id", campaignId)
-    .not("eligible_at", "is", null);
-  const initialLoad: Record<number, number> = {};
-  for (const et of (otherEmailTouches || []) as any[]) {
-    const off = businessDayOffset(anchor, new Date(et.eligible_at));
-    initialLoad[off] = (initialLoad[off] ?? 0) + 1;
+  const attempt = async (): Promise<{ reanchored: number }> => {
+    const { data: enrRows, error: enrErr } = await supabase
+      .from("campaign_enrollment" as any)
+      .select("id, lead_id")
+      .eq("campaign_id", campaignId)
+      .eq("current_step_number", 0)
+      .in("status", ["scheduled", "active"]);
+    if (enrErr) throw new Error(enrErr.message || "Couldn't read the outreach schedule");
+    const enrollments = (enrRows || []) as unknown as { id: string; lead_id: string }[];
+
+    // Seed the drip with OTHER outreaches' booked email days (this campaign's own
+    // rows are the ones being rewritten). Mirrors enrollLeadsInCampaign.
+    const anchor = new Date();
+    const { data: otherEmailTouches } = await supabase
+      .from("campaign_touch" as any)
+      .select("eligible_at")
+      .eq("channel", "email")
+      .in("status", ["scheduled", "queued"])
+      .neq("campaign_id", campaignId)
+      .not("eligible_at", "is", null);
+    const initialLoad: Record<number, number> = {};
+    for (const et of (otherEmailTouches || []) as any[]) {
+      const off = businessDayOffset(anchor, new Date(et.eligible_at));
+      initialLoad[off] = (initialLoad[off] ?? 0) + 1;
+    }
+    const plan = planRelaunch(campaignId, enrollments, steps, dailyCap, initialLoad, anchor);
+
+    // Regroup the flat touch rows per enrollment — the RPC's wire shape.
+    const touchesByEnrollment = new Map<string, PlannedTouch[]>();
+    for (const t of plan.touchRows) {
+      const list = touchesByEnrollment.get(t.enrollment_id) ?? [];
+      list.push({ step_number: t.step_number, channel: t.channel, eligible_at: t.eligible_at, max_age_at: t.max_age_at });
+      touchesByEnrollment.set(t.enrollment_id, list);
+    }
+    const { data, error } = await supabase.rpc("launch_campaign_with_schedule" as any, {
+      _campaign_id: campaignId,
+      _plan: plan.starts.map((st) => ({
+        enrollment_id: st.enrollmentId,
+        started_at: st.startedAt,
+        touches: touchesByEnrollment.get(st.enrollmentId) ?? [],
+      })),
+    });
+    if (error) throw new Error(error.message || "Couldn't launch the outreach");
+    return { reanchored: Number((data as any)?.reanchored ?? 0) };
+  };
+
+  let result: { reanchored: number };
+  try {
+    result = await attempt();
+  } catch (err) {
+    // The RPC refuses when people were added between our read and the write
+    // (serialization_failure). Re-plan once from the fresh set; anything else
+    // (not a draft, not authorized) surfaces as-is.
+    if (err instanceof Error && /added while you were launching/i.test(err.message)) {
+      result = await attempt();
+    } else {
+      throw err;
+    }
   }
-
-  const plan = planRelaunch(campaignId, enrollments, steps, await fetchDailyCap(), initialLoad, anchor);
-
-  const { error: touchErr } = await supabase
-    .from("campaign_touch" as any)
-    .upsert(plan.touchRows as any, { onConflict: "enrollment_id,step_number" });
-  if (touchErr) throw new Error(touchErr.message || "Couldn't re-date the outreach touches");
-
-  // Per-row started_at differs, so one update per enrollment, in small parallel
-  // chunks. ponytail: O(n) round-trips — fine for pilot lists (hundreds); the
-  // upgrade path is a single SQL function doing the whole re-anchor server-side.
-  const CHUNK = 25;
-  for (let i = 0; i < plan.starts.length; i += CHUNK) {
-    await Promise.all(
-      plan.starts.slice(i, i + CHUNK).map((st) =>
-        supabase
-          .from("campaign_enrollment" as any)
-          .update({ started_at: st.startedAt, status: "scheduled" } as any)
-          .eq("id", st.enrollmentId),
-      ),
-    );
-  }
-  return { reanchored: enrollments.length };
-}
-
-/**
- * Launch a draft outreach the right way: re-date the not-started schedule from
- * now, flip status to 'active', then surface the first due cards immediately
- * (same gates the scheduler applies) instead of waiting for the next cron tick.
- */
-export async function launchCampaignWithSchedule(campaignId: string): Promise<{ reanchored: number }> {
-  const result = await reanchorScheduleForLaunch(campaignId);
-  await launchCampaign(campaignId);
 
   // Best-effort inline promotion — cron catches anything this misses.
   try {
