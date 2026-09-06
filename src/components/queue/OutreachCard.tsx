@@ -212,8 +212,17 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       setCallConfirmOpen(true);
       return;
     }
-    toast.info("Opening your phone to make the call.");
-    window.location.href = telLink(phone);
+    // No Twilio number for this rep or workspace → browser calling isn't set up.
+    // A desktop has no dialer to hand a tel: link to, so say so plainly (the old
+    // "Opening your phone…" toast + tel: navigation looked like a call was
+    // starting and nothing happened — BUG #12). Put the number on the clipboard
+    // so they can dial it from their phone and log the outcome below.
+    const copied = await copyToClipboard(phone);
+    toast.error("Browser calling isn't set up — no Twilio number", {
+      description: `${copied ? `${phone} copied — ` : ""}dial from your phone, then log the outcome on this card. Set a default in Settings → Calls/Voice, or your own in Settings → Your Profile.`,
+      action: { label: "Open Settings", onClick: () => navigate("/app/settings") },
+      duration: 8000,
+    });
   }
 
   async function startDesktopCall() {
