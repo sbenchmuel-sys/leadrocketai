@@ -26,6 +26,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import { loadExecutionSettings, type ExecutionSettings } from "../_shared/executionSettings.ts";
 import { advanceColdEnrollment, endColdEnrollment, repliedSinceEnrollment } from "../_shared/coldOutreach.ts";
+import { stepConditionUnmetReason } from "../_shared/coldConditions.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -222,6 +223,22 @@ Deno.serve(async (req) => {
     if (!fresh || fresh.status !== "scheduled") { counters.skipped++; continue; }
     if (fresh.eligible_at && new Date(fresh.eligible_at) > now) { counters.skipped++; continue; }
     const maxAgeAt = fresh.max_age_at; // use the fresh deadline for the auto-skip decision
+
+    // ── Step condition (Sprint 3) ──
+    // A conditional step whose signal isn't there when it comes due is skipped —
+    // with the reason on the timeline — instead of always running. Executor-owned
+    // automatic emails are checked by the executor itself (it's the one that would
+    // send them), so the scheduler leaves those alone here too.
+    if (!(t.channel === "email" && autoSendable)) {
+      const unmet = await stepConditionUnmetReason(supabase, t);
+      if (unmet) {
+        const exec = await getExec(lead.owner_user_id);
+        await advanceColdEnrollment(supabase, exec, t, "auto_skipped", { skipReason: unmet });
+        counters.auto_skipped++;
+        console.log(`[campaign-touch-scheduler] auto-skipped touch ${t.id} (${t.channel}) — condition not met`);
+        continue;
+      }
+    }
 
     // ── Email touches ──
     if (t.channel === "email") {

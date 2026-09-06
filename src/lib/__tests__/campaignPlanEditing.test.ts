@@ -18,6 +18,7 @@ import {
   changeStepChannel,
   setStepGap,
   setStepMeetingCta,
+  setStepCondition,
   stepNeedsSmsSetup,
   emailIntent,
   type DraftStep,
@@ -328,5 +329,37 @@ describe("editor over the default 9-touch plan", () => {
     expect(emailIntent("intro")).toBe("first message");
     expect(emailIntent("breakup")).toBe("last message");
     expect(emailIntent("followup")).toBe("follow-up");
+  });
+});
+
+describe("cadence conditions (Sprint 3)", () => {
+  it("the default plan branches: LinkedIn message waits for the invite, second call only if none answered", () => {
+    const plan = buildDefaultPlan(["linkedin", "voice", "sms"]);
+    expect(plan[6].channel).toBe("linkedin");
+    expect(plan[6].condition).toBe("linkedin_accepted");
+    expect(plan[7].channel).toBe("voice");
+    expect(plan[7].condition).toBe("no_call_answered");
+    expect(plan.filter((s) => s.condition).length).toBe(2);
+  });
+
+  it("a LinkedIn condition is dropped when the touch falls back to email (channel not selected)", () => {
+    const plan = buildDefaultPlan(["voice"]);
+    expect(plan[6].channel).toBe("email");
+    expect(plan[6].condition).toBeNull();
+    // The call condition survives — it doesn't depend on the LinkedIn channel.
+    expect(plan[7].condition).toBe("no_call_answered");
+  });
+
+  it("setStepCondition sets and clears; changing channel away from LinkedIn clears an invite condition", () => {
+    let plan = buildDefaultPlan(["linkedin", "voice"]);
+    plan = setStepCondition(plan, 2, "call_answered");
+    expect(plan[2].condition).toBe("call_answered");
+    plan = setStepCondition(plan, 2, null);
+    expect(plan[2].condition).toBeNull();
+    plan = changeStepChannel(plan, 6, "email");
+    expect(plan[6].condition).toBeNull();
+    // …but a call condition rides through a channel change.
+    plan = changeStepChannel(plan, 7, "sms");
+    expect(plan[7].condition).toBe("no_call_answered");
   });
 });

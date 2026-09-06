@@ -35,6 +35,8 @@ import {
   changeStepChannel,
   setStepGap,
   setStepMeetingCta,
+  setStepCondition,
+  type StepCondition,
   detectMeetingCtaIntent,
   applyMeetingCtaIntent,
   type DraftStep,
@@ -204,6 +206,9 @@ export default function NewCampaign() {
     setPlan((prev) => insertStep(prev, atIndex, channel));
   };
 
+  const handleChangeCondition = (index: number, condition: StepCondition | null) => {
+    setPlan((p) => setStepCondition(p, index, condition));
+  };
   const handleToggleMeeting = (index: number, value: boolean) => {
     setPlan((prev) => setStepMeetingCta(prev, index, value));
   };
@@ -322,6 +327,7 @@ export default function NewCampaign() {
           variant_group: null,
           // Per-step meeting-link choice (email touches); null = inherit default.
           include_meeting_cta: s.include_meeting_cta ?? null,
+          condition: s.condition ?? null,
         })),
       });
 
@@ -593,6 +599,7 @@ export default function NewCampaign() {
             onChangeChannel={handleChangeChannel}
             onInsert={handleInsert}
             onToggleMeeting={handleToggleMeeting}
+            onChangeCondition={handleChangeCondition}
           />
 
           <div className="flex gap-3">

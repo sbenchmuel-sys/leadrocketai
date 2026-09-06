@@ -91,6 +91,27 @@ CREATE TABLE public.campaign_steps (
   UNIQUE (campaign_id, step_number)
 );
 
+-- Keyed by step_number (reconciled by replace_campaign_steps_reconciled).
+CREATE TABLE public.campaign_step_content (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id uuid NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
+  step_number integer NOT NULL,
+  variant_group text,
+  subject text,
+  body text,
+  is_edited boolean NOT NULL DEFAULT false
+);
+CREATE UNIQUE INDEX campaign_step_content_unique
+  ON public.campaign_step_content (campaign_id, step_number, COALESCE(variant_group, ''));
+
+CREATE TABLE public.campaign_collateral (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id uuid NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
+  collateral_type text NOT NULL DEFAULT 'one_pager',
+  variant_group text,
+  attached_step_number integer
+);
+
 CREATE TABLE public.campaign_suppression_list (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,

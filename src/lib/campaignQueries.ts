@@ -5,7 +5,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
-import { touchVerb } from "@/lib/campaignDefaults";
+import { touchVerb, type StepCondition } from "@/lib/campaignDefaults";
 import type { StepType } from "@/lib/campaignTypes";
 
 // ── Types (mirrors DB schema) ──────────────────────────────────────
@@ -67,6 +67,8 @@ export interface CampaignStep {
   // Per-step meeting-link override. null = inherit campaigns.include_meeting_cta.
   // Hand-typed here until Lovable regenerates types.ts after the migration applies.
   include_meeting_cta: boolean | null;
+  // Cadence branch (Sprint 3, migration 20260907000100). null = always runs.
+  condition: StepCondition | null;
   created_at: string;
   updated_at: string;
 }
@@ -173,6 +175,8 @@ export interface DraftCampaignStep {
   // Per-step meeting-link override (email touches). undefined/null = inherit
   // the campaign-level default — i.e. unchanged behavior for existing flows.
   include_meeting_cta?: boolean | null;
+  // Cadence branch; undefined/null = always runs.
+  condition?: StepCondition | null;
 }
 
 export interface CreateCampaignInput {
@@ -207,6 +211,7 @@ export function draftStepToRow(campaignId: string, s: DraftCampaignStep) {
     variant_group: s.variant_group ?? null,
     // null (the default) = inherit the campaign-level meeting-link toggle.
     include_meeting_cta: s.include_meeting_cta ?? null,
+    condition: s.condition ?? null,
   };
 }
 
@@ -325,6 +330,7 @@ export async function replaceCampaignStepsReconciled(
     active: s.active,
     variant_group: s.variant_group ?? null,
     include_meeting_cta: s.include_meeting_cta ?? null,
+    condition: s.condition ?? null,
   }));
   const { error } = await supabase.rpc("replace_campaign_steps_reconciled" as any, {
     _campaign_id: campaignId,

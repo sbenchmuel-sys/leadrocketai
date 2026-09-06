@@ -5,7 +5,7 @@ import type { OutreachTouch } from "./outreachQueue";
 const touch = (id: string, channel: OutreachTouch["channel"], eligibleAt: string): OutreachTouch => ({
   id, campaignId: "c", campaignName: "C", leadId: `l-${id}`, leadName: "L", company: null,
   channel, stepNumber: 1, eligibleAt, email: null, phone: null, linkedinUrl: null, whatsappNumber: null,
-  subject: null, body: null, smsText: null, talkingPoints: null, voicemailScript: null,
+  linkedinConnectedAt: null, subject: null, body: null, smsText: null, talkingPoints: null, voicemailScript: null,
 });
 
 describe("groupByChannel — the Today view's grouping", () => {

@@ -30,7 +30,7 @@ import {
 import { Phone, MessageSquare, Send, Loader2, Linkedin, Check, Clock, Copy } from "lucide-react";
 import { toast } from "sonner";
 import type { OutreachTouch } from "@/lib/outreachQueue";
-import { sendReviewEmail, markTouchSent, skipTouch, snoozeTouch, setCallOutcome } from "@/lib/outreachQueue";
+import { sendReviewEmail, markTouchSent, skipTouch, snoozeTouch, setCallOutcome, setLinkedinAccepted } from "@/lib/outreachQueue";
 import { telLink, smsLink, whatsappLink, copyToClipboard } from "@/lib/outreachDeepLinks";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useBrowserCall } from "@/components/call/BrowserCallProvider";
@@ -118,6 +118,25 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const [callConfirmOpen, setCallConfirmOpen] = useState(false);
   const [callerId, setCallerId] = useState<string | null>(null);
   const callInProgress = callStatus === "connecting" || callStatus === "on-call";
+
+  // "Invite accepted" — the rep-marked LinkedIn signal the cadence branches on.
+  // Local state so the toggle reflects immediately; the row is the source of truth.
+  const [linkedinAccepted, setLinkedinAcceptedState] = useState(!!touch.linkedinConnectedAt);
+  const [acceptedBusy, setAcceptedBusy] = useState(false);
+  async function toggleLinkedinAccepted() {
+    const next = !linkedinAccepted;
+    setAcceptedBusy(true);
+    setLinkedinAcceptedState(next);
+    try {
+      await setLinkedinAccepted(touch.leadId, next);
+      toast.success(next ? "Marked — they accepted your invite." : "Unmarked.");
+    } catch (err) {
+      setLinkedinAcceptedState(!next);
+      toast.error(err instanceof Error ? err.message : "Couldn't save that");
+    } finally {
+      setAcceptedBusy(false);
+    }
+  }
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
@@ -389,6 +408,25 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
           {actionable && previews.map((p) => (
             <PreviewBlock key={p.label} label={p.label} text={p.text} />
           ))}
+
+          {/* LinkedIn cards carry the one signal the app can't observe: did they
+              accept the connection request? Later steps ("only if invite accepted")
+              branch on it, so it's a one-tap toggle right where the rep finds out. */}
+          {touch.channel === "linkedin" && (
+            <div className="mt-2">
+              <Button
+                size="sm"
+                variant={linkedinAccepted ? "secondary" : "outline"}
+                className="h-7 gap-1 text-[11px]"
+                disabled={busy || acceptedBusy}
+                aria-pressed={linkedinAccepted}
+                onClick={toggleLinkedinAccepted}
+                title={linkedinAccepted ? "Click to unmark" : "Mark that they accepted your connection request"}
+              >
+                <Check className="h-3 w-3" /> {linkedinAccepted ? "Invite accepted" : "They accepted my invite"}
+              </Button>
+            </div>
+          )}
 
           {/* Always visible on a voice card — NOT gated on local "did they tap Call?"
               state, which a mobile tab reload (app-switch to the dialer and back)

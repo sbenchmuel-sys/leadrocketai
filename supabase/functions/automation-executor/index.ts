@@ -30,6 +30,7 @@ import {
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 import { coldTouchClaimKey, coldTouchClaimAcquired } from "../_shared/coldTouchClaim.ts";
+import { stepConditionUnmetReason } from "../_shared/coldConditions.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 
@@ -1713,6 +1714,18 @@ serve(async (req) => {
           if (repliedSinceEnrollment(lead.last_inbound_at, enr.enrolled_at)) {
             await endColdEnrollment(supabase, enr.id, "replied");
             continue;
+          }
+
+          // Step condition (Sprint 3): an automatic email whose step condition isn't
+          // met when it comes due is auto-skipped (reason on the timeline) and the
+          // cadence moves on — the scheduler does the same for the touches it owns.
+          {
+            const unmet = await stepConditionUnmetReason(supabase, touch);
+            if (unmet) {
+              await advanceColdEnrollment(supabase, await loadExecutionSettings(lead.owner_user_id, supabase), touch, "auto_skipped", { skipReason: unmet });
+              console.log(`[automation-executor:cold] auto-skipped touch ${touch.id} — condition not met`);
+              continue;
+            }
           }
 
           // 24h new-lead cooldown (Unit 0): never blast a brand-new address.

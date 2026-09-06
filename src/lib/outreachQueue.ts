@@ -67,6 +67,8 @@ export interface OutreachTouch {
   phone: string | null;
   linkedinUrl: string | null;
   whatsappNumber: string | null;
+  /** When the rep marked the LinkedIn invite accepted (leads.linkedin_connected_at). */
+  linkedinConnectedAt: string | null;
   // Resolved, rep-reviewed content for this step (from campaign_step_content).
   subject: string | null;       // email
   body: string | null;          // email body / LinkedIn message
@@ -171,7 +173,7 @@ export async function fetchOutreachQueue(
       .lte("eligible_at", nowIso);
   let pageQ = dueBase(
     "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
-      "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, industry, owner_user_id)",
+      "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, linkedin_connected_at, industry, owner_user_id)",
     { count: "exact" },
   );
   if (opts?.channel) pageQ = pageQ.eq("channel", opts.channel);
@@ -303,6 +305,7 @@ export async function fetchOutreachQueue(
       phone: lead.phone ?? null,
       linkedinUrl: lead.linkedin_url ?? null,
       whatsappNumber: lead.whatsapp_number ?? null,
+      linkedinConnectedAt: lead.linkedin_connected_at ?? null,
       subject: interpolate(c?.subject ?? null, mctx),
       body: appendMeetingCtaLocal(interpolate(c?.body ?? null, mctx), meetingLinkFor(t, lead)),
       smsText: interpolate(c?.sms_text ?? null, mctx),
@@ -376,6 +379,20 @@ export function snoozeTouch(touchId: string, days: 3 | 5 | 7): Promise<ActionRes
 /** Record a call outcome (shapes the next draft). Does not advance. */
 export function setCallOutcome(touchId: string, outcome: "got_them" | "no_answer"): Promise<ActionResult> {
   return invokeAction({ action: "set_call_outcome", touchId, outcome });
+}
+
+/**
+ * Rep-marked signal: the lead accepted (or, on undo, hasn't accepted) the LinkedIn
+ * connection request. There's no LinkedIn integration by design, so this is the
+ * only source for the "only if invite accepted" cadence branch. Lives on the LEAD
+ * (a connection outlives one outreach); RLS scopes the write to the rep's own leads.
+ */
+export async function setLinkedinAccepted(leadId: string, accepted: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("leads")
+    .update({ linkedin_connected_at: accepted ? new Date().toISOString() : null } as any)
+    .eq("id", leadId);
+  if (error) throw new Error(error.message || "Couldn't save that");
 }
 
 // ── Campaign pause / stop (halts every touch for every enrolled lead) ─────────

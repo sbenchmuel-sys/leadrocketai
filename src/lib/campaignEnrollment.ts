@@ -818,7 +818,7 @@ async function promoteFirstDueTouches(
 
   // Need send_mode (per campaign) + workspace auto-send gate (per workspace) to
   // know whether step-1 EMAIL touches should be left for automation-executor.
-  const [{ data: camp }, { data: ws }, { data: autoSettings }] = await Promise.all([
+  const [{ data: camp }, { data: ws }, { data: autoSettings }, { data: step1 }] = await Promise.all([
     supabase.from("campaigns").select("send_mode, status").eq("id", campaignId).maybeSingle(),
     supabase
       .from("workspaces")
@@ -830,7 +830,11 @@ async function promoteFirstDueTouches(
       .select("cold_auto_send_enabled")
       .eq("workspace_id", workspaceId)
       .maybeSingle(),
+    supabase.from("campaign_steps").select("condition").eq("campaign_id", campaignId).eq("step_number", 1).maybeSingle(),
   ]);
+  // A CONDITIONAL first step is the scheduler's call (it evaluates the signal and
+  // auto-skips with a timeline note when unmet) — never promote it here.
+  if ((step1 as any)?.condition) return;
   // Only a LIVE outreach surfaces cards. A DRAFT's touches are re-anchored at
   // Launch (launchCampaignWithSchedule) and promoted then; promoting them here
   // would leave step-1 cards dated from "add people" (BUG-011). Paused/completed:
