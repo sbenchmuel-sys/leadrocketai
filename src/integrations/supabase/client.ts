@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import { boundedAuthLock, authFetchWithTimeout } from './authLock';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -14,5 +15,11 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     storage: brokeredPreviewStorage(),
     persistSession: true,
     autoRefreshToken: true,
-  }
+    // BUG-014 root cause: bounded cross-tab lock — see authLock.ts. If Lovable
+    // regenerates this file, re-add `lock` and `global.fetch`
+    // (src/test/authLockGuard.test.ts fails until you do).
+    lock: boundedAuthLock,
+  },
+  // Deadline on /auth/v1/* requests only; everything else passes through.
+  global: { fetch: authFetchWithTimeout },
 });
