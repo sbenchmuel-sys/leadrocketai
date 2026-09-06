@@ -53,6 +53,7 @@ import { NewItemsBanner } from "@/components/queue/NewItemsBanner";
 import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
 import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachToday } from "@/components/queue/OutreachToday";
+import { OutreachDigest } from "@/components/queue/OutreachDigest";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
 import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachChannel, type OutreachTouch } from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
@@ -375,6 +376,11 @@ export default function Queue() {
               </Button>
             </div>
           )}
+          <OutreachDigest
+            dueNow={outreachByChannel}
+            refreshKey={outreachTouches.length}
+            onOpenChannel={selectOutreachChannel}
+          />
           <UpcomingTouchesStrip refreshKey={outreachTouches.length} />
           <OutreachToday
             touches={outreachTouches}
