@@ -37,6 +37,8 @@ import { useBrowserCall } from "@/components/call/BrowserCallProvider";
 import { fetchRepCallerNumber } from "@/lib/repCallerNumber";
 import { getDefaultSignature } from "@/lib/repProfileQueries";
 import { useNavigate } from "react-router-dom";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { formatDueAt } from "@/lib/eligibleAtFormat";
 
 interface OutreachCardProps {
   touch: OutreachTouch;
@@ -84,13 +86,13 @@ function PreviewBlock({ label, text }: { label: string; text: string }) {
 }
 
 export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
-  const [opened, setOpened] = useState(false); // rep has tapped the channel action
   const [busy, setBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [subject, setSubject] = useState(touch.subject || "");
   const [body, setBody] = useState(touch.body || "");
   const [hasSignature, setHasSignature] = useState<boolean | null>(null);
   const navigate = useNavigate();
+  const { workspaceTimezone } = useWorkspace();
 
   useEffect(() => {
     let cancelled = false;
@@ -111,16 +113,11 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   }, []);
 
   const isMobile = useIsMobile();
-  const { makeCall, status: callStatus, leadId: activeCallLeadId, activeCall } = useBrowserCall();
+  const { makeCall, status: callStatus } = useBrowserCall();
   const [callPrep, setCallPrep] = useState(false);
   const [callConfirmOpen, setCallConfirmOpen] = useState(false);
   const [callerId, setCallerId] = useState<string | null>(null);
   const callInProgress = callStatus === "connecting" || callStatus === "on-call";
-
-  const callPlacedForThisLead = !!activeCall && activeCallLeadId === touch.leadId;
-  useEffect(() => {
-    if (callPlacedForThisLead) setOpened(true);
-  }, [callPlacedForThisLead]);
 
   const first = touch.leadName.split(" ")[0] || touch.leadName;
 
@@ -155,10 +152,11 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
   const handleSnooze = (days: 3 | 5 | 7) =>
     run(() => snoozeTouch(touch.id, days), `Snoozed ${days} days`);
 
-  async function recordOutcome(outcome: "got_them" | "no_answer") {
-    await setCallOutcome(touch.id, outcome);
-    toast.success(outcome === "got_them" ? "Noted: reached them" : "Noted: no answer");
-  }
+  // The call IS the touch: recording the outcome completes it and arms the next
+  // step server-side, so `run` removes the card exactly like "Mark as handled".
+  const recordOutcome = (outcome: "got_them" | "no_answer") =>
+    run(() => setCallOutcome(touch.id, outcome),
+        outcome === "got_them" ? "Logged — reached them" : "Logged — no answer");
 
   async function handleReviewSend() {
     setBusy(true);
@@ -196,7 +194,6 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       return;
     }
     toast.info("Opening your phone to make the call.");
-    setOpened(true);
     window.location.href = telLink(phone);
   }
 
@@ -221,7 +218,6 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       void prepareDesktopCall();
       return;
     }
-    setOpened(true);
     if (touch.channel === "voice" && touch.phone) {
       window.location.href = telLink(touch.phone);
     } else if (touch.channel === "sms" && touch.phone) {
@@ -242,18 +238,16 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       window.open(touch.linkedinUrl!, "_blank", "noopener,noreferrer");
       return;
     }
-    if (action === "message") {
-      const copyPromise = text ? copyToClipboard(text) : Promise.resolve(true);
-      void copyPromise.then((ok) => {
-        if (ok && text) toast.success("Message copied — paste it in the chat (⌘/Ctrl+V).");
-      });
-      window.open("https://www.linkedin.com/messaging/compose/", "_blank", "noopener,noreferrer");
-      return;
-    }
+    // Both remaining actions land on the PERSON's profile. LinkedIn has no
+    // supported URL that opens a composer addressed to someone, and the old
+    // /messaging/compose/ link opened an EMPTY chat with no recipient — the rep
+    // then had to search for the lead by hand. From the profile, "Message" is one
+    // click and already addressed. Only the paste instruction differs.
+    const hint = action === "message"
+      ? "Message copied — click Message on their profile, then paste (⌘/Ctrl+V)."
+      : "Note copied — click Connect → Add a note, then paste (⌘/Ctrl+V).";
     const copyPromise = text ? copyToClipboard(text) : Promise.resolve(true);
-    void copyPromise.then((ok) => {
-      if (ok && text) toast.success("Note copied — click Connect → Add a note, then paste (⌘/Ctrl+V).");
-    });
+    void copyPromise.then((ok) => { if (ok && text) toast.success(hint); });
     window.open(touch.linkedinUrl!, "_blank", "noopener,noreferrer");
   }
 
@@ -335,6 +329,9 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
             <Badge variant="secondary" className="shrink-0 text-[10px]">{touch.campaignName}</Badge>
           </div>
           <div className="truncate text-xs text-muted-foreground">{touch.company || "—"}</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            Step {touch.stepNumber} · due {formatDueAt(touch.eligibleAt, workspaceTimezone)}
+          </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-1 ml-auto">
@@ -393,8 +390,10 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
             <PreviewBlock key={p.label} label={p.label} text={p.text} />
           ))}
 
-          {/* Post-call outcome buttons appear only after a real call is placed. */}
-          {touch.channel === "voice" && opened && (
+          {/* Always visible on a voice card — NOT gated on local "did they tap Call?"
+              state, which a mobile tab reload (app-switch to the dialer and back)
+              silently discards, stranding the rep with no way to log the call. */}
+          {touch.channel === "voice" && (
             <div className="mt-2 flex items-center gap-1">
               <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy} onClick={() => recordOutcome("got_them")}>Got them</Button>
               <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy} onClick={() => recordOutcome("no_answer")}>No answer</Button>

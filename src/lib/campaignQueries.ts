@@ -5,6 +5,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
+import { touchVerb } from "@/lib/campaignDefaults";
 import type { StepType } from "@/lib/campaignTypes";
 
 // ── Types (mirrors DB schema) ──────────────────────────────────────
@@ -788,4 +789,176 @@ export async function attachCollateralToStep(id: string, stepNumber: number | nu
     .update({ attached_step_number: stepNumber } as any)
     .eq("id", id);
   if (error) throw new Error(error.message || "Failed to link collateral");
+}
+
+// ── Per-person cadence status (the People list) ──────────────────────────────
+// "Who is where in the cadence, and what's next for them" — the campaign page
+// listed names and nothing else, so a rep couldn't tell an untouched lead from
+// one on step 7 from one whose steps were being auto-skipped.
+
+export type CadenceState =
+  | "not_started" // enrolled but the campaign hasn't produced a cadence for them yet
+  | "waiting"     // next step scheduled, not yet due
+  | "due"         // next step is on the rep's Queue right now
+  | "replied"
+  | "stopped"
+  | "completed";
+
+export interface LeadCadenceStatus {
+  state: CadenceState;
+  /** The step they're waiting on (null once there is no next step). */
+  stepNumber: number | null;
+  totalSteps: number;
+  channel: string | null;
+  dueAt: string | null;
+  /** Steps the scheduler skipped for them without anyone asking. */
+  autoSkipped: number;
+}
+
+export interface CadenceTouchRow {
+  step_number: number;
+  channel: string;
+  status: string;
+  eligible_at: string | null;
+}
+
+/**
+ * Pure: fold one lead's enrollment + touch rows into what the People list shows.
+ * Kept separate from the query so the state machine is testable without a DB.
+ */
+export function deriveCadenceStatus(
+  enrollment: { status: string; current_step_number: number | null } | null,
+  touches: CadenceTouchRow[],
+  now: Date = new Date(),
+): LeadCadenceStatus {
+  const autoSkipped = touches.filter((t) => t.status === "auto_skipped").length;
+  const base = { totalSteps: touches.length, autoSkipped };
+
+  if (!enrollment) {
+    return { ...base, state: "not_started", stepNumber: null, channel: null, dueAt: null };
+  }
+  if (enrollment.status === "replied" || enrollment.status === "stopped" || enrollment.status === "completed") {
+    return { ...base, state: enrollment.status, stepNumber: null, channel: null, dueAt: null };
+  }
+
+  // Only step (cursor + 1) is ever live — the same lock-step rule advanceColdEnrollment
+  // enforces — so that row IS "what's next", whatever the later pre-created rows say.
+  const nextStep = (enrollment.current_step_number ?? 0) + 1;
+  const next = touches.find((t) => t.step_number === nextStep);
+  if (!next) {
+    return { ...base, state: "completed", stepNumber: null, channel: null, dueAt: null };
+  }
+  // "queued" alone isn't "due now": snooze_touch deliberately leaves a touch queued
+  // while pushing eligible_at days into the future (the Outreach query itself still
+  // excludes it until then), so a snoozed touch must still read "waiting" here too.
+  const isDue = next.status === "queued" && (!next.eligible_at || new Date(next.eligible_at) <= now);
+  return {
+    ...base,
+    state: isDue ? "due" : "waiting",
+    stepNumber: next.step_number,
+    channel: next.channel,
+    dueAt: next.eligible_at,
+  };
+}
+
+/**
+ * Cadence status for every enrolled lead in a campaign, plus the campaign's total
+ * auto-skip count. Two queries, folded client-side — PostgREST has no GROUP BY, and
+ * a per-lead round-trip would be N+1.
+ *
+ * ponytail: paged reads of the campaign's touch rows (leads × steps, so ~900 for a
+ * 100-lead default cadence), ordered by (lead_id, step_number) so pages accumulate
+ * into a complete row set per lead even when a lead's own rows straddle a page. A
+ * lead is only ever fully represented or entirely absent — never partial — capped
+ * at TOUCH_LEAD_CAP distinct leads. (Previously a single step_number-ordered read
+ * capped at a flat row count could cut a lead off mid-cadence, making its cursor
+ * read as past the last fetched row — reported "completed" when it wasn't.) Past
+ * the lead cap the trailing leads are simply absent — the caller falls back to
+ * "Not in the cadence yet" rather than a wrong-but-confident state. Upgrade path
+ * when campaigns get big: a SQL view returning one pre-folded row per enrollment.
+ */
+const TOUCH_PAGE_SIZE = 1000;
+const TOUCH_LEAD_CAP = 2000;
+
+export async function fetchCampaignCadence(campaignId: string): Promise<{
+  byLead: Map<string, LeadCadenceStatus>;
+  autoSkippedTotal: number;
+}> {
+  type EnrollmentRow = { lead_id: string; status: string; current_step_number: number | null };
+  type TouchRow = CadenceTouchRow & { lead_id: string };
+
+  const [{ data: enrollments, error: enrollmentsError }] = await Promise.all([
+    supabase
+      .from("campaign_enrollment" as never)
+      .select("lead_id, status, current_step_number")
+      .eq("campaign_id", campaignId),
+  ]);
+  // A Supabase query failure resolves as { data: null, error }, it does not reject.
+  // Folding a null `data` silently would read as "no enrollments" (not_started for
+  // everyone) rather than "the query failed" — throw so the caller's existing
+  // .catch() leaves the previous (stale but not confidently wrong) cadence in place.
+  if (enrollmentsError) throw new Error(enrollmentsError.message || "Failed to load campaign enrollments");
+
+  // Page through every touch row, ordered by lead so pages accumulate into complete
+  // per-lead lists even when one lead's rows straddle a page boundary. Stop once a
+  // page comes back short (fewer rows than requested — no more data) or once
+  // TOUCH_LEAD_CAP distinct leads have been seen. Unlike a flat step_number-ordered
+  // cap, no lead is ever left with a partial cadence: a lead is either complete or
+  // entirely absent from the map.
+  const touchesByLead = new Map<string, TouchRow[]>();
+  let from = 0;
+  for (;;) {
+    const { data: page, error: touchesError } = await supabase
+      .from("campaign_touch" as never)
+      .select("lead_id, step_number, channel, status, eligible_at")
+      .eq("campaign_id", campaignId)
+      .order("lead_id", { ascending: true })
+      .order("step_number", { ascending: true })
+      .range(from, from + TOUCH_PAGE_SIZE - 1);
+    // Same reasoning as above: a failed page must not be folded as "no more touches"
+    // — that reads as "everyone's finished" instead of "we don't actually know".
+    if (touchesError) throw new Error(touchesError.message || "Failed to load campaign touches");
+    const rows = (page || []) as unknown as TouchRow[];
+    for (const t of rows) {
+      const list = touchesByLead.get(t.lead_id) || [];
+      list.push(t);
+      touchesByLead.set(t.lead_id, list);
+    }
+    if (rows.length < TOUCH_PAGE_SIZE) break;
+    if (touchesByLead.size >= TOUCH_LEAD_CAP) break;
+    from += TOUCH_PAGE_SIZE;
+  }
+
+  const byLead = new Map<string, LeadCadenceStatus>();
+  for (const e of ((enrollments || []) as unknown as EnrollmentRow[])) {
+    byLead.set(e.lead_id, deriveCadenceStatus(e, touchesByLead.get(e.lead_id) || []));
+  }
+  // A lead with touch rows but no enrollment row shouldn't happen; if it does, it
+  // still belongs in the list rather than silently rendering blank.
+  for (const [leadId, list] of touchesByLead) {
+    if (!byLead.has(leadId)) byLead.set(leadId, deriveCadenceStatus(null, list));
+  }
+
+  let autoSkippedTotal = 0;
+  for (const s of byLead.values()) autoSkippedTotal += s.autoSkipped;
+  return { byLead, autoSkippedTotal };
+}
+
+/** One line of plain English for a cadence status. */
+export function cadenceStatusLabel(
+  s: LeadCadenceStatus | undefined,
+  formatDue: (iso: string | null) => string,
+): string {
+  if (!s) return "Not in the cadence yet";
+  switch (s.state) {
+    case "replied":     return "Replied — handled in your Queue";
+    case "stopped":     return "Stopped";
+    case "completed":   return "Finished the cadence";
+    case "not_started": return "Not started";
+    default: {
+      const step = `Step ${s.stepNumber}${s.totalSteps ? ` of ${s.totalSteps}` : ""}`;
+      const when = s.state === "due" ? "due now" : `due ${formatDue(s.dueAt)}`;
+      return `${step} · ${touchVerb((s.channel || "email") as CanonicalChannel)} · ${when}`;
+    }
+  }
 }

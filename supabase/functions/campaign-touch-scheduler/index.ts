@@ -34,6 +34,14 @@ const corsHeaders = {
 
 const BATCH = 200; // due touches considered per run
 
+// What canReceive() looks for, in the rep's words. Keep in step with it.
+const CHANNEL_HANDLE: Record<string, string> = {
+  voice: "phone number",
+  sms: "phone number",
+  whatsapp: "WhatsApp number",
+  linkedin: "LinkedIn profile",
+};
+
 function canReceive(channel: string, lead: { phone: string | null; linkedin_url: string | null; whatsapp_number: string | null }): boolean {
   switch (channel) {
     case "voice":
@@ -234,7 +242,10 @@ Deno.serve(async (req) => {
     const unreachable = !canReceive(t.channel, lead);
     if (pastMaxAge || unreachable) {
       const exec = await getExec(lead.owner_user_id);
-      await advanceColdEnrollment(supabase, exec, t, "auto_skipped");
+      const reason = pastMaxAge
+        ? "the step's window passed before anyone acted on it"
+        : `this lead has no ${CHANNEL_HANDLE[t.channel] ?? "contact handle"} on file`;
+      await advanceColdEnrollment(supabase, exec, t, "auto_skipped", { skipReason: reason });
       counters.auto_skipped++;
       console.log(`[campaign-touch-scheduler] auto-skipped touch ${t.id} (${t.channel}) — ${pastMaxAge ? "past max-age" : "lead can't receive channel"}`);
       continue;
@@ -290,7 +301,9 @@ Deno.serve(async (req) => {
     }
 
     const exec = await getExec(ld.owner_user_id);
-    await advanceColdEnrollment(supabase, exec, t, "auto_skipped");
+    await advanceColdEnrollment(supabase, exec, t, "auto_skipped", {
+      skipReason: "the step's window passed while the card sat in the Queue",
+    });
     counters.auto_skipped++;
     console.log(`[campaign-touch-scheduler] auto-skipped STALE queued touch ${t.id} (past max-age)`);
   }

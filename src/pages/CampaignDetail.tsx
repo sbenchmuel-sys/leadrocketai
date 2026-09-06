@@ -44,6 +44,8 @@ import { toast } from "sonner";
 import {
   fetchCampaignById,
   fetchCampaignLeads,
+  fetchCampaignCadence,
+  cadenceStatusLabel,
   fetchCampaignCollateral,
   updateCampaign,
   deleteCampaign,
@@ -54,9 +56,12 @@ import {
   type CampaignLead,
   type SendMode,
   type CampaignCollateral,
+  type LeadCadenceStatus,
   type ReconcileCampaignStep,
 } from "@/lib/campaignQueries";
 import { pauseCampaign, resumeCampaign } from "@/lib/outreachQueue";
+import { formatDueAt } from "@/lib/eligibleAtFormat";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { unenrollLeadFromCampaign, launchCampaignWithSchedule } from "@/lib/campaignEnrollment";
 import {
   insertStep,
@@ -93,6 +98,9 @@ export default function CampaignDetail() {
 
   const [campaign, setCampaign] = useState<CampaignWithSteps | null>(null);
   const [people, setPeople] = useState<CampaignLead[]>([]);
+  const [cadence, setCadence] = useState<Map<string, LeadCadenceStatus>>(new Map());
+  const [autoSkipped, setAutoSkipped] = useState(0);
+  const { workspaceTimezone } = useWorkspace();
   const [loading, setLoading] = useState(true);
   const [instructions, setInstructions] = useState("");
   const [instructionsOpen, setInstructionsOpen] = useState(false);
@@ -135,6 +143,9 @@ export default function CampaignDetail() {
   const loadPeople = useCallback(() => {
     if (!id) return;
     fetchCampaignLeads(id).then(setPeople).catch(() => {});
+    fetchCampaignCadence(id)
+      .then(({ byLead, autoSkippedTotal }) => { setCadence(byLead); setAutoSkipped(autoSkippedTotal); })
+      .catch(() => {});
   }, [id]);
 
   // Collateral is owned here so the Collateral section and the email-review
@@ -241,6 +252,11 @@ export default function CampaignDetail() {
     try {
       const { reanchored } = await launchCampaignWithSchedule(id);
       setCampaign({ ...campaign, status: "active" });
+      // launchCampaignWithSchedule re-anchors every not-started touch's eligible_at
+      // to today and may promote the first step straight to "queued" — the People
+      // list's cadence line (due dates, due-now state) was built from the pre-launch
+      // read and would otherwise keep showing stale dates until a manual reload.
+      loadPeople();
       toast.success(
         reanchored > 0
           ? `Outreach launched — ${reanchored} ${reanchored === 1 ? "person's" : "people's"} schedule starts today`
@@ -285,7 +301,11 @@ export default function CampaignDetail() {
       // Stop their schedule (delete enrollment → touches cascade) AND clear
       // campaign_id — clearing campaign_id alone would leave the cadence running.
       await unenrollLeadFromCampaign(id, leadId);
-      setPeople((prev) => prev.filter((p) => p.id !== leadId));
+      // Re-fetch people + cadence together rather than just filtering local state:
+      // the removed person's touches (including any auto-skipped ones) are gone
+      // from the DB now, so the campaign's auto-skip total and everyone else's
+      // per-person counts need to reflect that, not just the shorter people list.
+      loadPeople();
       refreshCadenceGate(); // removing the last enrolled person may re-open editing
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove that person");
@@ -763,6 +783,11 @@ export default function CampaignDetail() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">
             People {people.length > 0 && <span className="text-muted-foreground">({people.length})</span>}
+            {autoSkipped > 0 && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {autoSkipped} {autoSkipped === 1 ? "step" : "steps"} auto-skipped
+              </span>
+            )}
           </h2>
           <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
             <UserPlus className="mr-2 h-4 w-4" />
@@ -789,6 +814,12 @@ export default function CampaignDetail() {
                       <div className="truncate text-sm font-medium text-foreground">{p.name}</div>
                       <div className="truncate text-xs text-muted-foreground">
                         {[p.company, p.email].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {cadenceStatusLabel(cadence.get(p.id), (iso) => formatDueAt(iso, workspaceTimezone))}
+                        {(cadence.get(p.id)?.autoSkipped ?? 0) > 0 && (
+                          <span> · {cadence.get(p.id)!.autoSkipped} auto-skipped</span>
+                        )}
                       </div>
                     </div>
                     <Button

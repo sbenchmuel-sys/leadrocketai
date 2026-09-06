@@ -3,7 +3,10 @@
 // + async recompute trigger
 // ============================================================
 
-import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+// `import type` (not `import { type ... }`) so this module emits NO runtime import:
+// coldOutreach.ts now imports it, and coldOutreach's Deno tests are otherwise
+// dependency-free — they should not have to fetch the supabase-js bundle for a type.
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export interface TimelineItemInput {
   workspace_id: string;

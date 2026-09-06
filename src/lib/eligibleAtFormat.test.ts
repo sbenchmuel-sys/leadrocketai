@@ -3,6 +3,7 @@ import {
   formatEligibleAtAbsolute,
   formatEligibleAtRelative,
   formatEligibleAt,
+  formatDueAt,
 } from "./eligibleAtFormat";
 
 const NOW = new Date("2026-05-21T14:00:00Z"); // 10:00 EDT, 15:00 BST
@@ -82,5 +83,48 @@ describe("formatEligibleAt (combined)", () => {
     const iso = "2026-05-21T17:00:00Z"; // +3h
     const out = formatEligibleAt(iso, "America/New_York", NOW);
     expect(out).toMatch(/1:00.*\(Fires in 3h\)/);
+  });
+});
+
+describe("formatDueAt", () => {
+  // 2026-05-21T14:00:00Z is 10:00 AM in New York and 2:00 PM in London.
+  const NOW_DUE = new Date("2026-05-21T14:00:00Z");
+
+  it("renders the WORKSPACE clock, not the browser's", () => {
+    const iso = "2026-05-21T21:30:00Z";
+    expect(formatDueAt(iso, "America/New_York", NOW_DUE)).toBe("Today 5:30 PM");
+    expect(formatDueAt(iso, "Europe/London", NOW_DUE)).toBe("Today 10:30 PM");
+  });
+
+  it("says Today / Tomorrow by the WORKSPACE calendar day", () => {
+    // 01:30Z on the 22nd is still the 21st (9:30 PM) in New York, but already
+    // "tomorrow" in London — the old browser-TZ version got one of these wrong
+    // for every rep whose browser TZ != the workspace's.
+    const iso = "2026-05-22T01:30:00Z";
+    expect(formatDueAt(iso, "America/New_York", NOW_DUE)).toBe("Today 9:30 PM");
+    expect(formatDueAt(iso, "Europe/London", NOW_DUE)).toBe("Tomorrow 2:30 AM");
+  });
+
+  it("falls back to a weekday + date further out", () => {
+    const out = formatDueAt("2026-07-06T13:00:00Z", "America/New_York", NOW_DUE);
+    expect(out).toContain("Mon");
+    expect(out).toContain("Jul 6");
+  });
+
+  it("crosses a month boundary without claiming Tomorrow", () => {
+    // 31 May → 1 Jun exercises nextDayKey's calendar rollover.
+    const now = new Date("2026-05-31T12:00:00Z");
+    expect(formatDueAt("2026-06-01T12:00:00Z", "UTC", now)).toBe("Tomorrow 12:00 PM");
+    expect(formatDueAt("2026-06-02T12:00:00Z", "UTC", now)).not.toContain("Tomorrow");
+  });
+
+  it("falls back to UTC on a missing or bogus timezone", () => {
+    expect(formatDueAt("2026-05-21T21:30:00Z", null, NOW_DUE)).toBe("Today 9:30 PM");
+    expect(formatDueAt("2026-05-21T21:30:00Z", "Not/A_Real_Zone", NOW_DUE)).toBe("Today 9:30 PM");
+  });
+
+  it("returns a dash for a missing or unparseable timestamp", () => {
+    expect(formatDueAt(null, "UTC", NOW_DUE)).toBe("—");
+    expect(formatDueAt("not-a-date", "UTC", NOW_DUE)).toBe("—");
   });
 });

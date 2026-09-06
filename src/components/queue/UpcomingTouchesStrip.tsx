@@ -11,10 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   fetchUpcomingTouches,
-  formatReadyAt,
   type UpcomingCampaignGroup,
   type UpcomingChannel,
 } from "@/lib/upcomingTouchesQueries";
+import { formatDueAt } from "@/lib/eligibleAtFormat";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 const VISIBLE_CAP = 50;
 
@@ -35,6 +36,8 @@ interface Props {
 }
 
 export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
+  const { workspaceTimezone } = useWorkspace();
+  const due = (iso: string | null) => formatDueAt(iso, workspaceTimezone);
   const [groups, setGroups] = useState<UpcomingCampaignGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -87,7 +90,7 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-foreground">
                       <span className="font-medium">{g.campaignName}</span>
-                      <span className="text-muted-foreground"> — {g.leadCount} {g.leadCount === 1 ? "lead" : "leads"} scheduled · next ready {formatReadyAt(g.nextReadyAt)}</span>
+                      <span className="text-muted-foreground"> — {g.leadCount} {g.leadCount === 1 ? "lead" : "leads"} scheduled · next ready {due(g.nextReadyAt)}</span>
                     </div>
                     {g.skipReasonSummary.length > 0 && (
                       <div className="text-[11px] text-muted-foreground mt-0.5">
@@ -105,7 +108,7 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
                           {l.leadName}
                           {l.company && <span className="text-muted-foreground"> · {l.company}</span>}
                         </span>
-                        <span className="text-muted-foreground whitespace-nowrap">{formatReadyAt(l.readyAt)}</span>
+                        <span className="text-muted-foreground whitespace-nowrap">{due(l.readyAt)}</span>
                         {l.previousSkipReason && (
                           <span className="text-[10px] text-muted-foreground italic whitespace-nowrap">
                             skipped: {l.previousSkipReason}
@@ -138,7 +141,7 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
               <SheetHeader>
                 <SheetTitle>{drawer.campaignName}</SheetTitle>
                 <p className="text-xs text-muted-foreground">
-                  {drawer.leadCount} scheduled · next ready {formatReadyAt(drawer.nextReadyAt)}
+                  {drawer.leadCount} scheduled · next ready {due(drawer.nextReadyAt)}
                 </p>
               </SheetHeader>
               <ul className="mt-4 space-y-1">
@@ -149,7 +152,7 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
                       {l.leadName}
                       {l.company && <span className="text-muted-foreground"> · {l.company}</span>}
                     </span>
-                    <span className="text-muted-foreground whitespace-nowrap">{formatReadyAt(l.readyAt)}</span>
+                    <span className="text-muted-foreground whitespace-nowrap">{due(l.readyAt)}</span>
                   </li>
                 ))}
               </ul>
