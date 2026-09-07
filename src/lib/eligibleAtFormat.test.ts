@@ -4,6 +4,7 @@ import {
   formatEligibleAtRelative,
   formatEligibleAt,
   formatDueAt,
+  startOfDayInTz,
 } from "./eligibleAtFormat";
 
 const NOW = new Date("2026-05-21T14:00:00Z"); // 10:00 EDT, 15:00 BST
@@ -126,5 +127,34 @@ describe("formatDueAt", () => {
   it("returns a dash for a missing or unparseable timestamp", () => {
     expect(formatDueAt(null, "UTC", NOW_DUE)).toBe("—");
     expect(formatDueAt("not-a-date", "UTC", NOW_DUE)).toBe("—");
+  });
+});
+
+describe("startOfDayInTz", () => {
+  it("returns local midnight of the workspace zone as an instant", () => {
+    // 2026-09-06 01:30 UTC is still Sep 5 in New York (21:30 EDT).
+    const now = new Date("2026-09-06T01:30:00Z");
+    expect(startOfDayInTz(now, "America/New_York").toISOString()).toBe("2026-09-05T04:00:00.000Z");
+    // …but already Sep 6 in Jerusalem (04:30 IDT).
+    expect(startOfDayInTz(now, "Asia/Jerusalem").toISOString()).toBe("2026-09-05T21:00:00.000Z");
+  });
+
+  it("walks whole calendar days for yesterday / tomorrow", () => {
+    const now = new Date("2026-09-06T12:00:00Z");
+    expect(startOfDayInTz(now, "UTC", -1).toISOString()).toBe("2026-09-05T00:00:00.000Z");
+    expect(startOfDayInTz(now, "UTC", 1).toISOString()).toBe("2026-09-07T00:00:00.000Z");
+  });
+
+  it("lands on local midnight on DST-switch days (Codex P2 on PR #136)", () => {
+    // Sydney leaves DST on 2026-04-05 (UTC+11 → +10) and re-enters on 2026-10-04.
+    // Local midnight is 13:00 UTC the day before (still +11) / 14:00 UTC (+10).
+    expect(startOfDayInTz(new Date("2026-04-05T06:00:00Z"), "Australia/Sydney").toISOString()).toBe("2026-04-04T13:00:00.000Z");
+    expect(startOfDayInTz(new Date("2026-10-04T06:00:00Z"), "Australia/Sydney").toISOString()).toBe("2026-10-03T14:00:00.000Z");
+    // And the US spring-forward day (New York, 2026-03-08): midnight is still EST (+5).
+    expect(startOfDayInTz(new Date("2026-03-08T12:00:00Z"), "America/New_York").toISOString()).toBe("2026-03-08T05:00:00.000Z");
+  });
+
+  it("falls back to UTC on a bad zone", () => {
+    expect(startOfDayInTz(new Date("2026-09-06T12:00:00Z"), "Mars/Olympus").toISOString()).toBe("2026-09-06T00:00:00.000Z");
   });
 });

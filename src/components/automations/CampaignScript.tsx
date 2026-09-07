@@ -30,7 +30,10 @@ import {
   cumulativeDays,
   emailIntent,
   stepNeedsSmsSetup,
+  conditionShortLabel,
   EDITABLE_CHANNELS,
+  STEP_CONDITIONS,
+  type StepCondition,
 } from "@/lib/campaignDefaults";
 
 // Minimal shape shared by draft steps and DB steps.
@@ -43,6 +46,8 @@ export interface ScriptStep {
   step_type?: StepType;
   // Per-step "Include a meeting link" flag (email touches). Editable mode only.
   include_meeting_cta?: boolean | null;
+  // Cadence branch — "only if invite accepted" etc. null = always runs.
+  condition?: StepCondition | null;
 }
 
 const ICONS: Record<CanonicalChannel, LucideIcon> = {
@@ -77,6 +82,7 @@ interface CampaignScriptProps {
   onChangeChannel?: (index: number, channel: CanonicalChannel) => void;
   onInsert?: (atIndex: number, channel: CanonicalChannel) => void;
   onToggleMeeting?: (index: number, value: boolean) => void;
+  onChangeCondition?: (index: number, condition: StepCondition | null) => void;
 }
 
 /**
@@ -98,6 +104,7 @@ export function CampaignScript({
   onChangeChannel,
   onInsert,
   onToggleMeeting,
+  onChangeCondition,
 }: CampaignScriptProps) {
   const days = cumulativeDays(steps);
   // Which "Add a step" slot is currently expanded (0..steps.length), or null.
@@ -196,6 +203,12 @@ export function CampaignScript({
                   <span className="text-xs text-muted-foreground">
                     {days[i] === 0 ? "Day 1 — right away" : `Day ${days[i] + 1}`}
                   </span>
+                  {/* Read-only: the branch, in plain words. (Editable mode has the picker below.) */}
+                  {!editable && conditionShortLabel(step.condition) && (
+                    <span className="rounded-full border border-border px-1.5 text-[10px] text-muted-foreground">
+                      {conditionShortLabel(step.condition)}
+                    </span>
+                  )}
                 </div>
                 {step.custom_instructions && (
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -220,6 +233,27 @@ export function CampaignScript({
                       onCheckedChange={(v) => onToggleMeeting(i, v === true)}
                     />
                     Include a meeting link
+                  </label>
+                )}
+
+                {/* Cadence branch: run this touch always, or only on a signal. The
+                    LinkedIn-invite option is only offered on a LinkedIn touch. */}
+                {editable && onChangeCondition && i > 0 && (
+                  <label className="mt-2 flex w-fit items-center gap-2 text-xs text-foreground">
+                    <span className="text-muted-foreground">Runs</span>
+                    <select
+                      className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+                      value={step.condition ?? ""}
+                      onChange={(e) => onChangeCondition(i, (e.target.value || null) as StepCondition | null)}
+                      aria-label="When this touch runs"
+                    >
+                      <option value="">Always</option>
+                      {STEP_CONDITIONS
+                        .filter((c) => c.id !== "linkedin_accepted" || step.channel === "linkedin")
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>{c.label}</option>
+                        ))}
+                    </select>
                   </label>
                 )}
 

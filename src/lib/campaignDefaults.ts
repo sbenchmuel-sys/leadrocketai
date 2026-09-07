@@ -21,6 +21,24 @@ export const DEFAULT_GLOBAL_INSTRUCTIONS = `- Emails: open with one line persona
 - On the 2nd and 3rd emails, offer to send a one-pager relevant to the prospect's industry and suggest a quick meeting.
 - Stay grounded in the knowledge file, never over-promise, and always honor opt-outs.`;
 
+// ── Cadence branch conditions (Sprint 3) ────────────────────────────
+// A touch may only run when a signal the cadence already tracks is there;
+// otherwise it's auto-skipped when it comes due (reason on the timeline) and
+// the plan moves on. Evaluated server-side (supabase/functions/_shared/
+// coldConditions.ts); this is the rep-facing vocabulary.
+export type StepCondition = "linkedin_accepted" | "call_answered" | "no_call_answered";
+
+export const STEP_CONDITIONS: { id: StepCondition; label: string; short: string }[] = [
+  { id: "linkedin_accepted", label: "Only if they accepted the LinkedIn invite", short: "if invite accepted" },
+  { id: "call_answered", label: "Only if a call was answered", short: "if a call was answered" },
+  { id: "no_call_answered", label: "Only if no call was answered yet", short: "if no call answered" },
+];
+
+/** Short badge text for a condition, or null for an unconditional touch. */
+export function conditionShortLabel(condition: StepCondition | null | undefined): string | null {
+  return STEP_CONDITIONS.find((c) => c.id === condition)?.short ?? null;
+}
+
 // ── A single touch in the default plan ──────────────────────────────
 export interface DraftStep {
   step_number: number;
@@ -34,6 +52,8 @@ export interface DraftStep {
   // Per-step "Include a meeting link" override (email touches only).
   // null = inherit the campaign-level default; true/false = force on/off.
   include_meeting_cta?: boolean | null;
+  // Cadence branch (see StepCondition). null/undefined = always runs.
+  condition?: StepCondition | null;
   // The step's PRIOR step_number when editing an already-saved campaign, so the
   // reconciling write path can move this touch's generated copy / collateral
   // link to its new number (and drop them when the touch is removed). null/
@@ -62,6 +82,9 @@ interface TouchTemplate {
   delay_days: number;
   cta_type: string;
   custom_instructions: string;
+  // Only meaningful while the touch keeps its preferred channel (a LinkedIn
+  // message that fell back to email shouldn't wait on a LinkedIn invite).
+  condition?: StepCondition;
 }
 
 const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
@@ -121,19 +144,25 @@ const NINE_TOUCH_TEMPLATE: TouchTemplate[] = [
   },
   {
     // 7 · LinkedIn — follow-up message (friendly nudge, one light question). Manual touch.
+    // Only once they've accepted the invite from touch 2 — you can't message
+    // a non-connection, so without the signal this step would just be skipped
+    // by the rep anyway.
     step_type: "followup",
     preferredChannel: "linkedin",
     delay_days: 3,
     cta_type: "question",
+    condition: "linkedin_accepted",
     custom_instructions:
       "Friendly follow-up that adds one relevant insight and ends with a single light question. No hard pitch.",
   },
   {
-    // 8 · Call — second attempt
+    // 8 · Call — second attempt. Only if the first call wasn't answered; a rep
+    // who already reached them doesn't cold-call again.
     step_type: "followup",
     preferredChannel: "voice",
     delay_days: 3,
     cta_type: "question",
+    condition: "no_call_answered",
     custom_instructions:
       "Second call attempt. Brief — reference the value you've already shared. Voicemail if there's no answer.",
   },
@@ -166,6 +195,8 @@ export function buildDefaultPlan(selectedChannels: CanonicalChannel[]): DraftSte
       cta_type: t.cta_type,
       custom_instructions: t.custom_instructions,
       active: true,
+      // A condition tied to the preferred channel is dropped when the touch fell back.
+      condition: channel === t.preferredChannel ? t.condition ?? null : null,
     };
   });
 }
@@ -403,10 +434,21 @@ export function changeStepChannel(
           ...s,
           channel,
           include_meeting_cta: channel === "email" ? s.include_meeting_cta ?? null : null,
+          // "Only if invite accepted" only makes sense on a LinkedIn touch.
+          condition: s.condition === "linkedin_accepted" && channel !== "linkedin" ? null : s.condition ?? null,
         }
       : s,
   );
   return normalizePlan(next);
+}
+
+/** Set (or clear, with null) the cadence branch on the touch at `index`. */
+export function setStepCondition(
+  plan: DraftStep[],
+  index: number,
+  condition: StepCondition | null,
+): DraftStep[] {
+  return plan.map((s, i) => (i === index ? { ...s, condition } : s));
 }
 
 /** Set a gap (days after the previous touch) on the touch at `index`. */

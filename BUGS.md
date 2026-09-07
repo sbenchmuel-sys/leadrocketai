@@ -61,6 +61,23 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Repro:** grep edge functions for `from("interactions").insert` that has no adjacent `projectTimelineItem`/`createCanonicalInteraction` → the two automation-executor sites.
 - **Claude Code prompt:** "Route the two automation-executor system-note inserts (lines ~193 OOO-return and ~688 unsubscribe) through `createCanonicalInteraction` so they also land in `lead_timeline_items`; preserve dedupe_key; add `workspace_id` to the source queries so projection fires."
 
+## BUG-030 — Sprint 3 Codex findings (PR #136, first pass)
+- **Severity:** P1 (one), P2 (three)
+- **Status:** fixed (2026-09-07, branch `fix/outreach-sprint-3`)
+- **Found:** Codex review on the Sprint 3 PR.
+- **P1 — condition lookup failed open.** `stepConditionUnmetReason` discarded the query `error`, so a failed `campaign_steps` read looked like "no condition" and an automatic email whose condition was never verified could send. Now any read error throws; scheduler and executor leave the touch `scheduled` for the next tick (never surface or skip unverified), the inline promote simply doesn't promote. Deno test with a stub client.
+- **P2 — `startOfDayInTz` used the offset at the UTC-midnight guess**, wrong by an hour on DST-switch days (e.g. Australia/Sydney 2026-04-05 / 2026-10-04). Now re-reads the offset at the candidate instant and corrects once. Tests for Sydney both ways + New York spring-forward.
+- **P2 — digest skipped yesterday's auto-skip notes when no campaign was active today** (rep paused their last one). The notes query is historical and now always runs; only the forward-looking reads need an active campaign.
+- **P2 — digest presented capped (500-row, unordered) reads as exact totals.** Overdue now uses exact per-channel HEAD counts (same filters as the queue); later-today and skip-note reads are ordered and carry `…Truncated` flags rendered as "500+" / "first 500 shown".
+
+## BUG-029 — Enrollment and Launch were multi-request browser sequences that could half-commit
+- **Severity:** P2 (data integrity — a lead could be stamped into an outreach with no cadence, or enrolled with no touches)
+- **Status:** fixed (2026-09-06, branch `fix/outreach-sprint-3`) — audit item #8.
+- **Found:** 2026-09-02, outreach audit.
+- **What happens:** "Add people" ran as separate requests — stamp `leads.campaign_id`, insert `campaign_enrollment`, re-read the step fingerprint, insert every `campaign_touch` (N leads × up to 10 steps) — with hand-written rollback between them. A closed tab or dropped connection mid-way left a lead stamped-but-unscheduled (invisible to the scheduler, and a retry skipped it as "already enrolled"). Launch had the same shape: touch upsert, then per-enrollment `started_at` updates in chunks, then the status flip — three phases that could commit independently.
+- **Fix:** two SECURITY DEFINER RPCs (`20260907000000_transactional_enrollment_rpcs.sql`): `enroll_campaign_leads` and `launch_campaign_with_schedule`, each ONE transaction. The client keeps the pure planning (`planEnrollment` / `planRelaunch`); the database claims each lead (workspace + unassigned + owner-or-admin — the leads RLS checks), re-checks opt-out / do-not-contact / already-enrolled at write time, and writes enrollment + touches together; launch refuses if people were added since the client's read (client re-plans once). Behaviour checks run on a real Postgres in CI (`scripts/test-sql.sh`, `supabase/tests/`).
+- **Lovable:** apply the migration.
+
 ## BUG-022 — CAN-SPAM postal-address block silently off since June; its test went stale and red
 - **Severity:** P2 today (invited pilot only), P0 the day cold outreach opens up
 - **Status:** fixed (2026-09-05, branch `fix/outreach-sprint-2`) — behaviour unchanged for the pilot, but no longer implicit.
@@ -168,7 +185,7 @@ One place for every bug the QA agent (or anyone) finds. Claude Code: pick open b
 - **Severity:** P1 (reliability; observed live on drivepilot.app 2026-09-02)
 - **Status:** verified (2026-09-03, code audit) — `AuthContext.authStalled` flips after 10s of loading; `ProtectedRoute` / `ProtectedOnboardingRoute` render `AuthStalledCard` (Reload / Sign in again, which clears `sb-*` local session keys). Verified in `src/contexts/AuthContext.tsx`, `src/components/AuthStalledCard.tsx`, `src/components/ProtectedRoute.tsx`, `src/components/ProtectedOnboardingRoute.tsx` (commit f7f3b15).
 - **What happens:** Supabase auth calls (`/auth/v1/token`, `/auth/v1/user`) stayed pending indefinitely (multi-tab lock / stuck refresh); `initializeAuth` awaited `getSession()` with no timeout → blank page + spinner, every tab.
-- **Still to look at:** root cause of the pending auth requests (supabase-js lock). Consider upgrading supabase-js and configuring a lock timeout.
+- **Root cause fixed (2026-09-06, branch `fix/outreach-sprint-3`):** supabase-js serialises auth across tabs with a `navigator.locks` lock and `getSession()` waits for it with no timeout (`_acquireLock(-1)`); the holder's own token-refresh request has no timeout either. One background tab with a hung `/auth/v1/token` (lid closed mid-refresh, dead connection, frozen tab) held the lock forever, so every tab hung. `src/integrations/supabase/authLock.ts`: the lock wait is bounded (10s, then the lock is taken over — a lock held that long is a dead holder), and `/auth/v1/*` requests get a 15s deadline via `global.fetch` so a holder can't wedge the lock in the first place. Wired in `client.ts` (Lovable-generated — `src/test/authLockGuard.test.ts` fails `npm test` if a regeneration drops the options). The `AuthStalledCard` fallback stays as belt-and-braces.
 
 ## BUG-015 — Email cards show a "Mark as handled" tick that always errors
 - **Severity:** P2 (UX)

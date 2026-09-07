@@ -185,3 +185,46 @@ export function formatDueAt(
   }).format(d);
   return `${date} ${time}`;
 }
+
+/** Milliseconds the zone's wall clock is ahead of UTC at `date` (negative = behind). */
+function tzOffsetMs(date: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return asUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+/**
+ * The instant the calendar day containing `date` STARTS in the workspace zone
+ * (00:00 wall time), offset by `dayDelta` days (−1 = yesterday, +1 = tomorrow).
+ * Pure calendar arithmetic on the day key, so DST can't skip or repeat a day.
+ * Used for "due today" / "overdue" / "yesterday" windows on the Outreach digest.
+ */
+export function startOfDayInTz(date: Date, workspaceTz: string | null | undefined, dayDelta = 0): Date {
+  const tz = resolveTz(workspaceTz);
+  let key = dayKey(date, tz);
+  for (let i = 0; i < dayDelta; i++) key = nextDayKey(key);
+  for (let i = 0; i > dayDelta; i--) key = prevDayKey(key);
+  // The zone's offset can differ between the UTC-midnight guess and the local
+  // midnight we're solving for (a DST switch on that day). Apply the offset,
+  // then re-read the offset AT the candidate and correct once — converges
+  // because offsets change at most once per day.
+  const guess = new Date(`${key}T00:00:00Z`);
+  let candidate = new Date(guess.getTime() - tzOffsetMs(guess, tz));
+  const offsetAtCandidate = tzOffsetMs(candidate, tz);
+  if (candidate.getTime() !== guess.getTime() - offsetAtCandidate) {
+    candidate = new Date(guess.getTime() - offsetAtCandidate);
+  }
+  return candidate;
+}
+
+/** The calendar day before `key` — counterpart of nextDayKey. */
+function prevDayKey(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return prev.toISOString().slice(0, 10);
+}

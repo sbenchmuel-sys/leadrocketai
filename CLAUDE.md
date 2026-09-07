@@ -116,6 +116,8 @@ When Lovable applies a migration, it creates its own copy with a `<timestamp>_<u
 
 ## Open hazards
 
+- **`src/integrations/supabase/client.ts` is Lovable-generated but carries hand-added options.** `auth.lock: boundedAuthLock` and `global.fetch: authFetchWithTimeout` (from `authLock.ts`) are the root-cause fix for the multi-tab spinner hang (BUG-014). Lovable rewrites this file occasionally (last: 2026-09-02); if the options drop out, `src/test/authLockGuard.test.ts` fails `npm test` — re-add them rather than skipping the test.
+
 - **Supabase anon key is hardcoded in 12 cron commands** (`https://ntzeiflqqluwgdfmatjh.supabase.co/...`). When the anon key rotates, all 12 crons must be updated together OR they all break silently.
 - **Demo data fall-through in `src/lib/demoData.ts` (736 lines)** — imported by production query paths. If `VITE_DEMO_MODE` is misconfigured in prod, real users could see demo numbers. Gate explicitly.
 - **Lead scoring exists client-side AND server-side** with no sync — `closingPowerUtils.ts` (client) vs `recompute-lead-intelligence` (server). Pick server as canonical.
@@ -124,10 +126,11 @@ When Lovable applies a migration, it creates its own copy with a `<timestamp>_<u
 
 ## Running tests
 
-Three suites. **Staging setup, the QA gate (when each suite is mandatory), and harness gotchas live in [`STAGING_TEST_PLAN.md`](STAGING_TEST_PLAN.md)** — keep the detail there, not here.
+Four suites. **Staging setup, the QA gate (when each suite is mandatory), and harness gotchas live in [`STAGING_TEST_PLAN.md`](STAGING_TEST_PLAN.md)** — keep the detail there, not here.
 
 - **Frontend / shared-logic (Vitest, Node):** `npm test` (or `npm run test:watch`). Pure unit tests, no DB/network; `vitest.config.ts` (jsdom).
 - **Edge-function (Deno):** `npm run test:edge`. First run downloads Deno std; `supabase-js` imports need `node_modules` present (else `--no-check`).
+- **SQL RPC behaviour (Postgres, local or CI):** `./scripts/test-sql.sh` — creates a throwaway database, loads `supabase/tests/fixture_schema.sql` (a minimal stand-in for the real schema), applies the migrations listed in `supabase/tests/migrations.list`, and runs every `supabase/tests/*.test.sql`. Needs `psql` and a reachable Postgres (`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`; CI starts a `postgres:16` service). When a tested function starts depending on a new column, add it to the fixture.
 - **Workspace / RLS isolation (integration, live STAGING):** `npm run test:isolation`. Needs the gitignored `.env.staging` (+ `TEST_USER_*`); guarded so it can never hit prod. Run it before merging anything touching RLS / workspace isolation. Mechanics + QA gate → `STAGING_TEST_PLAN.md`.
 
 **Toolchain (Windows):** Node + npm + Deno must be on PATH. Node lives at `C:\Program Files\nodejs`; Deno at `C:\Users\<you>\.deno\bin`. Both are on PATH for new shells — if a tool isn't found, open a fresh terminal (PATH is set per-session at launch). Install deps with `npm install` — **use npm, not Bun** (a Bun-installed `node_modules` omits the `.bin` shims Vitest needs).

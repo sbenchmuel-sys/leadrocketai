@@ -9,6 +9,20 @@ Working state of major in-flight features.
 When a phase fully ships, move it to a `## Completed` section at the bottom of the file or remove it entirely. Don't let ✅ checklists pile up forever — `CLAUDE.md` covers durable knowledge; this file is just the working board.
 
 
+## Outreach Sprint 3 — scale (branch `fix/outreach-sprint-3`, 2026-09-06)
+
+From the outreach audit (project doc `claude/outreach-audit-2026-09-02.md`), Sprint 3 + leftovers. All on one PR.
+
+- ✅ #8 Enrollment + Launch are single transactions (`enroll_campaign_leads`, `launch_campaign_with_schedule` RPCs; BUG-029). SQL behaviour checks on a real Postgres in CI (`scripts/test-sql.sh`).
+- ✅ Today view: Outreach tab grouped by channel (chips with true backlog counts, grouped "All" view) + focus mode (one card at a time, Prev/Next, auto-pages).
+- ✅ Daily digest (in-app, top of the Outreach tab): due now / later today per channel, auto-skipped yesterday grouped by reason with names, overdue with a jump to the queue. Workspace-calendar-day windows.
+- ✅ Enrichment pass: `enrich-lead-linkedin` edge function (shares the SerpAPI / Google-CSE provider with `enrich-company-search` via `_shared/webSearch.ts`); fail-closed matcher; fired at enrollment for leads missing a LinkedIn URL when the cadence has a LinkedIn step.
+- ✅ Conditions: `campaign_steps.condition` (`linkedin_accepted` / `call_answered` / `no_call_answered`), evaluated in scheduler + executor + inline promote; "They accepted my invite" toggle on LinkedIn cards → `leads.linkedin_connected_at`; picker in the cadence editor. Default plan: LinkedIn message only if invite accepted, second call only if no call answered.
+- ✅ Leftover #4: multi-tab auth lock root cause (bounded lock + auth request deadline, `authLock.ts`; BUG-014).
+- ✅ Leftover #12: honest "browser calling isn't set up" message on desktop Call with no Twilio number.
+- ⬜ **Lovable:** apply migrations `20260907000000_transactional_enrollment_rpcs.sql` and `20260907000100_cadence_step_conditions.sql` (in that order). Deploy edge functions `enrich-lead-linkedin` (new), `campaign-touch-scheduler`, `automation-executor`, `outreach-touch-action` (via `_shared/coldOutreach.ts`), `enrich-company-search` (via `_shared/webSearch.ts`). Confirm `SERPAPI_API_KEY` (or the Google CSE pair) is set — the LinkedIn lookup uses the same secret as company enrichment.
+- ⬜ Still owed from Sprint 2: redeploy `outreach-touch-action` + `campaign-touch-scheduler` (PR #135 touched both) — covered by the list above.
+
 ## Outreach Sprint 1 — correctness fixes (branch `fix/outreach-sprint-1`, 2026-09-02)
 
 From the outreach audit (project doc `claude/outreach-audit-2026-09-02.md`). All five are small, additive, test-backed; see BUGS.md BUG-011…015.

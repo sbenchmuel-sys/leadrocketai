@@ -25,6 +25,7 @@ import { appendMeetingCta } from "./meetingCtaLine.ts";
 import { ONE_PAGER_LINK_TOKEN, applyOnePagerToken } from "./onePagerToken.ts";
 import { interpolateMergeFields, type MergeContext } from "./mergeFieldInterpolate.ts";
 import { projectTimelineItem } from "./timelineProjector.ts";
+import { stepConditionUnmetReason } from "./coldConditions.ts";
 
 type ServiceClient = any; // supabase-js client (service role)
 
@@ -587,6 +588,15 @@ export async function advanceColdEnrollment(
         canPromote = !!((lead as any)?.whatsapp_number || (lead as any)?.phone);
       } else if (next.channel === "linkedin") {
         canPromote = !!(lead as any)?.linkedin_url;
+      }
+
+      // A conditional next step whose signal isn't there is left for cron, which
+      // auto-skips it with the reason on the timeline — never surfaced as a card.
+      if (canPromote && await stepConditionUnmetReason(supabase, {
+        campaign_id: touch.campaign_id, step_number: next.step_number,
+        enrollment_id: touch.enrollment_id, lead_id: touch.lead_id,
+      })) {
+        canPromote = false;
       }
 
       if (canPromote) {

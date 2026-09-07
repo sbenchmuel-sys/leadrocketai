@@ -85,3 +85,30 @@ jobs:
       #      reach any live service (the live Supabase project included).
       - name: Edge-function tests
         run: deno test --no-check --allow-read --allow-env supabase/functions/_shared
+
+  sql:
+    name: SQL — outreach RPC behaviour
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Exercises the SECURITY DEFINER RPCs (enrollment / launch) against a real
+      # Postgres: fixture schema + the migrations under test + assertion scripts.
+      # See scripts/test-sql.sh. No Supabase project is reached.
+      - name: SQL behavioural checks
+        run: ./scripts/test-sql.sh
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres

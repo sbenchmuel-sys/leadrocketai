@@ -1,0 +1,4 @@
+# Migrations applied (in order) on top of supabase/tests/fixture_schema.sql by scripts/test-sql.sh.
+20260625000000_replace_campaign_steps_reconciled.sql
+20260907000000_transactional_enrollment_rpcs.sql
+20260907000100_cadence_step_conditions.sql
