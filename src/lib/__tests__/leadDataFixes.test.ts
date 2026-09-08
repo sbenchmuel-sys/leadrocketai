@@ -169,3 +169,26 @@ describe("deep analysis save keeps canonical and mirror in sync", () => {
     expect(src.slice(skip, save)).toMatch(/return;/);
   });
 });
+
+// The drain is the ONLY path that actually recomputes now (queueRecompute just
+// enqueues). `recompute-lead-intelligence` has no verify_jwt=false entry in
+// supabase/config.toml, so the Supabase gateway 401s ("Missing authorization
+// header") any call without a Bearer token BEFORE the function's own
+// X-Internal-Secret check runs — the queue would drain forever with
+// failed_count=1. Both headers must be present.
+describe("intelligence-queue-drain authorizes its recompute call", () => {
+  const src = read("supabase/functions/intelligence-queue-drain/index.ts");
+  const call = src.slice(src.indexOf("functions/v1/recompute-lead-intelligence"));
+  const headers = call.slice(0, call.indexOf("body:"));
+
+  it("sends a service-role Bearer token so the gateway lets the call through", () => {
+    expect(headers).toMatch(/Authorization: `Bearer \$\{serviceKey\}`/);
+  });
+  it("still sends X-Internal-Secret — that is the real authorization check", () => {
+    expect(headers).toMatch(/"X-Internal-Secret": internalSecret/);
+  });
+  it("fails loudly instead of silently 401ing when the service-role key is missing", () => {
+    expect(src).toMatch(/if \(!serviceKey\)/);
+    expect(src).toMatch(/SUPABASE_SERVICE_ROLE_KEY/);
+  });
+});
