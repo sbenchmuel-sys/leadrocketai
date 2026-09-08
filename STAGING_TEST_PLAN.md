@@ -4,6 +4,64 @@
 
 Last full revision: 2026-06-11 (built from the QA kit's 36 core cases + a feature inventory of all 436 commits / 82 PRs since 2026-03-01).
 
+## Master-upgrade gate: commands
+
+The QA gate every master-upgrade PR passes before merge. Copy-paste; nothing here needs interpretation. Staging ref: `jhipmqdpjenojfhfjgzq`. `supabase/config.toml` points at **production**, so **a `supabase functions deploy` / `supabase db push` without `--project-ref jhipmqdpjenojfhfjgzq` is a review blocker** — anywhere: PR text, scripts, chat.
+
+**1. Load staging env (bash / Git Bash on Windows):**
+```bash
+set -a; . ./.env.staging; set +a
+```
+`.env.staging` is gitignored; it carries `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (staging; the preflight signs in as `TEST_USER_A` for the `ai_task` probe — that function wants a user JWT), `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_USER_A/B_EMAIL`, `TEST_USER_A/B_ID`, `TEST_USER_PASSWORD` (names documented in `.env.example`).
+
+**2. Secrets preflight (read-only probes; `--print` shows the requests without sending):**
+```bash
+npm run preflight:staging
+```
+Proves `LOVABLE_API_KEY` (ai_task `intent_router` → 200) and `INTERNAL_API_SECRET` (cron-dispatcher → 400 on unknown target, not 401/500) over HTTP. `UNSUBSCRIBE_TOKEN_SECRET` and `OPENAI_API_KEY` have no read-only HTTP proof (the unsubscribe verifier fails closed with 400 whether or not the secret exists; `generate-embedding` never reads the OpenAI key) — both are checked by *name* via `supabase secrets list --project-ref jhipmqdpjenojfhfjgzq`. Without the CLI they are UNVERIFIED and the script exits non-zero unless `--allow-unverified` is passed. The outreach-unsubscribe 400-vs-500 probe stays as a liveness check only.
+
+**3. The three suites — when each is mandatory:**
+
+| Suite | Command | Mandatory when |
+|---|---|---|
+| Unit (vitest, offline) | `npm test` | **Always.** Also `npx tsc -b --noEmit` and `npm run build`. |
+| Edge (Deno) | `npm run test:edge` | Any change under `supabase/functions/`. |
+| Isolation (live staging RLS) | `npm run test:isolation` | Any RLS / workspace-scoping change (`is_workspace_member`, `is_workspace_admin`, policies, anything touching `workspace_id` filters). Hard-aborts unless `SUPABASE_URL` is the staging ref. |
+
+**4. Prove a build targets staging before deploying it:**
+```bash
+set -a; . ./.env.staging; set +a && npx vite build --mode staging
+grep -l jhipmqdp dist/assets/*.js        # must list at least one file
+```
+(`vite.config.ts` falls back to production when `VITE_SUPABASE_URL` is unset in `process.env` — the grep is the proof, not the flag.)
+
+**5. Deploy to staging — explicit ref, every time:**
+```bash
+supabase functions deploy <name> --project-ref jhipmqdpjenojfhfjgzq
+supabase db push --project-ref jhipmqdpjenojfhfjgzq
+```
+The staging cron file `supabase/migrations/*_codify_cron_jobs_staging.sql` codifies all **17** prod dispatcher jobs, reads URL/key from Vault (`staging_functions_url`, `staging_anon_key`) and no-ops (NOTICE "SKIPPED") unless `staging_functions_url` contains `jhipmqdpjenojfhfjgzq`; it is never applied to production and never via Lovable. `src/test/noProdRefInStagingSql.test.ts` fails the unit suite if any staging-named file contains the production ref. **QA SQL after applying it on staging:**
+```sql
+SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%';            -- 17
+SELECT jobname FROM cron.job WHERE command ILIKE '%cron-dispatcher%' AND NOT active;
+                                                  -- exactly one row: dispatch-automation-executor
+SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%'
+   AND command NOT ILIKE '%vault.decrypted_secrets%';                            -- 0 (no literal URL/key)
+SELECT jobname, status FROM cron.job_run_details d JOIN cron.job j USING (jobid)
+ WHERE j.jobname = 'cron_classify_inbound' ORDER BY d.start_time DESC LIMIT 3;   -- succeeded
+```
+
+**6. Cold-template eval baseline (needs `LOVABLE_API_KEY` + network — status: PENDING, not yet captured):**
+```bash
+git worktree add /tmp/dp-main origin/main
+PROMPTS_MODULE="file:///tmp/dp-main/supabase/functions/_shared/prompts.ts" \
+LOVABLE_API_KEY=... RUNS=3 deno run --allow-net --allow-env --allow-read \
+  supabase/functions/_shared/__evals__/coldTemplateEval.ts run > /tmp/baseline.json
+# candidate = same command without PROMPTS_MODULE, from the PR branch; then:
+deno run --allow-read supabase/functions/_shared/__evals__/coldTemplateEval.ts compare /tmp/baseline.json /tmp/candidate.json
+```
+Any PR that edits `_shared/prompts.ts` cold templates attaches the `compare` output (exit 0 required).
+
 ## The three catastrophic risks
 
 Every test session starts from these. Anything touching them is **Tier 1** and gets tested first and deepest:

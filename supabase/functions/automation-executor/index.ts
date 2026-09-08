@@ -32,13 +32,7 @@ import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachU
 import { coldTouchClaimKey, coldTouchClaimAcquired } from "../_shared/coldTouchClaim.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
-
-// Removes the "Best,\nMike" sign-off the AI generates per prompt instructions.
-// Must run before the real signature block is appended to avoid duplication.
-function stripAISignOff(body: string): string {
-  const pattern = /\n\n(?:Best regards?|Best|Thanks|Thank you|Kind regards?|Warm regards?|Regards|Cheers|Sincerely),?\s*\n[^\n]{1,40}\s*$/i;
-  return body.replace(pattern, "").trimEnd();
-}
+import { stripAISignOff } from "../_shared/signoff.ts";
 
 /** @deprecated — Use resolveCampaignInstruction() instead for new code.
  *  Kept temporarily for any edge case not yet migrated to the resolver. */

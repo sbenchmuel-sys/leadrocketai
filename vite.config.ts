@@ -18,6 +18,10 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Cross-runtime alias for PURE modules in supabase/functions/_shared/ (no
+      // Deno.*, no esm.sh). Only files actually imported get bundled/type-checked;
+      // the alias alone pulls nothing in. Guarded by src/test/sharedPurity.test.ts.
+      "@shared": path.resolve(__dirname, "./supabase/functions/_shared"),
     },
   },
   define: {
