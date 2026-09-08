@@ -1,6 +1,6 @@
 # DrivePilot master upgrade — checkpoint
 
-Updated: 2026-09-08 09:00 (Israel time) · origin/main still `f75a3ce9` (Lovable has not pushed since) · orchestrator running in the cloud workspace.
+Updated: 2026-09-08 09:40 (Israel time) · origin/main `f75a3ce9` · four PRs open, waiting for Codex + staging.
 
 ## OBSERVE — things only you can see or hear (each unblocks one PR)
 _Nothing ready to observe yet — every observation needs the branch deployed to staging first, and staging is still unreachable (see DECIDE 1)._ Coming first: **G-C** — one executor tick under 55s, one email in a real inbox with exactly one signature and one footer, kill switch sends zero, review-mode Send still works with the switch on.
@@ -9,7 +9,7 @@ _Nothing ready to observe yet — every observation needs the branch deployed to
 _Nothing merged yet._
 
 ## DECIDE — what I need from you, and defaults I took
-1. **[BLOCKING pushes + PRs] GitHub token is read-only.** Every push is refused ("Permission denied"). Fix: GitHub → Settings → Developer settings → Fine-grained tokens → this token → Repository permissions → **Contents: Read and write**, **Pull requests: Read and write** (Workflows: Read and write if shown) → save → tell me "done". _Alternative if faster:_ the four finished branches are already inside your local repo at `C:\Dev\DrivePilot` — from there `git push origin status/upgrade infra/p0-harness unit/g-c-executor-safety unit/l1-lead-data-fixes unit/e-s1a-ai-gateway` with your own login pushes them.
+1. ~~GitHub token read-only~~ — fixed 08 Sep; branches pushed, PRs #137–#140 open.
 2. **[BLOCKING every QA gate] Network access for staging.** Allow `*.supabase.co`, `api.supabase.com`, `*.pooler.supabase.com`, `*.vercel.app`, `deno.land`, `esm.sh` in the Claude app's network settings, then give me a Supabase access token (`sbp_…`). Until then: built and code-reviewed, but nothing can be deployed to staging, so nothing merges.
 3. **Staging Twilio subaccount — unknown.** Default: C1's Twilio checks deferred; C2 waits. Free to change until C1 reaches QA.
 4. **Outlook + real inbox test accounts — unknown.** Needed for the G-C and G-B observations. Default: I seed staging and tell you which inbox to check.
@@ -22,10 +22,10 @@ _Nothing merged yet._
 ## Units
 | Unit | Tier | Status | Branch / commit | QA (code-only, provisional) |
 |---|---|---|---|---|
-| P0 harness | 2 | built · code-QA passed · **waiting to push** | `infra/p0-harness` @ `eda1eb29` | SHIP WITH NOTES (notes fixed: 17-job staging cron, PR template, purity guard) |
-| G-C executor safety | 1 | built · code-QA passed · **waiting to push** | `unit/g-c-executor-safety` @ `38148a45` | SHIP WITH NOTES (note fixed: fail-closed checks moved before AI call) |
-| L1 lead data fixes | 2 | built · code-QA passed · **waiting to push** | `unit/l1-lead-data-fixes` @ `b51e63ba` | SHIP WITH NOTES (notes fixed: merge-seed, MeetingsTab index bug) |
-| E-S1a aiGateway | 2 | built · code-QA passed · **waiting to push** | `unit/e-s1a-ai-gateway` @ `fa5dd0cc` | HOLD → fixed → SHIP WITH NOTES (WhatsApp off-switch, 402 no-retry, 180s PDF timeout, eval import) |
+| P0 harness | 2 | **PR open** [#137](https://github.com/sbenchmuel-sys/leadrocketai/pull/137) · awaiting Codex + staging QA | `infra/p0-harness` @ `eda1eb29` | SHIP WITH NOTES (notes fixed: 17-job staging cron, PR template, purity guard) |
+| G-C executor safety | 1 | **PR open** [#138](https://github.com/sbenchmuel-sys/leadrocketai/pull/138) · awaiting Codex + staging QA + your observation | `unit/g-c-executor-safety` @ `38148a45` | SHIP WITH NOTES (note fixed: fail-closed checks moved before AI call) |
+| L1 lead data fixes | 2 | **PR open** [#139](https://github.com/sbenchmuel-sys/leadrocketai/pull/139) · awaiting Codex + staging QA | `unit/l1-lead-data-fixes` @ `b51e63ba` | SHIP WITH NOTES (notes fixed: merge-seed, MeetingsTab index bug) |
+| E-S1a aiGateway | 2 | **PR open** [#140](https://github.com/sbenchmuel-sys/leadrocketai/pull/140) · awaiting Codex + staging QA | `unit/e-s1a-ai-gateway` @ `fa5dd0cc` | HOLD → fixed → SHIP WITH NOTES (WhatsApp off-switch, 402 no-retry, 180s PDF timeout, eval import) |
 | C1 calling safety | 1 | queued — starts when G-C merges (one Tier 1 at a time) | | |
 | Q1 follow-up rule | 1 | queued — after C1 | | |
 | G-A, G-B, Q2 | 2/1/3 | queued — need Q1 merged | | |
