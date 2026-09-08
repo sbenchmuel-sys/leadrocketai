@@ -18,7 +18,7 @@ set -a; . ./.env.staging; set +a
 ```bash
 npm run preflight:staging
 ```
-Proves `LOVABLE_API_KEY` (ai_task `intent_router`), `INTERNAL_API_SECRET` (cron-dispatcher → 400 on unknown target, not 401/500) and `UNSUBSCRIBE_TOKEN_SECRET` (outreach-unsubscribe → 400 on a forged token, not 500). `OPENAI_API_KEY` has no read-only HTTP path (`generate-embedding` never reads it) — the script checks the *name* via `supabase secrets list --project-ref jhipmqdpjenojfhfjgzq` when the CLI is present, else reports it UNVERIFIED.
+Proves `LOVABLE_API_KEY` (ai_task `intent_router` → 200) and `INTERNAL_API_SECRET` (cron-dispatcher → 400 on unknown target, not 401/500) over HTTP. `UNSUBSCRIBE_TOKEN_SECRET` and `OPENAI_API_KEY` have no read-only HTTP proof (the unsubscribe verifier fails closed with 400 whether or not the secret exists; `generate-embedding` never reads the OpenAI key) — both are checked by *name* via `supabase secrets list --project-ref jhipmqdpjenojfhfjgzq`. Without the CLI they are UNVERIFIED and the script exits non-zero unless `--allow-unverified` is passed. The outreach-unsubscribe 400-vs-500 probe stays as a liveness check only.
 
 **3. The three suites — when each is mandatory:**
 
@@ -43,8 +43,8 @@ supabase db push --project-ref jhipmqdpjenojfhfjgzq
 The staging cron file `supabase/migrations/*_codify_cron_jobs_staging.sql` codifies all **17** prod dispatcher jobs, reads URL/key from Vault (`staging_functions_url`, `staging_anon_key`) and no-ops (NOTICE "SKIPPED") unless `staging_functions_url` contains `jhipmqdpjenojfhfjgzq`; it is never applied to production and never via Lovable. `src/test/noProdRefInStagingSql.test.ts` fails the unit suite if any staging-named file contains the production ref. **QA SQL after applying it on staging:**
 ```sql
 SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%';            -- 17
-SELECT jobname FROM cron.job WHERE command ILIKE '%cron-dispatcher%' AND NOT active
- ORDER BY 1;  -- exactly: cron_campaign_touch_scheduler, dispatch-automation-executor
+SELECT jobname FROM cron.job WHERE command ILIKE '%cron-dispatcher%' AND NOT active;
+                                                  -- exactly one row: dispatch-automation-executor
 SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%'
    AND command NOT ILIKE '%vault.decrypted_secrets%';                            -- 0 (no literal URL/key)
 SELECT jobname, status FROM cron.job_run_details d JOIN cron.job j USING (jobid)

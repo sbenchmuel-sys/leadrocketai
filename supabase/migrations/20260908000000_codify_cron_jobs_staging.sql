@@ -13,10 +13,12 @@
 --   • X-Internal-Secret is attached from the 'internal_api_secret' Vault secret,
 --     as 20260623000000_cron_dispatcher_auth_header.sql does for prod — the
 --     staging cron-dispatcher is auth-gated and would 401 without it.
---   • dispatch-automation-executor AND cron_campaign_touch_scheduler are created
---     but set active=false, which is how staging runs today (Eligible Ed has
---     full-auto consent; either job live would send real email). Enable only by
---     hand, only on purpose.
+--   • dispatch-automation-executor is created but set active=false, which is how
+--     staging runs today (Eligible Ed has full-auto consent; the executor live
+--     would send real email). Enable only by hand, only on purpose.
+--     cron_campaign_touch_scheduler stays ACTIVE: it owns manual/review-mode
+--     campaign progression (due touches → approval cards, reply bridge,
+--     stale-touch cleanup, bounce breaker) and never sends email itself.
 --
 -- Safety on the wrong database: the whole body is skipped (RAISE NOTICE, no
 -- changes) unless the Vault secret 'staging_functions_url' exists AND contains
@@ -369,7 +371,7 @@ BEGIN
 
   -- Promote due cold-campaign touches to the executor / review queue. Every 5
   -- minutes. (mirrors 20260606000100_add_campaign_touch_scheduler_cron.sql)
-  -- Created here, set active=false below (staging).
+  -- Stays active on staging: review-mode progression only, no sends.
   PERFORM cron.schedule(
     'cron_campaign_touch_scheduler',
     '*/5 * * * *',
@@ -386,13 +388,12 @@ BEGIN
     $cron$
   );
 
-  -- ── Staging deviation: the two live-send paths stay OFF ────────────────────
-  -- Created above so the jobs exist (schedule/body mirror prod), disabled here
+  -- ── Staging deviation: the live auto-sender stays OFF ──────────────────────
+  -- Created above so the job exists (schedule/body mirror prod), disabled here
   -- so staging never auto-sends. The QA plan exercises the send path by manual
   -- invoke / review mode only (STAGING_TEST_PLAN.md → "Edge functions").
-  UPDATE cron.job SET active = false
-   WHERE jobname IN ('dispatch-automation-executor', 'cron_campaign_touch_scheduler');
+  UPDATE cron.job SET active = false WHERE jobname = 'dispatch-automation-executor';
 
-  RAISE NOTICE 'codify_cron_jobs_staging: 17 dispatcher jobs (re)scheduled on staging; dispatch-automation-executor and cron_campaign_touch_scheduler left inactive.';
+  RAISE NOTICE 'codify_cron_jobs_staging: 17 dispatcher jobs (re)scheduled on staging; dispatch-automation-executor left inactive (the only inactive job).';
 END
 $mig$;

@@ -6,6 +6,7 @@
 # Usage (repo root; Windows users: run in Git Bash):
 #   npm run preflight:staging            # loads ./.env.staging if present
 #   bash scripts/staging-preflight.sh --print   # dry run: print the requests, send nothing
+#   bash scripts/staging-preflight.sh --allow-unverified   # no supabase CLI: pass with UNVERIFIED names
 #   (--print still requires SUPABASE_URL to be the staging ref — the safety
 #    abort runs before anything else, in every mode.)
 #
@@ -18,21 +19,25 @@
 # Checks (each exits non-zero naming the missing secret):
 #   LOVABLE_API_KEY          ai_task {task:"intent_router"}  -> 200 (500 "AI gateway not configured" = missing)
 #   INTERNAL_API_SECRET      cron-dispatcher unknown target  -> 400 (500 "Not configured" = missing; 401 = bad Bearer)
-#   UNSUBSCRIBE_TOKEN_SECRET outreach-unsubscribe bad token  -> 400 (anything else = broken; a blank secret
-#                            fails closed as 400 too — see the secrets-list check below for the name itself)
+#   UNSUBSCRIBE_TOKEN_SECRET NOT provable over HTTP: verifyUnsubscribeToken fails closed with 400 whether
+#                            the secret exists or not. Checked by NAME via `supabase secrets list`
+#                            (required when the CLI is available). The outreach-unsubscribe bad-token
+#                            probe below is a LIVENESS check only (400 = up, 500 = broken).
 #   OPENAI_API_KEY           no edge function exposes it read-only (generate-embedding never reads it;
-#                            process-knowledge-document would write chunks). Checked by NAME via
-#                            `supabase secrets list --project-ref <staging>` when the CLI is available,
-#                            otherwise reported as UNVERIFIED (not a failure).
+#                            process-knowledge-document would write chunks). Checked by NAME as above.
+#   When the CLI is unavailable those two are UNVERIFIED and the script exits 1 (never "PREFLIGHT OK")
+#   unless --allow-unverified is passed.
 set -u
 
 STAGING_REF="jhipmqdpjenojfhfjgzq"
 PRINT_ONLY=0
+ALLOW_UNVERIFIED=0
 for a in "$@"; do
   case "$a" in
     --print) PRINT_ONLY=1 ;;
+    --allow-unverified) ALLOW_UNVERIFIED=1 ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
-    *) echo "Unknown flag: $a (only --print is supported)"; exit 2 ;;
+    *) echo "Unknown flag: $a (supported: --print, --allow-unverified)"; exit 2 ;;
   esac
 done
 
@@ -128,27 +133,28 @@ else
   esac
 fi
 
-# ── 3. UNSUBSCRIBE_TOKEN_SECRET via outreach-unsubscribe with a forged token (GET never mutates) ──
+# ── 3. outreach-unsubscribe LIVENESS (forged token on GET never mutates). NOT a secret proof:
+#       verifyUnsubscribeToken returns 400 for a bad token whether or not the secret is set. ──
 if [ "$PRINT_ONLY" -eq 1 ]; then
-  probe "UNSUBSCRIBE_TOKEN_SECRET (outreach-unsubscribe bad token)" GET "outreach-unsubscribe?token=preflight.invalid" "" ""
+  probe "outreach-unsubscribe liveness (bad token)" GET "outreach-unsubscribe?token=preflight.invalid" "" ""
 else
-  probe "UNSUBSCRIBE_TOKEN_SECRET (outreach-unsubscribe bad token)" GET "outreach-unsubscribe?token=preflight.invalid" "" ""
+  probe "outreach-unsubscribe liveness (bad token)" GET "outreach-unsubscribe?token=preflight.invalid" "" ""
   case "$STATUS" in
-    400) ok "outreach-unsubscribe rejects a forged token with 400 (verify path healthy)" ;;
-    500) fail "outreach-unsubscribe returned 500 — UNSUBSCRIBE_TOKEN_SECRET handling is broken on staging" ;;
+    400) ok "outreach-unsubscribe is up and rejects a forged token (400) — secret presence checked by name below" ;;
+    500) fail "outreach-unsubscribe returned 500 — the function is broken on staging" ;;
     *)   fail "outreach-unsubscribe returned HTTP $STATUS (expected 400)" ;;
   esac
 fi
 
-# ── 4. Secret NAMES via the CLI (covers OPENAI_API_KEY, which has no read-only HTTP path) ──
+# ── 4. Secret NAMES via the CLI — the ONLY proof for UNSUBSCRIBE_TOKEN_SECRET and OPENAI_API_KEY ──
+NAME_ONLY="UNSUBSCRIBE_TOKEN_SECRET OPENAI_API_KEY"
 echo "== secret names (supabase secrets list --project-ref $STAGING_REF)"
 if [ "$PRINT_ONLY" -eq 1 ]; then
-  echo "   supabase secrets list --project-ref $STAGING_REF   # then grep for LOVABLE_API_KEY OPENAI_API_KEY INTERNAL_API_SECRET UNSUBSCRIBE_TOKEN_SECRET"
+  echo "   supabase secrets list --project-ref $STAGING_REF   # must list LOVABLE_API_KEY OPENAI_API_KEY INTERNAL_API_SECRET UNSUBSCRIBE_TOKEN_SECRET"
 elif command -v supabase >/dev/null 2>&1; then
   LIST="$(supabase secrets list --project-ref "$STAGING_REF" 2>/dev/null)" || LIST=""
   if [ -z "$LIST" ]; then
-    UNVERIFIED="$UNVERIFIED OPENAI_API_KEY(cli-not-logged-in)"
-    echo "   supabase CLI present but 'secrets list' failed (not logged in?) — OPENAI_API_KEY UNVERIFIED"
+    fail "supabase CLI is present but 'secrets list --project-ref $STAGING_REF' failed (not logged in?) — cannot prove $NAME_ONLY"
   else
     for name in LOVABLE_API_KEY OPENAI_API_KEY INTERNAL_API_SECRET UNSUBSCRIBE_TOKEN_SECRET; do
       if printf '%s\n' "$LIST" | grep -q "^[[:space:]]*$name[[:space:]|]"; then
@@ -159,8 +165,8 @@ elif command -v supabase >/dev/null 2>&1; then
     done
   fi
 else
-  UNVERIFIED="$UNVERIFIED OPENAI_API_KEY(no-supabase-cli)"
-  echo "   supabase CLI not found — OPENAI_API_KEY UNVERIFIED (semantic KB search silently falls back to text search without it)"
+  UNVERIFIED="$UNVERIFIED $NAME_ONLY"
+  echo "   supabase CLI not found — $NAME_ONLY UNVERIFIED (install the CLI, or pass --allow-unverified to accept this)"
 fi
 
 echo
@@ -168,9 +174,17 @@ if [ "$PRINT_ONLY" -eq 1 ]; then
   echo "Dry run only — nothing was sent."
   exit 0
 fi
-[ -n "$UNVERIFIED" ] && echo "UNVERIFIED:$UNVERIFIED"
 if [ "$FAILURES" -gt 0 ]; then
+  [ -n "$UNVERIFIED" ] && echo "UNVERIFIED:$UNVERIFIED"
   echo "PREFLIGHT FAILED: $FAILURES check(s) failed — see FAIL lines above." >&2
+  exit 1
+fi
+if [ -n "$UNVERIFIED" ]; then
+  if [ "$ALLOW_UNVERIFIED" -eq 1 ]; then
+    echo "PREFLIGHT PASSED WITH UNVERIFIED (--allow-unverified):$UNVERIFIED — confirm these names in the Supabase dashboard."
+    exit 0
+  fi
+  echo "PREFLIGHT INCOMPLETE: could not verify$UNVERIFIED (no supabase CLI). Install it or re-run with --allow-unverified." >&2
   exit 1
 fi
 echo "PREFLIGHT OK: staging ($STAGING_REF) secrets verified."
