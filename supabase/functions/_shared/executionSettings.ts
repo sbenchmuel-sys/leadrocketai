@@ -49,6 +49,15 @@ export interface ExecutionSettings {
    * case. Set in loadExecutionSettings, never derived from cadence_settings.
    */
   timezone: string | null;
+  /**
+   * Workspace-level pause for ALL automatic sends (legacy + cold). Read from
+   * cadence_settings.automation_paused (boolean, default false). The executor
+   * skips and logs every due send for this owner while it is true; nothing is
+   * deferred, so un-pausing resumes on the next tick. No UI toggle yet — set the
+   * key in workspace_profiles.cadence_settings (see CadenceSettingsCard for the
+   * natural home of the switch).
+   */
+  automation_paused: boolean;
 }
 
 // ── Defaults (match DEFAULT_CADENCE_SETTINGS) ──────────────────────
@@ -80,6 +89,7 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
     max_messages_before_pause: 3,
   },
   timezone: null,
+  automation_paused: false,
 };
 
 // ── Loader (cached per-owner within a single executor run) ─────────
@@ -140,6 +150,9 @@ export async function loadExecutionSettings(
       ...(raw.whatsapp as Record<string, unknown> || {}),
     },
     timezone: timezone && timezone.trim() ? timezone.trim() : null,
+    // Only a literal boolean true pauses — a string "true" or 1 does not, so a
+    // malformed value can never silently stop a workspace's sends.
+    automation_paused: raw.automation_paused === true,
   };
 
   cache.set(ownerUserId, settings);
