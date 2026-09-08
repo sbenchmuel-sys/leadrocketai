@@ -5,6 +5,56 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "./logger.ts";
 
+/**
+ * Normalize a phone number for comparison: strip whitespace/dashes/parens and
+ * force a leading `+`. Both sides of every number comparison in this file go
+ * through it — a stored "+1 (415) 555-0123" and a Twilio "+14155550123" are the
+ * same number and must match.
+ */
+export function normalizeE164(n: string): string {
+  const stripped = (n ?? "").trim().replace(/[\s\-()]/g, "");
+  return stripped.startsWith("+") ? stripped : "+" + stripped;
+}
+
+/** One `call_settings` row, as far as number matching is concerned. */
+export interface WorkspaceNumberRow {
+  workspace_id: string;
+  default_twilio_number: string | null;
+}
+
+/**
+ * Find the workspace whose configured Twilio number IS this number.
+ * Pure and exported so the match rule has exactly one definition and one test.
+ * Returns null when nothing matches — there is deliberately NO "if there is
+ * only one row, use it" fallback (C1/9).
+ */
+export function matchWorkspaceByNumber(
+  rows: readonly WorkspaceNumberRow[] | null | undefined,
+  agentNumber: string,
+): string | null {
+  if (!rows || rows.length === 0) return null;
+  const target = normalizeE164(agentNumber);
+  const hit = rows.find(
+    (r) => r.default_twilio_number && normalizeE164(r.default_twilio_number) === target,
+  );
+  return hit?.workspace_id ?? null;
+}
+
+/**
+ * Resolve the workspace that owns a Twilio number, by normalized comparison.
+ * Returns null when the number is not a configured workspace number.
+ */
+export async function resolveWorkspaceByAgentNumber(
+  supabase: ReturnType<typeof createClient>,
+  agentNumber: string,
+): Promise<string | null> {
+  const { data: settings } = await supabase
+    .from("call_settings")
+    .select("workspace_id, default_twilio_number")
+    .not("default_twilio_number", "is", null);
+  return matchWorkspaceByNumber(settings as WorkspaceNumberRow[] | null, agentNumber);
+}
+
 interface PhoneMappingResult {
   workspaceId: string | null;
   agentUserId: string | null;
@@ -35,12 +85,6 @@ export async function resolvePhoneMapping(
     leadId: null,
   };
 
-  // Normalize numbers: strip whitespace, ensure + prefix for E.164
-  const normalizeE164 = (n: string): string => {
-    const stripped = n.trim().replace(/[\s\-()]/g, "");
-    return stripped.startsWith("+") ? stripped : "+" + stripped;
-  };
-
   const from = normalizeE164(fromNumber);
   const to = normalizeE164(toNumber);
 
@@ -52,24 +96,12 @@ export async function resolvePhoneMapping(
     //    NEVER fall back to "first workspace" — that is a multi-tenant leak.
     const agentNumber = direction === "inbound" ? to : from;
 
-    // Strategy A: Match via call_settings with a configured Twilio number
-    const { data: settings } = await supabase
-      .from("call_settings")
-      .select("workspace_id, default_twilio_number")
-      .not("default_twilio_number", "is", null);
-
-    if (settings && settings.length > 0) {
-      // Normalize stored numbers before comparison
-      const exactMatch = settings.find(
-        (s: any) => normalizeE164(s.default_twilio_number) === agentNumber,
-      );
-      if (exactMatch) {
-        result.workspaceId = exactMatch.workspace_id;
-      } else if (settings.length === 1) {
-        // Single workspace with call_settings — safe to use
-        result.workspaceId = settings[0].workspace_id;
-      }
-    }
+    // Strategy A: Match via call_settings with a configured Twilio number.
+    // NO "only one workspace configured, so use it" fallback. That was correct
+    // at one tenant and a cross-tenant data leak at two (C1/9): a call on an
+    // unrecognised number would be filed into someone else's workspace. Fail
+    // closed — an unmapped number produces no session rather than a wrong one.
+    result.workspaceId = await resolveWorkspaceByAgentNumber(supabase, agentNumber);
 
     if (!result.workspaceId) {
       logger.warn("phone_mapping_no_workspace", { from, to });
@@ -97,29 +129,17 @@ export async function resolvePhoneMapping(
       result.customerContactId = identities[0].contact_id;
     }
 
-    // 3. Find lead by phone number — workspace-scoped when possible
-    if (result.workspaceId) {
-      const { data: leads } = await supabase
-        .from("leads")
-        .select("id")
-        .eq("workspace_id", result.workspaceId)
-        .in("phone", normalizedNumbers)
-        .limit(1);
+    // 3. Find lead by phone number — always workspace-scoped. (The former
+    //    unscoped `else` branch was unreachable and a second leak vector.)
+    const { data: leads } = await supabase
+      .from("leads")
+      .select("id")
+      .eq("workspace_id", result.workspaceId)
+      .in("phone", normalizedNumbers)
+      .limit(1);
 
-      if (leads && leads.length > 0) {
-        result.leadId = leads[0].id;
-      }
-    } else {
-      // Fallback: unscoped (should rarely reach here since we return early if no workspace)
-      const { data: leads } = await supabase
-        .from("leads")
-        .select("id")
-        .in("phone", normalizedNumbers)
-        .limit(1);
-
-      if (leads && leads.length > 0) {
-        result.leadId = leads[0].id;
-      }
+    if (leads && leads.length > 0) {
+      result.leadId = leads[0].id;
     }
 
     logger.info("phone_mapping_resolved", {

@@ -291,6 +291,72 @@ async function handleCallStatus(
 }
 
 // ============================================================
+// Session lookup with stub creation (C1/8)
+// A recording callback can arrive before any call-status callback has created
+// the session row. Rather than dropping the recording, create a minimal stub
+// the later status callbacks will fill in (handleCallStatus updates by call_sid).
+// Returns null only when no workspace can be resolved for the call.
+// ============================================================
+async function findOrStubCallSession(
+  supabase: ReturnType<typeof createClient>,
+  params: Record<string, string>,
+): Promise<{ id: string; workspace_id: string } | null> {
+  const callSid = params.CallSid;
+
+  const selectByCallSid = async () => {
+    const { data } = await supabase
+      .from("call_sessions")
+      .select("id, workspace_id")
+      .eq("call_sid", callSid)
+      .maybeSingle();
+    return (data as { id: string; workspace_id: string } | null) ?? null;
+  };
+
+  const existing = await selectByCallSid();
+  if (existing) return existing;
+
+  const fromNumber = params.From ?? "";
+  const toNumber = params.To ?? "";
+  const direction =
+    params.Direction === "outbound-api" || params.Direction === "outbound-dial"
+      ? "outbound"
+      : "inbound";
+
+  const mapping = await resolvePhoneMapping(supabase, fromNumber, toNumber, direction);
+  if (!mapping.workspaceId) {
+    logger.warn("recording_stub_no_workspace", { callSid, from: fromNumber, to: toNumber });
+    return null;
+  }
+
+  const { data: stub, error } = await supabase
+    .from("call_sessions")
+    .insert({
+      call_sid: callSid,
+      workspace_id: mapping.workspaceId,
+      direction,
+      from_number: fromNumber,
+      to_number: toNumber,
+      status: "initiated",
+      started_at: new Date().toISOString(),
+      customer_contact_id: mapping.customerContactId,
+      lead_id: mapping.leadId,
+      agent_user_id: mapping.agentUserId,
+    })
+    .select("id, workspace_id")
+    .single();
+
+  if (error) {
+    // 23505 = the status callback won the race between our SELECT and INSERT.
+    if (error.code === "23505") return await selectByCallSid();
+    logger.error("recording_stub_insert_error", { callSid, error: error.message });
+    return null;
+  }
+
+  logger.info("recording_stub_session_created", { callSid, workspaceId: mapping.workspaceId });
+  return stub as { id: string; workspace_id: string };
+}
+
+// ============================================================
 // Recording Status Handler — Idempotent upsert by RecordingSid
 // Applies cost-control gate for short recordings
 // ============================================================
@@ -310,15 +376,17 @@ async function handleRecordingStatus(
     return;
   }
 
-  // Find call session
-  const { data: session } = await supabase
-    .from("call_sessions")
-    .select("id, workspace_id")
-    .eq("call_sid", callSid)
-    .maybeSingle();
+  // Find call session — or create a stub if the recording callback beat the
+  // status callback (C1/8). Before this, an early recording callback was logged
+  // and dropped, and the audio was never ingested, transcribed or analysed:
+  // the recording was lost forever even though Twilio still held it.
+  const session = await findOrStubCallSession(supabase, params);
 
   if (!session) {
-    logger.warn("recording_no_session", { callSid, recordingSid });
+    // Only reachable when we cannot resolve a workspace for the numbers on the
+    // callback, so a stub row would violate call_sessions.workspace_id NOT NULL.
+    // The raw payload is still in call_webhook_log for manual replay.
+    logger.error("recording_no_session_unresolvable", { callSid, recordingSid });
     return;
   }
 

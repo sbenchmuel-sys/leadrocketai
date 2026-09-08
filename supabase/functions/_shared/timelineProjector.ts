@@ -208,6 +208,18 @@ export function callDedupeKey(callSessionId: string): string {
 }
 
 /**
+ * Build a dedupe key for the AI ANALYSIS row of a call.
+ *
+ * MUST differ from `callDedupeKey` for the same session. `projectTimelineItem`
+ * keeps the first row's `snippet_text` on conflict, so reusing the call row's
+ * key made the AI summary silently vanish (C1/1). The analysis row is a second,
+ * distinct timeline entry.
+ */
+export function callAnalysisDedupeKey(callSessionId: string): string {
+  return `call:analysis:${callSessionId}`;
+}
+
+/**
  * Build a standard dedupe key for meeting events.
  */
 export function meetingDedupeKey(meetingSummaryId: string): string {
