@@ -25,8 +25,12 @@
 // `intent IS NOT NULL AND ai_summary IS NOT NULL`), so it must keep
 // flowing to the AI path rather than short-circuiting to a
 // summary-less terminal intent. See CLAUDE.md → "Public product
-// commitments". An OOO whose body carries a live commercial question
-// is held back for the same two reasons — see the ooo_reply branch.
+// commitments". The same holds for any auto-reply or calendar accept
+// whose body carries a live commercial question ("Accepted: Demo — and
+// can you send pricing?"): a deterministic verdict there would hide the
+// card and bury a real question, so those fall through too. And
+// `unsubscribe` is only emitted when the caller supplies headers, since
+// the helper's contract puts the List-Unsubscribe guard on the caller.
 //
 // Purity: no Deno.*, no createClient, no import.meta.env — this module
 // is imported from Deno edge functions AND from vitest via the
@@ -38,7 +42,7 @@ import {
   detectMeetingConfirmation,
   type MeetingConfirmationResult,
 } from "./meetingConfirmation.ts";
-import { isHumanUnsubscribeRequest } from "./unsubscribeDetection.ts";
+import { isHumanUnsubscribeRequest, stripQuotedReply } from "./unsubscribeDetection.ts";
 import { detectBounce } from "./bounceDetection.ts";
 import { detectZoomRecap } from "./zoomRecapDetection.ts";
 import { emailDomain, normalizeEmail } from "./leadCandidateDetection.ts";
@@ -125,14 +129,53 @@ export function detectInboundIntent(
     return { intent: "ooo_reply", ooo, meeting: null };
   }
 
-  // 3. unsubscribe — explicit human opt-out phrases only.
-  if (body && isHumanUnsubscribeRequest(body.toLowerCase())) {
-    return { intent: "unsubscribe", ooo: null, meeting: null };
+  // 3. unsubscribe — explicit human opt-out phrases only, and ONLY when
+  // we have the two things the helper's contract requires:
+  //
+  //   (a) the sender's own prose, quoted history removed. The keyword
+  //       regexes run over the whole body, so a normal reply whose quoted
+  //       thread (or a newsletter footer below it) contains "unsubscribe"
+  //       would be classified `unsubscribe` and hidden. The live Gmail and
+  //       Outlook handlers already call stripQuotedReply first; this chain
+  //       did not. stripQuotedReply is idempotent, so callers that already
+  //       stripped lose nothing.
+  //
+  //   (b) the List-Unsubscribe header check the helper's own docblock
+  //       makes the CALLER responsible for ("newsletters should be
+  //       excluded before calling this function"). Timeline rows do not
+  //       persist headers, so `classify-inbound` cannot supply it — and
+  //       without it we must NOT emit a terminal, hide-the-card verdict.
+  //       No headers → fall through to the AI. Marking a live lead
+  //       unsubscribed on a footer match is the expensive mistake here;
+  //       an extra AI call is the cheap one.
+  //
+  // Both directions of this are pinned by the `unsubscribeNeedsContext`
+  // tests. Callers that DO have headers (the sync paths) still get the
+  // deterministic verdict.
+  const headers = input.headers;
+  if (headers && body) {
+    const hasListUnsubscribe = headers.some(
+      (h) => h.name.toLowerCase() === "list-unsubscribe" && !!h.value,
+    );
+    const senderProse = stripQuotedReply(body);
+    if (!hasListUnsubscribe && senderProse && isHumanUnsubscribeRequest(senderProse.toLowerCase())) {
+      return { intent: "unsubscribe", ooo: null, meeting: null };
+    }
   }
 
   // 4 + 5. meeting confirmation / calendar accept.
+  //
+  // Same exception as the OOO branch above, for the same reason:
+  // "Accepted: Demo — and can you send pricing?" sets
+  // hasSubstantiveQuestion, and the sync handlers deliberately KEEP the
+  // lead actionable for it. Returning `calendar_accept` here would hide
+  // the card anyway (shouldHideFromQueue checks the intent set first),
+  // cancelling that out — the exact failure mode we already fixed once
+  // for OOO. Fall through to the AI so it gets a substantive intent, a
+  // durable ai_summary, and stays on the rep's board.
   const meeting = detectMeetingConfirmation(subject, body);
   if (meeting.isConfirmed) {
+    if (meeting.hasSubstantiveQuestion) return { intent: null, ooo: null, meeting };
     return {
       intent: meeting.confidence === "subject"
         ? "calendar_accept"

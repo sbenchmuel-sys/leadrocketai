@@ -484,10 +484,14 @@ serve(async (req) => {
           continue;
         }
 
+        // Set when applyOOOPause paused the lead but deliberately KEPT it
+        // actionable (auto-reply carrying a live commercial question). The
+        // defer branch below must not then clear needs_action again.
+        let oooKeptActionable = false;
         // OOO detection
         if (direction === "inbound" && !isBounce) {
           const oooResult = isOutOfOfficeReply(headersArr, subject, bodyText);
-          const applied = await applyOOOPause({
+          const oooPause = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
             workspaceId: leadData?.workspace_id ?? null,
@@ -497,15 +501,18 @@ serve(async (req) => {
             gmailThreadId: msg.conversationId,
             logPrefix: "[outlook-sync]",
           });
-          if (applied) {
+          // Branch on `.skipInbound`, never on the object — see gmail-sync.
+          if (oooPause.skipInbound) {
             existingMessageIds.add(messageId);
             synced++;
             continue;
           }
+          oooKeptActionable = oooPause.paused;
         }
 
         // ── Defer / "reconnect later" detection ──
-        if (direction === "inbound" && !isBounce) {
+        // Skipped when the OOO deliberately kept this lead actionable.
+        if (direction === "inbound" && !isBounce && !oooKeptActionable) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,

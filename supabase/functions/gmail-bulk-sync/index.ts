@@ -591,10 +591,14 @@ async function syncLeadEmails(
           });
       }
 
+      // Set when applyOOOPause paused the lead but deliberately KEPT it
+      // actionable (auto-reply carrying a live commercial question). The
+      // defer branch below must not then clear needs_action again.
+      let oooKeptActionable = false;
       // OOO / Auto-reply detection — must run BEFORE counting as real inbound
       if (direction === "inbound" && !isBounce) {
         const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
-        const applied = await applyOOOPause({
+        const oooPause = await applyOOOPause({
           supabase: serviceSupabase,
           leadId,
           workspaceId,
@@ -604,15 +608,18 @@ async function syncLeadEmails(
           gmailThreadId: threadId,
           logPrefix: "[gmail-bulk-sync]",
         });
-        if (applied) {
+        // Branch on `.skipInbound`, never on the object — see gmail-sync.
+        if (oooPause.skipInbound) {
           existingMessageIds.add(gmailMessageId);
           synced++;
           continue;
         }
+        oooKeptActionable = oooPause.paused;
       }
 
       // ── Defer / "reconnect later" detection ──
-      if (direction === "inbound" && !isBounce) {
+      // Skipped when the OOO deliberately kept this lead actionable.
+      if (direction === "inbound" && !isBounce && !oooKeptActionable) {
         const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
         await applyDeferPause({
           supabase: serviceSupabase,
@@ -784,10 +791,14 @@ async function syncLeadEmails(
           });
         }
 
+        // Set when applyOOOPause paused the lead but deliberately KEPT it
+        // actionable (auto-reply carrying a live commercial question). The
+        // defer branch below must not then clear needs_action again.
+        let oooKeptActionableT = false;
         // OOO detection in thread messages
         if (direction === "inbound" && !isBounceT && !isStaleForActions) {
           const oooResultT = isOutOfOfficeReply(headers, subject, bodyText);
-          const applied = await applyOOOPause({
+          const oooPauseT = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
             workspaceId,
@@ -797,15 +808,18 @@ async function syncLeadEmails(
             gmailThreadId: threadId,
             logPrefix: "[gmail-bulk-sync:thread]",
           });
-          if (applied) {
+          // Branch on `.skipInbound`, never on the object — see gmail-sync.
+          if (oooPauseT.skipInbound) {
             existingMessageIds.add(gmailMessageId);
             synced++;
             continue;
           }
+          oooKeptActionableT = oooPauseT.paused;
         }
 
         // ── Defer detection in thread messages ──
-        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
+        // Skipped when the OOO deliberately kept this lead actionable.
+        if (direction === "inbound" && !isBounceT && !isStaleForActions && !oooKeptActionableT) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,

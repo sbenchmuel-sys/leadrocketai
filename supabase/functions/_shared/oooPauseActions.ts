@@ -31,12 +31,45 @@ interface ApplyOOOArgs {
 }
 
 /**
- * Apply OOO pause: set ooo_until, clear pending action, log a system_note.
- * Returns true when an OOO was detected & applied.
+ * Outcome of `applyOOOPause`.
+ *
+ * This used to be a bare `boolean`, where `true` meant BOTH "an OOO was
+ * applied" AND "caller: skip your normal inbound-store path". Those two
+ * came apart the moment an auto-reply could carry a live commercial
+ * question: we mark the lead actionable, the caller sees `true` and
+ * `continue`s, and the very email holding the question is never inserted
+ * or projected. `last_inbound_at` never advances and the Queue shows a
+ * `reply_now` pointing at a message that does not exist. (Codex P1 on
+ * PR #143.) The two facts are now separate fields.
  */
-export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
+export interface OOOPauseResult {
+  /** An OOO was detected and the lead was paused. */
+  paused: boolean;
+  /**
+   * TRUE  — routine auto-reply: caller should skip its normal
+   *         inbound-store path (this is not real inbound activity).
+   * FALSE — either no OOO at all, or an OOO that ALSO carries a
+   *         substantive commercial question. In the latter case the lead
+   *         stays actionable and the message MUST still be stored, or the
+   *         rep is pointed at a reply they cannot read.
+   */
+  skipInbound: boolean;
+}
+
+const NOT_OOO: OOOPauseResult = { paused: false, skipInbound: false };
+
+/**
+ * Apply OOO pause: set ooo_until, clear pending action (unless the body
+ * carries a live commercial question), log a system_note.
+ *
+ * Callers MUST branch on `.skipInbound`, never on the object itself —
+ * an object is always truthy, so an un-migrated `if (applied)` would
+ * silently swallow every inbound. `src/test/queueInboundClassification.test.ts`
+ * pins that no caller does this.
+ */
+export async function applyOOOPause(args: ApplyOOOArgs): Promise<OOOPauseResult> {
   const { supabase, leadId, workspaceId, leadName, oooResult, occurredAt } = args;
-  if (!oooResult.isOOO) return false;
+  if (!oooResult.isOOO) return NOT_OOO;
 
   const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
   const returnDateStr = oooResult.returnDate
@@ -86,7 +119,9 @@ export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
     provider: "automation",
   });
 
-  return true;
+  // The substantive-question case is a pause, but NOT a "skip this
+  // inbound": the caller still has to store and project the message.
+  return { paused: true, skipInbound: !keepActionable };
 }
 
 interface ApplyDeferArgs {

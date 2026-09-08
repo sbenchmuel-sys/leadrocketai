@@ -474,10 +474,14 @@ async function processChangeNotification(
     return;
   }
 
+  // Set when applyOOOPause paused the lead but deliberately KEPT it
+  // actionable (auto-reply carrying a live commercial question). The
+  // defer branch below must not then clear needs_action again.
+  let oooKeptActionable = false;
   // --- 9. OOO detection ---
   {
     const oooResult = isOutOfOfficeReply(internetMessageHeaders, messageSubject || "", bodyText);
-    const applied = await applyOOOPause({
+    const oooPause = await applyOOOPause({
       supabase: serviceClient,
       leadId: leadRow.id,
       workspaceId: leadRow.workspace_id ?? null,
@@ -486,14 +490,21 @@ async function processChangeNotification(
       occurredAt: new Date().toISOString(),
       logPrefix: "[outlook-webhook]",
     });
-    if (applied) {
+    // Pause the automation whenever an OOO landed, but only RETURN (i.e.
+    // drop the message) for a routine auto-reply. An OOO carrying a live
+    // commercial question is paused AND kept actionable, so it must fall
+    // through and be stored (Codex P1, PR #143).
+    if (oooPause.paused) {
       await pauseActiveAutomation(serviceClient, leadRow.id, mailAccountId, "ooo_reply");
-      return;
+      if (oooPause.skipInbound) return;
+      oooKeptActionable = true;
     }
   }
 
   // ── Defer / "reconnect later" detection ──
-  {
+  // Skipped when the OOO above deliberately kept this lead actionable —
+  // applyDeferPause clears needs_action, which would immediately undo it.
+  if (!oooKeptActionable) {
     const deferResult = detectDeferSignal(bodyText, new Date());
     await applyDeferPause({
       supabase: serviceClient,

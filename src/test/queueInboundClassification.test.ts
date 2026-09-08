@@ -517,3 +517,157 @@ describe("purgeGateSummary", () => {
     });
   });
 });
+
+// ── 9. substantiveQuestionNeverBuried (Codex P1 x3, PR #143) ───────
+// One theme, three places: a deterministic verdict must never bury a
+// real customer question — and "not hidden" is only half the fix, the
+// message also has to be STORED or the Queue points the rep at a
+// message that does not exist.
+describe("substantiveQuestionNeverBuried", () => {
+  const notHidden = (intent: string | null) =>
+    shouldHideFromQueue({ intent, reply_worthy: null, sender_is_lead: null });
+
+  // --- 1. OOO: paused, but still stored ---
+  it("applyOOOPause returns a result object, not a bare boolean", () => {
+    const src = read(OOO_PAUSE);
+    expect(src).toContain("export interface OOOPauseResult");
+    expect(src).toContain("skipInbound: boolean;");
+    // The substantive-question case pauses but does NOT skip the inbound.
+    expect(src).toContain("return { paused: true, skipInbound: !keepActionable };");
+  });
+
+  it("every applyOOOPause caller branches on .skipInbound, never on the object", () => {
+    // An object is always truthy, so a leftover `if (applied)` would
+    // silently swallow EVERY inbound on that path — worse than the bug.
+    const callers = [
+      "supabase/functions/gmail-sync/index.ts",
+      "supabase/functions/gmail-bulk-sync/index.ts",
+      "supabase/functions/outlook-sync/index.ts",
+      "supabase/functions/outlook-webhook/processor.ts",
+    ];
+    for (const rel of callers) {
+      const src = read(rel);
+      expect(src).toContain("applyOOOPause(");
+      expect(src).toContain(".skipInbound");
+      // No caller may keep the old truthiness test.
+      expect(src).not.toMatch(/const applied = await applyOOOPause/);
+      expect(src).not.toMatch(/if \(applied\) \{/);
+    }
+  });
+
+  it("the defer branch cannot re-clear a deliberately-kept action", () => {
+    // applyDeferPause also clears needs_action; running it on the same
+    // message would undo the keep. Each caller guards it.
+    for (const rel of [
+      "supabase/functions/gmail-sync/index.ts",
+      "supabase/functions/gmail-bulk-sync/index.ts",
+      "supabase/functions/outlook-sync/index.ts",
+      "supabase/functions/outlook-webhook/processor.ts",
+    ]) {
+      expect(read(rel)).toContain("oooKeptActionable");
+    }
+  });
+
+  // --- 2. calendar accept carrying a question ---
+  it("an accept carrying a commercial question is not calendar_accept", () => {
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Accepted: Demo @ Tue Mar 3",
+      body: "Looks good. Quick one before then — can you send the pricing for 50 seats?",
+    });
+    expect(r.meeting?.isConfirmed).toBe(true);
+    expect(r.meeting?.hasSubstantiveQuestion).toBe(true);
+    expect(r.intent).toBeNull();
+    expect(notHidden(r.intent)).toBe(false);
+  });
+
+  it("a clean accept is still calendar_accept and still hidden", () => {
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Accepted: Demo @ Tue Mar 3",
+      body: "See you then!",
+    });
+    expect(r.intent).toBe("calendar_accept");
+    expect(notHidden(r.intent)).toBe(true);
+  });
+
+  // --- 3. unsubscribe needs sender prose + header context ---
+  it("a reply whose QUOTED history says unsubscribe is not an opt-out", () => {
+    const body = [
+      "Sounds good, can you send the contract?",
+      "",
+      "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+      "> Happy to help. To unsubscribe, click here.",
+    ].join("\n");
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Re: pilot",
+      body,
+      headers: [],
+    });
+    expect(r.intent).toBeNull();
+    expect(notHidden(r.intent)).toBe(false);
+  });
+
+  it("no headers → no deterministic unsubscribe verdict (falls to the AI)", () => {
+    // classify-inbound cannot supply headers, and the helper's contract
+    // puts the List-Unsubscribe guard on the caller.
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Re: pilot",
+        body: "Please unsubscribe me from this list.",
+      }).intent,
+    ).toBeNull();
+  });
+
+  it("a newsletter (List-Unsubscribe header present) is not an opt-out", () => {
+    expect(
+      detectInboundIntent({
+        fromEmail: "news@vendor.com",
+        subject: "March digest",
+        body: "Lots of news. Click here to unsubscribe.",
+        headers: [{ name: "List-Unsubscribe", value: "<mailto:x@vendor.com>" }],
+      }).intent,
+    ).toBeNull();
+  });
+
+  it("a real opt-out WITH header context still classifies", () => {
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Re: pilot",
+        body: "Please remove me from your list.",
+        headers: [{ name: "From", value: "dana@acme.com" }],
+      }).intent,
+    ).toBe("unsubscribe");
+  });
+});
+
+// ── 10. badgeMatchesQueue (Codex P2, PR #143) ──────────────────────
+describe("badgeMatchesQueue", () => {
+  const src = read("src/lib/dashboardMetricsService.ts");
+
+  it("the dashboard badge uses the Queue's own hide predicate", () => {
+    expect(src).toContain('import { shouldHideFromQueue } from "@/lib/queueQueries"');
+    expect(src).toContain("shouldHideFromQueue({");
+    // …and no longer carries its own copy of the rule.
+    expect(src).not.toContain("INTENT_HIDE_FROM_QUEUE.has(");
+  });
+
+  it("it reads the two signal columns, not just intent", () => {
+    for (const f of ["reply_worthy", "sender_is_lead"]) expect(src).toContain(f);
+  });
+
+  it("a lead hidden by a signal is hidden for BOTH surfaces", () => {
+    // Same function, so this is true by construction — asserted so the
+    // shared-predicate arrangement can't be quietly unpicked.
+    for (const row of [
+      { intent: null, reply_worthy: false, sender_is_lead: null },
+      { intent: null, reply_worthy: null, sender_is_lead: false },
+      { intent: "bounce", reply_worthy: null, sender_is_lead: null },
+    ]) {
+      expect(shouldHideFromQueue(row)).toBe(true);
+    }
+  });
+});

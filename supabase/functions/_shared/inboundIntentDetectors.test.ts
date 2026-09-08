@@ -191,11 +191,14 @@ Deno.test("plain OOO clears needs_action", async () => {
   assertEquals(ooo.hasSubstantiveQuestion, false);
 
   // deno-lint-ignore no-explicit-any
-  await applyOOOPause({ supabase: fakeSupabase(captured) as any, ...OOO_ARGS, oooResult: ooo });
+  const r = await applyOOOPause({ supabase: fakeSupabase(captured) as any, ...OOO_ARGS, oooResult: ooo });
 
   const leadUpdate = captured.find((c) => c.table === "leads");
   assertEquals(leadUpdate?.payload.needs_action, false);
   assertEquals(leadUpdate?.payload.next_action_key, null);
+  // Routine auto-reply: caller SHOULD skip its normal inbound-store path.
+  assertEquals(r.paused, true);
+  assertEquals(r.skipInbound, true);
 });
 
 Deno.test("OOO carrying a commercial question keeps needs_action", async () => {
@@ -216,4 +219,86 @@ Deno.test("OOO carrying a commercial question keeps needs_action", async () => {
   assertEquals(leadUpdate?.payload.action_reason_code, "REPLY_PENDING");
   // The automation pause is still applied — we hold the robot, not the rep.
   assertEquals(typeof leadUpdate?.payload.eligible_at, "string");
+  // …and, the P1: the caller must STILL STORE this inbound. Marking the
+  // lead actionable while telling the caller to drop the message points
+  // the rep at a reply that was never inserted.
+  assertEquals(r.paused, true);
+  assertEquals(r.skipInbound, false);
+});
+
+// ── the same theme, two more places ───────────────────────────────
+
+Deno.test("an accept carrying a commercial question is NOT calendar_accept", () => {
+  const r = detectInboundIntent({
+    fromEmail: "dana@acme.com",
+    subject: "Accepted: Demo @ Tue Mar 3",
+    body: "Looks good. Quick one before then — can you send the pricing for 50 seats?",
+  });
+  assertEquals(r.meeting?.isConfirmed, true);
+  assertEquals(r.meeting?.hasSubstantiveQuestion, true);
+  assertEquals(r.intent, null);
+});
+
+Deno.test("a clean accept is still calendar_accept", () => {
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Accepted: Demo @ Tue Mar 3",
+      body: "See you then!",
+    }).intent,
+    "calendar_accept",
+  );
+});
+
+Deno.test("unsubscribe: quoted history is not the sender's opt-out", () => {
+  const body = [
+    "Sounds good, can you send the contract?",
+    "",
+    "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+    "> Happy to help. To unsubscribe, click here.",
+  ].join("\n");
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Re: pilot",
+      body,
+      headers: [],
+    }).intent,
+    null,
+  );
+});
+
+Deno.test("unsubscribe: no headers → no deterministic verdict", () => {
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Re: pilot",
+      body: "Please unsubscribe me from this list.",
+    }).intent,
+    null,
+  );
+});
+
+Deno.test("unsubscribe: List-Unsubscribe header means newsletter, not opt-out", () => {
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "news@vendor.com",
+      subject: "March digest",
+      body: "Lots of news. Click here to unsubscribe.",
+      headers: [{ name: "List-Unsubscribe", value: "<mailto:x@vendor.com>" }],
+    }).intent,
+    null,
+  );
+});
+
+Deno.test("unsubscribe: a real opt-out WITH header context still classifies", () => {
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Re: pilot",
+      body: "Please remove me from your list.",
+      headers: [{ name: "From", value: "dana@acme.com" }],
+    }).intent,
+    "unsubscribe",
+  );
 });

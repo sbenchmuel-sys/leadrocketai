@@ -8,7 +8,8 @@
 import { supabase } from "@/integrations/supabase/client";
 import { differenceInDays, parseISO } from "date-fns";
 import type { EnrichedLead, DealStage, Motion, RevenueState } from "@/lib/dashboardUtils";
-import { enrichLead, classifyRevenueState, INTENT_HIDE_FROM_QUEUE } from "@/lib/dashboardUtils";
+import { enrichLead, classifyRevenueState } from "@/lib/dashboardUtils";
+import { shouldHideFromQueue } from "@/lib/queueQueries";
 import { isDemoMode } from "@/lib/demoMode";
 import { demoLeads } from "@/lib/demoData";
 
@@ -127,8 +128,7 @@ async function fetchLeads(workspaceId?: string): Promise<EnrichedLead[]> {
 
 /**
  * PR C — Build the set of lead IDs whose latest inbound timeline row
- * has an `intent` in `INTENT_HIDE_FROM_QUEUE` (calendar_accept,
- * ooo_reply, bounce, zoom_recap). Used by `classifyRevenueState` to
+ * the Queue would hide. Used by `classifyRevenueState` to
  * suppress action_required for noise inbounds so the CommandStrip
  * "Action Required" badge stays accurate when the Queue UI (PR D)
  * applies the same hide-rule.
@@ -142,9 +142,15 @@ async function fetchLeads(workspaceId?: string): Promise<EnrichedLead[]> {
  * client-side; that approach silently dropped leads in workspaces
  * with dense inbound history (Codex P2 on PR #44).
  *
- * NULL intent (not yet classified by PR A's cron) is filtered out
- * inside the RPC — callers treat absence as "not hidden", so the UI
- * never depends on async classification.
+ * NULL intent (not yet classified by the classify-inbound cron) reads as
+ * "not hidden", so the UI never depends on async classification.
+ *
+ * The hide predicate itself is `shouldHideFromQueue` in queueQueries.ts —
+ * SHARED, not duplicated. This function used to test only the intent set
+ * and ignore the two signal columns the RPC now returns, so a lead the
+ * Queue hid for `reply_worthy=false` / `sender_is_lead=false` still
+ * counted toward "Action Required": a nonzero badge that opens an empty
+ * Queue (Codex P2 on PR #143). One predicate, one answer.
  */
 async function fetchIntentHiddenLeadIds(
   leadIds: string[],
@@ -163,8 +169,22 @@ async function fetchIntentHiddenLeadIds(
   }
 
   const hidden = new Set<string>();
-  for (const row of (data ?? []) as Array<{ lead_id: string; intent: string | null }>) {
-    if (row.intent && INTENT_HIDE_FROM_QUEUE.has(row.intent)) {
+  // ponytail: cast — `src/integrations/supabase/types.ts` is Lovable-generated
+  // and still describes the pre-20260908120000 two-column RPC. Drop the cast
+  // once types regenerate.
+  for (const row of (data ?? []) as unknown as Array<{
+    lead_id: string;
+    intent: string | null;
+    reply_worthy?: boolean | null;
+    sender_is_lead?: boolean | null;
+  }>) {
+    if (
+      shouldHideFromQueue({
+        intent: row.intent ?? null,
+        reply_worthy: row.reply_worthy ?? null,
+        sender_is_lead: row.sender_is_lead ?? null,
+      })
+    ) {
       hidden.add(row.lead_id);
     }
   }

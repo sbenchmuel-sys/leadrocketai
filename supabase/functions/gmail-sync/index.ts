@@ -717,11 +717,15 @@ serve(async (req) => {
           continue;
         }
 
+        // Set when applyOOOPause paused the lead but deliberately KEPT it
+        // actionable (auto-reply carrying a live commercial question). The
+        // defer branch below must not then clear needs_action again.
+        let oooKeptActionable = false;
         // OOO / Auto-reply detection — must run BEFORE last_inbound_at is updated
         // OOO replies should NOT count as real inbound activity
         if (direction === "inbound" && !isBounce) {
           const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
-          const applied = await applyOOOPause({
+          const oooPause = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
             workspaceId: leadData?.workspace_id ?? null,
@@ -732,16 +736,23 @@ serve(async (req) => {
             gmailThreadId: threadId,
             logPrefix: "[gmail-sync]",
           });
-          if (applied) {
+          // Branch on `.skipInbound`, never on the object — an object is
+          // always truthy, and an OOO carrying a live commercial question is
+          // paused but MUST still be stored, or the Queue points the rep at a
+          // message that was never inserted (Codex P1, PR #143).
+          if (oooPause.skipInbound) {
             // Skip normal interaction insert — this is not a real inbound
             existingMessageIds.add(gmailMessageId);
             synced++;
             continue;
           }
+          oooKeptActionable = oooPause.paused;
         }
 
         // ── Defer / "reconnect later" detection ──
-        if (direction === "inbound" && !isBounce) {
+        // Skipped when we just deliberately kept this lead actionable:
+        // applyDeferPause clears needs_action, which would immediately undo it.
+        if (direction === "inbound" && !isBounce && !oooKeptActionable) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,
