@@ -15,6 +15,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
+import {
+  hasSubstantiveQuestion,
+  SUBSTANTIVE_QUESTION_FLAG,
+} from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
@@ -484,10 +488,14 @@ serve(async (req) => {
           continue;
         }
 
+        // Set when applyOOOPause paused the lead but deliberately KEPT it
+        // actionable (auto-reply carrying a live commercial question). The
+        // defer branch below must not then clear needs_action again.
+        let oooKeptActionable = false;
         // OOO detection
         if (direction === "inbound" && !isBounce) {
           const oooResult = isOutOfOfficeReply(headersArr, subject, bodyText);
-          const applied = await applyOOOPause({
+          const oooPause = await applyOOOPause({
             supabase: serviceSupabase,
             leadId,
             workspaceId: leadData?.workspace_id ?? null,
@@ -497,15 +505,18 @@ serve(async (req) => {
             gmailThreadId: msg.conversationId,
             logPrefix: "[outlook-sync]",
           });
-          if (applied) {
+          // Branch on `.skipInbound`, never on the object — see gmail-sync.
+          if (oooPause.skipInbound) {
             existingMessageIds.add(messageId);
             synced++;
             continue;
           }
+          oooKeptActionable = oooPause.paused;
         }
 
         // ── Defer / "reconnect later" detection ──
-        if (direction === "inbound" && !isBounce) {
+        // Skipped when the OOO deliberately kept this lead actionable.
+        if (direction === "inbound" && !isBounce && !oooKeptActionable) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,
@@ -610,7 +621,16 @@ serve(async (req) => {
           gmail_thread_id: msg.conversationId,
           workspace_id: leadData?.workspace_id ?? null,
           provider: "outlook",
-          metadata_json: { provider_message_id: messageId, conversation_id: msg.conversationId, from_email: msg.from?.emailAddress?.address },
+          metadata_json: {
+            provider_message_id: messageId,
+            conversation_id: msg.conversationId,
+            from_email: msg.from?.emailAddress?.address,
+            // Decided against the FULL body; classify-inbound only sees the
+            // 500-char snippet (Codex P1, PR #143).
+            ...(direction === "inbound"
+              ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
+              : {}),
+          },
           dedupe_key: emailDedupeKey("outlook", messageId, messageId),
         });
 

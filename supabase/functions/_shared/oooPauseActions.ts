@@ -31,12 +31,45 @@ interface ApplyOOOArgs {
 }
 
 /**
- * Apply OOO pause: set ooo_until, clear pending action, log a system_note.
- * Returns true when an OOO was detected & applied.
+ * Outcome of `applyOOOPause`.
+ *
+ * This used to be a bare `boolean`, where `true` meant BOTH "an OOO was
+ * applied" AND "caller: skip your normal inbound-store path". Those two
+ * came apart the moment an auto-reply could carry a live commercial
+ * question: we mark the lead actionable, the caller sees `true` and
+ * `continue`s, and the very email holding the question is never inserted
+ * or projected. `last_inbound_at` never advances and the Queue shows a
+ * `reply_now` pointing at a message that does not exist. (Codex P1 on
+ * PR #143.) The two facts are now separate fields.
  */
-export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
+export interface OOOPauseResult {
+  /** An OOO was detected and the lead was paused. */
+  paused: boolean;
+  /**
+   * TRUE  — routine auto-reply: caller should skip its normal
+   *         inbound-store path (this is not real inbound activity).
+   * FALSE — either no OOO at all, or an OOO that ALSO carries a
+   *         substantive commercial question. In the latter case the lead
+   *         stays actionable and the message MUST still be stored, or the
+   *         rep is pointed at a reply they cannot read.
+   */
+  skipInbound: boolean;
+}
+
+const NOT_OOO: OOOPauseResult = { paused: false, skipInbound: false };
+
+/**
+ * Apply OOO pause: set ooo_until, clear pending action (unless the body
+ * carries a live commercial question), log a system_note.
+ *
+ * Callers MUST branch on `.skipInbound`, never on the object itself —
+ * an object is always truthy, so an un-migrated `if (applied)` would
+ * silently swallow every inbound. `src/test/queueInboundClassification.test.ts`
+ * pins that no caller does this.
+ */
+export async function applyOOOPause(args: ApplyOOOArgs): Promise<OOOPauseResult> {
   const { supabase, leadId, workspaceId, leadName, oooResult, occurredAt } = args;
-  if (!oooResult.isOOO) return false;
+  if (!oooResult.isOOO) return NOT_OOO;
 
   const eligibleAt = getOOOEligibleAt(oooResult.returnDate);
   const returnDateStr = oooResult.returnDate
@@ -50,21 +83,34 @@ export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
       `Return: ${returnDateStr}. Pausing until ${eligibleAt}`,
   );
 
+  // An OOO is usually matched on the SUBJECT alone. When the body also
+  // carries a question mark plus a commercial keyword (pricing, contract,
+  // timeline, …) the message is BOTH "I'm away" AND "here's a live
+  // question" — clearing `needs_action` there silently buries a real ask.
+  // We still pause the robot (ooo_until / eligible_at are set either way);
+  // we just keep the human prompt on the board.
+  const keepActionable = oooResult.hasSubstantiveQuestion === true;
+
   await supabase.from("leads").update({
     ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
     eligible_at: eligibleAt,
-    needs_action: false,
-    next_action_key: null,
-    next_action_label: null,
-    action_reason_code: null,
+    // Mirrors syncEngine's REPLY_PENDING branch exactly so the Queue,
+    // the CommandStrip badge and the button label all agree.
+    needs_action: keepActionable ? true : false,
+    next_action_key: keepActionable ? "reply_now" : null,
+    next_action_label: keepActionable ? "Reply to customer" : null,
+    action_reason_code: keepActionable ? "REPLY_PENDING" : null,
   }).eq("id", leadId);
 
   await createCanonicalInteraction(supabase, {
     lead_id: leadId,
     type: "system_note",
     source: "automation",
-    body_text:
-      `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
+    body_text: keepActionable
+      ? `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
+        `returning ${returnDateStr}. Automation paused until then. Kept on your list: the reply ` +
+        `also contains an open question (${oooResult.matchedKeywords.join(", ")}).`
+      : `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
       `returning ${returnDateStr}. Automation paused until then.`,
     occurred_at: occurredAt,
     gmail_message_id: args.gmailMessageId ?? null,
@@ -73,7 +119,9 @@ export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
     provider: "automation",
   });
 
-  return true;
+  // The substantive-question case is a pause, but NOT a "skip this
+  // inbound": the caller still has to store and project the message.
+  return { paused: true, skipInbound: !keepActionable };
 }
 
 interface ApplyDeferArgs {

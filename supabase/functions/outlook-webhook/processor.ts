@@ -17,6 +17,10 @@ import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { logger } from "../_shared/logger.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
+import {
+  hasSubstantiveQuestion,
+  SUBSTANTIVE_QUESTION_FLAG,
+} from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
@@ -474,10 +478,14 @@ async function processChangeNotification(
     return;
   }
 
+  // Set when applyOOOPause paused the lead but deliberately KEPT it
+  // actionable (auto-reply carrying a live commercial question). The
+  // defer branch below must not then clear needs_action again.
+  let oooKeptActionable = false;
   // --- 9. OOO detection ---
   {
     const oooResult = isOutOfOfficeReply(internetMessageHeaders, messageSubject || "", bodyText);
-    const applied = await applyOOOPause({
+    const oooPause = await applyOOOPause({
       supabase: serviceClient,
       leadId: leadRow.id,
       workspaceId: leadRow.workspace_id ?? null,
@@ -486,14 +494,29 @@ async function processChangeNotification(
       occurredAt: new Date().toISOString(),
       logPrefix: "[outlook-webhook]",
     });
-    if (applied) {
-      await pauseActiveAutomation(serviceClient, leadRow.id, mailAccountId, "ooo_reply");
-      return;
+    // Pause the automation whenever an OOO landed, but only RETURN (i.e.
+    // drop the message) for a routine auto-reply. An OOO carrying a live
+    // commercial question is paused AND kept actionable, so it must fall
+    // through and be stored (Codex P1, PR #143).
+    if (oooPause.paused) {
+      // clearLeadAction=false when we kept the lead actionable — pausing the
+      // automation must not blank the reply_now applyOOOPause just wrote.
+      await pauseActiveAutomation(
+        serviceClient,
+        leadRow.id,
+        mailAccountId,
+        "ooo_reply",
+        oooPause.skipInbound,
+      );
+      if (oooPause.skipInbound) return;
+      oooKeptActionable = true;
     }
   }
 
   // ── Defer / "reconnect later" detection ──
-  {
+  // Skipped when the OOO above deliberately kept this lead actionable —
+  // applyDeferPause clears needs_action, which would immediately undo it.
+  if (!oooKeptActionable) {
     const deferResult = detectDeferSignal(bodyText, new Date());
     await applyDeferPause({
       supabase: serviceClient,
@@ -588,7 +611,13 @@ async function processChangeNotification(
     cc_emails: ccRecipients,
     workspace_id: leadRow.workspace_id ?? null,
     provider: "outlook",
-    metadata_json: { provider_message_id: providerMessageId, conversation_id: conversationId },
+    metadata_json: {
+      provider_message_id: providerMessageId,
+      conversation_id: conversationId,
+      // Decided against the FULL body; classify-inbound only sees the
+      // 500-char snippet (Codex P1, PR #143). This path is always inbound.
+      [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText),
+    },
     dedupe_key: `outlook:webhook:${providerMessageId}`,
   });
 
@@ -615,11 +644,25 @@ async function processChangeNotification(
 // ============================================================
 // Helper: Pause active automation_log entries
 // ============================================================
+/**
+ * Pause the lead's active automation_log row.
+ *
+ * `clearLeadAction` (default true) also blanks the lead's human reply
+ * prompt (needs_action / next_action_key / next_action_label). That is
+ * right for a routine auto-reply, and WRONG for an OOO that carries a
+ * live commercial question: applyOOOPause has just deliberately set
+ * `reply_now`, and clearing it here undid that one line later — the
+ * message was stored (previous fix worked) but never became actionable.
+ * Callers in that case pass `clearLeadAction: false`: we still pause the
+ * robot, we just don't take the question off the rep's board.
+ * (Codex P1 on PR #143.)
+ */
 async function pauseActiveAutomation(
   serviceClient: ReturnType<typeof createClient>,
   leadId: string,
   mailAccountId: string,
-  reason: string
+  reason: string,
+  clearLeadAction = true,
 ): Promise<void> {
   const { data: activeLog, error: logErr } = await serviceClient
     .from("automation_log")
@@ -679,14 +722,16 @@ async function pauseActiveAutomation(
     })
     .eq("id", row.id);
 
-  await serviceClient
-    .from("leads")
-    .update({
-      needs_action: false,
-      next_action_key: null,
-      next_action_label: null,
-    })
-    .eq("id", leadId);
+  if (clearLeadAction) {
+    await serviceClient
+      .from("leads")
+      .update({
+        needs_action: false,
+        next_action_key: null,
+        next_action_label: null,
+      })
+      .eq("id", leadId);
+  }
 
   logger.info("mail.outlook.automation_paused", {
     lead_id: leadId,

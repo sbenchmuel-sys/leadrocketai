@@ -3,6 +3,8 @@
  * Used by gmail-sync, gmail-bulk-sync, and future outlook-sync.
  */
 
+import { detectSubstantiveQuestionInAccept } from "./meetingConfirmation.ts";
+
 const OOO_SUBJECT_PATTERNS = [
   /out of office/i,
   /\bOOO\b/,
@@ -45,6 +47,24 @@ export interface OOOResult {
   isOOO: boolean;
   returnDate: Date | null;
   confidence: "header" | "subject" | "body" | null;
+  /**
+   * True when the body carries BOTH a question mark AND a commercial
+   * keyword (`MEETING_OVERRIDE_KEYWORDS` in meetingConfirmation.ts).
+   *
+   * An OOO is usually detected on the SUBJECT alone ("Automatic reply:
+   * ..."), and `applyOOOPause` used to clear `needs_action`
+   * unconditionally on that basis. But plenty of real auto-replies are
+   * a human sentence plus the autoresponder boilerplate — "I'm out
+   * until Monday; can you send the updated pricing before then?" —
+   * and clearing `needs_action` there loses a live commercial question.
+   *
+   * When this is true, callers MUST keep the lead actionable. The
+   * automation pause (ooo_until / eligible_at) still applies: we hold
+   * the robot back, we do not hide the question from the rep.
+   */
+  hasSubstantiveQuestion: boolean;
+  /** Commercial keywords that triggered the override. Empty if none. */
+  matchedKeywords: string[];
 }
 
 /**
@@ -62,16 +82,14 @@ export function isOutOfOfficeReply(
       (h) => h.name.toLowerCase() === indicator.header.toLowerCase()
     )?.value;
     if (headerValue && indicator.value.test(headerValue)) {
-      const returnDate = parseReturnDate(bodyText);
-      return { isOOO: true, returnDate, confidence: "header" };
+      return oooHit(bodyText, "header");
     }
   }
 
   // 2. Check subject line (very reliable)
   for (const pattern of OOO_SUBJECT_PATTERNS) {
     if (pattern.test(subject)) {
-      const returnDate = parseReturnDate(bodyText);
-      return { isOOO: true, returnDate, confidence: "subject" };
+      return oooHit(bodyText, "subject");
     }
   }
 
@@ -81,13 +99,30 @@ export function isOutOfOfficeReply(
     if (pattern.test(bodyText)) {
       bodyMatchCount++;
       if (bodyMatchCount >= 2) {
-        const returnDate = parseReturnDate(bodyText);
-        return { isOOO: true, returnDate, confidence: "body" };
+        return oooHit(bodyText, "body");
       }
     }
   }
 
-  return { isOOO: false, returnDate: null, confidence: null };
+  return {
+    isOOO: false,
+    returnDate: null,
+    confidence: null,
+    hasSubstantiveQuestion: false,
+    matchedKeywords: [],
+  };
+}
+
+/** Build a positive OOOResult, including the substantive-question override. */
+function oooHit(bodyText: string, confidence: "header" | "subject" | "body"): OOOResult {
+  const matchedKeywords = detectSubstantiveQuestionInAccept(bodyText ?? "");
+  return {
+    isOOO: true,
+    returnDate: parseReturnDate(bodyText),
+    confidence,
+    hasSubstantiveQuestion: matchedKeywords.length > 0,
+    matchedKeywords,
+  };
 }
 
 const MONTHS: Record<string, number> = {
