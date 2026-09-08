@@ -54,11 +54,12 @@ export const OUTBOUND_SEND_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Keys that are a prompt for the human, not an automated send. An armed
- * cadence (`hasActiveSequence`) must not blank these out of the Queue.
+ * Queue prompts for the rep. They are NOT cadence positions and NOT sends, so
+ * nothing may schedule from them: `syncEngine.buildLeadUpdate` blanks their
+ * `eligible_at`, and `AutomationPreviewCard`'s Resume refuses to carry them
+ * into an armed `eligible_at`.
  */
-export const HUMAN_PROMPT_KEYS: ReadonlySet<string> = new Set([
-  "reply_now",
+export const PROMPT_ONLY_KEYS: ReadonlySet<string> = new Set([
   FOLLOWUP_DUE_KEY,
   RATE_LIMITED_KEY,
 ]);
@@ -109,8 +110,11 @@ export function followupWaitDays(
   modeSettings?: { followup_wait_days?: number | null } | null,
 ): number {
   const configured = modeSettings?.followup_wait_days;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
-    return configured;
+  // Floor of one day: below that the rule would overlap the same-day / 16-hour
+  // send guardrails, which are deliberately silent (a lead emailed minutes ago
+  // is not work). A workspace asking for 0 gets 1.
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 1) {
+    return Math.floor(configured);
   }
   return strategy === "nurture" ? DEFAULT_FOLLOWUP_WAIT_DAYS.nurture : DEFAULT_FOLLOWUP_WAIT_DAYS.fast;
 }
@@ -169,24 +173,29 @@ export function formatAvailableDate(atMs: number, timezone: string | null): stri
 }
 
 /**
- * A send guardrail (7d/30d cap, 16-hour gap, same-day) fired. Previously this
- * returned a null key with `needs_action = false`, so the lead vanished from
- * the Queue with no reason and no date. Now it stays visible and says when it
- * comes back.
+ * A VOLUME cap (max emails per lead per 7d / 30d) fired: the lead is out of
+ * automated sends for days. It used to return a null key with
+ * `needs_action = false` and vanish from the Queue with no reason and no date.
+ *
+ * Scope, deliberately narrow: only the multi-day volume caps land here. The
+ * 16-hour-gap and same-day guardrails stay silent exactly as they always were
+ * — they trip on every lead the rep just emailed, so surfacing them would have
+ * bounced every sent email straight back into the Queue as a no-op card.
+ *
+ * Wording: the cap pauses the AUTOMATIC send. The rep can still write to this
+ * lead right now (the card's own button does exactly that), so the label must
+ * not read as "you may not act until <date>".
+ *
+ * The date is rendered in the WORKSPACE's timezone, the same contract
+ * `src/lib/eligibleAtFormat.ts` documents (workspace clock, never the
+ * browser's) — deriveAction receives that timezone from its callers.
  */
 export function rateLimitedAction(availableAtMs: number, timezone: string | null): FollowupAction {
   return {
     needs_action: true,
     next_action_key: RATE_LIMITED_KEY,
-    next_action_label: `Follow up available ${formatAvailableDate(availableAtMs, timezone)}`,
+    next_action_label: `Follow up anytime — auto-send paused until ${formatAvailableDate(availableAtMs, timezone)}`,
     eligible_at: new Date(availableAtMs).toISOString(),
     action_reason_code: "RATE_LIMITED",
   };
-}
-
-/** UTC midnight after `now` — when the same-day-send guardrail expires. */
-export function startOfNextUtcDay(now: number): number {
-  const d = new Date(now);
-  d.setUTCHours(24, 0, 0, 0);
-  return d.getTime();
 }

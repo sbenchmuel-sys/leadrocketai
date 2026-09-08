@@ -8,10 +8,9 @@
 import {
   deriveFollowupDue,
   followupWaitDays,
-  HUMAN_PROMPT_KEYS,
   OUTBOUND_SEND_KEYS,
+  PROMPT_ONLY_KEYS,
   rateLimitedAction,
-  startOfNextUtcDay,
 } from "./followupRule.ts";
 
 // ============================================
@@ -479,30 +478,49 @@ export function deriveAction(
 
   // GUARDRAILS
   //
-  // These cap AUTOMATED sends. They used to return a null key with
-  // needs_action=false, so the lead silently disappeared from the Queue with
-  // no reason and no date. Now: an owed follow-up still surfaces (it's manual
-  // work, not a send), and otherwise the lead stays visible as `rate_limited`
-  // with the date the limit expires.
+  // All four cap AUTOMATED sends. Only the two VOLUME caps become visible as
+  // `rate_limited`: they hold a lead for days, and returning a null key made it
+  // vanish from the Queue with no reason and no date.
+  //
+  // The 16-hour-gap and same-day rules stay SILENT, exactly as they always
+  // were. They trip on every lead the rep just emailed — and `postSendDeriveAction`
+  // now recomputes seconds after a send — so surfacing them would bounce every
+  // sent email straight back into the Queue as a no-op card ("follow up, sent 0
+  // minutes ago") parked until UTC midnight. The Queue would never empty.
+  // (`followupWaitDays` has a one-day floor, so an owed follow-up can never
+  // fall inside those two windows and be swallowed by them.)
+  //
+  // A still-unanswered inbound also suppresses `rate_limited`: branch A already
+  // returned `reply_now` once the reply is past `reply_pending_hours`, so
+  // reaching here means the customer wrote very recently and we are inside that
+  // window. A "Follow up" card whose why-now line reads off `last_outbound_at`
+  // would actively hide the fresh reply for up to 4h (fast) / 24h (nurture).
+  const hasUnansweredInbound = metrics.last_inbound_at != null
+    && new Date(metrics.last_inbound_at).getTime() > lastOutTime;
+  const silent: ActionResult = { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+  const capped = (availableAtMs: number): ActionResult =>
+    followupDue ?? (hasUnansweredInbound ? silent : rateLimitedAction(availableAtMs, timezone));
+
   if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
     // ponytail: deriveAction only receives the COUNT of recent outbounds, not
     // their timestamps, so the true expiry (oldest-in-window + 7d) is unknown.
     // last_outbound + 7d is the conservative upper bound — never promises the
     // rep an earlier date than the cap actually allows. Upgrade path: pass the
     // oldest in-window outbound timestamp from the callers.
-    return followupDue ?? rateLimitedAction((lastOutTime || now) + 7 * DAY, timezone);
+    return capped((lastOutTime || now) + 7 * DAY);
   }
   if (recentOutbound30d >= guardrails.max_emails_per_lead_per_30d) {
-    return followupDue ?? rateLimitedAction((lastOutTime || now) + 30 * DAY, timezone);
+    return capped((lastOutTime || now) + 30 * DAY);
   }
 
   if (hoursSinceLastOut < guardrails.min_gap_hours_between_emails && lastOutTime > 0) {
-    return followupDue ?? rateLimitedAction(lastOutTime + guardrails.min_gap_hours_between_emails * HOUR, timezone);
+    const eligibleTime = lastOutTime + (guardrails.min_gap_hours_between_emails * HOUR);
+    return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: new Date(eligibleTime).toISOString(), action_reason_code: null };
   }
 
   if (!guardrails.same_day_send_allowed && lastOutTime > 0) {
     if (new Date(lastOutTime).toDateString() === new Date(now).toDateString()) {
-      return followupDue ?? rateLimitedAction(startOfNextUtcDay(now), timezone);
+      return silent;
     }
   }
 
@@ -740,10 +758,11 @@ export function buildLeadUpdate(
   // reply_now overwritten with null on every sync — so the customer's reply never
   // reached the Queue's Replied tab. Mirrors the consent-gate carve-out above,
   // which also leaves reply_now intact.
-  // `followup_due` and `rate_limited` join `reply_now` here: all three are
-  // prompts for the rep, so an armed cadence must not blank them out either.
-  const isHumanPromptKey = finalAction.next_action_key != null
-    && HUMAN_PROMPT_KEYS.has(finalAction.next_action_key);
+  // `followup_due` / `rate_limited` deliberately do NOT get this carve-out: an
+  // armed cadence already schedules the follow-up, so the Queue prompt is
+  // redundant there, and letting it through would overwrite the lead's stored
+  // cadence anchor (`eligible_at`) with nothing.
+  const isHumanPromptKey = finalAction.next_action_key === "reply_now";
   const suppressForAutomation = hasActiveAutomation && !isHumanPromptKey;
 
   const leadUpdate: LeadUpdate = {
@@ -781,13 +800,11 @@ export function buildLeadUpdate(
   // true AND eligible_at <= now AND automation_mode IS NOT NULL AND key !=
   // 'ooo_return_followup'. So ANY key persisted with a due `eligible_at` is a
   // send trigger. `followup_due` / `rate_limited` are prompts for the human —
-  // deriveAction returns an honest date on them (it's also spelled out in the
-  // label, "Follow up available Sep 12"), and we drop it here so the executor
-  // can never pick these leads up. `reply_now` keeps its existing behaviour.
-  if (
-    leadUpdate.next_action_key === "followup_due"
-    || leadUpdate.next_action_key === "rate_limited"
-  ) {
+  // deriveAction returns an honest date on them (the label carries it too), and
+  // we drop it here so the executor can never pick these leads up. Leads with a
+  // live cadence keep their anchor instead: `suppressForAutomation` above stops
+  // these keys from ever reaching a lead that has one. `reply_now` unchanged.
+  if (leadUpdate.next_action_key != null && PROMPT_ONLY_KEYS.has(leadUpdate.next_action_key)) {
     leadUpdate.eligible_at = null;
   }
 
