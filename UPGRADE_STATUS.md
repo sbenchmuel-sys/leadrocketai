@@ -1,56 +1,77 @@
 # DrivePilot master upgrade — checkpoint
 
-Updated: 2026-09-08 21:30 (Israel time) · origin/main `d5137e96` · **4 units merged, 3 PRs waiting on you.**
+Updated: 2026-09-09 00:40 (Israel time) · origin/main `5f818be7` · **6 units merged, 4 PRs open. Two production problems found today that nobody knew about.**
 
 ## OBSERVE — things only you can see or hear
 
-**1. G-C — the automatic sender (PR #138). Partly done already.** I proved on staging today, without needing you:
-- Emergency stop ON → the executor returns `paused, sent 0` in **1 second** and writes nothing at all (it returns before reserving anything).
-- Emergency stop OFF → a full tick finishes in **5 seconds**. It used to sleep up to 90 seconds inside a 55-second timeout, which is why cold sends were being starved.
-- The new "why didn't this send?" ledger works, and it walked the pipeline forward one honest reason at a time: *"Workspace timezone not configured"* → I fixed that on staging → *"Outside send window 09:00–17:00 Asia/Jerusalem"* (correct — it was 9pm). Before this unit, all of that was silence.
-- The test lead's claim was not burned: he stays eligible for the next tick.
+**1. G-C — the automatic sender (PR #138).** Everything I could prove without you is proven: emergency stop returns `paused, sent 0` in 1 second writing nothing; a full tick finishes in 5 seconds where it used to sleep up to 90 inside a 55-second timeout; the "why didn't this send?" ledger walks the pipeline forward one honest reason at a time. **What still needs you is only the email itself** — one email in a real inbox with exactly one signature, one footer, a working unsubscribe link and the `List-Unsubscribe` header. Blocked on DECIDE 1.
 
-**What still needs you** is only the email itself — that one email in a real inbox with exactly one signature and one footer, a working unsubscribe link, and the `List-Unsubscribe` header. That needs four things on staging: `LOVABLE_API_KEY`, one connected mailbox, a real address for the test lead, and a tick inside 09:00–17:00. See DECIDE 1.
+**2. C1 — calling (PR #145).** Once a staging Twilio subaccount exists: answer an outbound call from a second phone and **hear the recording notice yourself** — the rep should hear only ringing. Codex caught that the first fix played the notice to the rep instead of the person being recorded.
 
-**2. C1 — calling (PR #145).** Two things: read me the Twilio console's Voice Request URL (DECIDE 2), and later, once a staging Twilio subaccount exists, **answer an outbound call from a second phone and hear the recording notice yourself** — the rep should hear only ringing. Codex caught that my first fix played the notice to the rep instead of the person being recorded.
+**3. Q1 — the follow-up rule (PR #146, new today).** Three things a person has to look at, all in the app: send a real email and confirm the lead **leaves** the Queue instead of reappearing at the bottom of "Follow up"; on a lead showing a follow-up prompt, confirm the automation card reads "Automation: Off / Enable" and **not** "Resume Anyway"; and confirm the "Follow up anytime — auto-send paused until the 12th" card's own Follow up button still sends.
 
-**3. L2 — the new lead page (#144), already merged.** A 20-step phone walkthrough is on the PR. Worth 15 minutes on a 390px screen when convenient; it is not blocking anything.
+**4. L2 — the new lead page (#144, merged).** A 20-step phone walkthrough is on the PR. Worth 15 minutes on a 390px screen when convenient; not blocking anything.
 
 ## PRODUCTION — do in Lovable, in this order (batched)
-Two units are merged. Nothing needs doing yet — **wait until I say the batch is ready**, because more is coming and the order matters. For your information, what has accumulated:
-1. **P0 harness (#137)** — no production migration. Its migration is staging-only: **never tell Lovable to apply `20260908000000_codify_cron_jobs_staging.sql`.** Functions that changed (pure code moves): `ai_task`, `automation-executor`.
-2. **L1 lead data fixes (#139)** — no migration. Functions: `recompute-lead-intelligence`, `sms-webhook`, `intelligence-queue-drain`, plus anything bundling `_shared/timelineProjector.ts` (`call-analyze`, `twilio-voice-webhook`, `meeting-transcript-analyze`, `conversation-analyze`).
+
+**Batch 1 is done.** You applied both items earlier today and I verified them against the live database: the Queue's intent RPC is the new version, and `gmail_connections.bulk_sync_cursor` exists. **The Gmail sync outage is confirmed dead** — `gmail-bulk-sync` errored 138 times in the two days before the fix and every single run since 19:40 has succeeded.
+
+Nothing to do right now. Batch 2 will follow when Q1 and the units behind it land. Standing rule: **never tell Lovable to apply `20260908000000_codify_cron_jobs_staging.sql`** — it is staging-only.
 
 ## DECIDE — what I need from you
-1. **[BLOCKING G-C's send test] Four things on staging, one sitting.** (a) `LOVABLE_API_KEY` in Supabase → drivepilot-staging → Edge Functions → Secrets — without it no email can be generated at all. (b) Connect one mailbox: log into `drivepilot-staging.vercel.app` as `repa@drivepilot-test.com` and connect a Gmail or Outlook account through Settings — a throwaway is fine. (c) Give me an address you can actually read, to replace the test lead's fake `ed@spruce-test.com`. (d) The tick has to land inside 09:00–17:00 Israel time, which I'll handle. Optional: `OPENAI_API_KEY` for embeddings. I already fixed the missing workspace timezone myself.
-2. **Retention: your docs and your database disagree.** CLAUDE.md says raw message bodies are kept until the AI has written a summary, then purged at 72h. The repo's newest migration says a flat 30-day cap with no AI gate — but the **live staging database** has the gated version and the hourly cleanup job is running. So three sources tell three stories. Nothing is at risk (all three keep data longer than promised, never less), but before the program turns retention on in production I need one answer. Default I'm holding: purge stays off until outbound summaries exist, then 30 days.
-3. **Staging Twilio subaccount — still unknown.** Default: C1's Twilio checks deferred, C2 queued behind it. Free to change until C1 reaches QA.
-4. **A real inbox + Outlook account on staging** — needed for observation 1 above and later for G-B. Default: I seed the data and tell you exactly which inbox to open.
-5. **Settled defaults you can still overturn:** uploaded-notes risks now expire at the next re-analysis (L1) · WhatsApp auto-replies stay OFF behind a switch (E-S1a) · warm follow-ups now obey the "require a postal address" setting like cold email does (G-C — check `COLD_REQUIRE_POSTAL_ADDRESS` in production before redeploying) · purge crons off, "call me then connect" default, Hebrew-first transcription.
-6. GitHub token is in the chat history — revoke when the program ends.
+
+**1. [BLOCKING G-C and E-S1a] The staging AI key is the wrong value.** The rename worked — Supabase staging now shows `LOVABLE_API_KEY`, the exact name the code reads. But the AI service rejects the value with a 401: "I don't recognise this key." Open your **production** project in Lovable → backend → secrets, copy the value of `LOVABLE_API_KEY` there, and paste that exact value into staging, replacing what's there. My read is that the current value is a Lovable *account* API key (for the editor), which is a different service from the AI gateway despite the shared name. Still also needed for the send test: one connected mailbox on staging, and an address you can actually read to replace the test lead's fake `ed@spruce-test.com`.
+
+**2. [NEW — the most important thing on this page] The 72-hour purge has never run in production.** CLAUDE.md and the public product commitment say raw message bodies auto-purge within 72 hours (inbound waits for an AI summary, 7-day hard cap). The code that does this is correct. **Nothing calls it.** There is no `message-cleanup` cron and no `expire_old_messages` cron among the 17 scheduled jobs. Live counts:
+- **4,896 email bodies** older than 7 days still stored, oldest dated 2012 (historical mail pulled in by sync).
+- **5,253 message snippets** older than 7 days still stored.
+- 0 of the WhatsApp/SMS bodies are overdue — that path is clean.
+
+Nothing is leaking and no customer is harmed, but the commitment is not being met and hasn't been. This is your call, not mine, and it has a real trade-off: turning the purge on before outbound summaries exist (unit E-S1b) destroys the context the AI uses to write follow-ups. **The default I'm holding:** leave it off until E-S1b ships, then switch it on at 30 days — and in the meantime, either soften the wording of the commitment or tell me to schedule the job now and accept the context loss. If you want it on today, say so and I'll queue it as its own unit with a staging proof first.
+
+**3. [NEW] One in five inbound messages was never classified, and the classifier times out a quarter of the time.** 407 inbound messages have no AI label at all — 403 of them older than a week — going back to 2025. Separately, `classify-inbound` runs every minute and **times out at 55 seconds on 88 of 360 runs** (24%). New mail is keeping up, so the 407 look like a stuck historical set the job retries and chokes on. Consequence: those messages can never be hidden by the Queue's bounce/out-of-office filter, and their bodies sit unpurged to the hard cap. **Default I'm holding:** a small unit after Q1 that makes the job skip what it has already failed on and process a bounded batch, plus a one-off backfill for the 407. Free to overturn.
+
+**4. Staging Twilio subaccount — still unknown.** Default: C1's Twilio checks deferred, C2 queued behind it. Free to change until C1 reaches QA.
+
+**5. Settled defaults you can still overturn:** uploaded-notes risks expire at the next re-analysis (L1) · WhatsApp auto-replies stay OFF behind a switch (E-S1a) · warm follow-ups obey the "require a postal address" setting like cold email does (G-C — check `COLD_REQUIRE_POSTAL_ADDRESS` in production before redeploying) · follow-up wait is 3 days on fast motion, 5 on nurture, calendar days (Q1) · "call me then connect" default · Hebrew-first transcription.
+
+**6. GitHub token is in the chat history — revoke when the program ends.**
 
 ## Units
+
 | Unit | Tier | Status | PR / commit |
 |---|---|---|---|
 | P0 harness | 2 | **merged** — staging gate passed, 3 Codex findings fixed | [#137](https://github.com/sbenchmuel-sys/leadrocketai/pull/137) |
-| Staging ops job | 3 | **merged** — how every staging gate now runs | [#141](https://github.com/sbenchmuel-sys/leadrocketai/pull/141), [#142](https://github.com/sbenchmuel-sys/leadrocketai/pull/142) |
-| L1 lead data fixes | 2 | **merged** — staging gate passed (double-enqueue → one row, drain ok, intelligence written) | [#139](https://github.com/sbenchmuel-sys/leadrocketai/pull/139) |
-| G-C executor safety | 1 | PR open · Codex green · QA SHIP WITH NOTES · **kill switch, stagger cap and skip ledger PROVEN on staging** · only the email-content observation left | [#138](https://github.com/sbenchmuel-sys/leadrocketai/pull/138) @ `4bf28459` |
-| E-S1a aiGateway | 2 | PR open · Codex green · QA SHIP WITH NOTES · **all 16 rerouted functions boot on staging**; holding the merge until one real AI call can be proven | [#140](https://github.com/sbenchmuel-sys/leadrocketai/pull/140) @ `70478bf7` |
-| G-A Queue truth | 2 | **merged** — staging proved detectors short-circuit, a truncated OOO with a late question is not hidden while the control still is | [#143](https://github.com/sbenchmuel-sys/leadrocketai/pull/143) |
+| Staging ops job | 3 | **merged** — how every staging gate runs; now also posts the Deno suite's output to the PR | [#141](https://github.com/sbenchmuel-sys/leadrocketai/pull/141), [#142](https://github.com/sbenchmuel-sys/leadrocketai/pull/142), [#147](https://github.com/sbenchmuel-sys/leadrocketai/pull/147) |
+| L1 lead data fixes | 2 | **merged** — staging gate passed | [#139](https://github.com/sbenchmuel-sys/leadrocketai/pull/139) |
+| G-A Queue truth | 2 | **merged** — applied to production and verified live | [#143](https://github.com/sbenchmuel-sys/leadrocketai/pull/143) |
 | L2 one-column lead page | 3 | **merged** — QA caught a wrong-customer delete race before it shipped | [#144](https://github.com/sbenchmuel-sys/leadrocketai/pull/144) |
-| C1 calling safety | 1 | PR open · Codex green · QA HOLD→fixed · blocked on the Twilio console URL and a staging Twilio subaccount | [#145](https://github.com/sbenchmuel-sys/leadrocketai/pull/145) @ `9600cf05` |
-| Q1 → G-B/Q2 → E-S1b/C2 → L3 → C3 → G-M → E-S2 → E-S3 → retention | | queued — every one of them depends on G-C or C1 merging, so the program is now genuinely gated on the two items above | |
+| G-C executor safety | 1 | PR open · Codex green · QA SHIP WITH NOTES · kill switch, stagger cap and skip ledger **proven on staging** · only the email-content observation left | [#138](https://github.com/sbenchmuel-sys/leadrocketai/pull/138) @ `ac4e3a76` |
+| E-S1a aiGateway | 2 | PR open · Codex green · QA SHIP WITH NOTES · all 16 rerouted functions boot on staging · holding the merge until one real AI call can be proven | [#140](https://github.com/sbenchmuel-sys/leadrocketai/pull/140) @ `3bf46b93` |
+| C1 calling safety | 1 | PR open · Codex green · QA HOLD→fixed · blocked on a staging Twilio subaccount | [#145](https://github.com/sbenchmuel-sys/leadrocketai/pull/145) @ `2778674e` |
+| **Q1 follow-up rule** | 1 | **new** · QA HOLD → HOLD → **SHIP WITH NOTES** · Codex + staging gate running | [#146](https://github.com/sbenchmuel-sys/leadrocketai/pull/146) @ `cd66630f` |
+| G-B / Q2 / E-S1b / C2 / L3 / C3 / G-M / E-S2 / E-S3 / retention | | queued — each one needs Q1, G-C, C1 or E-S1a to merge first; they share files with the open PRs, so starting one now would only create conflicts | |
 
 ## Things that were quietly broken in production, found by this program
-1. **Every bounce and out-of-office reply since the spring has sat in reps' queues as a "reply needed" card.** The AI's labels and the Queue's hide-list had no words in common, so nothing could ever be hidden. (G-A — fixed, and it now costs nothing: a bounce no longer triggers an AI call at all.)
-2. **Meeting transcripts are never analysed.** `transcript-poller` calls the analyser with no auth header, so the gateway rejects it every time — recorded meetings get a transcript and no summary. (Will be fixed inside L3.)
-3. **Queued lead re-analysis was failing the same way** — same missing header, so every recompute triggered by a text, call or meeting was rejected. (L1 — fixed and proven on staging.)
-4. **Six AI call sites were pointed at a wrong address** and silently failing: WhatsApp classification, reply suggestions, style extraction, the audio transcription path. (E-S1a — fixed; the WhatsApp one is deliberately left switched off until its consent logic is reviewed, because un-breaking it would have started auto-texting unknown numbers.)
-5. **Staging had 12 cron jobs with the API key written into each command.** Now 17, matching production, all reading from the encrypted vault, with only the automatic sender switched off. (Harness.)
+
+1. **The 72-hour purge has never run.** 4,896 email bodies and 5,253 snippets past the deadline, oldest from 2012. The code is right; nothing schedules it. (DECIDE 2.)
+2. **Every bounce and out-of-office reply since the spring sat in reps' queues as a "reply needed" card.** The AI's labels and the Queue's hide-list had no words in common. (G-A — fixed, applied to production, verified live. It now costs nothing: a bounce no longer triggers an AI call at all.)
+3. **Gmail bulk sync had been failing for 2.5 months** on a missing database column. (Fixed, applied, and confirmed healthy — every run since 19:40 today has succeeded.)
+4. **One in five inbound messages was never classified, and the classifier times out on a quarter of its runs.** (DECIDE 3.)
+5. **Warm leads vanished from the Queue for six weeks.** If a customer replied once and then went quiet after your next email, there was no follow-up rule for them at all. Outlook reps' sent mail never came back as a follow-up either, because Outlook has no automatic sync. (Q1 — fixed.)
+6. **Meeting transcripts are never analysed.** `transcript-poller` calls the analyser with no auth header, so the gateway rejects it every time. (Will be fixed inside L3.)
+7. **Queued lead re-analysis was failing the same way.** (L1 — fixed and proven on staging.)
+8. **Six AI call sites were pointed at a wrong address** and silently failing: WhatsApp classification, reply suggestions, style extraction, the audio transcription path. (E-S1a — fixed; the WhatsApp one is deliberately left switched off until its consent logic is reviewed, because un-breaking it would have started auto-texting unknown numbers.)
+9. **Staging had 12 cron jobs with the API key written into each command.** Now 17, matching production, all reading from the encrypted vault. (Harness.)
 
 ## What the review layers are catching
-Every unit goes through four gates: the worker builds it → an independent reviewer reads every line → Codex reviews the PR → the staging job runs it against the real database. Real defects caught before merge so far: a wrong-customer delete race on the lead page, an automatic WhatsApp reply that would have woken up and texted strangers, three separate ways a genuine customer question could have been buried by the new Queue filters, and a misconfigured sender that would have re-spent AI credits every 15 minutes. None reached production.
+
+Every unit goes through four gates: the worker builds it → an independent reviewer reads every line → Codex reviews the PR → the staging job runs it against the real database.
+
+Q1 is the clearest example yet. The reviewer held it **twice**. First: every email a rep sent would have bounced straight back into the Queue seconds later as a "follow up" card — the Queue would never have emptied. Second, and far worse: pressing "Resume" on a lead would have armed a **real automated email to a real customer**, two days later, from the wrong template, that nobody asked for. When that was fixed, the reviewer found the identical bug surviving in the "Enable Automation" button next to it. All three are closed and pinned by tests that genuinely fail without them — the reviewer proved that by putting the old code back and watching exactly three tests break.
+
+Running total of real defects caught before merge: a wrong-customer delete race on the lead page, an automatic WhatsApp reply that would have texted strangers, three ways a genuine customer question could have been buried by the new Queue filters, a misconfigured sender that would have re-spent AI credits every 15 minutes, and Q1's three. **None reached production.**
 
 ## Confidence
-**~85%.** The whole loop is real now — build, review, Codex, staging, merge — and two units have gone through it end to end. The two facts that would take it to ≥95%: the AI key on staging so G-C's send test runs and you observe one real email, and one production batch applied cleanly with `cron_run_log` quiet for an hour afterwards.
+
+**~85%.** The loop is real and four units have gone through it end to end. Two facts would take it to ≥95%: a working AI key on staging, so G-C's send test runs and you observe one real email; and one more production batch applied cleanly with the scheduled jobs quiet for an hour afterwards. The two new production findings don't lower my confidence in the program — the program is what found them — but DECIDE 2 is the first thing on this page that is a promise to customers rather than an engineering detail.
