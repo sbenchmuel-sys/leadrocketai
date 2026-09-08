@@ -15,10 +15,12 @@
 //   • Owns its own try/catch — a failure here MUST NOT fail the send.
 //   • Background-task pattern (EdgeRuntime.waitUntil where available,
 //     fire-and-forget otherwise) so the caller doesn't await.
-//   • gmail-send is INTENTIONALLY not migrated to this helper in this
-//     PR (see PR B brief). Its existing pattern stays untouched; this
-//     helper exists so the three new wirings don't drift. Consolidating
-//     gmail-send is a future cleanup.
+//   • Unit Q1 wired gmail-send AND outlook-send into this same helper
+//     (manual sends only — automation-executor still owns the state of
+//     its own sends). Outlook has no sync cron at all, so before that a
+//     rep's Outlook mail never came back as a follow-up. The AI
+//     `analyze_outgoing_email` write still runs first; this helper is
+//     the last word on next_action_key / needs_action.
 //
 // What this does NOT do (deliberate scope):
 //   • Does not WRITE meeting_packs bookkeeping — gmail-sync /
