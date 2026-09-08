@@ -329,12 +329,13 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
 
   return (
     <Card className={cn(isCompact ? "border-0 shadow-none" : "")}>
-      {!isCompact && (
-        <CardHeader className="pb-3">
+      {/* Unit L2: the age + Update control is ALWAYS visible — no compact-mode
+          hiding. Reps need to know how fresh this is wherever it renders. */}
+      <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
               <Brain className="h-4 w-4 text-primary" />
-              Intelligence
+              What we know
             </CardTitle>
             <div className="flex items-center gap-2">
               {staleReason && (
@@ -358,8 +359,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
               )}
             </div>
           </div>
-        </CardHeader>
-      )}
+      </CardHeader>
 
       <CardContent className={cn(isCompact ? "p-0" : "", "space-y-4")}>
         {/* Summary */}
@@ -377,7 +377,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <AlertTriangle className="h-3 w-3" /> Risks ({risks.length})
+                <AlertTriangle className="h-3 w-3" /> What could go wrong ({risks.length})
               </span>
               <div className="space-y-1.5 mt-1">
                 {risks.slice(0, maxItems).map((r, i) => (
@@ -409,7 +409,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <Target className="h-3 w-3" /> Milestones ({milestones.length})
+                <Target className="h-3 w-3" /> What we agreed to do ({milestones.length})
               </span>
               <div className="space-y-1.5 mt-1">
                 {milestones.slice(0, maxItems).map((m, i) => (
@@ -441,7 +441,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <Shield className="h-3 w-3" /> Objections ({objections.length})
+                <Shield className="h-3 w-3" /> Their pushback ({objections.length})
               </span>
               <div className="space-y-1 mt-1">
                 {objections.slice(0, maxItems).map((obj, i) => (
@@ -465,7 +465,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <TrendingUp className="h-3 w-3" /> Buying Signals ({buyingSignals.length})
+                <TrendingUp className="h-3 w-3" /> Good signs ({buyingSignals.length})
               </span>
               <div className="space-y-1 mt-1">
                 {buyingSignals.slice(0, maxItems).map((sig, i) => (
@@ -484,7 +484,7 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             <Separator />
             <div>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                <TrendingUp className="h-3 w-3" /> Sales Signals ({leadSignals.length})
+                <TrendingUp className="h-3 w-3" /> Good signs ({leadSignals.length})
               </span>
               <div className="space-y-1.5 mt-1">
                 {leadSignals.slice(0, maxItems).map((s) => (
@@ -502,9 +502,6 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                           <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline flex items-center gap-0.5">
                             <ExternalLink className="h-2.5 w-2.5" /> Source
                           </a>
-                        )}
-                        {s.confidence_score != null && (
-                          <span className="text-[10px] text-muted-foreground">{Math.round(s.confidence_score * 100)}%</span>
                         )}
                       </div>
                     </div>
@@ -594,14 +591,13 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
             (compact). Unit 3 moved the "Analyzed X ago / Run Analysis" control to
             the Deep Analysis pane (RecommendationsTab) so reps keep a recompute
             path; the plain-English Summary above is the kept surface here. */}
-        {!isCompact && (
-          <>
+        <>
             <Separator />
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] text-muted-foreground">
                 {lastComputedAt
-                  ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
-                  : "Never analyzed"}
+                  ? `Checked ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
+                  : "Not checked yet"}
               </span>
               <Button
                 size="sm"
@@ -615,11 +611,10 @@ export function UnifiedIntelligenceCard({ lead, mode = "full", onUpdated }: Unif
                 ) : (
                   <Brain className="h-3 w-3" />
                 )}
-                {isAnalyzing ? "Analyzing…" : "Run Analysis"}
+                {isAnalyzing ? "Updating…" : "Update"}
               </Button>
             </div>
-          </>
-        )}
+        </>
       </CardContent>
     </Card>
   );

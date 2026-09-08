@@ -43,10 +43,17 @@ type EditLeadFormData = z.infer<typeof editLeadSchema>;
 interface EditLeadDialogProps {
   lead: LeadDetail;
   onUpdate: () => void;
+  /** Controlled mode (Unit L2): the lead page opens this from its "…" overflow
+   *  menu, so no inline "Edit" trigger button is rendered. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
-  const [open, setOpen] = useState(false);
+export function EditLeadDialog({ lead, onUpdate, open: openProp, onOpenChange }: EditLeadDialogProps) {
+  const [openState, setOpenState] = useState(false);
+  const controlled = onOpenChange !== undefined;
+  const open = controlled ? !!openProp : openState;
+  const setOpen = controlled ? onOpenChange! : setOpenState;
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<EditLeadFormData>({
@@ -123,12 +130,14 @@ export function EditLeadDialog({ lead, onUpdate }: EditLeadDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Pencil className="h-4 w-4 mr-2" />
-          Edit
-        </Button>
-      </DialogTrigger>
+      {!controlled && (
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Lead</DialogTitle>

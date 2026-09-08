@@ -122,7 +122,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       }
     } catch (err) {
       console.error("[NurturePreviewCard] Generation error:", err);
-      toast.error("Failed to generate nurture draft");
+      toast.error("Failed to generate the slow-drip draft");
     } finally {
       setIsGenerating(false);
     }
@@ -180,7 +180,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
         console.warn("[NurturePreviewCard] Send was skipped:", reason);
         toast.error(`Send skipped: ${reason}`);
       } else {
-        toast.success("Nurture email sent");
+        toast.success("Slow-drip email sent");
       }
 
       onUpdate();
@@ -215,7 +215,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
         status: "approved",
       });
 
-      toast.success("Nurture email approved and saved");
+      toast.success("Slow-drip email approved and saved");
       setShowPreview(false);
 
       // After first manual approval, show upgrade prompt
@@ -294,7 +294,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
       if (error) throw error;
 
-      toast.success(`Nurture automation enabled — next email scheduled for ${format(eligibleAt, "MMM d 'at' h:mm a")}`);
+      toast.success(`Slow drip turned on — next email scheduled for ${format(eligibleAt, "MMM d 'at' h:mm a")}`);
       setShowUpgradeDialog(false);
       onUpdate();
     } catch (err) {
@@ -309,7 +309,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Sprout className="h-3.5 w-3.5 text-emerald-500" />
-          <span className="text-sm font-medium text-foreground">Nurture Paused</span>
+          <span className="text-sm font-medium text-foreground">Slow drip paused</span>
         </div>
         <p className="text-xs text-muted-foreground">Lead re-engaged.</p>
       </div>
@@ -322,7 +322,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Pause className="h-3.5 w-3.5 text-amber-500" />
-          <span className="text-sm font-medium text-foreground">Nurture Paused</span>
+          <span className="text-sm font-medium text-foreground">Slow drip paused</span>
         </div>
         <p className="text-xs text-muted-foreground">Manually paused</p>
         <Button
@@ -348,7 +348,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           <div className="flex items-center gap-2">
             <Sprout className="h-3.5 w-3.5 text-emerald-500" />
             <span className="text-sm font-medium text-foreground">
-              Nurture Mode
+              Slow drip
               <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 font-medium">
                 {mode === "review" ? "Review" : "Auto"}
               </span>
@@ -364,7 +364,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
 
         {/* Meta */}
         <div className="text-xs text-muted-foreground">
-          Theme: {THEME_LABELS[theme] || theme} · Cadence: Every {CADENCE_DAYS[lead.nurture_cadence || "biweekly"]} days
+          Style: {THEME_LABELS[theme] || theme} · Every {CADENCE_DAYS[lead.nurture_cadence || "biweekly"]} days
         </div>
 
         <Separator className="bg-border/40" />
@@ -578,7 +578,7 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Zap className="h-4 w-4 text-primary" />
-              Enable Nurture Automation?
+              Turn on automatic slow drip?
             </DialogTitle>
             <DialogDescription className="text-xs">
               Emails will send automatically at cadence. System stops instantly on reply or meeting.
@@ -599,9 +599,9 @@ export default function NurturePreviewCard({ lead, onUpdate }: NurturePreviewCar
       <AlertDialog open={confirmSendTarget !== null} onOpenChange={(open) => !open && setConfirmSendTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Send nurture email now?</AlertDialogTitle>
+            <AlertDialogTitle>Send this slow-drip email now?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will send the nurture email to <strong>{lead.name || lead.email || "this lead"}</strong> immediately.
+              This will send the slow-drip email to <strong>{lead.name || lead.email || "this lead"}</strong> immediately.
               This action cannot be undone once the email leaves your inbox.
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -562,17 +562,6 @@ export default function DraftsTab({ lead, onUpdate, onActionComplete, variant = 
                    WHATSAPP_INTENT_LABELS[selectedIntent as WhatsAppIntent] ||
                    SMS_INTENT_LABELS[selectedIntent as SmsIntent]}
                 </CardTitle>
-                {knowledgeUsed ? (
-                  <Badge variant="outline" className="text-xs text-primary border-primary/30">
-                    <Database className="h-3 w-3 mr-1" />
-                    KB
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-xs text-muted-foreground">
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                    No KB
-                  </Badge>
-                )}
                 {generatedAt && (
                   <span className="text-[10px] text-muted-foreground">
                     Generated {formatDistanceToNow(generatedAt, { addSuffix: true })}

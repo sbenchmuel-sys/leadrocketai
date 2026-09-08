@@ -144,7 +144,7 @@ export default function LeadContextPanel({ leadId, workspaceId, onUpdate }: Prop
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-2">
-          No imported context for this lead. Pull the name, company, title and key details straight from this lead's emails with "Enrich from email", or add context manually.
+          No imported context for this lead. Pull the name, company, title and key details straight from this lead's emails with "Fill in from their emails", or add context manually.
         </p>
       </div>
     );
@@ -216,7 +216,6 @@ export default function LeadContextPanel({ leadId, workspaceId, onUpdate }: Prop
 
 function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (item: LeadContextItem) => void }) {
   const sourceLabel = SOURCE_LABELS[item.source_type] || item.source_type;
-  const confidenceLabel = item.confidence != null ? `${(item.confidence * 100).toFixed(0)}%` : null;
   const meta = CATEGORY_META[item.category];
   const isCaution = item.category === "caution";
 
@@ -240,17 +239,11 @@ function ContextItemRow({ item, onToggle }: { item: LeadContextItem; onToggle: (
             variant={item.is_active ? "secondary" : "outline"}
             className={cn("text-[9px] px-1.5 py-0", !item.is_active && "opacity-60")}
           >
-            {item.is_active ? "Used by AI" : "Inactive"}
+            {item.is_active ? "In use" : "Not used"}
           </Badge>
           <span className="text-[10px] text-muted-foreground">{sourceLabel}</span>
-          {item.source_column_name && (
-            <span className="text-[10px] text-muted-foreground">• col: {item.source_column_name}</span>
-          )}
           {item.author_name && (
             <span className="text-[10px] text-muted-foreground">• by {item.author_name}</span>
-          )}
-          {confidenceLabel && (
-            <Badge variant="outline" className="text-[9px] px-1 py-0">{confidenceLabel}</Badge>
           )}
           {item.original_snippet && item.original_snippet !== item.content_text && (
             <span className="text-[10px] text-muted-foreground italic truncate max-w-[150px]" title={item.original_snippet}>
@@ -330,7 +323,7 @@ function EnrichFromEmailButton({ leadId, onDone }: { leadId: string; onDone: () 
       title="Read this lead's emails and fill in name, company, title, and key context"
     >
       {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-      {busy ? "Reading…" : "Enrich from email"}
+      {busy ? "Reading…" : "Fill in from their emails"}
     </Button>
   );
 }

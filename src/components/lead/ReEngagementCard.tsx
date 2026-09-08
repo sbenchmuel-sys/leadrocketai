@@ -52,9 +52,14 @@ interface ReEngagementCardProps {
   milestones?: MilestoneItem[] | null;
   /** Compact = queue card context (less chrome). */
   compact?: boolean;
+  /** "hero" = inside the lead page's "What to do next" card (Unit L2): a
+   *  one-line summary plus the page's SINGLE primary button, labelled
+   *  "Win them back". Default keeps the queue's own card + button. */
+  variant?: "card" | "hero";
 }
 
-export default function ReEngagementCard({ lead, gate, milestones, compact }: ReEngagementCardProps) {
+export default function ReEngagementCard({ lead, gate, milestones, compact, variant = "card" }: ReEngagementCardProps) {
+  const hero = variant === "hero";
   const eligible = useMemo(() => isReEngagementCandidate(gate), [gate]);
 
   const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
@@ -125,17 +130,17 @@ export default function ReEngagementCard({ lead, gate, milestones, compact }: Re
   }
 
   return (
-    <div className={compact ? "mt-2" : "mt-3 rounded-lg border border-border bg-card/40 p-3"}>
+    <div className={hero ? "space-y-2" : compact ? "mt-2" : "mt-3 rounded-lg border border-border bg-card/40 p-3"}>
       <p className="text-xs text-muted-foreground italic mb-2">{summaryLine}</p>
       <Button
         type="button"
         onClick={handleClick}
         disabled={generating}
-        className="min-h-[44px] gap-1.5"
-        size="sm"
+        className={hero ? "w-full min-h-[44px] gap-1.5" : "min-h-[44px] gap-1.5"}
+        size={hero ? "default" : "sm"}
       >
         {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-        {generating ? "Drafting…" : "Draft re-engagement"}
+        {generating ? "Drafting…" : hero ? "Win them back" : "Draft re-engagement"}
       </Button>
 
       {dialogOpen && prefilled && (

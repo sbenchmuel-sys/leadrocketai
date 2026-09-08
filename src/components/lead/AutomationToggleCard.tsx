@@ -1,7 +1,7 @@
-// AutomationToggleCard — the slim, rep-facing automation control for the lead
-// right rail (Unit 3). A single on/off Switch + a one-line plain-English status,
-// with the full control surface (scheduled steps, preview, Stop/Resume) tucked
-// into a collapsed "Details" disclosure — hidden, not deleted.
+// AutomationToggleCard — the rep-facing automation control for the lead page
+// (Unit L2). Renders as a CHIP that is itself the switch, so it sits in the
+// header chip row on every screen size (it used to live in a desktop-only
+// right rail, invisible on a phone).
 //
 // Automation LOGIC is unchanged: enable/disable write the exact same fields as
 // AutomationPreviewCard (shared via @/lib/leadAutomationActions), and the
@@ -10,19 +10,17 @@
 // RESUME a previously-enrolled lead while a safety blocker persists (mirrors the
 // legacy Resume guard), but a first-time enable is unguarded (mirrors the legacy
 // Enable path) so an inbound/lookback-seeded lead carrying last_inbound_at can
-// still be enrolled.
+// still be enrolled. The full control surface (scheduled steps, preview,
+// Stop/Resume/Disable) now lives in the "More about this deal" sheet →
+// "Automation details".
 
 import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import {
-  Collapsible, CollapsibleContent, CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Zap, ChevronDown, Loader2, Ban } from "lucide-react";
+import { Zap, Loader2, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -30,7 +28,6 @@ import type { LeadDetail } from "@/lib/supabaseQueries";
 import {
   getAutomationToggleState, getAutomationResumeBlocker, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
 } from "@/lib/leadAutomationActions";
-import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 
 interface Props {
   lead: LeadDetail;
@@ -40,10 +37,9 @@ interface Props {
 export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const motion = lead.motion;
-  const { eligible, isUnsubscribed, consented, safetyPaused, userPaused, isOn, primaryBlocker } =
+  const { eligible, isUnsubscribed, safetyPaused, userPaused, isOn, primaryBlocker } =
     getAutomationToggleState(lead);
   if (!eligible) return null;
 
@@ -53,7 +49,7 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   } else if (safetyPaused) {
     // Checked BEFORE isOn: during the reply/meeting window the lead can still
     // look enabled, but it's effectively paused — surface that, don't hide it.
-    description = `Paused — ${(primaryBlocker ?? "on hold").toLowerCase()}. Open Details to manage.`;
+    description = `Paused — ${(primaryBlocker ?? "on hold").toLowerCase()}. Open "More about this deal" to manage.`;
   } else if (isOn) {
     description = "On — sending the follow-ups for you. Pauses automatically if they reply or book a meeting.";
   } else if (userPaused) {
@@ -61,6 +57,14 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   } else {
     description = "Off — turn on and we'll send the follow-ups for you. Pauses if they reply or you book a meeting.";
   }
+
+  const chipLabel = isUnsubscribed
+    ? "Automation off"
+    : safetyPaused
+      ? "Automation paused"
+      : isOn
+        ? "Automation on"
+        : "Automation off";
 
   const handleToggle = async (next: boolean) => {
     if (next) {
@@ -70,7 +74,7 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
       // is allowed, matching the legacy Enable path.
       const resumeBlocker = getAutomationResumeBlocker(lead);
       if (resumeBlocker) {
-        toast.error(`Can't resume — ${resumeBlocker.toLowerCase()}. Open Details to stop the sequence.`);
+        toast.error(`Can't resume — ${resumeBlocker.toLowerCase()}. Open "More about this deal" to stop the sequence.`);
         return;
       }
       setConfirmOpen(true);
@@ -106,42 +110,26 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   };
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {isUnsubscribed ? (
-            <Ban className="h-3.5 w-3.5 shrink-0 text-destructive" />
-          ) : (
-            <Zap className={cn("h-3.5 w-3.5 shrink-0", isOn ? "text-primary" : "text-muted-foreground")} />
-          )}
-          <span className="text-sm font-medium text-foreground">Automation</span>
-        </div>
+    <>
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
+          isOn && !safetyPaused
+            ? "border-primary/30 bg-primary/10 text-primary"
+            : "border-border bg-muted/50 text-muted-foreground",
+        )}
+        title={description}
+      >
+        {isUnsubscribed ? <Ban className="h-3 w-3 shrink-0" /> : <Zap className="h-3 w-3 shrink-0" />}
+        {chipLabel}
         <Switch
           checked={isOn}
           disabled={busy || isUnsubscribed}
           onCheckedChange={handleToggle}
           aria-label="Turn automation on or off"
+          className="ml-0.5 scale-90"
         />
-      </div>
-
-      <p className="text-xs text-muted-foreground">{description}</p>
-
-      {/* Details — full control surface, collapsed by default (hide, don't delete).
-          Shown only once automation is actually consented: a non-consented manual
-          queue item (needs_action/eligible_at but no automation_mode) must not be
-          able to reach the legacy card's "Disable Automation", which would wipe
-          its manual next_action_key. Turning the toggle on (consent) reveals it. */}
-      {!isUnsubscribed && consented && (
-        <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground py-1">
-            <ChevronDown className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-180")} />
-            Details
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-1">
-            <AutomationPreviewCard lead={lead} onUpdate={onUpdate} />
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      </span>
 
       <AlertDialog open={confirmOpen} onOpenChange={(o) => { if (!busy) setConfirmOpen(o); }}>
         <AlertDialogContent>
@@ -150,7 +138,7 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
-                  We'll start sending <strong>{motion === "nurture" ? "nurture emails" : "follow-up emails"}</strong> to{" "}
+                  We'll start sending <strong>{motion === "nurture" ? "slow-drip emails" : "follow-up emails"}</strong> to{" "}
                   <strong>{lead.name || lead.email || "this lead"}</strong> for you.
                 </p>
                 <p className="text-muted-foreground">
@@ -168,8 +156,6 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <Separator className="bg-border/40" />
-    </div>
+    </>
   );
 }
