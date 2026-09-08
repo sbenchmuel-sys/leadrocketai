@@ -6,6 +6,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertLeadAccess, isInternalCaller } from "../_shared/authz.ts";
 import { higherMilestoneStatus, mergeMilestonesByText } from "../_shared/milestoneMerge.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -542,18 +543,11 @@ Rules:
 - If insufficient data, say "Insufficient evidence" for summary
 - Return valid JSON only, no markdown`;
 
-        const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${lovableKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.2,
-          }),
-        });
+        const aiRes = await aiGatewayFetch(lovableKey, {
+          model: "google/gemini-2.5-flash-lite",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2,
+        }, { label: "recompute-lead-intelligence" });
 
         if (aiRes.ok) {
           const aiData = await aiRes.json();

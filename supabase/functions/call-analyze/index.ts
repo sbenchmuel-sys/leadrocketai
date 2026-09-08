@@ -9,6 +9,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { CALL_DEFAULTS } from "../_shared/callConfig.ts";
 import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -423,18 +424,11 @@ Deno.serve(async (req) => {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       logger.info("analyze_retry_attempt", { callSessionId, attempt });
 
-      const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${lovableApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.1,
-        }),
-      });
+      const aiResponse = await aiGatewayFetch(lovableApiKey, {
+        model: "google/gemini-2.5-flash",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+      }, { label: "call-analyze" });
 
       if (!aiResponse.ok) {
         const errText = await aiResponse.text();

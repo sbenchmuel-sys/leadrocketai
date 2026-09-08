@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,18 +70,11 @@ Deno.serve(async (req) => {
 
         const prompt = `Summarize the following sales message into a concise, reusable messaging pattern. Focus on the approach, tone, and key phrases that made it effective. Keep it under 200 words.\n\nChannel: ${row.channel}\nOutcome: ${row.outcome_type}\n\nMessage:\n${row.message_content}`;
 
-        const aiResp = await fetch("https://ai.lovable.dev/api/generate", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${lovableApiKey}`,
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            prompt,
-            max_tokens: 400,
-          }),
-        });
+        const aiResp = await aiGatewayFetch(lovableApiKey, {
+          model: "google/gemini-2.5-flash-lite",
+          prompt,
+          max_tokens: 400,
+        }, { label: "promote-winning-interactions" });
 
         if (!aiResp.ok) {
           errors.push(`Row ${row.id}: AI summarization failed (${aiResp.status})`);

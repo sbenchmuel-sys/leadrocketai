@@ -21,6 +21,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -162,18 +163,14 @@ Return ONLY this JSON (no markdown):
   "context_notes": [{"category": "string", "text": "string", "confidence": 0.0}]
 }`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You are a data extraction assistant. Return valid JSON only, no markdown fences." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.1,
-      }),
-    });
+    const aiResponse = await aiGatewayFetch(apiKey, {
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: "You are a data extraction assistant. Return valid JSON only, no markdown fences." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.1,
+    }, { label: "extract-lead-profile" });
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text();

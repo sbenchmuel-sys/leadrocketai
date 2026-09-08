@@ -46,6 +46,7 @@ import {
   getInboundWarmIntroViolation, getLeadFirstNameFromContext, getRepFirstNameFromContext,
   substitutePlaceholders, normalizeCampaignTemplatePlaceholders, stripLeakedReasoningForTask,
 } from "../_shared/draftPostprocess.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 // ============================================
 // MESSAGE DIVERSITY CONTROL
@@ -1028,17 +1029,13 @@ serve(async (req) => {
         + (subject ? `Subject: ${subject}\n\n` : "") + body_text.slice(0, 3000);
 
       try {
-        const aiRes = await fetch("https://ai.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [
-              { role: "system", content: "You are a writing style analyst. Output only valid JSON." },
-              { role: "user", content: prompt },
-            ],
-          }),
-        });
+        const aiRes = await aiGatewayFetch(LOVABLE_API_KEY, {
+          model: "google/gemini-2.5-flash-lite",
+          messages: [
+            { role: "system", content: "You are a writing style analyst. Output only valid JSON." },
+            { role: "user", content: prompt },
+          ],
+        }, { label: "ai_task:extract_style_features" });
 
         if (!aiRes.ok) {
           console.error(`[ai_task] extract_style_features AI error: ${aiRes.status}`);
@@ -2096,11 +2093,7 @@ Do not invent real prospect or rep names.
 
     if (streamRequested) aiRequestBody.stream = true;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify(aiRequestBody),
-    });
+    const response = await aiGatewayFetch(LOVABLE_API_KEY, aiRequestBody, { label: "ai_task:primary" });
 
     if (!response.ok) {
       if (response.status === 429) {
@@ -2140,11 +2133,7 @@ Do not invent real prospect or rep names.
       console.log("[ai_task] Retrying with google/gemini-2.5-flash-lite (boosted max_tokens)...");
       const boostedMax = Math.max(Number((aiRequestBody as { max_tokens?: number }).max_tokens) || 2048, 8192);
       const retryBody = { ...aiRequestBody, model: "google/gemini-2.5-flash-lite", max_tokens: boostedMax };
-      const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify(retryBody),
-      });
+      const retryResponse = await aiGatewayFetch(LOVABLE_API_KEY, retryBody, { label: "ai_task:empty_retry" });
       if (retryResponse.ok) {
         aiResult = await retryResponse.json();
         content = aiResult.choices?.[0]?.message?.content || "";
@@ -2164,11 +2153,7 @@ Do not invent real prospect or rep names.
       ) {
         console.warn(`[ai_task] [${task}] finish_reason=length — retrying with 16384 max_tokens`);
         const retryBody = { ...aiRequestBody, max_tokens: 16384, _truncationRetry: true };
-        const retryResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify(retryBody),
-        });
+        const retryResponse = await aiGatewayFetch(LOVABLE_API_KEY, retryBody, { label: "ai_task:truncation_retry" });
         if (retryResponse.ok) {
           const retryJson = await retryResponse.json();
           const retryContent = retryJson.choices?.[0]?.message?.content || "";
@@ -2199,18 +2184,14 @@ Do not invent real prospect or rep names.
     if (preStripLength > 200 && (!content || content.length < 40) && EMAIL_BODY_TASKS.has(task)) {
       console.warn(`[ai_task] [${task}] Stripper removed leaked reasoning leaving no body (pre=${preStripLength}, post=${content.length}). Retrying...`);
       const hardenedPrompt = `${promptParts.join("\n\n")}\n\nABSOLUTE RULE: Output ONLY the final email body. Start with "Hi {Name}," or "Subject:". Do NOT write any reasoning, planning, analysis, or notes. Reasoning is forbidden.`;
-      const retryResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash-lite",
-          messages: [
-            { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
-            { role: "user", content: hardenedPrompt },
-          ],
-          max_tokens: 2048,
-        }),
-      });
+      const retryResp = await aiGatewayFetch(LOVABLE_API_KEY, {
+        model: "google/gemini-2.5-flash-lite",
+        messages: [
+          { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+          { role: "user", content: hardenedPrompt },
+        ],
+        max_tokens: 2048,
+      }, { label: "ai_task:stripper_retry" });
       if (retryResp.ok) {
         const retryJson = await retryResp.json();
         const retryContent = retryJson.choices?.[0]?.message?.content || "";
@@ -2234,18 +2215,14 @@ STRICT REWRITE REQUIRED:
 - End with a meeting CTA. If a meeting link exists, include it exactly.
 - Do NOT ask a cold discovery question such as their biggest challenge.
 - Output only the final email body.`;
-        const retryResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [
-              { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
-              { role: "user", content: retryPrompt },
-            ],
-            max_tokens: 2048,
-          }),
-        });
+        const retryResp = await aiGatewayFetch(LOVABLE_API_KEY, {
+          model: "google/gemini-2.5-flash-lite",
+          messages: [
+            { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+            { role: "user", content: retryPrompt },
+          ],
+          max_tokens: 2048,
+        }, { label: "ai_task:inbound_warm_retry" });
         if (retryResp.ok) {
           const retryJson = await retryResp.json();
           const retryContent = stripLeakedReasoningForTask(retryJson.choices?.[0]?.message?.content || "", task);
@@ -2315,18 +2292,14 @@ ${meetingLinkForCheck && (validationCtx.kind === "inbound_intro" || validationCt
 
 Output ONLY the final email body.`;
         try {
-          const repairResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "google/gemini-2.5-flash-lite",
-              messages: [
-                { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
-                { role: "user", content: repairPrompt },
-              ],
-              max_tokens: 2048,
-            }),
-          });
+          const repairResp = await aiGatewayFetch(LOVABLE_API_KEY, {
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+              { role: "user", content: repairPrompt },
+            ],
+            max_tokens: 2048,
+          }, { label: "ai_task:repair" });
           if (repairResp.ok) {
             const repairJson = await repairResp.json();
             let repaired = stripLeakedReasoningForTask(repairJson.choices?.[0]?.message?.content || "", task);
@@ -2419,18 +2392,14 @@ Output ONLY the final email body.`;
           if (feedback) {
             console.log(`[ai_task] [EVALUATOR] Triggering one-pass regeneration...`);
             const regenPromptParts = [...promptParts, feedback];
-            const regenResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model,
-                messages: [
-                  { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
-                  { role: "user", content: regenPromptParts.join("\n\n") },
-                ],
-                max_tokens: hasCustomInstructions ? 4096 : 2048,
-              }),
-            });
+            const regenResponse = await aiGatewayFetch(LOVABLE_API_KEY, {
+              model,
+              messages: [
+                { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split("T")[0]}` },
+                { role: "user", content: regenPromptParts.join("\n\n") },
+              ],
+              max_tokens: hasCustomInstructions ? 4096 : 2048,
+            }, { label: "ai_task:evaluator_regen" });
             if (regenResponse.ok) {
               const regenResult = await regenResponse.json();
               let regenContent = regenResult.choices?.[0]?.message?.content || "";
@@ -2502,30 +2471,22 @@ Output ONLY the final email body.`;
       try {
         // Run quality score and grounding validation in parallel
         const [scoreResponse, groundingResponse] = await Promise.all([
-          fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "google/gemini-2.5-flash-lite",
-              messages: [
-                { role: "system", content: QUALITY_SCORER_PROMPT },
-                { role: "user", content: content },
-              ],
-            }),
-          }),
+          aiGatewayFetch(LOVABLE_API_KEY, {
+            model: "google/gemini-2.5-flash-lite",
+            messages: [
+              { role: "system", content: QUALITY_SCORER_PROMPT },
+              { role: "user", content: content },
+            ],
+          }, { label: "ai_task:quality_score" }),
           // Grounding validation for first-touch outbound
           isFirstTouchTask && isOutboundFirstTouch
-            ? fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                method: "POST",
-                headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  model: "google/gemini-2.5-flash-lite",
-                  messages: [
-                    { role: "system", content: GROUNDING_VALIDATOR_PROMPT },
-                    { role: "user", content: `Generated Email:\n${content}\n\nLead Context:\n${enhancedPayload.lead_context || ""}\n\nSeller Context:\n${enhancedPayload.seller_context || enhancedPayload.workspace_context || ""}\n\nSignals:\n${enhancedPayload.signals || "None"}` },
-                  ],
-                }),
-              })
+            ? aiGatewayFetch(LOVABLE_API_KEY, {
+                model: "google/gemini-2.5-flash-lite",
+                messages: [
+                  { role: "system", content: GROUNDING_VALIDATOR_PROMPT },
+                  { role: "user", content: `Generated Email:\n${content}\n\nLead Context:\n${enhancedPayload.lead_context || ""}\n\nSeller Context:\n${enhancedPayload.seller_context || enhancedPayload.workspace_context || ""}\n\nSignals:\n${enhancedPayload.signals || "None"}` },
+                ],
+              }, { label: "ai_task:grounding" })
             : Promise.resolve(null),
         ]);
 
@@ -2577,18 +2538,14 @@ Output ONLY the final email body.`;
                 "=== REGENERATION INSTRUCTION ===\nThe previous attempt failed grounding validation. Write a SAFER email:\n- Use ONLY facts from Lead Context (Section B)\n- Ask a neutral question about their role or company\n- Do NOT reference seller products or assume pain points\n- If unsure, keep it ultra-short: one observation + one question"
               );
 
-              const regenResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                method: "POST",
-                headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  model,
-                  messages: [
-                    { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
-                    { role: "user", content: regenPromptParts.join("\n\n") },
-                  ],
-                  max_tokens: hasCustomInstructions ? 4096 : 2048,
-                }),
-              });
+              const regenResponse = await aiGatewayFetch(LOVABLE_API_KEY, {
+                model,
+                messages: [
+                  { role: "system", content: `${SYSTEM_GLOBAL_PROMPT}\n\nCurrent date: ${new Date().toISOString().split('T')[0]}` },
+                  { role: "user", content: regenPromptParts.join("\n\n") },
+                ],
+                max_tokens: hasCustomInstructions ? 4096 : 2048,
+              }, { label: "ai_task:quality_regen" });
 
               if (regenResponse.ok) {
                 const regenResult = await regenResponse.json();
@@ -2598,11 +2555,7 @@ Output ONLY the final email body.`;
                   regenerated_outbound = true;
                   selectedFramework = "neutral_observation" as any;
                   // Re-score
-                  const rescore = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                    method: "POST",
-                    headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                    body: JSON.stringify({ model: "google/gemini-2.5-flash-lite", messages: [{ role: "system", content: QUALITY_SCORER_PROMPT }, { role: "user", content: regenContent }] }),
-                  });
+                  const rescore = await aiGatewayFetch(LOVABLE_API_KEY, { model: "google/gemini-2.5-flash-lite", messages: [{ role: "system", content: QUALITY_SCORER_PROMPT }, { role: "user", content: regenContent }] }, { label: "ai_task:quality_rescore" });
                   if (rescore.ok) {
                     const rescoreResult = await rescore.json();
                     const rescoreText = rescoreResult.choices?.[0]?.message?.content || "";
@@ -2613,11 +2566,7 @@ Output ONLY the final email body.`;
                   // Log diversity for regenerated content
                   if (resolvedWorkspaceId && OUTREACH_TASKS.has(task)) {
                     try {
-                      const classifyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                        body: JSON.stringify({ model: "google/gemini-2.5-flash-lite", messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + regenContent }] }),
-                      });
+                      const classifyResponse = await aiGatewayFetch(LOVABLE_API_KEY, { model: "google/gemini-2.5-flash-lite", messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + regenContent }] }, { label: "ai_task:diversity_classify_regen" });
                       if (classifyResponse.ok) {
                         const classifyResult = await classifyResponse.json();
                         const classifyText = classifyResult.choices?.[0]?.message?.content || "";
@@ -2669,11 +2618,7 @@ Output ONLY the final email body.`;
     // Log message diversity (non-regenerated path)
     if (resolvedWorkspaceId && OUTREACH_TASKS.has(task) && payload?.lead_id) {
       try {
-        const classifyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "google/gemini-2.5-flash-lite", messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + content }] }),
-        });
+        const classifyResponse = await aiGatewayFetch(LOVABLE_API_KEY, { model: "google/gemini-2.5-flash-lite", messages: [{ role: "user", content: CLASSIFY_MESSAGE_PROMPT + content }] }, { label: "ai_task:diversity_classify" });
         if (classifyResponse.ok) {
           const classifyResult = await classifyResponse.json();
           const classifyText = classifyResult.choices?.[0]?.message?.content || "";

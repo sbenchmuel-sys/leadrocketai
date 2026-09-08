@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { assertLeadAccess, isInternalCaller } from "../_shared/authz.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -240,17 +241,10 @@ Recent interactions: ${interactionLines.slice(0, 5).join("; ") || "None"}
 
 Return a JSON array of strings only, e.g. ["angle1", "angle2", "angle3"]. No markdown, no explanation.`;
 
-        const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [{ role: "user", content: anglePrompt }],
-          }),
-        });
+        const aiResp = await aiGatewayFetch(LOVABLE_API_KEY, {
+          model: "google/gemini-2.5-flash-lite",
+          messages: [{ role: "user", content: anglePrompt }],
+        }, { label: "build-lead-context" });
 
         if (aiResp.ok) {
           const aiData = await aiResp.json();
