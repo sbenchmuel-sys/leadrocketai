@@ -50,21 +50,34 @@ export async function applyOOOPause(args: ApplyOOOArgs): Promise<boolean> {
       `Return: ${returnDateStr}. Pausing until ${eligibleAt}`,
   );
 
+  // An OOO is usually matched on the SUBJECT alone. When the body also
+  // carries a question mark plus a commercial keyword (pricing, contract,
+  // timeline, …) the message is BOTH "I'm away" AND "here's a live
+  // question" — clearing `needs_action` there silently buries a real ask.
+  // We still pause the robot (ooo_until / eligible_at are set either way);
+  // we just keep the human prompt on the board.
+  const keepActionable = oooResult.hasSubstantiveQuestion === true;
+
   await supabase.from("leads").update({
     ooo_until: oooResult.returnDate ? oooResult.returnDate.toISOString() : eligibleAt,
     eligible_at: eligibleAt,
-    needs_action: false,
-    next_action_key: null,
-    next_action_label: null,
-    action_reason_code: null,
+    // Mirrors syncEngine's REPLY_PENDING branch exactly so the Queue,
+    // the CommandStrip badge and the button label all agree.
+    needs_action: keepActionable ? true : false,
+    next_action_key: keepActionable ? "reply_now" : null,
+    next_action_label: keepActionable ? "Reply to customer" : null,
+    action_reason_code: keepActionable ? "REPLY_PENDING" : null,
   }).eq("id", leadId);
 
   await createCanonicalInteraction(supabase, {
     lead_id: leadId,
     type: "system_note",
     source: "automation",
-    body_text:
-      `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
+    body_text: keepActionable
+      ? `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
+        `returning ${returnDateStr}. Automation paused until then. Kept on your list: the reply ` +
+        `also contains an open question (${oooResult.matchedKeywords.join(", ")}).`
+      : `📵 OOO auto-reply detected (${oooResult.confidence} signal). ${who} is out of office — ` +
       `returning ${returnDateStr}. Automation paused until then.`,
     occurred_at: occurredAt,
     gmail_message_id: args.gmailMessageId ?? null,

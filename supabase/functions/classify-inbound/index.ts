@@ -3,8 +3,10 @@
 //
 // Picks up `lead_timeline_items` rows where:
 //   • event_type = 'email_inbound'
-//   • intent IS NULL  (Phase 1 deterministic detectors didn't match)
-// and classifies each via `ai_task.intent_router`, writing the
+//   • intent IS NULL
+// and classifies each — FIRST with the deterministic detector chain
+// (`_shared/inboundIntentDetectors.ts`), and only when that finds
+// nothing via `ai_task.intent_router`, writing the
 // returned `intent_primary` to `intent`, the returned `ai_summary` to
 // `metadata_json.ai_summary` (atomically — see below), and the current
 // `INTENT_VERSION` to `intent_version`.
@@ -27,6 +29,17 @@
 // is captured in EDGE_CASES.md §2 and AUDIT.md. Decoupling AI cost
 // and latency from the load-bearing sync path is the whole point.
 //
+// Deterministic-first (the P1 fix): the AI's vocabulary
+// (book_meeting, pricing, …) is DISJOINT from the vocabulary the Queue
+// hides on (bounce, ooo_reply, calendar_accept, zoom_recap,
+// meeting_confirmation, unsubscribe). Before this change only the
+// one-shot Phase-1 backfill ever wrote a hide intent, so every bounce
+// / OOO / calendar accept that arrived afterwards rendered in the
+// Queue as a normal "reply needed" card. Running the same detectors
+// the backfill used, in the same precedence order, ahead of the AI
+// call makes the hide list reachable again — and saves an AI call on
+// every routine auto-reply.
+//
 // Auth: requireScheduledCaller (X-Internal-Secret or service-role).
 //
 // Graceful degradation: rows past the 72-hour body-purge window have
@@ -48,6 +61,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { detectInboundIntent } from "../_shared/inboundIntentDetectors.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -137,6 +151,7 @@ interface LeadRow {
   id: string;
   name: string | null;
   company: string | null;
+  email: string | null;
 }
 
 interface BatchCounts {
@@ -146,6 +161,8 @@ interface BatchCounts {
   skipped: number;
   /** Subset of classified — rows that got the NO_SIGNAL_INTENT fallback. */
   no_signal: number;
+  /** Subset of classified — matched a deterministic detector, no AI call. */
+  deterministic: number;
 }
 
 function buildLeadContext(lead: LeadRow | undefined): string {
@@ -179,6 +196,114 @@ interface Classification {
   /** May be null when the model omits the field (older clients) — caller
    *  treats that as "no summary this run" and skips the summary write. */
   ai_summary: string | null;
+  /**
+   * The rest of the intent_router JSON schema. The model has been
+   * returning these on every call (and we have been paying for them)
+   * since the prompt was written; until now they were parsed away and
+   * dropped on the floor. They are persisted into `metadata_json` so
+   * the Queue can hide non-reply-worthy noise and v2 can rank on
+   * urgency / tone without a second AI round-trip.
+   *
+   * Every field is optional: a model that omits one must NOT fail the
+   * row (the atomic-or-nothing rule covers `intent` + `ai_summary`
+   * only — those two are what the 72h purge gate depends on).
+   */
+  signals: AiSignals;
+}
+
+/** Persisted verbatim under `metadata_json.ai_signals`. */
+interface AiSignals {
+  reply_worthy?: boolean;
+  urgency?: string;
+  tone?: string;
+  questions_extracted?: string[];
+  /**
+   * ponytail: `language` is NOT in the intent_router prompt schema yet
+   * (supabase/functions/_shared/prompts.ts is owned by another unit), so
+   * today this is only populated if the model volunteers it. The read
+   * side is wired now so adding one line to the prompt schema is the
+   * whole remaining change. Ceiling: until that line lands, expect
+   * `language` to be absent on most rows.
+   */
+  language?: string;
+}
+
+const URGENCY_VALUES = new Set(["high", "medium", "low"]);
+const TONE_VALUES = new Set(["positive", "neutral", "negative"]);
+
+/**
+ * Pull the four already-paid-for signals (+ language) out of the parsed
+ * AI JSON. Defensive by design — anything malformed is simply omitted.
+ */
+function extractSignals(parsed: Record<string, unknown>): AiSignals {
+  const out: AiSignals = {};
+
+  if (typeof parsed.reply_worthy === "boolean") out.reply_worthy = parsed.reply_worthy;
+
+  if (typeof parsed.urgency === "string") {
+    const u = parsed.urgency.trim().toLowerCase();
+    if (URGENCY_VALUES.has(u)) out.urgency = u;
+  }
+
+  if (typeof parsed.tone === "string") {
+    const t = parsed.tone.trim().toLowerCase();
+    if (TONE_VALUES.has(t)) out.tone = t;
+  }
+
+  if (Array.isArray(parsed.questions_extracted)) {
+    const qs = parsed.questions_extracted
+      .filter((q): q is string => typeof q === "string")
+      .map((q) => q.trim())
+      .filter((q) => q.length > 0)
+      // Bounded: questions are rendered on a card, and metadata_json is
+      // preserved indefinitely (it survives the 72h body purge).
+      .slice(0, 10)
+      .map((q) => q.slice(0, 300));
+    if (qs.length > 0) out.questions_extracted = qs;
+  }
+
+  if (typeof parsed.language === "string") {
+    const l = parsed.language.trim().toLowerCase();
+    if (l.length > 0 && l.length <= 32) out.language = l;
+  }
+
+  return out;
+}
+
+/**
+ * Cheap sender-identity check: did the person we think we're selling to
+ * actually send this, or was it their colleague / assistant / a vendor
+ * on the thread? Returns `null` when we can't tell.
+ *
+ * ponytail: compares `from_email` against `leads.email` only. `contacts`
+ * has no email column in this schema (identities live outside the row we
+ * fetch), so "a known contact on that lead" is not checkable without a
+ * second join we don't have. Ceiling: a lead who writes from an alias
+ * (j.smith@ vs john.smith@) reads as `false`. Upgrade path: match on the
+ * lead's contact identities once they carry addresses. Failing to know
+ * is expressed as `null` (never `false`), and the Queue treats `null` as
+ * "not hidden", so the check can only ever be additive.
+ */
+function senderIsLead(fromEmail: string, leadEmail: string | null | undefined): boolean | null {
+  const from = normalizeEmail(fromEmail);
+  const lead = normalizeEmail(leadEmail ?? "");
+  if (!from || !lead) return null;
+  return from === lead;
+}
+
+/** Lowercase + strip any RFC-2822 `Name <addr>` wrapper. */
+function normalizeEmail(raw: string): string {
+  const s = (raw ?? "").trim();
+  if (!s) return "";
+  const angle = s.match(/<([^>]+)>/);
+  return (angle ? angle[1] : s).trim().toLowerCase();
+}
+
+/** `from_email` off the timeline row's metadata, if present. */
+function fromEmailOf(row: TimelineRow): string {
+  return typeof row.metadata_json?.from_email === "string"
+    ? (row.metadata_json.from_email as string).trim()
+    : "";
 }
 
 /**
@@ -261,7 +386,11 @@ function extractClassification(content: string): Classification | null {
     if (trimmed.length > 0) summary = trimmed;
   }
 
-  return { intent, ai_summary: summary };
+  return {
+    intent,
+    ai_summary: summary,
+    signals: extractSignals(parsed as Record<string, unknown>),
+  };
 }
 
 Deno.serve(async (req) => {
@@ -282,6 +411,7 @@ Deno.serve(async (req) => {
     failed: 0,
     skipped: 0,
     no_signal: 0,
+    deterministic: 0,
   };
   const startedAt = Date.now();
 
@@ -330,7 +460,7 @@ Deno.serve(async (req) => {
     if (leadIds.length > 0) {
       const { data: leads, error: leadErr } = await admin
         .from("leads")
-        .select("id, name, company")
+        .select("id, name, company, email")
         .in("id", leadIds);
       if (leadErr) {
         // Non-fatal — we can still classify on email subject + sender alone.
@@ -368,9 +498,60 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const leadContext = buildLeadContext(
-          row.lead_id ? leadById.get(row.lead_id) : undefined,
-        );
+        const lead = row.lead_id ? leadById.get(row.lead_id) : undefined;
+        const fromEmail = fromEmailOf(row);
+        const sender_is_lead = senderIsLead(fromEmail, lead?.email);
+
+        // ── Deterministic detectors FIRST (the P1 fix) ────────────────
+        // These emit exactly the six intents the Queue hides on. All six
+        // are in SKIP_AI_SUMMARY_INTENTS — no rep ever drafts a reply to
+        // a bounce or an OOO — so short-circuiting the AI call here does
+        // NOT starve the purge gate of an `ai_summary` it would otherwise
+        // have got. (`defer_request` is deliberately excluded from the
+        // detector chain for exactly that reason: it IS a human email and
+        // must keep flowing to the AI so it gets a durable summary.)
+        //
+        // No email headers are available on a timeline row, so the OOO
+        // header check can't run here — subject + body patterns only,
+        // same limitation the Phase-1 backfill documented. The live sync
+        // paths still get the header signal.
+        const deterministic = detectInboundIntent({
+          fromEmail,
+          subject: row.subject ?? "",
+          body: row.snippet_text ?? "",
+        });
+
+        if (deterministic.intent) {
+          const { error: detErr } = await admin
+            .from("lead_timeline_items")
+            .update({
+              intent: deterministic.intent,
+              intent_version: INTENT_VERSION,
+              metadata_json: {
+                ...(row.metadata_json ?? {}),
+                intent_source: "deterministic",
+                sender_is_lead,
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", row.id)
+            .is("intent", null);
+
+          if (detErr) {
+            logger.error("classify_inbound_deterministic_update_failed", {
+              row_id: row.id,
+              intent: deterministic.intent,
+              error: detErr.message,
+            });
+            counts.failed++;
+          } else {
+            counts.classified++;
+            counts.deterministic++;
+          }
+          continue;
+        }
+
+        const leadContext = buildLeadContext(lead);
 
         const aiRes = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
           method: "POST",
@@ -424,7 +605,7 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const { intent: intentPrimary, ai_summary } = classification;
+        const { intent: intentPrimary, ai_summary, signals } = classification;
 
         // Atomic-or-nothing enforcement: if the intent is NOT in the
         // skip-list, ai_summary is REQUIRED. A row that parses to a
@@ -453,15 +634,23 @@ Deno.serve(async (req) => {
         // skip list (auto-replies / calendar acks / bounces never need
         // a body summary). Preserves existing fields (from_email,
         // to_emails, ...) via row-level spread.
+        //
+        // The AI signals (reply_worthy / urgency / tone /
+        // questions_extracted / language) and the sender-identity flag
+        // ride along on EVERY AI-classified row, summary or not — we
+        // already paid for them in the same call.
         const shouldWriteSummary = ai_summary !== null && !isSkipListIntent;
 
-        const nextMetadata = shouldWriteSummary
-          ? {
-              ...(row.metadata_json ?? {}),
-              ai_summary,
-              ai_summary_version: AI_SUMMARY_VERSION,
-            }
-          : undefined;
+        const nextMetadata: Record<string, unknown> = {
+          ...(row.metadata_json ?? {}),
+          intent_source: "ai",
+          sender_is_lead,
+          ai_signals: signals,
+        };
+        if (shouldWriteSummary) {
+          nextMetadata.ai_summary = ai_summary;
+          nextMetadata.ai_summary_version = AI_SUMMARY_VERSION;
+        }
 
         // Single UPDATE — intent + (optional) ai_summary land together
         // or not at all. The `.is("intent", null)` guard makes
@@ -469,11 +658,9 @@ Deno.serve(async (req) => {
         const updatePayload: Record<string, unknown> = {
           intent: intentPrimary,
           intent_version: INTENT_VERSION,
+          metadata_json: nextMetadata,
           updated_at: new Date().toISOString(),
         };
-        if (nextMetadata !== undefined) {
-          updatePayload.metadata_json = nextMetadata;
-        }
 
         const { error: updErr } = await admin
           .from("lead_timeline_items")

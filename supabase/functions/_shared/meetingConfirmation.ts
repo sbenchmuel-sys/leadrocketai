@@ -23,12 +23,29 @@ const MEETING_BODY_PATTERNS = [
 
 const CALENDAR_SUBJECT_PATTERNS = [
   // Calendar acceptance: "Accepted: Intro call with..."
+  // Anchored, so "Tentatively Accepted:" does NOT match — see below.
   /^Accepted:/i,
-  // Tentative acceptance
-  /^Tentatively [Aa]ccepted:/i,
   // Google Calendar: "Invitation: Meeting @ date"
   /^Invitation:/i,
 ];
+
+/**
+ * Tentative ("Tentatively Accepted:") calendar responses used to sit in
+ * CALENDAR_SUBJECT_PATTERNS, which made them indistinguishable from a firm
+ * accept: the lead was classified `calendar_accept`, hidden from the Queue,
+ * and its `needs_action` cleared. A prospect who is *wavering* about the
+ * meeting is exactly the one a rep should see. Tentative responses now fall
+ * through to the normal (AI) classification path and stay visible.
+ *
+ * Exported so callers that genuinely want the "some calendar response
+ * arrived" signal can still ask for it explicitly.
+ */
+export const TENTATIVE_ACCEPT_SUBJECT_PATTERN = /^Tentatively [Aa]ccepted:/i;
+
+/** True when the subject is a tentative (not firm) calendar acceptance. */
+export function isTentativeAccept(subject: string): boolean {
+  return TENTATIVE_ACCEPT_SUBJECT_PATTERN.test(subject ?? "");
+}
 
 /**
  * Commercial keywords that, combined with a question mark in the body of a
