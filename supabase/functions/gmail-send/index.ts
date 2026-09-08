@@ -463,7 +463,13 @@ serve(async (req) => {
               // fails the send. Runs AFTER the AI state write so it is the last
               // word on next_action_key. Automation sends (skipStateUpdate)
               // stay untouched — automation-executor owns their state.
-              postSendDeriveAction(serviceSupabase, { leadId, logPrefix: "[gmail-send]" });
+              postSendDeriveAction(serviceSupabase, {
+                leadId,
+                logPrefix: "[gmail-send]",
+                // The AI analysis above owns `stage`; deriveStage must not
+                // recompute a lower one over the top seconds later.
+                preserveStage: true,
+              });
             }
           } else {
             // Update lead's last_activity_at if we couldn't get lead data

@@ -611,7 +611,13 @@ serve(async (req) => {
               // paths use; fire-and-forget, never fails the send. Runs AFTER the
               // AI state write so it is the last word on next_action_key.
               // Automation sends (skipStateUpdate) stay untouched.
-              postSendDeriveAction(serviceClient, { leadId, logPrefix: "[outlook-send]" });
+              postSendDeriveAction(serviceClient, {
+                leadId,
+                logPrefix: "[outlook-send]",
+                // The AI analysis above owns `stage`; deriveStage must not
+                // recompute a lower one over the top seconds later.
+                preserveStage: true,
+              });
             }
           }
         }

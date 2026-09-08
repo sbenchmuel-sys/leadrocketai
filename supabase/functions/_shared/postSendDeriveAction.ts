@@ -51,6 +51,16 @@ interface PostSendDeriveActionParams {
   leadId: string;
   /** Optional log prefix for traceability, e.g. "[sms-send]". */
   logPrefix?: string;
+  /**
+   * Leave `leads.stage` alone (Codex P2). The email send paths call
+   * `analyze_outgoing_email` immediately before this, and that can advance a
+   * lead to e.g. `closing`. `deriveStage` preserves only the closed stages and
+   * would otherwise recompute `engaged` / `contacted` over the top, so a rep
+   * would watch the stage they just earned flip back seconds later. The stage
+   * still feeds `deriveAction` (read fresh from the row, so it IS the analysed
+   * value) — we simply don't persist a second opinion about it.
+   */
+  preserveStage?: boolean;
 }
 
 /**
@@ -71,10 +81,10 @@ export function postSendDeriveAction(
   const prefix = params.logPrefix ?? "[postSendDeriveAction]";
   const task = async (): Promise<void> => {
     try {
-      await runRecompute(supabase, params.leadId, prefix);
+      await recomputeLeadAction(supabase, params.leadId, prefix, params.preserveStage === true);
     } catch (err) {
       // This catch is the last line of defence. Anything that escapes
-      // runRecompute lands here. Never throws.
+      // recomputeLeadAction lands here. Never throws.
       console.error(`${prefix} postSendDeriveAction failed:`, err instanceof Error ? err.message : err);
     }
   };
@@ -89,10 +99,16 @@ export function postSendDeriveAction(
   }
 }
 
-async function runRecompute(
+/**
+ * The awaitable core. Exported so the scheduled `outlook-followup-sweep` can
+ * re-derive a lead with the SAME code path a send uses — one rule, one place.
+ * Throws on nothing: callers that can't fail (sends) wrap it; the sweep counts.
+ */
+export async function recomputeLeadAction(
   supabase: SupabaseClient,
   leadId: string,
   prefix: string,
+  preserveStage = false,
 ): Promise<void> {
   // 1. Lead snapshot — strategy / motion / dismissal / meeting flag.
   const { data: lead, error: leadErr } = await supabase
@@ -258,10 +274,14 @@ async function runRecompute(
     (currentLeadState as { automation_mode?: string | null })?.automation_mode ?? null,
   );
 
-  // 9. Persist.
+  // 9. Persist. `preserveStage` drops the stage column from the write — see the
+  // param docs: the AI analysis that ran just before a send owns the stage.
+  const payload: Record<string, unknown> = { ...leadUpdate };
+  if (preserveStage) delete payload.stage;
+
   const { error: updErr } = await supabase
     .from("leads")
-    .update(leadUpdate)
+    .update(payload)
     .eq("id", leadId);
 
   if (updErr) {
