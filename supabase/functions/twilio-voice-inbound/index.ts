@@ -6,7 +6,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
 import { resolveWorkspaceByAgentNumber } from "../_shared/phoneMapping.ts";
-import { CALL_DEFAULTS, buildOutboundDialTwiml, escapeXml } from "../_shared/callConfig.ts";
+import {
+  CALL_DEFAULTS,
+  CALLEE_NOTICE_PARAM,
+  CALLEE_NOTICE_VALUE,
+  buildCalleeNoticeTwiml,
+  buildOutboundDialTwiml,
+  calleeNoticeUrl,
+  escapeXml,
+} from "../_shared/callConfig.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,7 +77,16 @@ Deno.serve(async (req) => {
     // check is the correct default for a toll-fraud surface.
     // ---------------------------------------------------------------
     const signature = req.headers.get("X-Twilio-Signature");
-    const publicUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
+    // Twilio signs the FULL url including its query string, so the query must be
+    // carried over from the incoming request. The origin still comes from the
+    // public SUPABASE_URL, never from `req.url` (which is the internal container
+    // host). With no query string this is byte-identical to the plain function
+    // URL, so the inbound and browser branches are unaffected; it is the
+    // `?leg=callee_notice` fetch that needs it, and if this were wrong that
+    // fetch would 403 and the prospect's leg would be dropped mid-dial.
+    const incomingQuery = new URL(req.url).search;
+    const fnUrl = `${supabaseUrl}/functions/v1/twilio-voice-inbound`;
+    const publicUrl = `${fnUrl}${incomingQuery}`;
     const isValid = twilioAuthToken && signature
       ? await validateTwilioSignature(twilioAuthToken, signature, publicUrl, params)
       : false;
@@ -80,6 +97,28 @@ Deno.serve(async (req) => {
       });
       return new Response("<Response><Say>Unauthorized</Say></Response>", {
         status: 403,
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Callee-leg recording notice (C1/4).
+    //
+    // Twilio fetches this when the CALLED party answers an outbound call, and
+    // plays the response on THEIR leg before bridging them to the rep. It is a
+    // branch of this function rather than a new function precisely so it is
+    // covered by the signature validation above — it is a Twilio-facing URL like
+    // any other, and an open one would let anyone make the workspace's Twilio
+    // account speak.
+    //
+    // A `<Say>` on the rep's own <Dial> document would NOT work: that plays to
+    // the rep before the number is even dialled, which is exactly the bug this
+    // replaces.
+    // ---------------------------------------------------------------
+    if (new URL(req.url).searchParams.get(CALLEE_NOTICE_PARAM) === CALLEE_NOTICE_VALUE) {
+      logger.info("callee_notice_played", { callSid: params.CallSid, to: params.To });
+      return new Response(buildCalleeNoticeTwiml(), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "text/xml" },
       });
     }
@@ -203,15 +242,17 @@ Deno.serve(async (req) => {
         }
       }
 
-      // The outbound leg records exactly like the inbound leg, so it gets the
-      // same spoken recording notice (C1/4). Before C1 the outbound <Dial> had
-      // no <Say> at all — the callee was recorded without ever being told.
+      // The outbound leg records exactly like the inbound leg, so the CALLED
+      // party gets the same spoken recording notice (C1/4). It is delivered via
+      // the `url` on <Number> — i.e. on the prospect's leg after they answer —
+      // NOT as a <Say> on this document, which only the rep would hear.
       const twiml = buildOutboundDialTwiml({
         to: toNormalized,
         callerId,
         statusCallbackUrl,
         recordingCallbackUrl,
         recordingNotice: recordingNoticeEnabled,
+        calleeNoticeUrl: calleeNoticeUrl(fnUrl),
       }).trim();
 
       logger.info("browser_outbound_call", { to: toNormalized, callerId, twiml });
