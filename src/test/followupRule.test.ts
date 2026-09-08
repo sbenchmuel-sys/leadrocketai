@@ -22,6 +22,8 @@ import path from "node:path";
 
 import {
   DEFAULT_FOLLOWUP_WAIT_DAYS,
+  followupSweepCutoffIso,
+  isFollowupSweepCandidate,
   deriveFollowupDue,
   followupWaitDays,
   FOLLOWUP_DUE_KEY,
@@ -32,7 +34,7 @@ import {
   rateLimitedAction,
   RATE_LIMITED_KEY,
 } from "@shared/followupRule";
-import { chipForLead, urgencyOf } from "@/lib/queueQueries";
+import { belongsInReactiveTabs, chipForLead, urgencyOf } from "@/lib/queueQueries";
 import { getActionType } from "@/lib/dashboardUtils";
 import {
   automationCardState,
@@ -610,5 +612,220 @@ describe("action-key registry", () => {
       expect(chipForLead({ next_action_key: key, action_resurfaced_at: null }))
         .toBe("followup_due");
     }
+  });
+});
+
+
+// ── The Outlook hole: something must revisit a quiet lead ──────────
+//
+// The post-send recompute runs seconds after the send, when the answer is
+// correctly "nothing to do". Gmail gets a second look from its bulk-sync cron;
+// Outlook had none, so the lead was never re-derived and the six-week hole
+// stayed open for Outlook reps. `outlook-followup-sweep` is that second look.
+
+describe("outlook-followup-sweep — the lead a manual Outlook send leaves behind", () => {
+  // Exactly the row a manual Outlook send leaves: analyze_outgoing_email wrote
+  // needs_action=false, and postSendDeriveAction agreed (nothing was due yet).
+  // A warm lead: they wrote two months ago, the rep answered from Outlook four
+  // days ago, and nothing has come back.
+  const fourDaysAfterAnOutlookSend = {
+    needs_action: false,
+    next_action_key: null,
+    last_outbound_at: daysAgo(4),
+    last_inbound_at: daysAgo(60),
+    unsubscribed: false,
+    status: "active",
+    action_permanently_dismissed: false,
+    action_dismissed_at: null,
+  };
+
+  it("picks the lead up four days later", () => {
+    expect(isFollowupSweepCandidate(fourDaysAfterAnOutlookSend, NOW)).toBe(true);
+  });
+
+  it("and re-deriving it puts it in the Queue", () => {
+    // The other half of the proof: the sweep hands this lead to the same
+    // deriveAction a sync would, and it comes back as work for the rep.
+    const r = withFrozenClock(() => derive(metrics({
+      first_outbound_at: daysAgo(70),
+      last_outbound_at: fourDaysAfterAnOutlookSend.last_outbound_at,
+      last_inbound_at: fourDaysAfterAnOutlookSend.last_inbound_at,
+    })));
+    expect(r.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+    expect(r.needs_action).toBe(true);
+    expect(chipForLead({ next_action_key: r.next_action_key, action_resurfaced_at: null }))
+      .toBe("followup_due");
+  });
+
+  it("leaves alone leads that need nothing", () => {
+    const skip = (over: Record<string, unknown>) =>
+      expect(isFollowupSweepCandidate({ ...fourDaysAfterAnOutlookSend, ...over }, NOW)).toBe(false);
+    skip({ needs_action: true });                       // already in the Queue
+    skip({ unsubscribed: true });
+    skip({ status: "closed_won" });
+    skip({ action_permanently_dismissed: true });
+    skip({ action_dismissed_at: daysAgo(1) });          // snoozed / handled
+    skip({ last_outbound_at: null });                   // never emailed
+    skip({ last_outbound_at: hoursAgo(2) });            // too recent to be due
+    skip({ last_inbound_at: daysAgo(1) });              // they wrote last — reply_now's job
+    skip({ last_outbound_at: null, last_inbound_at: null }); // never emailed at all
+  });
+
+  it("cuts off at the wait floor, not at the 3/5-day default", () => {
+    // The sweep must not second-guess the per-workspace wait; deriveAction
+    // applies the real number.
+    expect(followupSweepCutoffIso(NOW)).toBe(new Date(NOW - 86_400_000).toISOString());
+  });
+
+  it("is a recompute-only job — it must never send or arm", () => {
+    const fn = readFileSync(
+      path.join(ROOT, "supabase/functions/outlook-followup-sweep/index.ts"), "utf8");
+    // Reuses the one recompute path rather than copying the rule.
+    expect(fn).toContain("recomputeLeadAction(");
+    expect(fn).toContain("isFollowupSweepCandidate(");
+    // Cron-only entry point.
+    expect(fn).toContain("requireScheduledCaller(");
+    // No sending, no arming, no consent writes.
+    expect(fn).not.toMatch(/gmail-send|outlook-send|automation_mode|eligible_at:/);
+  });
+});
+
+describe("campaign-origin leads reach the Follow up tab", () => {
+  // The flow: a campaign prospect replies, the enrolment is stopped, the rep
+  // answers, days pass. Outbound is now NEWER than inbound and
+  // `endColdEnrollment` leaves `campaign_id` set, so the old filter dropped the
+  // lead from the reactive tabs — and the stopped campaign had nothing to show
+  // for it either. The six-week hole, surviving for campaign-origin leads.
+  const afterTheRepAnswered = {
+    campaign_id: "camp-1",
+    last_inbound_at: daysAgo(9),
+    last_outbound_at: daysAgo(4),
+  };
+
+  it.each([FOLLOWUP_DUE_KEY, RATE_LIMITED_KEY])("keeps a %s lead visible", (key) => {
+    expect(belongsInReactiveTabs({ ...afterTheRepAnswered, next_action_key: key })).toBe(true);
+  });
+
+  it("still keeps purely cold campaign leads in the Outreach tab", () => {
+    expect(belongsInReactiveTabs({
+      campaign_id: "camp-1", next_action_key: "send_pre_2",
+      last_inbound_at: null, last_outbound_at: daysAgo(4),
+    })).toBe(false);
+  });
+
+  it("still routes an unanswered reply and non-campaign leads through", () => {
+    expect(belongsInReactiveTabs({
+      campaign_id: "camp-1", next_action_key: "reply_now",
+      last_inbound_at: daysAgo(1), last_outbound_at: daysAgo(4),
+    })).toBe(true);
+    expect(belongsInReactiveTabs({
+      campaign_id: null, next_action_key: "send_pre_2",
+      last_inbound_at: null, last_outbound_at: daysAgo(4),
+    })).toBe(true);
+  });
+});
+
+
+// ── The post-send recompute must not downgrade the AI's stage ──────
+
+describe("recomputeLeadAction — preserveStage", () => {
+  // `_shared/postSendDeriveAction.ts` takes its Supabase client as a parameter,
+  // so a recording stub exercises the REAL function end to end without a DB.
+  // Every builder method returns the same thenable; awaiting it yields the
+  // result configured for that table.
+  function stubClient(rows: Record<string, unknown>) {
+    const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+    const from = (table: string) => {
+      let updating: Record<string, unknown> | null = null;
+      const builder: any = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === "then") {
+            const result = updating
+              ? { data: null, error: null }
+              : { data: (rows as any)[table] ?? null, error: null };
+            return (res: any, rej: any) => Promise.resolve(result).then(res, rej);
+          }
+          return (...args: any[]) => {
+            if (prop === "update") {
+              updating = args[0];
+              updates.push({ table, payload: args[0] });
+            }
+            return builder;
+          };
+        },
+      });
+      return builder;
+    };
+    return { client: { from } as never, updates };
+  }
+
+  /** A lead the AI has just promoted to `closing` on a manual send. */
+  const rows = () => ({
+    leads: {
+      id: "lead-1",
+      stage: "closing",
+      strategy: "fast",
+      owner_user_id: null,
+      has_future_meeting: false,
+      action_dismissed_at: null,
+      motion: "outbound_prospecting",
+      workspace_id: "ws-1",
+      needs_action: false,
+      eligible_at: null,
+      nurture_status: "",
+      ooo_until: null,
+      automation_mode: null,
+    },
+    interactions: [
+      { type: "email", direction: "outbound", occurred_at: daysAgo(70), body_text: "hi" },
+      { type: "email", direction: "inbound", occurred_at: daysAgo(60), body_text: "interested" },
+      { type: "email", direction: "outbound", occurred_at: daysAgo(4), body_text: "circling back" },
+    ],
+    meeting_packs: [],
+    drafts: [],
+    workspace_profiles: null,
+  });
+
+  it("leaves stage out of the write when the caller asks it to", async () => {
+    const { client, updates } = stubClient(rows());
+    const { recomputeLeadAction } = await import(
+      /* @vite-ignore */ path.join(ROOT, "supabase/functions/_shared/postSendDeriveAction.ts")
+    );
+    await recomputeLeadAction(client, "lead-1", "[test]", true);
+    const write = updates.find((u) => u.table === "leads");
+    expect(write).toBeDefined();
+    expect("stage" in write!.payload).toBe(false);
+    // It still does its real job: the follow-up is derived and persisted.
+    expect(write!.payload.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+    expect(write!.payload.eligible_at).toBeNull();
+  });
+
+  it("would otherwise downgrade `closing` to `engaged` (the bug)", async () => {
+    const { client, updates } = stubClient(rows());
+    const { recomputeLeadAction } = await import(
+      /* @vite-ignore */ path.join(ROOT, "supabase/functions/_shared/postSendDeriveAction.ts")
+    );
+    await recomputeLeadAction(client, "lead-1", "[test]");
+    const write = updates.find((u) => u.table === "leads");
+    // deriveStage keeps only the closed stages, so without preserveStage the
+    // AI's `closing` is silently overwritten seconds after the send.
+    expect(write!.payload.stage).toBe("engaged");
+  });
+
+  it("both email send paths ask for it", () => {
+    for (const rel of [
+      "supabase/functions/gmail-send/index.ts",
+      "supabase/functions/outlook-send/index.ts",
+    ]) {
+      expect(readFileSync(path.join(ROOT, rel), "utf8")).toMatch(
+        /postSendDeriveAction\([\s\S]{0,400}preserveStage: true/,
+      );
+    }
+  });
+
+  it("the sweep does NOT ask for it — no AI ran, so deriveStage is canonical there", () => {
+    const fn = readFileSync(
+      path.join(ROOT, "supabase/functions/outlook-followup-sweep/index.ts"), "utf8");
+    expect(fn).not.toContain("preserveStage");
   });
 });
