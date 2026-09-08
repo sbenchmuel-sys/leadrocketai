@@ -1,17 +1,19 @@
 name: Staging ops (manual)
 
 # Manually-dispatched runner for STAGING-ONLY operations used by the master-upgrade
-# QA gates: deploy edge functions, apply one migration file, run the Deno edge suite,
-# run a QA check script. It never gates anything and never touches production:
-# the project ref is hard-coded to staging and every input is scanned for the
-# production ref before anything runs. Dispatch it against the branch under test.
+# QA gates. Two jobs, deliberately separated:
+#   tests — checks out the ref under test and runs npm install + the Deno edge suite.
+#           It has NO secrets, so untrusted branch code can never see staging keys.
+#   ops   — fresh runner. Checks out the ref but executes NO repository scripts
+#           (no npm install, no package.json scripts): only the Supabase CLI (deploy),
+#           psql (one migration file) and the orchestrator-authored check script.
+# Never gates anything and never touches production: the project ref is hard-coded
+# to staging and every input and the migration file are refused if they contain the
+# production ref. Lovable's flow is untouched.
 #
 # Required repository secrets (staging values only):
-#   SUPABASE_ACCESS_TOKEN        personal access token (sbp_...) with access to the staging project
-#   STAGING_DB_POOLER_URL        postgresql://postgres.jhipmqdpjenojfhfjgzq:...@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
-#   STAGING_SERVICE_ROLE_KEY     staging service-role JWT
-#   STAGING_ANON_KEY             staging anon JWT
-#   STAGING_INTERNAL_API_SECRET  (optional) staging INTERNAL_API_SECRET for dispatcher-path calls
+#   SUPABASE_ACCESS_TOKEN, STAGING_DB_POOLER_URL, STAGING_SERVICE_ROLE_KEY,
+#   STAGING_ANON_KEY, STAGING_INTERNAL_API_SECRET (optional)
 
 on:
   workflow_dispatch:
@@ -33,7 +35,7 @@ on:
         type: boolean
         default: false
       edge_tests:
-        description: "Run npm run test:edge (Deno)"
+        description: "Run npm run test:edge (Deno) in the secretless tests job"
         type: boolean
         default: true
       check_script:
@@ -53,42 +55,48 @@ env:
   SUPABASE_URL: https://jhipmqdpjenojfhfjgzq.supabase.co
 
 jobs:
-  ops:
-    name: Staging-only operations
+  guard:
+    name: Refuse anything that names production
     runs-on: ubuntu-latest
-    timeout-minutes: 40
     steps:
-      - name: Refuse anything that names production
-        env:
+      - env:
           INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
         run: |
           if printf '%s' "$INPUTS_JSON" | grep -q "ntzeiflqqluwgdfmatjh"; then
             echo "::error::Inputs reference the PRODUCTION project ref. Refusing."; exit 1; fi
           echo "inputs OK (staging only)"
 
-      - name: Checkout
+  tests:
+    name: Deno edge suite (no secrets)
+    needs: guard
+    if: ${{ inputs.edge_tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm run test:edge
+
+  ops:
+    name: Staging-only deploy / migrate / checks
+    needs: [guard, tests]
+    # run even when tests were skipped (edge_tests=false), never when they failed
+    if: ${{ always() && needs.guard.result == 'success' && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout ref under test (no repository scripts are executed in this job)
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install deps
-        run: npm install --no-audit --no-fund
-
-      - name: Set up Deno
-        if: ${{ inputs.edge_tests }}
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Deno edge suite
-        if: ${{ inputs.edge_tests }}
-        run: npm run test:edge
 
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v1
@@ -113,10 +121,12 @@ jobs:
         if: ${{ inputs.migration_file != '' }}
         env:
           DB_URL: ${{ secrets.STAGING_DB_POOLER_URL }}
+          MIG: ${{ inputs.migration_file }}
         run: |
           test -n "$DB_URL" || { echo "::error::STAGING_DB_POOLER_URL secret missing"; exit 1; }
           case "$DB_URL" in *jhipmqdpjenojfhfjgzq*) ;; *) echo "::error::DB URL is not the staging pooler"; exit 1;; esac
-          F="supabase/migrations/${{ inputs.migration_file }}"
+          case "$MIG" in */*|*..*) echo "::error::migration_file must be a bare filename"; exit 1;; esac
+          F="supabase/migrations/$MIG"
           test -f "$F" || { echo "::error::no such migration: $F"; exit 1; }
           grep -q "ntzeiflqqluwgdfmatjh" "$F" && { echo "::error::migration contains the production ref"; exit 1; }
           echo "== applying $F (1st run)"
@@ -125,9 +135,10 @@ jobs:
             echo "== applying $F (2nd run, must be a no-op)"
             psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
           fi
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations (version, name) SELECT split_part('${{ inputs.migration_file }}','_',1), '${{ inputs.migration_file }}' WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = split_part('${{ inputs.migration_file }}','_',1));" || echo "::warning::could not record migration in schema_migrations (table may differ on staging)"
+          V="${MIG%%_*}"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations (version, name) SELECT '$V', '$MIG' WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$V');" || echo "::warning::could not record migration in schema_migrations"
 
-      - name: QA check script
+      - name: QA check script (authored by the dispatcher, not the branch)
         if: ${{ inputs.check_script != '' }}
         env:
           SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
