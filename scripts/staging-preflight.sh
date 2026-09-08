@@ -115,11 +115,26 @@ INTENT_BODY='{"task":"intent_router","payload":{"lead_context":"","email_text":"
 TEST_EMAIL="${TEST_USER_A_EMAIL:-}"
 TEST_PASSWORD="${TEST_USER_PASSWORD:-}"
 
+# login_body: JSON-encode the credentials properly (a `"` or `\` in the password
+# must not break the body). jq preferred; python3 fallback; never string-interpolate.
+login_body() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -cn --arg e "$TEST_EMAIL" --arg p "$TEST_PASSWORD" '{email:$e,password:$p}'
+  elif command -v python3 >/dev/null 2>&1; then
+    PF_EMAIL="$TEST_EMAIL" PF_PASSWORD="$TEST_PASSWORD" python3 -c \
+      'import json,os;print(json.dumps({"email":os.environ["PF_EMAIL"],"password":os.environ["PF_PASSWORD"]}))'
+  else
+    return 1
+  fi
+}
+
 # user_token: sign in as the staging test user; prints the access token or nothing.
 user_token() {
+  local body
+  body="$(login_body)" || { echo "   neither jq nor python3 found — cannot build the sign-in body safely" >&2; return 1; }
   curl -sS -X POST "$URL/auth/v1/token?grant_type=password" \
     -H "apikey: $ANON" -H "Content-Type: application/json" \
-    -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}" 2>/dev/null \
+    -d "$body" 2>/dev/null \
     | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
 
