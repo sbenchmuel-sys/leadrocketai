@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 import {
   getStepLabels, getAutomationBlockers, buildAutomationEnableFields, AUTOMATION_DISABLE_FIELDS,
+  nextCadenceStepKey,
 } from "@/lib/leadAutomationActions";
 import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
 import CampaignStepPreview from "./CampaignStepPreview";
@@ -64,10 +65,11 @@ export function automationCardState(lead: {
 
 /**
  * Fields written when the rep presses Resume. Extracted from the two identical
- * inline copies so the safety rule lives in ONE place: a Queue prompt key is
- * never carried into an armed `eligible_at`. (Without the guard,
- * `parseInt("followup_due")` → NaN → a silent 2-day gap and a send from the
- * wrong template.) Same arithmetic as before otherwise.
+ * inline copies. The step-key choice — where a Queue prompt key must never be
+ * carried into an armed `eligible_at` — is delegated to `nextCadenceStepKey`,
+ * which Enable uses too. (Without that guard, `parseInt("followup_due")` → NaN
+ * → a silent 2-day gap and a send from the wrong template.) Same arithmetic as
+ * before otherwise.
  */
 export function buildResumeUpdateFields(
   lead: {
@@ -95,11 +97,9 @@ export function buildResumeUpdateFields(
   }
 
   const hasOutbound = !!lead.last_outbound_at;
-  // THE GUARD: only a real cadence key may be carried forward.
-  const carried = lead.next_action_key && !PROMPT_ONLY_KEYS.has(lead.next_action_key)
-    ? lead.next_action_key
-    : null;
-  const nextKey = hasOutbound ? (carried || "send_pre_2") : "send_pre_1";
+  // The prompt-key guard lives in `nextCadenceStepKey` — shared with
+  // `buildAutomationEnableFields`, which is the Enable (first turn-on) path.
+  const nextKey = nextCadenceStepKey(lead);
   const nextLabel = opts.stepLabels[nextKey] || "Follow-up";
   const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
   const gapDays = stepIdx > 0 && stepIdx < opts.intervals.length

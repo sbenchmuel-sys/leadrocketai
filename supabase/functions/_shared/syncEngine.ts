@@ -487,8 +487,12 @@ export function deriveAction(
   // now recomputes seconds after a send — so surfacing them would bounce every
   // sent email straight back into the Queue as a no-op card ("follow up, sent 0
   // minutes ago") parked until UTC midnight. The Queue would never empty.
-  // (`followupWaitDays` has a one-day floor, so an owed follow-up can never
-  // fall inside those two windows and be swallowed by them.)
+  // (`followupWaitDays` has a one-day floor, so at the DEFAULT 16-hour gap an
+  // owed follow-up can never fall inside these two windows and be swallowed.
+  // ponytail: a workspace that raises `min_gap_hours_between_emails` past its
+  // `followup_wait_days` — e.g. 96h against a 3-day wait — would silence a lead
+  // that is 80 hours quiet. Unreachable at defaults (72h vs 16h of margin), so
+  // it is documented rather than defended against.)
   //
   // A still-unanswered inbound also suppresses `rate_limited`: branch A already
   // returned `reply_now` once the reply is past `reply_pending_hours`, so

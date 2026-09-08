@@ -39,7 +39,11 @@ import {
   buildResumeUpdateFields,
 } from "@/components/lead/AutomationPreviewCard";
 import { getMotionIntervals } from "@/lib/cadenceSettingsTypes";
-import { getStepLabels } from "@/lib/leadAutomationActions";
+import {
+  buildAutomationEnableFields,
+  getStepLabels,
+  nextCadenceStepKey,
+} from "@/lib/leadAutomationActions";
 
 const ROOT = path.resolve(__dirname, "../..");
 const SYNC_ENGINE = "supabase/functions/_shared/syncEngine.ts";
@@ -442,6 +446,72 @@ describe("automation card — a Queue prompt is not a paused sequence", () => {
     });
     expect(state.hasAutomationEnabled).toBe(false);
     expect(state.userPaused).toBe(true);
+  });
+});
+
+describe("Enable Automation never arms a prompt key", () => {
+  // The first turn-on path, reached from AutomationPreviewCard's "Enable" and
+  // from AutomationToggleCard. `automationCardState` now routes a never-enrolled
+  // followup_due lead to exactly this button, so it has to be safe.
+  const enable = (lead: Record<string, unknown>) =>
+    buildAutomationEnableFields(lead as never) as Record<string, unknown>;
+
+  it.each([FOLLOWUP_DUE_KEY, RATE_LIMITED_KEY])(
+    "refuses to carry %s into an armed eligible_at",
+    (key) => {
+      const fields = enable({
+        next_action_key: key,
+        last_outbound_at: daysAgo(4),
+        motion: "outbound_prospecting",
+      });
+      // The forbidden row shape the executor would send on.
+      expect(
+        PROMPT_ONLY_KEYS.has(fields.next_action_key as string) && fields.eligible_at != null,
+      ).toBe(false);
+      expect(fields.next_action_key).toBe("send_pre_2");
+      // And the card no longer mislabels a step-2 arm as "Step 1 of 4".
+      expect(fields.next_action_label).toBe("Step 2 of 4");
+      expect(fields.automation_mode).toBe("full_auto");
+    },
+  );
+
+  it("still carries a genuine cadence key forward unchanged", () => {
+    expect(enable({
+      next_action_key: "send_pre_3", last_outbound_at: daysAgo(4), motion: "outbound_prospecting",
+    }).next_action_key).toBe("send_pre_3");
+  });
+
+  it("starts at step 1 for a lead that was never emailed", () => {
+    expect(enable({
+      next_action_key: FOLLOWUP_DUE_KEY, last_outbound_at: null, motion: "outbound_prospecting",
+    }).next_action_key).toBe("send_pre_1");
+  });
+
+  it("nurture leads are unaffected", () => {
+    expect(enable({
+      next_action_key: RATE_LIMITED_KEY, motion: "nurture", nurture_outbound_count: 1,
+    }).next_action_key).toBe("nurture_2");
+  });
+});
+
+describe("nextCadenceStepKey — the single place the guard lives", () => {
+  it("is what both builders use", () => {
+    const src = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+    for (const rel of [
+      "src/lib/leadAutomationActions.ts",
+      "src/components/lead/AutomationPreviewCard.tsx",
+    ]) {
+      expect(src(rel)).toContain("nextCadenceStepKey(");
+      // No second, unguarded copy of the carry-forward expression.
+      expect(src(rel)).not.toMatch(/lead\.next_action_key \|\| "send_pre_2"/);
+    }
+  });
+
+  it.each([FOLLOWUP_DUE_KEY, RATE_LIMITED_KEY])("never returns %s", (key) => {
+    expect(nextCadenceStepKey({ next_action_key: key, last_outbound_at: daysAgo(4) }))
+      .toBe("send_pre_2");
+    expect(nextCadenceStepKey({ next_action_key: key, last_outbound_at: null }))
+      .toBe("send_pre_1");
   });
 });
 
