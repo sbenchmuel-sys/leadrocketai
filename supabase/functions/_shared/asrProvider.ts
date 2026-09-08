@@ -251,6 +251,19 @@ export class GoogleSpeechAsrProvider implements AsrProvider {
       useEnhanced: true,
     };
 
+    // Language detection (C1/7). Without this, Google is told exactly one
+    // language and returns confident nonsense for any other — a Hebrew call on
+    // an en-US workspace came back transcribed as English. `allowedLanguages`
+    // is resolved per workspace by `resolveAsrLanguages` in callConfig.ts
+    // (he-IL workspaces get en-US as the alternative). Google caps
+    // alternativeLanguageCodes at 3 and rejects the primary appearing in it.
+    const alternativeLanguageCodes = Array.from(new Set(options.allowedLanguages ?? []))
+      .filter((lang) => Boolean(lang) && lang !== language)
+      .slice(0, 3);
+    if (options.autoDetect !== false && alternativeLanguageCodes.length > 0) {
+      config.alternativeLanguageCodes = alternativeLanguageCodes;
+    }
+
     if ((options.channelCount ?? 1) > 1) {
       config.audioChannelCount = options.channelCount;
       config.enableSeparateRecognitionPerChannel = true;

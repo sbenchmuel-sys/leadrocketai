@@ -7,8 +7,8 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-import { CALL_DEFAULTS } from "../_shared/callConfig.ts";
-import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
+import { CALL_DEFAULTS, authorizeCallJobCaller } from "../_shared/callConfig.ts";
+import { projectTimelineItem, callAnalysisDedupeKey, callDedupeKey } from "../_shared/timelineProjector.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -313,10 +313,17 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "Missing callSessionId" }, 400);
     }
 
+    // ---- Auth gate (C1/6) — paid function (Gemini), must never be open to the world ----
+    const denied = await authorizeCallJobCaller(req, supabase, corsHeaders, callSessionId);
+    if (denied) return denied;
+
     // Get session + settings
+    // `started_at` is selected because the timeline projection below uses it —
+    // it was read but never selected before C1, so every analysis row was
+    // timestamped "now" instead of when the call happened (C1/2).
     const { data: session } = await supabase
       .from("call_sessions")
-      .select("id, workspace_id, duration_sec, lead_id, direction")
+      .select("id, workspace_id, duration_sec, lead_id, direction, started_at")
       .eq("id", callSessionId)
       .single();
 
@@ -496,39 +503,55 @@ Deno.serve(async (req) => {
 
     logger.info("analyze_complete", { callSessionId, analysisId, version: "phase4" });
 
-    // Bridge to interactions table if lead is linked
+    // ---- Surface the AI summary on the lead timeline (C1/1) ----
+    // Two writes, both needed:
+    //   a) a NEW timeline row with its OWN dedupe key. Before C1 this row reused
+    //      callDedupeKey(), which collides with the row twilio-voice-webhook
+    //      already wrote; projectTimelineItem keeps the first row's snippet, so
+    //      the summary was silently discarded every time.
+    //   b) an in-place update of that original call row's snippet, so the rep
+    //      sees the summary on the call entry itself and not only on a second row.
+    // The legacy `interactions` insert that used to sit here is GONE — that table
+    // is being retired and CLAUDE.md forbids new writes to it.
     if (session.lead_id) {
       const summary = (normalized.summaryShort as string) || "Phone call completed";
       const callOccurredAt = new Date().toISOString();
-      const { data: callInteraction } = await supabase.from("interactions").insert({
-        lead_id: session.lead_id,
-        type: "phone_call",
-        source: "twilio",
-        direction: session.direction ?? "inbound",
-        body_text: summary,
-        subject: `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`,
-        occurred_at: callOccurredAt,
-      }).select("id").single();
+      const subject = `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`;
 
-      // Project to unified timeline
-      if (callInteraction) {
-        projectTimelineItem(supabase, {
-          workspace_id: session.workspace_id,
-          lead_id: session.lead_id,
-          channel: "voice",
-          provider: "twilio",
-          direction: session.direction ?? "inbound",
-          event_type: "phone_call",
-          occurred_at: session.started_at || callOccurredAt,
-          source_table: "call_sessions",
-          source_id: callSessionId,
-          snippet_text: summary?.substring(0, 500),
-          subject: `Call ${session.duration_sec ? `(${Math.ceil(session.duration_sec / 60)} min)` : ""}`,
-          metadata_json: { call_session_id: callSessionId, duration_sec: session.duration_sec, analysis_id: analysisId },
-          dedupe_key: callDedupeKey(callSessionId),
-        }, { triggerRecompute: true }).catch(e => logger.warn("analyze_timeline_projection_failed", { error: String(e) }));
+      await projectTimelineItem(supabase, {
+        workspace_id: session.workspace_id,
+        lead_id: session.lead_id,
+        channel: "voice",
+        provider: "twilio",
+        direction: session.direction ?? "inbound",
+        event_type: "call_analysis",
+        occurred_at: session.started_at || callOccurredAt,
+        source_table: "call_sessions",
+        source_id: callSessionId,
+        snippet_text: summary?.substring(0, 500),
+        subject,
+        metadata_json: { call_session_id: callSessionId, duration_sec: session.duration_sec, analysis_id: analysisId },
+        dedupe_key: callAnalysisDedupeKey(callSessionId),
+      }, { triggerRecompute: true }).catch((e) =>
+        logger.warn("analyze_timeline_projection_failed", { error: String(e) })
+      );
+
+      // Refresh the original call row's snippet with the summary. A direct
+      // update (not projectTimelineItem) because the projector deliberately
+      // refuses to overwrite a non-empty snippet.
+      const { error: snippetErr } = await supabase
+        .from("lead_timeline_items")
+        .update({
+          snippet_text: summary.substring(0, 500),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("lead_id", session.lead_id)
+        .eq("dedupe_key", callDedupeKey(callSessionId));
+      if (snippetErr) {
+        logger.warn("analyze_call_snippet_update_failed", { callSessionId, error: snippetErr.message });
       }
-      logger.info("analyze_bridged_to_interactions", { leadId: session.lead_id });
+
+      logger.info("analyze_timeline_written", { leadId: session.lead_id, analysisId });
     }
 
     return respond({ ok: true, analysisId });
