@@ -16,6 +16,10 @@ name: Staging ops (manual)
 on:
   workflow_dispatch:
     inputs:
+      ref:
+        description: "Branch / SHA under test to check out (blank = the ref this workflow was dispatched on)"
+        required: false
+        default: ""
       functions:
         description: "Edge functions to deploy to STAGING (comma-separated, blank = none)"
         required: false
@@ -64,6 +68,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
