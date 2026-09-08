@@ -5,7 +5,7 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertLeadAccess, isInternalCaller } from "../_shared/authz.ts";
-import { higherMilestoneStatus } from "../_shared/milestoneMerge.ts";
+import { higherMilestoneStatus, mergeMilestonesByText } from "../_shared/milestoneMerge.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -392,15 +392,20 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── From the stored milestone list (canonical lead_intelligence, else the leads mirror) ──
+    // ── From the stored milestone lists (canonical lead_intelligence MERGED with the leads mirror) ──
+    // Merge, not first-non-empty: under RLS only the lead owner can update the
+    // canonical row, so a non-owner's tick or an upload may exist only in the
+    // mirror. Text-keyed merge, completed beats pending, so neither side's
+    // "done" is lost.
     // Risks are deliberately NOT re-seeded from leads.risks_json any more: that
     // loop made every risk immortal (each recompute copied the previous output
     // back in), so a resolved risk could never leave the list. Risks now come
     // only from live evidence (cautions, call analyses).
     const priorIntelMilestones = (priorIntelRes as { data?: { milestones_json?: unknown } | null }).data?.milestones_json;
-    const leadMilestones = Array.isArray(priorIntelMilestones)
-      ? (priorIntelMilestones as any[])
-      : Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]) : [];
+    const leadMilestones = mergeMilestonesByText(
+      Array.isArray(priorIntelMilestones) ? (priorIntelMilestones as any[]) : [],
+      Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]) : [],
+    );
 
     for (const m of leadMilestones) {
       if (m?.description) {

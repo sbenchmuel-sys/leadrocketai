@@ -111,6 +111,34 @@ describe("milestoneMergeByText", () => {
   });
 });
 
+describe("recompute seeds from the MERGE of canonical and mirror", () => {
+  it("keeps a milestone that only reached the leads mirror and the higher status from either side", () => {
+    const canonical = [
+      { description: "Demo", status: "pending", date: null },
+      { description: "Security review", status: "completed", date: "2026-09-01" },
+    ];
+    const mirror = [
+      { description: "demo", status: "completed", date: "2026-09-03" }, // non-owner tick, mirror only
+      { description: "Security review", status: "pending", date: null },
+      { description: "Uploaded-only milestone", status: "pending", date: null },
+    ];
+    const seed = mergeMilestonesByText(canonical, mirror);
+    expect(seed.map((m) => m.description)).toEqual(["Demo", "Security review", "Uploaded-only milestone"]);
+    expect(seed[0].status).toBe("completed");
+    expect(seed[1].status).toBe("completed");
+  });
+  it("recompute-lead-intelligence merges both lists rather than picking the first non-empty", () => {
+    const src = read("supabase/functions/recompute-lead-intelligence/index.ts");
+    expect(src).toMatch(/const leadMilestones = mergeMilestonesByText\(/);
+    expect(src).not.toMatch(/Array\.isArray\(priorIntelMilestones\)\s*\?\s*\(priorIntelMilestones as any\[\]\)\s*:\s*Array\.isArray\(lead\.milestones_json\)/);
+  });
+  it("MeetingsTab ticks lead milestones by text, not pack row index", () => {
+    const src = read("src/components/lead/MeetingsTab.tsx");
+    expect(src).not.toMatch(/updateLeadMilestoneStatus\(leadId, i,/);
+    expect((src.match(/updateLeadMilestoneStatus\(leadId, m\.description,/g) ?? []).length).toBe(2);
+  });
+});
+
 describe("risksNotReseeded", () => {
   const src = read("supabase/functions/recompute-lead-intelligence/index.ts");
   it("does not seed risksMap from leads.risks_json", () => {
