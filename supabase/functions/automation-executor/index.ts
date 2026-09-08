@@ -975,6 +975,31 @@ serve(async (req) => {
           continue;
         }
 
+        // ── CAN-SPAM PRECONDITIONS (fail closed, BEFORE spending anything) ──
+        // Checked here — ahead of the approved-draft consumption and the ai_task
+        // call — so a misconfigured environment neither re-spends AI credits every
+        // tick nor marks a rep-approved draft "sent" without sending it. The
+        // channel is not resolved yet at this point, so these apply to every step;
+        // both are environment-level misconfigurations that must be fixed anyway.
+        if (!unsubSecret) {
+          console.error(`[automation-executor] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send email for lead ${lead.id} (fail closed)`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "UNSUBSCRIBE_TOKEN_SECRET unset — cannot add unsubscribe link (fail closed)";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+        const postalAddress = await getPostalAddress(lead.workspace_id);
+        if (!postalAddress && requirePostalAddress()) {
+          logEntry.status = "skipped";
+          logEntry.error_message = "No company postal address (CAN-SPAM) — set it in Settings → Cold Outreach Safety";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
         // --- STRATEGY 1: Draft Caching ---
         // Priority 1: Check for user-approved drafts (no time limit — user explicitly saved these)
         const { data: approvedDraft } = await supabase
@@ -1269,24 +1294,8 @@ serve(async (req) => {
         // generated drafts, before the audit draft row so it matches the send.
         let emailFooterHeaders: Record<string, string> = {};
         if (resolvedChannel !== "sms") {
-          if (!unsubSecret) {
-            console.error(`[automation-executor] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send email for lead ${lead.id} (fail closed)`);
-            logEntry.status = "skipped";
-            logEntry.error_message = "UNSUBSCRIBE_TOKEN_SECRET unset — cannot add unsubscribe link (fail closed)";
-            logEntry.completed_at = new Date().toISOString();
-            await supabase.from("automation_log").insert(logEntry);
-            skipped++;
-            continue;
-          }
-          const postalAddress = await getPostalAddress(lead.workspace_id);
-          if (!postalAddress && requirePostalAddress()) {
-            logEntry.status = "skipped";
-            logEntry.error_message = "No company postal address (CAN-SPAM) — set it in Settings → Cold Outreach Safety";
-            logEntry.completed_at = new Date().toISOString();
-            await supabase.from("automation_log").insert(logEntry);
-            skipped++;
-            continue;
-          }
+          // unsubSecret / postal preconditions were verified BEFORE the draft
+          // lookup (see CAN-SPAM PRECONDITIONS above), so nothing fails here.
           const unsubToken = await signUnsubscribeToken(
             { lid: lead.id, wid: lead.workspace_id, cid: lead.campaign_id ?? null, iat: Math.floor(Date.now() / 1000) },
             unsubSecret,
