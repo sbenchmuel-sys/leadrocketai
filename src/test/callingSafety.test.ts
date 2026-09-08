@@ -95,26 +95,56 @@ describe("C1 — outbound call safety", () => {
     expect(src).toMatch(/if \(!isValid\)[\s\S]{0,400}status:\s*403/);
   });
 
-  it("outboundRecordingNotice — the outbound TwiML says the notice before <Dial>", () => {
+  // The first version of this fix put a <Say> before <Dial>. That plays on the
+  // REP's Twilio Client leg, before the number is even dialled — the prospect
+  // heard nothing and was still recorded without notice. A test that only
+  // checked "a <Say> exists somewhere" PASSED on that broken version, so this
+  // one pins the LEG the notice lands on.
+  it("outboundRecordingNotice — the notice rides the callee leg, not the rep's", () => {
     const src = callConfig();
-    const body = /export function buildOutboundDialTwiml\([\s\S]*?\n}\n/.exec(src)?.[0] ?? "";
-    expect(body).toBeTruthy();
+    const dialDoc = /export function buildOutboundDialTwiml\([\s\S]*?\n}\n/.exec(src)?.[0] ?? "";
+    expect(dialDoc).toBeTruthy();
 
-    const say = body.indexOf("<Say");
-    const dial = body.indexOf("<Dial");
-    expect(say).toBeGreaterThan(-1);
-    expect(dial).toBeGreaterThan(-1);
-    expect(say).toBeLessThan(dial);
+    // 1. The rep's document must contain NO <Say> at all. This is the assertion
+    //    that fails on the broken version.
+    expect(dialDoc).not.toMatch(/<Say/);
 
-    // The notice actually says the call is recorded, and the outbound leg
-    // really is recording (so the notice is not decorative).
+    // 2. The notice is delivered by a `url` on <Number>, which Twilio fetches on
+    //    the CALLED party's leg after they answer and before bridging.
+    const numberTag = /<Number[^>]*>/.exec(dialDoc)?.[0] ?? "";
+    expect(numberTag).toBeTruthy();
+    expect(numberTag).toMatch(/\$\{noticeAttr\}|noticeAttr/);
+    expect(dialDoc).toMatch(/noticeAttr\s*=\s*args\.recordingNotice[\s\S]{0,160}url="\$\{escapeXml\(args\.calleeNoticeUrl\)\}"/);
+
+    // 3. The thing that URL returns is the actual spoken notice.
+    const noticeDoc = /export function buildCalleeNoticeTwiml\([\s\S]*?\n}\n/.exec(src)?.[0] ?? "";
+    expect(noticeDoc).toMatch(/<Say[^>]*>\$\{RECORDING_NOTICE_TEXT\}<\/Say>/);
     expect(src).toMatch(/RECORDING_NOTICE_TEXT\s*=\s*\n?\s*"This call may be recorded/);
-    expect(body).toMatch(/record="record-from-answer-dual"/);
 
-    // ...and twilio-voice-inbound builds its outbound TwiML through it rather
-    // than hand-rolling a <Dial> with no notice.
+    // 4. The outbound leg really is recording, so the notice is not decorative.
+    expect(dialDoc).toMatch(/record="record-from-answer-dual"/);
+
+    // 5. twilio-voice-inbound builds through the builder and supplies the URL.
     const inbound = stripComments(voiceInbound());
     expect(inbound).toMatch(/buildOutboundDialTwiml\(\{/);
+    expect(inbound).toMatch(/calleeNoticeUrl:\s*calleeNoticeUrl\(fnUrl\)/);
+  });
+
+  it("calleeNoticeBranchIsSignatureValidated — the notice endpoint is not open", () => {
+    const src = stripComments(voiceInbound());
+    // The branch that speaks must sit AFTER signature validation, like every
+    // other branch — an open TwiML endpoint lets anyone make the workspace's
+    // Twilio account talk.
+    const sigCheck = src.indexOf("validateTwilioSignature(");
+    const noticeBranch = src.indexOf("buildCalleeNoticeTwiml()");
+    expect(sigCheck).toBeGreaterThan(-1);
+    expect(noticeBranch).toBeGreaterThan(sigCheck);
+
+    // Twilio signs the full URL INCLUDING the query string. If this regressed to
+    // the bare function URL, the ?leg=callee_notice fetch would 403 and Twilio
+    // would drop the prospect's leg mid-dial — so it is load-bearing.
+    expect(src).toMatch(/const incomingQuery = new URL\(req\.url\)\.search;/);
+    expect(src).toMatch(/const publicUrl = `\$\{fnUrl\}\$\{incomingQuery\}`;/);
   });
 
   it("repCallerNumberPreferred — the rep's own number wins over the workspace default", () => {

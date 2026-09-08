@@ -102,12 +102,50 @@ export const RECORDING_NOTICE_TEXT =
   "This call may be recorded for quality and training purposes.";
 
 /**
+ * Query marker that turns `twilio-voice-inbound` into the callee-leg notice
+ * endpoint. `<Number url="...?leg=callee_notice">` points here.
+ *
+ * A query STRING (not a separate function) because Twilio must be able to fetch
+ * it, and every Twilio-facing URL in this codebase is signature-validated by
+ * `twilio-voice-inbound` already. Twilio signs the full URL INCLUDING the query
+ * string, so the validator must reconstruct it — see twilio-voice-inbound.
+ */
+export const CALLEE_NOTICE_PARAM = "leg";
+export const CALLEE_NOTICE_VALUE = "callee_notice";
+
+/** Build the callee-leg notice URL from the function's own public URL. */
+export function calleeNoticeUrl(functionUrl: string): string {
+  return `${functionUrl}?${CALLEE_NOTICE_PARAM}=${CALLEE_NOTICE_VALUE}`;
+}
+
+/**
+ * TwiML played to the CALLED party (the prospect), on their own leg, after they
+ * answer and BEFORE the two legs are bridged. This is what Twilio fetches from
+ * the `url` attribute on `<Number>`.
+ */
+export function buildCalleeNoticeTwiml(): string {
+  return `<Response><Say voice="Polly.Joanna">${RECORDING_NOTICE_TEXT}</Say></Response>`;
+}
+
+/**
  * TwiML for a browser-originated OUTBOUND call.
  *
- * The `<Say>` recording notice is a PUBLIC LEGAL COMMITMENT, not decoration:
- * the outbound leg records with `record-from-answer-dual` exactly like the
- * inbound leg, and until C1 the outbound leg said nothing at all. It is emitted
- * BEFORE `<Dial>` so the callee hears it as the call connects.
+ * WHICH LEG HEARS WHAT — this is the whole point, and getting it wrong is why
+ * the first version of this fix was rejected:
+ *
+ *   • This document executes on the REP's Twilio Client leg. A `<Say>` placed
+ *     here — as the first version had it, before `<Dial>` — is heard by the REP,
+ *     before Twilio has even dialled the `<Number>`. The prospect hears nothing
+ *     and is still recorded without notice. There is therefore deliberately NO
+ *     `<Say>` in this document.
+ *   • The notice rides on the `url` attribute of `<Number>`. Twilio fetches that
+ *     URL when the CALLED party answers and plays the returned TwiML on THEIR
+ *     leg, before bridging. So the prospect hears the notice before the
+ *     conversation starts, and the rep does not sit through it on every call
+ *     (the rep hears ringback for the ~3s it takes).
+ *
+ * `record="record-from-answer-dual"` starts at answer, so the notice is also
+ * captured at the head of the recording — useful evidence that it was given.
  */
 export function buildOutboundDialTwiml(args: {
   to: string;
@@ -115,162 +153,18 @@ export function buildOutboundDialTwiml(args: {
   statusCallbackUrl: string;
   recordingCallbackUrl: string;
   recordingNotice: boolean;
+  /** Where Twilio fetches the callee-leg notice. See `calleeNoticeUrl`. */
+  calleeNoticeUrl: string;
 }): string {
-  const notice = args.recordingNotice
-    ? `\n  <Say voice="Polly.Joanna">${RECORDING_NOTICE_TEXT}</Say>`
+  // No notice configured → no `url` attribute → straight bridge, as before.
+  const noticeAttr = args.recordingNotice
+    ? ` url="${escapeXml(args.calleeNoticeUrl)}" method="POST"`
     : "";
-  return `<Response>${notice}
+  return `<Response>
   <Dial callerId="${escapeXml(args.callerId)}" record="record-from-answer-dual" recordingStatusCallback="${escapeXml(args.recordingCallbackUrl)}" recordingStatusCallbackEvent="completed" recordingChannels="2">
-    <Number statusCallback="${escapeXml(args.statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed" statusCallbackMethod="POST">${escapeXml(args.to)}</Number>
+    <Number${noticeAttr} statusCallback="${escapeXml(args.statusCallbackUrl)}" statusCallbackEvent="initiated ringing answered completed" statusCallbackMethod="POST">${escapeXml(args.to)}</Number>
   </Dial>
 </Response>`;
-}
-
-// ---- Twilio Status values ----
-export type TwilioCallStatus =
-  | "initiated"
-  | "ringing"
-  | "in-progress"
-  | "completed"
-  | "failed"
-  | "busy"
-  | "no-answer"
-  | "canceled";
-
-// Map Twilio status → our internal status
-export function mapTwilioStatus(twStatus: string): string {
-  const map: Record<string, string> = {
-    "initiated": "initiated",
-    "ringing": "ringing",
-    "in-progress": "answered",
-    "completed": "completed",
-    "failed": "failed",
-    "busy": "busy",
-    "no-answer": "no-answer",
-    "canceled": "canceled",
-  };
-  return map[twStatus] ?? twStatus;
-}
-
-// ---- Evidence pointer (Phase 4: timestamp + speaker) ----
-export interface EvidencePointer {
-  timestamp: string; // "MM:SS"
-  speaker: "Agent" | "Customer" | string;
-  quote: string;
-}
-
-// ---- Transcript segment ----
-export interface TranscriptSegment {
-  startMs: number;
-  endMs: number;
-  speaker: string;
-  label?: string;
-  text: string;
-}
-
-// ---- Phase 4: Structured analysis output ----
-export interface CallOutcome {
-  label: "positive" | "neutral" | "negative" | "no_outcome";
-  confidence: number;
-}
-
-export interface CallIntent {
-  type: "buying" | "support" | "complaint" | "renewal" | "churn_risk" | "other";
-  confidence: number;
-  evidence: EvidencePointer[];
-}
-
-export interface SentimentTimelineEntry {
-  minute: number;
-  sentiment: "positive" | "neutral" | "negative";
-}
-
-export interface CallSentiment {
-  overall: "positive" | "neutral" | "negative";
-  confidence: number;
-  timeline: SentimentTimelineEntry[];
-}
-
-export interface CallObjection {
-  type: "price" | "timing" | "security" | "feature_gap" | "trust" | "other";
-  severity: "low" | "medium" | "high";
-  evidence: EvidencePointer[];
-}
-
-export interface CallCommitment {
-  who: "Agent" | "Customer";
-  text: string;
-  dueDate: string | null;
-  evidence: EvidencePointer[];
-}
-
-export interface CallRisk {
-  type: "churn" | "legal" | "escalation" | "no_next_step" | "other";
-  severity: "low" | "medium" | "high";
-  evidence: EvidencePointer[];
-}
-
-export interface ActionItem {
-  text: string;
-  owner: "Agent" | "Internal" | "Customer";
-  priority: "low" | "medium" | "high";
-  evidence: EvidencePointer[];
-}
-
-export interface RecommendedNextStep {
-  rank: number;
-  text: string;
-  rationale: string;
-  confidence: number;
-  evidence: EvidencePointer[];
-}
-
-export interface CallAnalysisOutput {
-  summaryShort: string;
-  summaryLong: string;
-  outcome: CallOutcome;
-  intent: CallIntent;
-  sentiment: CallSentiment;
-  objections: CallObjection[];
-  commitments: CallCommitment[];
-  risks: CallRisk[];
-  actionItems: ActionItem[];
-  recommendedNextSteps: RecommendedNextStep[];
-}
-
-// ---- Job interface ----
-export interface CallJob {
-  type: "ingest_recording" | "transcribe_call" | "analyze_call";
-  callSessionId: string;
-  recordingId?: string;
-}
-
-export async function enqueueCallJob(job: CallJob): Promise<void> {
-  const fnMap: Record<CallJob["type"], string> = {
-    ingest_recording: "call-ingest-recording",
-    transcribe_call: "call-transcribe",
-    analyze_call: "call-analyze",
-  };
-
-  const fnName = fnMap[job.type];
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-  const resp = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(job),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error(`[enqueueCallJob] Failed to invoke ${fnName}: ${resp.status} ${text}`);
-  } else {
-    await resp.text(); // consume body
-  }
 }
 
 /**

@@ -7,7 +7,11 @@
 // ============================================================================
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildCalleeNoticeTwiml,
   buildOutboundDialTwiml,
+  CALLEE_NOTICE_PARAM,
+  CALLEE_NOTICE_VALUE,
+  calleeNoticeUrl,
   RECORDING_NOTICE_TEXT,
   resolveAsrLanguages,
 } from "./callConfig.ts";
@@ -94,39 +98,70 @@ Deno.test("normalizeE164 strips formatting and forces a leading +", () => {
   assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000");
 });
 
-Deno.test("outbound TwiML speaks the recording notice before dialing", () => {
-  const twiml = buildOutboundDialTwiml({
-    to: "+972500000000",
-    callerId: "+14155550123",
-    statusCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
-    recordingCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
-    recordingNotice: true,
-  });
-  assert(twiml.indexOf("<Say") < twiml.indexOf("<Dial"), "notice must precede <Dial>");
-  assert(twiml.includes(RECORDING_NOTICE_TEXT));
+const DIAL_ARGS = {
+  to: "+972500000000",
+  callerId: "+14155550123",
+  statusCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
+  recordingCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
+  recordingNotice: true,
+  calleeNoticeUrl: calleeNoticeUrl("https://example.test/functions/v1/twilio-voice-inbound"),
+};
+
+Deno.test("the rep's <Dial> document contains NO <Say> — it would play to the rep", () => {
+  // The rejected first version put the notice here. This TwiML runs on the
+  // rep's Twilio Client leg, BEFORE Twilio dials the <Number>, so the prospect
+  // never heard it and was recorded without notice.
+  const twiml = buildOutboundDialTwiml(DIAL_ARGS);
+  assert(!twiml.includes("<Say"), "a <Say> here plays to the REP, not the callee");
+});
+
+Deno.test("the notice rides the callee leg via the url attribute on <Number>", () => {
+  const twiml = buildOutboundDialTwiml(DIAL_ARGS);
+  const numberTag = /<Number[^>]*>/.exec(twiml)?.[0] ?? "";
+  assert(numberTag.length > 0, "expected a <Number> tag");
+  assert(
+    numberTag.includes(`${CALLEE_NOTICE_PARAM}=${CALLEE_NOTICE_VALUE}`),
+    "the notice url must be an attribute of <Number>, so Twilio plays it on the CALLED leg",
+  );
+  assert(numberTag.includes('method="POST"'));
+  // The recording really is on, so the notice is load-bearing.
   assert(twiml.includes('record="record-from-answer-dual"'));
   assert(twiml.includes('callerId="+14155550123"'));
 });
 
+Deno.test("what the callee-notice endpoint returns is the actual spoken notice", () => {
+  const twiml = buildCalleeNoticeTwiml();
+  assert(twiml.includes("<Say"));
+  assert(twiml.includes(RECORDING_NOTICE_TEXT));
+  // Nothing else — it is played mid-dial and must not hang up or redirect.
+  assert(!twiml.includes("<Hangup"));
+  assert(!twiml.includes("<Dial"));
+});
+
+Deno.test("calleeNoticeUrl appends the marker the inbound branch keys on", () => {
+  const url = calleeNoticeUrl("https://example.test/functions/v1/twilio-voice-inbound");
+  assertEquals(
+    url,
+    `https://example.test/functions/v1/twilio-voice-inbound?${CALLEE_NOTICE_PARAM}=${CALLEE_NOTICE_VALUE}`,
+  );
+  // Round-trips through URL parsing the way the edge function reads it.
+  assertEquals(new URL(url).searchParams.get(CALLEE_NOTICE_PARAM), CALLEE_NOTICE_VALUE);
+});
+
 Deno.test("outbound TwiML honours a workspace that turned the notice off", () => {
-  const twiml = buildOutboundDialTwiml({
-    to: "+972500000000",
-    callerId: "+14155550123",
-    statusCallbackUrl: "https://example.test/a",
-    recordingCallbackUrl: "https://example.test/b",
-    recordingNotice: false,
-  });
+  const twiml = buildOutboundDialTwiml({ ...DIAL_ARGS, recordingNotice: false });
   assert(!twiml.includes("<Say"));
+  // No url attribute at all → straight bridge, no whisper.
+  assert(!twiml.includes(CALLEE_NOTICE_VALUE));
   assert(twiml.includes("<Dial"));
 });
 
 Deno.test("outbound TwiML escapes callback URLs so a query string cannot break the XML", () => {
+  // The callee-notice url itself carries a query string, so this is not theoretical.
   const twiml = buildOutboundDialTwiml({
-    to: "+14155550000",
-    callerId: "+14155550123",
+    ...DIAL_ARGS,
     statusCallbackUrl: "https://example.test/cb?a=1&b=2",
     recordingCallbackUrl: "https://example.test/cb?a=1&b=2",
-    recordingNotice: true,
   });
   assert(twiml.includes("a=1&amp;b=2"));
   assert(!twiml.includes("a=1&b=2"));
