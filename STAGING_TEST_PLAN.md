@@ -40,7 +40,16 @@ grep -l jhipmqdp dist/assets/*.js        # must list at least one file
 supabase functions deploy <name> --project-ref jhipmqdpjenojfhfjgzq
 supabase db push --project-ref jhipmqdpjenojfhfjgzq
 ```
-The staging cron file `supabase/migrations/*_codify_cron_jobs_staging.sql` reads URL/key from Vault (`staging_functions_url`, `staging_anon_key`) and no-ops on any DB without those secrets; it is never applied to production on purpose. `src/test/noProdRefInStagingSql.test.ts` fails the unit suite if any staging-named file contains the production ref.
+The staging cron file `supabase/migrations/*_codify_cron_jobs_staging.sql` codifies all **17** prod dispatcher jobs, reads URL/key from Vault (`staging_functions_url`, `staging_anon_key`) and no-ops (NOTICE "SKIPPED") unless `staging_functions_url` contains `jhipmqdpjenojfhfjgzq`; it is never applied to production and never via Lovable. `src/test/noProdRefInStagingSql.test.ts` fails the unit suite if any staging-named file contains the production ref. **QA SQL after applying it on staging:**
+```sql
+SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%';            -- 17
+SELECT jobname FROM cron.job WHERE command ILIKE '%cron-dispatcher%' AND NOT active
+ ORDER BY 1;  -- exactly: cron_campaign_touch_scheduler, dispatch-automation-executor
+SELECT count(*) FROM cron.job WHERE command ILIKE '%cron-dispatcher%'
+   AND command NOT ILIKE '%vault.decrypted_secrets%';                            -- 0 (no literal URL/key)
+SELECT jobname, status FROM cron.job_run_details d JOIN cron.job j USING (jobid)
+ WHERE j.jobname = 'cron_classify_inbound' ORDER BY d.start_time DESC LIMIT 3;   -- succeeded
+```
 
 **6. Cold-template eval baseline (needs `LOVABLE_API_KEY` + network — status: PENDING, not yet captured):**
 ```bash

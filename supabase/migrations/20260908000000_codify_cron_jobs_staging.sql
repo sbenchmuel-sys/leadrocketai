@@ -1,27 +1,30 @@
 -- 20260908000000_codify_cron_jobs_staging.sql
--- STAGING ONLY — never apply to production.
+-- STAGING ONLY — never apply to production, never via Lovable.
 --
--- Staging mirror of 20260427230000_codify_cron_jobs.sql (same 10 dispatcher
--- jobs, same schedules, same bodies). Differences, all deliberate:
+-- Staging mirror of production's 17 cron-dispatcher jobs: the 10 from
+-- 20260427230000_codify_cron_jobs.sql plus the 7 added by later per-job
+-- migrations (detect/score/lookback lead candidates, transcript poller,
+-- classify-inbound, intelligence-queue-drain, campaign-touch-scheduler). Same
+-- names, schedules and bodies. Differences, all deliberate:
 --   • The functions URL and the anon key are NOT literals. They are read at run
 --     time from Supabase Vault: secrets named 'staging_functions_url'
---     (e.g. https://<staging-ref>.supabase.co/functions/v1) and
---     'staging_anon_key'. Nothing in this file names a project, so it cannot
---     point a staging cron at production even if applied to the wrong DB.
+--     (https://jhipmqdpjenojfhfjgzq.supabase.co/functions/v1) and
+--     'staging_anon_key'. No production identifier appears in this file.
 --   • X-Internal-Secret is attached from the 'internal_api_secret' Vault secret,
 --     as 20260623000000_cron_dispatcher_auth_header.sql does for prod — the
 --     staging cron-dispatcher is auth-gated and would 401 without it.
---   • dispatch-automation-executor is created but immediately set active=false,
---     which is how staging runs today (Eligible Ed has full-auto consent; an
---     active job would send real email). Enable it only by hand, only on purpose.
+--   • dispatch-automation-executor AND cron_campaign_touch_scheduler are created
+--     but set active=false, which is how staging runs today (Eligible Ed has
+--     full-auto consent; either job live would send real email). Enable only by
+--     hand, only on purpose.
 --
 -- Safety on the wrong database: the whole body is skipped (RAISE NOTICE, no
--- changes) unless BOTH staging Vault secrets exist. Production has neither, so
--- a `supabase db push` that sweeps this file into prod is a no-op there —
--- prod's live crons are untouched.
+-- changes) unless the Vault secret 'staging_functions_url' exists AND contains
+-- the staging ref jhipmqdpjenojfhfjgzq AND 'staging_anon_key' exists. So a
+-- `supabase db push` that sweeps this file into prod is a no-op there.
 --
 -- One-time setup (run once on STAGING, values never go in git):
---   SELECT vault.create_secret('https://<staging-ref>.supabase.co/functions/v1', 'staging_functions_url');
+--   SELECT vault.create_secret('https://jhipmqdpjenojfhfjgzq.supabase.co/functions/v1', 'staging_functions_url');
 --   SELECT vault.create_secret('<staging anon key>', 'staging_anon_key');
 --   SELECT vault.create_secret('<staging INTERNAL_API_SECRET>', 'internal_api_secret');
 -- Verify:
@@ -42,10 +45,15 @@ CREATE EXTENSION IF NOT EXISTS pg_net  WITH SCHEMA extensions;
 DO $mig$
 DECLARE
   jid BIGINT;
+  fn_url TEXT;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'staging_functions_url')
+  SELECT decrypted_secret INTO fn_url
+    FROM vault.decrypted_secrets WHERE name = 'staging_functions_url' LIMIT 1;
+
+  IF fn_url IS NULL
+     OR position('jhipmqdpjenojfhfjgzq' IN fn_url) = 0
      OR NOT EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'staging_anon_key') THEN
-    RAISE NOTICE 'codify_cron_jobs_staging: Vault secrets staging_functions_url / staging_anon_key not found — this is not the staging database (or they are not created yet). Skipping; no cron jobs changed.';
+    RAISE NOTICE 'codify_cron_jobs_staging: SKIPPED — Vault secret staging_functions_url is missing or does not contain the staging ref jhipmqdpjenojfhfjgzq, or staging_anon_key is missing. This is not the staging database (or the secrets are not created yet). No cron jobs changed.';
     RETURN;
   END IF;
 
@@ -62,7 +70,14 @@ BEGIN
       'dispatch-message-cleanup',
       'dispatch-reply-suggestions',
       'dispatch-manager-analytics',
-      'dispatch-calendar-sync'
+      'dispatch-calendar-sync',
+      'dispatch-detect-lead-candidates',
+      'dispatch-score-lead-candidate',
+      'dispatch-lookback-seed-candidates',
+      'dispatch-transcript-poller',
+      'cron_classify_inbound',
+      'dispatch-intelligence-queue-drain',
+      'cron_campaign_touch_scheduler'
     ])
   LOOP
     PERFORM cron.unschedule(jid);
@@ -244,12 +259,140 @@ BEGIN
     $cron$
   );
 
-  -- ── Staging deviation: the live auto-sender stays OFF ──────────────────────
-  -- Created above so the job exists (schedule/body mirror prod), disabled here
+  -- Detect lead candidates from synced mail. Every 20 minutes.
+  -- (mirrors 20260430000000_add_detect_lead_candidates_cron.sql)
+  PERFORM cron.schedule(
+    'dispatch-detect-lead-candidates',
+    '*/20 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "detect-lead-candidates"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Score pending lead candidates. Every 10 minutes.
+  -- (mirrors 20260430120000_add_score_lead_candidate_cron.sql)
+  PERFORM cron.schedule(
+    'dispatch-score-lead-candidate',
+    '*/10 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "score-lead-candidate"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Look-back seeding of candidates from mailbox history. Hourly at :45.
+  -- (mirrors 20260430140100_add_lookback_seed_cron.sql)
+  PERFORM cron.schedule(
+    'dispatch-lookback-seed-candidates',
+    '45 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "lookback-seed-candidates"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Poll Teams/Meet for meeting transcripts. Every 15 minutes.
+  -- (mirrors 20260513210727_add_transcript_poller_cron.sql)
+  PERFORM cron.schedule(
+    'dispatch-transcript-poller',
+    '*/15 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "transcript-poller"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Classify un-labelled inbound email + write durable ai_summary before the
+  -- 72h purge. Every minute. (mirrors 20260520210100_codify_cron_classify_inbound.sql)
+  PERFORM cron.schedule(
+    'cron_classify_inbound',
+    '* * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "classify-inbound"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Drain the lead-intelligence recompute queue. Every 5 minutes.
+  -- (mirrors 20260526180100_codify_cron_intelligence_queue_drain.sql)
+  PERFORM cron.schedule(
+    'dispatch-intelligence-queue-drain',
+    '*/5 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "intelligence-queue-drain"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- Promote due cold-campaign touches to the executor / review queue. Every 5
+  -- minutes. (mirrors 20260606000100_add_campaign_touch_scheduler_cron.sql)
+  -- Created here, set active=false below (staging).
+  PERFORM cron.schedule(
+    'cron_campaign_touch_scheduler',
+    '*/5 * * * *',
+    $cron$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_functions_url') || '/cron-dispatcher',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'staging_anon_key'),
+        'X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret')
+      ),
+      body := '{"target": "campaign-touch-scheduler"}'::jsonb
+    ) AS request_id;
+    $cron$
+  );
+
+  -- ── Staging deviation: the two live-send paths stay OFF ────────────────────
+  -- Created above so the jobs exist (schedule/body mirror prod), disabled here
   -- so staging never auto-sends. The QA plan exercises the send path by manual
   -- invoke / review mode only (STAGING_TEST_PLAN.md → "Edge functions").
-  UPDATE cron.job SET active = false WHERE jobname = 'dispatch-automation-executor';
+  UPDATE cron.job SET active = false
+   WHERE jobname IN ('dispatch-automation-executor', 'cron_campaign_touch_scheduler');
 
-  RAISE NOTICE 'codify_cron_jobs_staging: 10 dispatcher jobs (re)scheduled; dispatch-automation-executor left inactive.';
+  RAISE NOTICE 'codify_cron_jobs_staging: 17 dispatcher jobs (re)scheduled on staging; dispatch-automation-executor and cron_campaign_touch_scheduler left inactive.';
 END
 $mig$;

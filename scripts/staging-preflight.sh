@@ -6,6 +6,8 @@
 # Usage (repo root; Windows users: run in Git Bash):
 #   npm run preflight:staging            # loads ./.env.staging if present
 #   bash scripts/staging-preflight.sh --print   # dry run: print the requests, send nothing
+#   (--print still requires SUPABASE_URL to be the staging ref — the safety
+#    abort runs before anything else, in every mode.)
 #
 # Needs from .env.staging (gitignored):
 #   SUPABASE_URL                 https://jhipmqdpjenojfhfjgzq.supabase.co   (must be the staging ref)

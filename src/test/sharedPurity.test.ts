@@ -3,8 +3,10 @@
 // Any supabase/functions/_shared/*.ts file that src/ imports (via a relative
 // path today, via the @shared/* alias going forward) is loaded by BOTH Deno
 // (edge functions) and Vite/vitest (browser + Node). It must therefore be pure:
-// no `Deno.` global, no `esm.sh` URL imports, no `import.meta.env`. A violation
-// breaks one side or the other at import time — usually the production bundle.
+// no `Deno.` global, no `esm.sh` / `https://deno.land` / `npm:` imports, no
+// `import.meta.env`, no `createClient(` (a Supabase client is runtime-bound). A
+// violation breaks one side or the other at import time — usually the
+// production bundle.
 //
 // Comments are stripped before scanning: two files legitimately *mention*
 // "Deno." / "esm.sh" in prose (campaignStepConfig.ts, coldSendFloorRules.ts)
@@ -20,6 +22,9 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   ["Deno.", /\bDeno\./],
   ["esm.sh", /esm\.sh/],
   ["import.meta.env", /import\.meta\.env/],
+  ["https://deno.land", /https:\/\/deno\.land/],
+  ["npm: import", /from\s+["']npm:/],
+  ["createClient(", /\bcreateClient\(/],
 ];
 
 function walk(dir: string): string[] {
@@ -56,7 +61,7 @@ describe("_shared modules imported from src/ are runtime-pure", () => {
   });
 
   for (const rel of modules) {
-    it(`${rel} has no Deno./esm.sh/import.meta.env in code`, () => {
+    it(`${rel} is runtime-pure (no Deno., deno.land, esm.sh, npm:, import.meta.env, createClient)`, () => {
       const code = stripComments(readFileSync(path.join(ROOT, rel), "utf8"));
       for (const [label, re] of FORBIDDEN) {
         expect(re.test(code), `${rel} contains ${label}`).toBe(false);

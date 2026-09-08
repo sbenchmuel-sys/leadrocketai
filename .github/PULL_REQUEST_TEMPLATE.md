@@ -36,6 +36,14 @@
 
 <!-- Paste the QA agent's verdict verbatim, or "pending". -->
 
+## Feature preservation
+
+<!-- Nothing rep-facing removed/hidden unless it is on the plan's "deliberately removed" list. Anything moved → name its new location here (must stay reachable in ≤2 taps). -->
+
+## At-risk items handled / unsure about
+
+<!-- What could bite, what you did about it, what you were not sure of. "none" is a valid answer only after saying why. -->
+
 ## Human-only staging steps
 
 <!-- Anything a person must click/see/receive (real mailbox, calendar, phone). -->
@@ -44,5 +52,6 @@
 
 - [ ] I did not edit `src/integrations/supabase/types.ts`
 - [ ] Every deploy / db push command in this PR includes `--project-ref`
+- [ ] The staging cron file (`*_codify_cron_jobs_staging.sql`) is applied to staging only, never via Lovable / never to production
 - [ ] No behaviour change outside the files owned by this unit
 - [ ] `STAGING_TEST_PLAN.md` updated if this PR adds a scenario worth re-testing nightly
