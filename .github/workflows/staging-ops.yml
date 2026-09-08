@@ -1,0 +1,153 @@
+name: Staging ops (manual)
+
+# Manually-dispatched runner for STAGING-ONLY operations used by the master-upgrade
+# QA gates. Two jobs, deliberately separated:
+#   tests — checks out the ref under test and runs npm install + the Deno edge suite.
+#           It has NO secrets, so untrusted branch code can never see staging keys.
+#   ops   — fresh runner. Checks out the ref but executes NO repository scripts
+#           (no npm install, no package.json scripts): only the Supabase CLI (deploy),
+#           psql (one migration file) and the orchestrator-authored check script.
+# Never gates anything and never touches production: the project ref is hard-coded
+# to staging and every input and the migration file are refused if they contain the
+# production ref. Lovable's flow is untouched.
+#
+# Required repository secrets (staging values only):
+#   SUPABASE_ACCESS_TOKEN, STAGING_DB_POOLER_URL, STAGING_SERVICE_ROLE_KEY,
+#   STAGING_ANON_KEY, STAGING_INTERNAL_API_SECRET (optional)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / SHA under test to check out (blank = the ref this workflow was dispatched on)"
+        required: false
+        default: ""
+      functions:
+        description: "Edge functions to deploy to STAGING (comma-separated, blank = none)"
+        required: false
+        default: ""
+      migration_file:
+        description: "One migration file under supabase/migrations/ to apply to STAGING with psql (blank = none)"
+        required: false
+        default: ""
+      apply_twice:
+        description: "Apply the migration a second time to prove it is idempotent"
+        type: boolean
+        default: false
+      edge_tests:
+        description: "Run npm run test:edge (Deno) in the secretless tests job"
+        type: boolean
+        default: true
+      check_script:
+        description: "Bash to run after deploy (env: SUPABASE_URL, SERVICE_ROLE_KEY, ANON_KEY, DB_URL, INTERNAL_API_SECRET; psql + curl + jq available)"
+        required: false
+        default: ""
+
+concurrency:
+  group: staging-ops
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  STAGING_REF: jhipmqdpjenojfhfjgzq
+  SUPABASE_URL: https://jhipmqdpjenojfhfjgzq.supabase.co
+
+jobs:
+  guard:
+    name: Refuse anything that names production
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
+        run: |
+          if printf '%s' "$INPUTS_JSON" | grep -q "ntzeiflqqluwgdfmatjh"; then
+            echo "::error::Inputs reference the PRODUCTION project ref. Refusing."; exit 1; fi
+          echo "inputs OK (staging only)"
+
+  tests:
+    name: Deno edge suite (no secrets)
+    needs: guard
+    if: ${{ inputs.edge_tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm run test:edge
+
+  ops:
+    name: Staging-only deploy / migrate / checks
+    needs: [guard, tests]
+    # run even when tests were skipped (edge_tests=false), never when they failed
+    if: ${{ always() && needs.guard.result == 'success' && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout ref under test (no repository scripts are executed in this job)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy edge functions to STAGING
+        if: ${{ inputs.functions != '' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          test -n "$SUPABASE_ACCESS_TOKEN" || { echo "::error::SUPABASE_ACCESS_TOKEN secret missing"; exit 1; }
+          IFS=',' read -ra FNS <<< "${{ inputs.functions }}"
+          for f in "${FNS[@]}"; do
+            f="$(echo "$f" | xargs)"; [ -z "$f" ] && continue
+            test -d "supabase/functions/$f" || { echo "::error::no such function: $f"; exit 1; }
+            echo "== deploying $f to $STAGING_REF"
+            supabase functions deploy "$f" --project-ref "$STAGING_REF"
+          done
+
+      - name: Apply migration to STAGING (psql)
+        if: ${{ inputs.migration_file != '' }}
+        env:
+          DB_URL: ${{ secrets.STAGING_DB_POOLER_URL }}
+          MIG: ${{ inputs.migration_file }}
+        run: |
+          test -n "$DB_URL" || { echo "::error::STAGING_DB_POOLER_URL secret missing"; exit 1; }
+          case "$DB_URL" in *jhipmqdpjenojfhfjgzq*) ;; *) echo "::error::DB URL is not the staging pooler"; exit 1;; esac
+          case "$MIG" in */*|*..*) echo "::error::migration_file must be a bare filename"; exit 1;; esac
+          F="supabase/migrations/$MIG"
+          test -f "$F" || { echo "::error::no such migration: $F"; exit 1; }
+          grep -q "ntzeiflqqluwgdfmatjh" "$F" && { echo "::error::migration contains the production ref"; exit 1; }
+          echo "== applying $F (1st run)"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+          if [ "${{ inputs.apply_twice }}" = "true" ]; then
+            echo "== applying $F (2nd run, must be a no-op)"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+          fi
+          V="${MIG%%_*}"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations (version, name) SELECT '$V', '$MIG' WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$V');" || echo "::warning::could not record migration in schema_migrations"
+
+      - name: QA check script (authored by the dispatcher, not the branch)
+        if: ${{ inputs.check_script != '' }}
+        env:
+          SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+          ANON_KEY: ${{ secrets.STAGING_ANON_KEY }}
+          DB_URL: ${{ secrets.STAGING_DB_POOLER_URL }}
+          INTERNAL_API_SECRET: ${{ secrets.STAGING_INTERNAL_API_SECRET }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          CHECK_SCRIPT: ${{ inputs.check_script }}
+        run: |
+          printf '%s\n' "$CHECK_SCRIPT" > /tmp/check.sh
+          grep -q "ntzeiflqqluwgdfmatjh" /tmp/check.sh && { echo "::error::check script references production"; exit 1; }
+          bash -euo pipefail /tmp/check.sh
