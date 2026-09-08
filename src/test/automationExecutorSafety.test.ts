@@ -134,8 +134,29 @@ describe("legacyPathFloorAndFooter", () => {
 
   it("SMS sends get neither the email floor nor the email footer", () => {
     const legacy = legacySection();
-    expect(legacy).toMatch(/if \(resolvedChannel !== "sms"\) \{\s*\n\s*if \(!unsubSecret\)/);
+    expect(legacy).toMatch(/if \(resolvedChannel !== "sms"\) \{[^}]*const unsubToken = await signUnsubscribeToken/);
     expect(legacy).toMatch(/if \(resolvedChannel !== "sms"\) \{\s*\n\s*const legacyFloor = await coldSendFloor/);
+  });
+
+  it("the unsubscribe-secret and postal-address refusals run BEFORE the draft lookup and the AI call", () => {
+    const legacy = legacySection();
+    const secretCheck = legacy.indexOf("if (!unsubSecret) {");
+    const postalCheck = legacy.indexOf("if (!postalAddress && requirePostalAddress()) {");
+    const draftLookup = legacy.indexOf('from("drafts")');
+    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
+    const aiCall = legacy.indexOf("functions/v1/ai_task");
+    expect(secretCheck).toBeGreaterThan(-1);
+    expect(postalCheck).toBeGreaterThan(-1);
+    expect(secretCheck).toBeLessThan(draftLookup);
+    expect(postalCheck).toBeLessThan(draftLookup);
+    expect(postalCheck).toBeLessThan(approvedConsumed);
+    expect(postalCheck).toBeLessThan(aiCall);
+    // Each refusal writes the skip row and continues (no send, no claim).
+    for (const at of [secretCheck, postalCheck]) {
+      const branch = legacy.slice(at, at + 500);
+      expect(branch).toContain('from("automation_log").insert(logEntry)');
+      expect(branch).toContain("continue;");
+    }
   });
 });
 
