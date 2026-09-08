@@ -2,7 +2,7 @@
 // Shared AI gateway (Unit E-S1a)
 //
 // The ONE place that knows the Lovable AI gateway URL, builds the auth header,
-// applies a timeout, retries once on transient gateway errors and emits a single
+// applies a timeout, retries once on 429/5xx and emits a single
 // usage/latency log line per call. Every edge-function AI call goes through
 // `aiGatewayFetch` — `src/test/aiGatewaySingleSource.test.ts` fails the build if
 // the literal "lovable.dev" appears anywhere else under supabase/functions/.
@@ -38,6 +38,7 @@ export class AiGatewayError extends Error {
 export interface AiGatewayOptions {
   /** Short tag for the log line, e.g. "ai_task:primary" or "call-analyze". */
   label?: string;
+  /** Time-to-first-byte budget for this call; defaults to AI_GATEWAY_TIMEOUT_MS (90s). */
   timeoutMs?: number;
   /** Test seams. */
   fetchImpl?: typeof fetch;
@@ -49,9 +50,9 @@ export function buildAuthHeaders(apiKey: string): Record<string, string> {
   return { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
 }
 
-/** 429 / 402 / 5xx are the gateway's transient-or-quota errors: retry exactly once. */
+/** 429 / 5xx are transient: retry exactly once. 402 (credits) is not — it only adds latency. */
 export function isRetryableGatewayStatus(status: number): boolean {
-  return status === 429 || status === 402 || status >= 500;
+  return status === 429 || status >= 500;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -62,8 +63,10 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * - throws AiGatewayError("missing_key") when apiKey is empty
  * - throws AiGatewayError("timeout") when no headers arrive within timeoutMs
  * - throws AiGatewayError("network") when fetch itself rejects
- * - on 429 / 402 / 5xx waits 2s and retries once; the second response is
- *   returned as-is (callers keep their existing `!res.ok` handling)
+ * - on 429 / 5xx waits 2s and retries once; the second response is returned
+ *   as-is (callers keep their existing `!res.ok` handling). 402 is never retried.
+ * - timeoutMs (default AI_GATEWAY_TIMEOUT_MS) is per call; pass a larger value
+ *   for long non-streaming jobs (e.g. parse-document's vision fallback)
  * - logs one line: {"tag":"ai_gateway",label,model,status,ms,attempts,usage}
  */
 export async function aiGatewayFetch(

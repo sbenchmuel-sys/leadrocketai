@@ -1,4 +1,3 @@
-import { aiGatewayFetch } from "../aiGateway.ts";
 // ============================================================================
 // COLD-TEMPLATE BEFORE/AFTER EVAL (Unit C)
 //

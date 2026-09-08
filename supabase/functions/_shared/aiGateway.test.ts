@@ -50,16 +50,18 @@ Deno.test("retries once on 429 then returns the successful response", async () =
   assertEquals(line.usage.total_tokens, 7);
 });
 
-Deno.test("does not retry on 400 and returns the response untouched", async () => {
-  const seen: Seen[] = [];
-  const res = await aiGatewayFetch("k", { model: "m" }, {
-    fetchImpl: fakeFetch([() => new Response("bad", { status: 400 })], seen),
-    sleep: noSleep,
-    log: () => {},
-  });
-  assertEquals(res.status, 400);
-  assertEquals(seen.length, 1);
-  assertEquals(await res.text(), "bad");
+Deno.test("does not retry on 400 or 402 and returns the response untouched", async () => {
+  for (const status of [400, 402]) {
+    const seen: Seen[] = [];
+    const res = await aiGatewayFetch("k", { model: "m" }, {
+      fetchImpl: fakeFetch([() => new Response("bad", { status })], seen),
+      sleep: noSleep,
+      log: () => {},
+    });
+    assertEquals(res.status, status);
+    assertEquals(seen.length, 1);
+    assertEquals(await res.text(), "bad");
+  }
 });
 
 Deno.test("retries exactly once on 5xx — second failure is returned, not retried again", async () => {
@@ -80,6 +82,21 @@ Deno.test("timeout surfaces a typed AiGatewayError(kind=timeout)", async () => {
     })) as unknown as typeof fetch;
   const err = await assertRejects(
     () => aiGatewayFetch("k", { model: "m" }, { fetchImpl: hanging, timeoutMs: 10, log: () => {} }),
+    AiGatewayError,
+  );
+  assertEquals(err.kind, "timeout");
+});
+
+Deno.test("per-call timeoutMs override is honoured", async () => {
+  const slow = ((_url: string, init: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const t = setTimeout(() => resolve(okJson()), 40);
+      init.signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); });
+    })) as unknown as typeof fetch;
+  const ok = await aiGatewayFetch("k", { model: "m" }, { fetchImpl: slow, timeoutMs: 2_000, log: () => {} });
+  assertEquals(ok.status, 200);
+  const err = await assertRejects(
+    () => aiGatewayFetch("k", { model: "m" }, { fetchImpl: slow, timeoutMs: 5, log: () => {} }),
     AiGatewayError,
   );
   assertEquals(err.kind, "timeout");

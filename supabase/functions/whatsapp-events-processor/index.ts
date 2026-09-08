@@ -614,6 +614,27 @@ Context:
       return;
     }
 
+    // ponytail: hard off-switch in front of the only auto-SEND in this function.
+    // Routing the classifier through the canonical AI gateway (E-S1a) un-broke a
+    // path that had been silently failing, and everything above (auto-created
+    // leads with wa_opted_in=true, 24h acceleration, email full_auto enrolment)
+    // can now reach a real customer's phone. Default OFF until a human flips the
+    // env var per environment; classification, lead and draft creation still run.
+    if (Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") !== "true") {
+      console.log("[processor] auto-reply disabled by default (WHATSAPP_AUTO_REPLY_ENABLED unset)");
+      if (suggestedReply) {
+        await supabase.from("drafts").insert({
+          lead_id: matchedLead.id,
+          channel: "whatsapp",
+          draft_type: "ai_suggested",
+          body_text: suggestedReply,
+          to_recipient: normalizedPhone,
+          created_by: ownerUserId,
+        });
+      }
+      return;
+    }
+
     const svc = await WhatsAppService.forIntegration(supabase, integrationId);
     const sendResult = await svc.sendMessage({ to: normalizedPhone, body: suggestedReply });
     const replyMsgId = sendResult.providerMessageId;
