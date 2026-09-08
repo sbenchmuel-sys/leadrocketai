@@ -28,6 +28,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { INTENT_HIDE_FROM_QUEUE as BASE_HIDE_SET } from "@/lib/dashboardUtils";
+import { PROMPT_ONLY_KEYS } from "@shared/followupRule";
 
 // ── Queue-side hide list (extends dashboard hide list) ─────────────
 
@@ -90,11 +91,16 @@ const QUEUE_URGENCY_PRIORITY: Record<string, number> = {
   send_pre_2: 5,
   send_pre_3: 6,
   send_pre_4: 7,
+  followup_due: 8, // Unit Q1: my message, unanswered N days — real rep work.
   reengage: 8,
   switch_to_nurture: 9,
+  // A send guardrail is holding this lead. It is visible on purpose (it used
+  // to vanish silently) but it is the least urgent thing in the tab — the rep
+  // can't act on it until the date in its label.
+  rate_limited: 50,
 };
 
-function urgencyOf(key: string | null | undefined): number {
+export function urgencyOf(key: string | null | undefined): number {
   if (!key) return 100; // unknown / null sort to the bottom
   if (QUEUE_URGENCY_PRIORITY[key] != null) return QUEUE_URGENCY_PRIORITY[key];
   // Nurture sequence buckets — every send_nurture_N collapses to 9.
@@ -155,7 +161,9 @@ export function chipForLead(input: {
   // Replied — customer is the one waiting.
   if (next_action_key === "reply_now") return "replied";
 
-  // Follow up — default for anything else with an action key.
+  // Follow up — default for anything else with an action key, including the
+  // two Unit Q1 keys (`followup_due`, `rate_limited`). Both are the rep's own
+  // move, so neither ever belongs under "Replied".
   if (next_action_key) return "followup_due";
 
   return null;
@@ -223,6 +231,26 @@ const QUEUE_LEAD_COLUMNS = `
 // ── List fetch ─────────────────────────────────────────────────────
 
 /**
+ * Does an outreach-enrolled lead belong in the reactive tabs (Replied / Follow
+ * up) rather than the Outreach tab? Extracted so it is testable — the rules are
+ * spelled out at the call site in `fetchQueueLeads`.
+ */
+export function belongsInReactiveTabs(lead: {
+  campaign_id?: string | null;
+  next_action_key?: string | null;
+  last_inbound_at?: string | null;
+  last_outbound_at?: string | null;
+}): boolean {
+  if (!lead.campaign_id) return true;
+  if (lead.next_action_key === "reply_now") return true;
+  // Unit Q1: a human-prompt key is never cold campaign work.
+  if (PROMPT_ONLY_KEYS.has(lead.next_action_key ?? "")) return true;
+  if (!lead.last_inbound_at) return false;
+  if (!lead.last_outbound_at) return true;
+  return new Date(lead.last_inbound_at).getTime() > new Date(lead.last_outbound_at).getTime();
+}
+
+/**
  * Fetch all queue-candidate leads in the user's workspace, post the
  * intent-hide reduction. Sort applied client-side via
  * `QUEUE_URGENCY_PRIORITY` then `last_inbound_at DESC`. Caller paginates.
@@ -282,13 +310,18 @@ export async function fetchQueueLeads(opts?: {
   // `reply_now` (rate-limit guardrails, an armed cadence touch), the reply is
   // still visible here instead of vanishing. Purely cold leads — no inbound at
   // all — stay in the Outreach tab so reactive lists aren't flooded.
-  const filteredForOutreach = (leadRows ?? []).filter((l: any) => {
-    if (!l.campaign_id) return true;
-    if (l.next_action_key === "reply_now") return true;
-    if (!l.last_inbound_at) return false;
-    if (!l.last_outbound_at) return true;
-    return new Date(l.last_inbound_at).getTime() > new Date(l.last_outbound_at).getTime();
-  });
+  //
+  // Rule 3 (Unit Q1, Codex P1): a HUMAN-PROMPT key is never cold campaign work,
+  // so it belongs in the reactive tabs whatever the lead's origin. The flow that
+  // needs this: a campaign prospect replies → the enrolment is stopped → the rep
+  // answers → days pass with no response → `followup_due`. That lead has its
+  // outbound NEWER than its inbound, so rule 2 rejects it, and
+  // `endColdEnrollment` does not clear `leads.campaign_id`, so it showed up in
+  // neither the Follow up list nor the stopped campaign's Outreach touches. The
+  // six-week hole, still open for every lead that started life in a campaign.
+  // `rate_limited` gets the same treatment for the same reason — it is the rep's
+  // own follow-up, merely held, and the Outreach tab has nothing to show for it.
+  const filteredForOutreach = (leadRows ?? []).filter((l: any) => belongsInReactiveTabs(l));
 
 
   const leads = filteredForOutreach as unknown as QueueLeadRow[];

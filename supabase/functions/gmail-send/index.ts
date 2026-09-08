@@ -5,6 +5,7 @@ import { isInternalCaller, assertLeadAccess } from "../_shared/authz.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 // Dynamic CORS based on allowed origins
 function getCorsHeaders(req: Request): Record<string, string> {
@@ -446,12 +447,30 @@ serve(async (req) => {
                 // Don't fail the send if AI analysis fails, just update basic fields
                 await serviceSupabase
                   .from("leads")
-                  .update({ 
+                  .update({
                     last_activity_at: new Date().toISOString(),
                     last_outbound_at: new Date().toISOString(),
                   })
                   .eq("id", leadId);
               }
+
+              // Unit Q1: recompute the follow-up rule after a MANUAL send, so
+              // the lead's post-send state is the rule's answer rather than
+              // `analyze_outgoing_email`'s unconditional needs_action=false.
+              // This makes the state CORRECT NOW; it is not a substitute for a
+              // periodic re-derive later (gmail-bulk-sync's cron provides that
+              // for Gmail). Same shared helper the SMS / WhatsApp / voice send
+              // paths use; fire-and-forget, never fails the send. Runs AFTER
+              // the AI state write so it is the last word on next_action_key.
+              // Automation sends (skipStateUpdate) stay untouched —
+              // automation-executor owns their state.
+              postSendDeriveAction(serviceSupabase, {
+                leadId,
+                logPrefix: "[gmail-send]",
+                // The AI analysis above owns `stage`; deriveStage must not
+                // recompute a lower one over the top seconds later.
+                preserveStage: true,
+              });
             }
           } else {
             // Update lead's last_activity_at if we couldn't get lead data

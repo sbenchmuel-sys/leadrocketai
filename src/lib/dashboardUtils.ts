@@ -392,6 +392,11 @@ export function getActionType(actionKey: string | null): "reply" | "follow_up" |
   if (actionKey.startsWith("send_pre_")) return "follow_up";
   if (actionKey === "generate_post_meeting_recap") return "recap";
   if (actionKey === "post_meeting_followup") return "follow_up";
+  // Unit Q1: "my message, unanswered N days". A real follow-up to write.
+  if (actionKey === "followup_due") return "follow_up";
+  // Unit Q1: a send guardrail is holding this lead until the date in its
+  // label — there is nothing to write yet, so it stays a "view".
+  if (actionKey === "rate_limited") return "view";
   if (actionKey.startsWith("send_nurture_")) return "nurture";
   if (actionKey === "send_proposal" || actionKey === "closing_followup") return "closing";
   return "view";

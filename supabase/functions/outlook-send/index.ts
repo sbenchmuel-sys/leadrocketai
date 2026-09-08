@@ -16,6 +16,7 @@ import { logger } from "../_shared/logger.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 // Detect whether `body` already contains HTML markup. If not, treat it as
 // plain text and convert via plainTextToHtml so Outlook (Graph contentType:HTML)
@@ -601,6 +602,33 @@ serve(async (req) => {
                   })
                   .eq("id", leadId);
               }
+
+              // Unit Q1: recompute the follow-up rule after a MANUAL send, so
+              // the lead's post-send state is the rule's answer rather than
+              // `analyze_outgoing_email`'s unconditional needs_action=false.
+              //
+              // HONEST SCOPE: this does NOT close the Outlook half of the Queue
+              // audit's P1. It runs seconds after the send, when the 3/5-day
+              // wait has not expired and "nothing due" is the correct answer.
+              // Gmail gets a second look later from gmail-bulk-sync's cron,
+              // which walks every lead of a connection; Outlook has no such job
+              // (outlook-sync runs from the UI and only touches leads with new
+              // messages), so a quiet Outlook lead is still never re-derived and
+              // an unanswered message still never returns to the Queue. That
+              // periodic re-derive is a separate unit — a first attempt at it
+              // was reverted for re-arming old send keys on dormant leads.
+              //
+              // Same shared helper the SMS / WhatsApp / voice send paths use;
+              // fire-and-forget, never fails the send. Runs AFTER the AI state
+              // write so it is the last word on next_action_key. Automation
+              // sends (skipStateUpdate) stay untouched.
+              postSendDeriveAction(serviceClient, {
+                leadId,
+                logPrefix: "[outlook-send]",
+                // The AI analysis above owns `stage`; deriveStage must not
+                // recompute a lower one over the top seconds later.
+                preserveStage: true,
+              });
             }
           }
         }

@@ -15,10 +15,14 @@
 //   • Owns its own try/catch — a failure here MUST NOT fail the send.
 //   • Background-task pattern (EdgeRuntime.waitUntil where available,
 //     fire-and-forget otherwise) so the caller doesn't await.
-//   • gmail-send is INTENTIONALLY not migrated to this helper in this
-//     PR (see PR B brief). Its existing pattern stays untouched; this
-//     helper exists so the three new wirings don't drift. Consolidating
-//     gmail-send is a future cleanup.
+//   • Unit Q1 wired gmail-send AND outlook-send into this same helper
+//     (manual sends only — automation-executor still owns the state of
+//     its own sends). The AI `analyze_outgoing_email` write runs first;
+//     this helper is the last word on next_action_key / needs_action,
+//     so the post-send state is the follow-up rule's answer. It is a
+//     recompute AT SEND TIME only — nothing here revisits the lead when
+//     the wait later expires. Gmail relies on gmail-bulk-sync's cron for
+//     that; Outlook has no equivalent (its own unit).
 //
 // What this does NOT do (deliberate scope):
 //   • Does not WRITE meeting_packs bookkeeping — gmail-sync /
@@ -49,6 +53,16 @@ interface PostSendDeriveActionParams {
   leadId: string;
   /** Optional log prefix for traceability, e.g. "[sms-send]". */
   logPrefix?: string;
+  /**
+   * Leave `leads.stage` alone (Codex P2). The email send paths call
+   * `analyze_outgoing_email` immediately before this, and that can advance a
+   * lead to e.g. `closing`. `deriveStage` preserves only the closed stages and
+   * would otherwise recompute `engaged` / `contacted` over the top, so a rep
+   * would watch the stage they just earned flip back seconds later. The stage
+   * still feeds `deriveAction` (read fresh from the row, so it IS the analysed
+   * value) — we simply don't persist a second opinion about it.
+   */
+  preserveStage?: boolean;
 }
 
 /**
@@ -69,10 +83,10 @@ export function postSendDeriveAction(
   const prefix = params.logPrefix ?? "[postSendDeriveAction]";
   const task = async (): Promise<void> => {
     try {
-      await runRecompute(supabase, params.leadId, prefix);
+      await recomputeLeadAction(supabase, params.leadId, prefix, params.preserveStage === true);
     } catch (err) {
       // This catch is the last line of defence. Anything that escapes
-      // runRecompute lands here. Never throws.
+      // recomputeLeadAction lands here. Never throws.
       console.error(`${prefix} postSendDeriveAction failed:`, err instanceof Error ? err.message : err);
     }
   };
@@ -87,10 +101,24 @@ export function postSendDeriveAction(
   }
 }
 
-async function runRecompute(
+/**
+ * The awaitable core, split out of the fire-and-forget wrapper above.
+ *
+ * Exported because `preserveStage` is safety-relevant behaviour that has to be
+ * testable: `src/test/followupRule.test.ts` drives this directly with a
+ * recording stub client to prove the write omits `stage` (and that the
+ * unguarded call really would downgrade `closing` to `engaged`). The wrapper
+ * can't serve that test — it is deliberately not awaitable. Any future
+ * scheduled re-derive should reuse this rather than copy the sequence, but note
+ * it persists whatever `deriveAction` returns, INCLUDING keys in
+ * OUTBOUND_SEND_KEYS with a past `eligible_at`; a caller that re-derives
+ * dormant leads must constrain that itself.
+ */
+export async function recomputeLeadAction(
   supabase: SupabaseClient,
   leadId: string,
   prefix: string,
+  preserveStage = false,
 ): Promise<void> {
   // 1. Lead snapshot — strategy / motion / dismissal / meeting flag.
   const { data: lead, error: leadErr } = await supabase
@@ -256,10 +284,14 @@ async function runRecompute(
     (currentLeadState as { automation_mode?: string | null })?.automation_mode ?? null,
   );
 
-  // 9. Persist.
+  // 9. Persist. `preserveStage` drops the stage column from the write — see the
+  // param docs: the AI analysis that ran just before a send owns the stage.
+  const payload: Record<string, unknown> = { ...leadUpdate };
+  if (preserveStage) delete payload.stage;
+
   const { error: updErr } = await supabase
     .from("leads")
-    .update(leadUpdate)
+    .update(payload)
     .eq("id", leadId);
 
   if (updErr) {
