@@ -16,6 +16,7 @@ import { logger } from "../_shared/logger.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shared/dealMemory.ts";
 import { plainTextToHtml } from "../_shared/emailUtils.ts";
+import { postSendDeriveAction } from "../_shared/postSendDeriveAction.ts";
 
 // Detect whether `body` already contains HTML markup. If not, treat it as
 // plain text and convert via plainTextToHtml so Outlook (Graph contentType:HTML)
@@ -601,6 +602,16 @@ serve(async (req) => {
                   })
                   .eq("id", leadId);
               }
+
+              // Unit Q1: recompute the follow-up rule after a MANUAL send.
+              // THIS is the Outlook hole from the Queue audit: Outlook has no
+              // sync cron, so `analyze_outgoing_email` setting needs_action=false
+              // was the last word and a rep's sent mail never came back as a
+              // follow-up. Same shared helper the SMS / WhatsApp / voice send
+              // paths use; fire-and-forget, never fails the send. Runs AFTER the
+              // AI state write so it is the last word on next_action_key.
+              // Automation sends (skipStateUpdate) stay untouched.
+              postSendDeriveAction(serviceClient, { leadId, logPrefix: "[outlook-send]" });
             }
           }
         }
