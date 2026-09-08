@@ -10,7 +10,11 @@
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-import { DETERMINISTIC_INTENTS, detectInboundIntent } from "./inboundIntentDetectors.ts";
+import {
+  DETERMINISTIC_INTENTS,
+  detectInboundIntent,
+  senderIsLead,
+} from "./inboundIntentDetectors.ts";
 import { detectMeetingConfirmation, isTentativeAccept } from "./meetingConfirmation.ts";
 import { isOutOfOfficeReply } from "./oooDetection.ts";
 import { applyOOOPause } from "./oooPauseActions.ts";
@@ -80,6 +84,45 @@ Deno.test("a substantive human reply falls through to the AI", () => {
   );
 });
 
+Deno.test("an OOO carrying a commercial question is NOT labelled ooo_reply", () => {
+  // ooo_reply is in the Queue's hide set, so labelling this would undo the
+  // needs_action that applyOOOPause deliberately keeps (see below) and the
+  // lead would vanish within one classification cycle.
+  const r = detectInboundIntent({
+    fromEmail: "dana@acme.com",
+    subject: "Automatic reply: Re: pilot",
+    body: "I'm out of the office until March 5. Before then, can you send the updated pricing?",
+  });
+  assertEquals(r.intent, null);
+  assertEquals(r.ooo?.isOOO, true);
+  assertEquals(r.ooo?.hasSubstantiveQuestion, true);
+});
+
+// ── sender identity ───────────────────────────────────────────────
+
+Deno.test("senderIsLead: true on exact match, alias and display name", () => {
+  assertEquals(senderIsLead("dana@acme.com", "dana@acme.com"), true);
+  assertEquals(senderIsLead('"Dana Ruiz" <Dana@Acme.com>', "dana@acme.com"), true);
+  assertEquals(senderIsLead("dana+drivepilot@acme.com", "dana@acme.com"), true);
+});
+
+Deno.test("senderIsLead: null (not false) when only the local part differs", () => {
+  // `false` hides a Queue card, so a shared inbox or a second address at
+  // the lead's own company must stay unknown rather than be suppressed.
+  assertEquals(senderIsLead("procurement@acme.com", "dana@acme.com"), null);
+  assertEquals(senderIsLead("d.ruiz@acme.com", "dana@acme.com"), null);
+});
+
+Deno.test("senderIsLead: false only when the domain differs too", () => {
+  assertEquals(senderIsLead("vendor@other.com", "dana@acme.com"), false);
+});
+
+Deno.test("senderIsLead: null when either side is missing or unparseable", () => {
+  assertEquals(senderIsLead("", "dana@acme.com"), null);
+  assertEquals(senderIsLead("dana@acme.com", null), null);
+  assertEquals(senderIsLead("not-an-email", "dana@acme.com"), null);
+});
+
 Deno.test("defer_request is not emitted (it must keep getting an ai_summary)", () => {
   assertEquals(DETERMINISTIC_INTENTS.includes("defer_request" as never), false);
 });
@@ -89,8 +132,14 @@ Deno.test("defer_request is not emitted (it must keep getting an ai_summary)", (
 interface Captured { table: string; payload: Record<string, unknown> }
 
 function fakeSupabase(captured: Captured[]) {
-  // Minimal chainable stub: only .from().update().eq() and
-  // .from().select().eq().single() are exercised by applyOOOPause.
+  // Minimal chainable stub covering exactly what applyOOOPause reaches:
+  //   .from().update().eq()
+  //   .from().select().eq().single()          (personal_notes read)
+  //   .from().insert().select().single()      (createCanonicalInteraction,
+  //                                            canonicalInteraction.ts:214-218)
+  // `insert` MUST return the chainable shape, not a bare promise — the real
+  // code calls .select("id").single() on it, so a promise double makes the
+  // helper throw and the assertions below never run.
   return {
     from(table: string) {
       return {
@@ -98,12 +147,27 @@ function fakeSupabase(captured: Captured[]) {
           captured.push({ table, payload });
           return { eq: () => Promise.resolve({ error: null }) };
         },
+        // Chainable and self-returning so the timeline projection's
+        // .eq().eq().maybeSingle() lookup resolves quietly too. (That call
+        // is inside canonicalInteraction's try/catch, so it cannot affect
+        // the assertions either way — this just keeps the run warning-free.)
         select() {
-          return {
-            eq: () => ({ single: () => Promise.resolve({ data: { personal_notes: "" } }) }),
+          const node: Record<string, unknown> = {
+            single: () => Promise.resolve({ data: { personal_notes: "" }, error: null }),
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
           };
+          node.eq = () => node;
+          node.limit = () => node;
+          node.order = () => node;
+          return node;
         },
-        insert: () => Promise.resolve({ data: null, error: null }),
+        insert: () => ({
+          select: () => ({
+            single: () => Promise.resolve({ data: { id: "i1" }, error: null }),
+          }),
+        }),
+        // timelineProjector.ts:98 — awaited directly, no chaining.
+        upsert: () => Promise.resolve({ error: null }),
       };
     },
   };

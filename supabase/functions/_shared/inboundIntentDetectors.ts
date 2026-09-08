@@ -25,7 +25,8 @@
 // `intent IS NOT NULL AND ai_summary IS NOT NULL`), so it must keep
 // flowing to the AI path rather than short-circuiting to a
 // summary-less terminal intent. See CLAUDE.md → "Public product
-// commitments".
+// commitments". An OOO whose body carries a live commercial question
+// is held back for the same two reasons — see the ooo_reply branch.
 //
 // Purity: no Deno.*, no createClient, no import.meta.env — this module
 // is imported from Deno edge functions AND from vitest via the
@@ -40,11 +41,12 @@ import {
 import { isHumanUnsubscribeRequest } from "./unsubscribeDetection.ts";
 import { detectBounce } from "./bounceDetection.ts";
 import { detectZoomRecap } from "./zoomRecapDetection.ts";
+import { emailDomain, normalizeEmail } from "./leadCandidateDetection.ts";
 
 /**
  * The intents this chain can emit. MUST stay a superset of the Queue's
  * hide set (`QUEUE_INTENT_HIDE_SET` in src/lib/queueQueries.ts) —
- * that invariant is pinned by src/lib/inboundIntentDetectors.test.ts
+ * that invariant is pinned by src/test/queueInboundClassification.test.ts
  * (`hideVocabularyMatches`).
  */
 export type DeterministicIntent =
@@ -106,8 +108,22 @@ export function detectInboundIntent(
 
   // 2. ooo_reply — headers are the strongest signal when the caller has
   // them; subject + body patterns still run when it doesn't.
+  //
+  // EXCEPT when the auto-reply body also carries a live commercial
+  // question ("I'm out until Monday — can you send the updated pricing
+  // before then?"). Labelling that `ooo_reply` would hide it from the
+  // Queue (ooo_reply is in QUEUE_INTENT_HIDE_SET) and so cancel out the
+  // `needs_action` that applyOOOPause deliberately keeps — the rep would
+  // lose the question inside one classification cycle. Same treatment as
+  // `defer_request` above: emit NO deterministic match so the row flows
+  // to the AI, gets a substantive intent, and gets its durable
+  // `ai_summary`. The send-side pause is unaffected — that is
+  // applyOOOPause's job and it runs on the sync path, not here.
   const ooo = isOutOfOfficeReply(input.headers ?? [], subject, body);
-  if (ooo.isOOO) return { intent: "ooo_reply", ooo, meeting: null };
+  if (ooo.isOOO) {
+    if (ooo.hasSubstantiveQuestion) return { intent: null, ooo, meeting: null };
+    return { intent: "ooo_reply", ooo, meeting: null };
+  }
 
   // 3. unsubscribe — explicit human opt-out phrases only.
   if (body && isHumanUnsubscribeRequest(body.toLowerCase())) {
@@ -132,4 +148,66 @@ export function detectInboundIntent(
   }
 
   return NO_MATCH;
+}
+
+// ── Sender identity ────────────────────────────────────────────────
+
+/**
+ * Strip an RFC-2822 display-name wrapper, then apply the project's
+ * standard address normalization (lowercase + drop `+tag` aliasing).
+ *
+ *   `"Dana Ruiz" <Dana+dp@Acme.com>` → `dana@acme.com`
+ *
+ * Reuses `normalizeEmail` from leadCandidateDetection.ts rather than
+ * adding a third normalizer; that one already handles plus-aliasing,
+ * which matters here (dana+drivepilot@ is still Dana).
+ */
+export function bareEmail(raw: string | null | undefined): string {
+  const s = (raw ?? "").trim();
+  if (!s) return "";
+  const angle = s.match(/<([^>]+)>/);
+  return normalizeEmail(angle ? angle[1] : s);
+}
+
+/**
+ * Did the person we think we're selling to actually send this, or was it
+ * a third party on the thread?
+ *
+ *   true  — same address (after normalization).
+ *   null  — can't tell. INCLUDES the same-domain case; see below.
+ *   false — different address AND a different organisation.
+ *
+ * Only `false` hides a Queue card, so `false` has to be the confident
+ * answer rather than the default. Customers legitimately reply from an
+ * alias, a shared inbox (procurement@, billing@) or a second address at
+ * the same company — all differ from `leads.email` in the local part
+ * while staying on the lead's domain. Calling those `false` would hide a
+ * genuine reply, the single worst failure this unit could introduce. So
+ * a domain match downgrades the verdict to `null` (unknown → visible),
+ * and only a wholly different organisation yields `false`.
+ *
+ * ponytail: compares against `leads.email` only — `contacts` carries no
+ * email column in this schema, so "a known contact on that lead" is not
+ * checkable from the data the row has. Ceiling: a colleague at the
+ * lead's own company reads as `null`, i.e. still shown, which is the
+ * conservative direction. Upgrade path: replace the same-domain
+ * downgrade with a real membership test once contact identities carry
+ * addresses.
+ */
+export function senderIsLead(
+  fromEmail: string | null | undefined,
+  leadEmail: string | null | undefined,
+): boolean | null {
+  const from = bareEmail(fromEmail);
+  const lead = bareEmail(leadEmail);
+  if (!from || !lead) return null;
+  if (from === lead) return true;
+
+  const fromDomain = emailDomain(from);
+  const leadDomain = emailDomain(lead);
+  // Unparseable on either side, or the same company — not confident
+  // enough to hide anything.
+  if (!fromDomain || !leadDomain || fromDomain === leadDomain) return null;
+
+  return false;
 }

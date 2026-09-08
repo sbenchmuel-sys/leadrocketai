@@ -61,7 +61,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
-import { detectInboundIntent } from "../_shared/inboundIntentDetectors.ts";
+import {
+  detectInboundIntent,
+  senderIsLead,
+} from "../_shared/inboundIntentDetectors.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -269,35 +272,10 @@ function extractSignals(parsed: Record<string, unknown>): AiSignals {
 }
 
 /**
- * Cheap sender-identity check: did the person we think we're selling to
- * actually send this, or was it their colleague / assistant / a vendor
- * on the thread? Returns `null` when we can't tell.
- *
- * ponytail: compares `from_email` against `leads.email` only. `contacts`
- * has no email column in this schema (identities live outside the row we
- * fetch), so "a known contact on that lead" is not checkable without a
- * second join we don't have. Ceiling: a lead who writes from an alias
- * (j.smith@ vs john.smith@) reads as `false`. Upgrade path: match on the
- * lead's contact identities once they carry addresses. Failing to know
- * is expressed as `null` (never `false`), and the Queue treats `null` as
- * "not hidden", so the check can only ever be additive.
+ * `from_email` off the timeline row's metadata, if present. Left raw —
+ * `senderIsLead` / `bareEmail` normalize, and the detector chain wants
+ * the original for bounce-sender matching.
  */
-function senderIsLead(fromEmail: string, leadEmail: string | null | undefined): boolean | null {
-  const from = normalizeEmail(fromEmail);
-  const lead = normalizeEmail(leadEmail ?? "");
-  if (!from || !lead) return null;
-  return from === lead;
-}
-
-/** Lowercase + strip any RFC-2822 `Name <addr>` wrapper. */
-function normalizeEmail(raw: string): string {
-  const s = (raw ?? "").trim();
-  if (!s) return "";
-  const angle = s.match(/<([^>]+)>/);
-  return (angle ? angle[1] : s).trim().toLowerCase();
-}
-
-/** `from_email` off the timeline row's metadata, if present. */
 function fromEmailOf(row: TimelineRow): string {
   return typeof row.metadata_json?.from_email === "string"
     ? (row.metadata_json.from_email as string).trim()

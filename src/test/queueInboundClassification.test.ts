@@ -13,12 +13,13 @@
 // rather than in a rep's Queue.
 // ============================================================
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
   DETERMINISTIC_INTENTS,
   detectInboundIntent,
+  senderIsLead,
 } from "@shared/inboundIntentDetectors";
 import { detectMeetingConfirmation } from "@shared/meetingConfirmation";
 import { isOutOfOfficeReply } from "@shared/oooDetection";
@@ -44,9 +45,12 @@ describe("detectorsRunBeforeAI", () => {
   const src = read(CLASSIFY_INBOUND);
 
   it("imports the shared deterministic detector chain", () => {
-    expect(src).toContain(
-      'import { detectInboundIntent } from "../_shared/inboundIntentDetectors.ts"',
-    );
+    expect(src).toContain('from "../_shared/inboundIntentDetectors.ts"');
+    expect(src).toMatch(/import\s*\{[^}]*\bdetectInboundIntent\b[^}]*\}\s*from\s*"\.\.\/_shared\/inboundIntentDetectors\.ts"/);
+    // Sender identity lives in the same pure module (testable from vitest),
+    // not as a private copy inside the edge function.
+    expect(src).toMatch(/import\s*\{[^}]*\bsenderIsLead\b[^}]*\}\s*from\s*"\.\.\/_shared\/inboundIntentDetectors\.ts"/);
+    expect(src).not.toContain("function senderIsLead(");
   });
 
   it("calls detectInboundIntent strictly before the ai_task fetch", () => {
@@ -216,6 +220,47 @@ describe("oooKeepsNeedsActionOnQuestion", () => {
     expect(r.hasSubstantiveQuestion).toBe(false);
   });
 
+  it("an OOO carrying a question is NOT labelled ooo_reply (would re-hide it)", () => {
+    // The whole point of keeping needs_action is lost if the classifier
+    // then stamps `ooo_reply`, because that intent is in the Queue's hide
+    // set — the lead would vanish within one classification cycle.
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: "I'm out of the office until March 5. Before then, can you send the updated pricing?",
+    });
+    expect(r.intent).toBeNull();
+    expect(r.ooo?.isOOO).toBe(true);
+    expect(r.ooo?.hasSubstantiveQuestion).toBe(true);
+  });
+
+  it("…and is therefore not hidden from the Queue", () => {
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: "I'm out of the office until March 5. Before then, can you send the updated pricing?",
+    });
+    expect(
+      shouldHideFromQueue({
+        intent: r.intent,
+        reply_worthy: null,
+        sender_is_lead: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("a plain OOO IS still labelled ooo_reply and hidden", () => {
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: "I'm out of the office until March 5 with limited access to email.",
+    });
+    expect(r.intent).toBe("ooo_reply");
+    expect(
+      shouldHideFromQueue({ intent: r.intent, reply_worthy: null, sender_is_lead: null }),
+    ).toBe(true);
+  });
+
   it("applyOOOPause keeps the lead actionable when the flag is set", () => {
     const src = read(OOO_PAUSE);
     expect(src).toContain("const keepActionable = oooResult.hasSubstantiveQuestion === true;");
@@ -344,12 +389,42 @@ describe("aiSignalsPersisted", () => {
       .toBe(false);
   });
 
-  it("hides the card when a colleague, not the lead, wrote it", () => {
+  it("hides the card when a third party, not the lead, wrote it", () => {
     expect(shouldHideFromQueue({ intent: null, reply_worthy: true, sender_is_lead: false }))
       .toBe(true);
     // Unknown sender identity must fail OPEN.
     expect(shouldHideFromQueue({ intent: null, reply_worthy: true, sender_is_lead: null }))
       .toBe(false);
+  });
+
+  // `false` is the ONLY verdict here that can hide a real customer reply,
+  // so it must require cross-organisation evidence. Anything less certain
+  // stays `null` (unknown → visible).
+  it("sender_is_lead is true on an exact match, alias or display name", () => {
+    expect(senderIsLead("dana@acme.com", "dana@acme.com")).toBe(true);
+    expect(senderIsLead('"Dana Ruiz" <Dana@Acme.com>', "dana@acme.com")).toBe(true);
+    // Plus-aliasing is still Dana (normalizeEmail strips it).
+    expect(senderIsLead("dana+drivepilot@acme.com", "dana@acme.com")).toBe(true);
+  });
+
+  it("sender_is_lead is NULL, not false, when only the local part differs", () => {
+    // Shared inbox, second address, or an alias we can't normalize away.
+    expect(senderIsLead("procurement@acme.com", "dana@acme.com")).toBeNull();
+    expect(senderIsLead("d.ruiz@acme.com", "dana@acme.com")).toBeNull();
+    // …and NULL never hides.
+    expect(
+      shouldHideFromQueue({ intent: null, reply_worthy: true, sender_is_lead: null }),
+    ).toBe(false);
+  });
+
+  it("sender_is_lead is false only when the DOMAIN differs too", () => {
+    expect(senderIsLead("vendor@other.com", "dana@acme.com")).toBe(false);
+  });
+
+  it("sender_is_lead is NULL when either side is missing or unparseable", () => {
+    expect(senderIsLead("", "dana@acme.com")).toBeNull();
+    expect(senderIsLead("dana@acme.com", null)).toBeNull();
+    expect(senderIsLead("not-an-email", "dana@acme.com")).toBeNull();
   });
 });
 
@@ -401,12 +476,44 @@ describe("purgeGateSummary", () => {
     ).toBeNull();
   });
 
-  it("the purge gate itself still requires BOTH intent and ai_summary", () => {
-    // Guard against a future migration in this unit loosening the gate.
-    const gate = read(
-      "supabase/migrations/20260524090429_ec95597a-4651-4d8b-ac22-fb2eb147317d.sql",
-    );
-    expect(gate).toContain("intent IS NOT NULL AND (metadata_json->>'ai_summary') IS NOT NULL");
+  it("this unit does not touch the purge function at all", () => {
+    // The retention gate is not ours to move. Whatever the live
+    // definition of expire_old_messages() says, our one migration must
+    // not mention it — so the Queue fix can never widen or narrow the
+    // purge window as a side effect.
     expect(read(MIGRATION)).not.toContain("expire_old_messages");
+    expect(read(MIGRATION)).not.toMatch(/snippet_text|body_text|expires_at/);
+  });
+
+  it("the newest expire_old_messages() definition is the one QA verified", () => {
+    // Pinned by discovery, not by hard-coded filename: an earlier draft of
+    // this test asserted against 20260524090429, which had ALREADY been
+    // superseded the same day — so it was asserting a gate that is not
+    // live. Read whichever definition actually wins by migration order.
+    const dir = "supabase/migrations";
+    const defining = readdirSync(path.join(ROOT, dir))
+      .filter((f) => f.endsWith(".sql"))
+      .sort()
+      .filter((f) =>
+        /CREATE OR REPLACE FUNCTION public\.expire_old_messages/i.test(
+          read(path.posix.join(dir, f)),
+        ),
+      );
+    expect(defining.length).toBeGreaterThan(0);
+
+    const newest = defining[defining.length - 1];
+    const sql = read(path.posix.join(dir, newest));
+
+    // Documented reality as of this unit (QA-confirmed, routed to the
+    // founder as an out-of-unit discrepancy with CLAUDE.md): the winning
+    // definition is a flat 30-day cap that does NOT consult `intent` or
+    // `ai_summary` at all. This assertion is a TRIPWIRE, not an
+    // endorsement — if someone restores the label-based gate, it fails
+    // and whoever does that should re-read the comment above.
+    const consultsClassifier = /intent IS NOT NULL/i.test(sql);
+    expect({ newest, consultsClassifier }).toEqual({
+      newest: "20260524133934_69822792-ceb0-4eee-b7b2-ea7d70def4b7.sql",
+      consultsClassifier: false,
+    });
   });
 });
