@@ -197,8 +197,15 @@ export default function LeadDetail() {
   // Same gate the automation chip uses — a non-consented manual queue item must
   // not reach AutomationPreviewCard's "Disable Automation" (it would wipe that
   // lead's manual next_action_key). Turning the chip on (consent) reveals it.
+  // Slow-drip (nurture) leads are excluded for the same reason the chip is: the
+  // generic card's Pause/Disable clear needs_action / eligible_at /
+  // automation_mode WITHOUT touching nurture_status, which would leave the
+  // slow-drip card reading "Active" for a sequence the executor will never send.
+  // NurturePreviewCard above is the control surface for those leads.
   const autoState = getAutomationToggleState(lead);
-  const showAutomationDetails = autoState.eligible && !autoState.isUnsubscribed && autoState.consented;
+  const isNurture = (lead as any).motion === "nurture";
+  const showAutomationDetails =
+    autoState.eligible && !autoState.isUnsubscribed && autoState.consented && !isNurture;
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4">
@@ -274,7 +281,7 @@ export default function LeadDetail() {
                 <AutomationPreviewCard lead={lead} onUpdate={handleUpdate} />
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  {(lead as any).motion === "nurture"
+                  {isNurture
                     // Slow-drip leads have no automation chip at the top — their
                     // controls appear in this section once a drip is running.
                     ? "No slow drip running for this lead yet — its controls appear here once one starts."

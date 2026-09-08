@@ -1118,16 +1118,22 @@ export default function TimelineTab({
   const [replyTargetLead, setReplyTargetLead] = useState<TimelineMinimalLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const groupMode = !!groupId;
+  // How many rows this lead (or group) has hidden. Counted independently of the
+  // rendered list: that list is windowed AND filtered, so a count derived from
+  // it would drop to zero the moment a rep hid something — taking the only
+  // control that restores the row off screen with it.
+  const [hiddenCount, setHiddenCount] = useState(0);
 
+  // The readers apply a fixed 200-row window in SQL, so the fetch must ask for
+  // exactly what will be RENDERED: pulling hidden rows in and filtering them
+  // client-side let hidden rows eat the window and push older visible ones off
+  // the page (Codex P2). The "Show hidden" control is kept alive by a separate
+  // count query instead — see hiddenCount.
   const loadTimeline = () => {
     setIsLoading(true);
     const reader = groupId
-      // ALWAYS fetch hidden rows; `showHidden` only decides what we render.
-      // Fetching without them made hiddenCount collapse to 0 the moment a rep
-      // hid something, which took the "Show hidden" control off screen and left
-      // no way to restore the row (Codex P2).
-      ? getGroupTimelineItems(groupId, { includeHidden: true })
-      : getLeadTimeline(leadId, { includeHidden: true });
+      ? getGroupTimelineItems(groupId, { includeHidden: showHidden })
+      : getLeadTimeline(leadId, { includeHidden: showHidden });
     reader
       .then(items => setTimelineItems(items))
       .catch(console.error)
@@ -1136,7 +1142,7 @@ export default function TimelineTab({
 
   useEffect(() => {
     loadTimeline();
-  }, [leadId, groupId]);
+  }, [leadId, groupId, showHidden]);
 
   // Live-refresh the timeline when a new event lands for this lead.
   // Group mode also receives updates for the current lead only — group
@@ -1180,6 +1186,25 @@ export default function TimelineTab({
     })();
     return () => { cancelled = true; };
   }, [groupId]);
+
+  // Hidden-row count — one head-only query, independent of the windowed list.
+  const countLeadIds = useMemo(
+    () => (groupMode ? Array.from(groupMembers.keys()) : [leadId]),
+    [groupMode, groupMembers, leadId],
+  );
+  const refreshHiddenCount = useCallback(async () => {
+    if (countLeadIds.length === 0) return;
+    const { count, error } = await supabase
+      .from("lead_timeline_items")
+      .select("id", { count: "exact", head: true })
+      .in("lead_id", countLeadIds)
+      .eq("hidden", true);
+    if (!error) setHiddenCount(count ?? 0);
+  }, [countLeadIds]);
+
+  useEffect(() => {
+    refreshHiddenCount();
+  }, [refreshHiddenCount]);
 
   // PR 2.4 — unsubscribed gate map (across solo + group views).
   const leadUnsubscribedById = useMemo(() => {
@@ -1288,6 +1313,7 @@ export default function TimelineTab({
         toast.success("Item restored");
       }
       loadTimeline();
+      refreshHiddenCount();
     } catch (err) {
       console.error("[TimelineTab] Hide toggle error:", err);
       toast.error("Failed to update item");
@@ -1354,7 +1380,6 @@ export default function TimelineTab({
   const entries = useMemo(() => groupIntoThreads(filteredItems), [filteredItems]);
   const autoExpand = useMemo(() => getAutoExpandIds(entries), [entries]);
 
-  const hiddenCount = useMemo(() => timelineItems.filter(i => i.hidden).length, [timelineItems]);
   // Unit L2 — filters are noise on a short history; they appear once the lead
   // has more than 20 logged items.
   const showFilters = timelineItems.length > 20;
@@ -1366,7 +1391,7 @@ export default function TimelineTab({
 
   // ...unless the "+ Add a message" form is open — a brand-new lead has no
   // history yet and must still be able to log the first inbound message.
-  if (timelineItems.length === 0 && !showReplyForm) {
+  if (timelineItems.length === 0 && hiddenCount === 0 && !showReplyForm) {
     return (
       <div className="py-12 text-center">
         <p className="text-sm text-muted-foreground">
