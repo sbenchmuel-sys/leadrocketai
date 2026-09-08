@@ -112,7 +112,8 @@ export function followupWaitDays(
   const configured = modeSettings?.followup_wait_days;
   // Floor of one day: below that the rule would overlap the same-day / 16-hour
   // send guardrails, which are deliberately silent (a lead emailed minutes ago
-  // is not work). A workspace asking for 0 gets 1.
+  // is not work). A workspace asking for 0 — or for anything under a day — gets
+  // the 3/5 default back, not a clamp to 1.
   if (typeof configured === "number" && Number.isFinite(configured) && configured >= 1) {
     return Math.floor(configured);
   }
