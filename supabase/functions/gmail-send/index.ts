@@ -454,15 +454,16 @@ serve(async (req) => {
                   .eq("id", leadId);
               }
 
-              // Unit Q1: recompute the follow-up rule after a MANUAL send.
-              // `analyze_outgoing_email` above sets needs_action=false, so
-              // until a sync ran deriveAction the lead was out of the Queue —
-              // fine for Gmail (20-min bulk-sync cron) but permanent for
-              // Outlook, which has no sync cron at all. Same shared helper the
-              // SMS / WhatsApp / voice send paths use; fire-and-forget, never
-              // fails the send. Runs AFTER the AI state write so it is the last
-              // word on next_action_key. Automation sends (skipStateUpdate)
-              // stay untouched — automation-executor owns their state.
+              // Unit Q1: recompute the follow-up rule after a MANUAL send, so
+              // the lead's post-send state is the rule's answer rather than
+              // `analyze_outgoing_email`'s unconditional needs_action=false.
+              // This makes the state CORRECT NOW; it is not a substitute for a
+              // periodic re-derive later (gmail-bulk-sync's cron provides that
+              // for Gmail). Same shared helper the SMS / WhatsApp / voice send
+              // paths use; fire-and-forget, never fails the send. Runs AFTER
+              // the AI state write so it is the last word on next_action_key.
+              // Automation sends (skipStateUpdate) stay untouched —
+              // automation-executor owns their state.
               postSendDeriveAction(serviceSupabase, {
                 leadId,
                 logPrefix: "[gmail-send]",

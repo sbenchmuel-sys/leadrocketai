@@ -9,10 +9,6 @@
 
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  followupSweepCutoffIso,
-  isFollowupSweepCandidate,
-} from "./followupRule.ts";
-import {
   buildLeadUpdate,
   DEFAULT_CADENCE_SETTINGS,
   deriveAction,
@@ -216,57 +212,3 @@ Deno.test("an armed cadence keeps its anchor — the prompt does not overwrite i
 });
 
 
-// ── The sweep that gives Outlook its missing second look ───────────
-
-Deno.test("sweep picks up the lead a manual Outlook send leaves behind", () => {
-  // needs_action=false + an unanswered outbound four days old: the exact row
-  // analyze_outgoing_email + postSendDeriveAction leave, which nothing revisits
-  // on Outlook because it has no bulk-sync cron.
-  const lead = {
-    needs_action: false,
-    last_outbound_at: daysAgo(4),
-    last_inbound_at: daysAgo(60),
-    unsubscribed: false,
-    status: "active",
-    action_permanently_dismissed: false,
-    action_dismissed_at: null,
-  };
-  assertEquals(isFollowupSweepCandidate(lead), true);
-
-  // …and the recompute it triggers is what puts the lead back in the Queue.
-  const r = derive(metrics({
-    first_outbound_at: daysAgo(70),
-    last_outbound_at: lead.last_outbound_at,
-    last_inbound_at: lead.last_inbound_at,
-  }));
-  assertEquals(r.next_action_key, "followup_due");
-  assertEquals(r.needs_action, true);
-});
-
-Deno.test("sweep skips leads that need nothing", () => {
-  const base = {
-    needs_action: false,
-    last_outbound_at: daysAgo(4),
-    last_inbound_at: null,
-    unsubscribed: false,
-    status: "active",
-    action_permanently_dismissed: false,
-    action_dismissed_at: null,
-  };
-  for (const over of [
-    { needs_action: true },
-    { unsubscribed: true },
-    { status: "closed_won" },
-    { action_permanently_dismissed: true },
-    { action_dismissed_at: daysAgo(1) },
-    { last_outbound_at: null },
-    { last_inbound_at: daysAgo(1) },
-  ]) {
-    assertEquals(isFollowupSweepCandidate({ ...base, ...over }), false, JSON.stringify(over));
-  }
-});
-
-Deno.test("sweep cut-off is the wait floor, not the 3/5-day default", () => {
-  const now = Date.now();
-  assertEquals(followupSweepCutoffIso(now), new Date(now - 24 * 60 * 60 * 1000).toISOString());
-});
