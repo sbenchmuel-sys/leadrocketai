@@ -274,7 +274,11 @@ export default function LeadDetail() {
                 <AutomationPreviewCard lead={lead} onUpdate={handleUpdate} />
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  Turn on the automation chip at the top to schedule and preview the follow-ups.
+                  {(lead as any).motion === "nurture"
+                    // Slow-drip leads have no automation chip at the top — their
+                    // controls appear in this section once a drip is running.
+                    ? "No slow drip running for this lead yet — its controls appear here once one starts."
+                    : "Turn on the automation chip at the top to schedule and preview the follow-ups."}
                 </p>
               )}
             </DealSection>
