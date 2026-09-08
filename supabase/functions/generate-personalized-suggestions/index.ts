@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertLeadAccess } from "../_shared/authz.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -154,18 +155,11 @@ Rules:
 - Return valid JSON array only, no markdown fences`;
 
     // ── 6) Call LLM ──
-    const llmRes = await fetch("https://api.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [{ role: "user", content: systemPrompt }],
-        temperature: 0.7,
-      }),
-    });
+    const llmRes = await aiGatewayFetch(lovableKey, {
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content: systemPrompt }],
+      temperature: 0.7,
+    }, { label: "generate-personalized-suggestions" });
 
     if (!llmRes.ok) {
       console.error("LLM call failed:", llmRes.status);

@@ -1,3 +1,4 @@
+import { aiGatewayFetch } from "../aiGateway.ts";
 // ============================================================================
 // COLD-TEMPLATE BEFORE/AFTER EVAL (Unit C)
 //
@@ -44,6 +45,8 @@
 //
 // Loaded LAZILY (only in `run` mode) so `compare` needs neither --allow-env nor
 // the prompts module — it runs with just --allow-read.
+import { aiGatewayFetch } from "../aiGateway.ts";
+
 let SYSTEM_GLOBAL_PROMPT: string;
 let PROMPTS: Record<string, string>;
 let QUALITY_SCORER_PROMPT: string;
@@ -58,7 +61,6 @@ async function loadPrompts(): Promise<void> {
   GROUNDING_VALIDATOR_PROMPT = m.GROUNDING_VALIDATOR_PROMPT;
 }
 
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const MODEL = "google/gemini-2.5-flash-lite";
 
 // The COMPLETE canonical banned list (mirrors SYSTEM_GLOBAL_PROMPT's BANNED
@@ -204,18 +206,14 @@ function fill(template: string, vars: Record<string, string>): string {
 async function callModel(system: string, user: string, temperature = 0.6): Promise<string> {
   const key = Deno.env.get("LOVABLE_API_KEY");
   if (!key) throw new Error("LOVABLE_API_KEY not set — this eval needs the model gateway.");
-  const resp = await fetch(GATEWAY, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
+  const resp = await aiGatewayFetch(key, {
+    model: MODEL,
+    temperature,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  }, { label: "eval:coldTemplate" });
   if (!resp.ok) throw new Error(`gateway ${resp.status}: ${await resp.text()}`);
   const json = await resp.json();
   return json.choices?.[0]?.message?.content ?? "";

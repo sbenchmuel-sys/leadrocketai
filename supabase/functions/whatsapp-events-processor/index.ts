@@ -18,6 +18,7 @@ import { WhatsAppService } from "../_shared/whatsapp/service.ts";
 import { projectTimelineItem, whatsappDedupeKey } from "../_shared/timelineProjector.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -535,20 +536,13 @@ Context:
 - Disallowed topics: ${(workspaceProfile?.disallowed_topics ?? []).join(", ") || "none"}
 - Pricing policy: ${workspaceProfile?.pricing_policy ?? "do not discuss pricing"}`;
 
-    const aiResponse = await fetch("https://ai.lovable.dev/api/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${lovableApiKey}`,
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: bodyText },
-        ],
-      }),
-    });
+    const aiResponse = await aiGatewayFetch(lovableApiKey, {
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: bodyText },
+      ],
+    }, { label: "whatsapp-events-processor:classify" });
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text();

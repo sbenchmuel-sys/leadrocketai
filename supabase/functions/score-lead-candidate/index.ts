@@ -15,6 +15,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -100,17 +101,13 @@ async function scoreOne(
   const userPrompt = buildUserPrompt(candidate);
   let resp: Response;
   try {
-    resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: SCORER_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-    });
+    resp = await aiGatewayFetch(apiKey, {
+      model: MODEL,
+      messages: [
+        { role: "system", content: SCORER_SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    }, { label: "score-lead-candidate" });
   } catch (err) {
     return { error: `network: ${err instanceof Error ? err.message : String(err)}` };
   }
