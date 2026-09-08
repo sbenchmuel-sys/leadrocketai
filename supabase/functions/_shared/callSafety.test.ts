@@ -12,6 +12,7 @@ import {
   resolveAsrLanguages,
 } from "./callConfig.ts";
 import { callAnalysisDedupeKey, callDedupeKey } from "./timelineProjector.ts";
+import { matchWorkspaceByNumber, normalizeE164 } from "./phoneMapping.ts";
 
 Deno.test("callAnalysisDedupeKey never collides with callDedupeKey", () => {
   const id = "1f1e0f6a-0000-4000-8000-000000000001";
@@ -26,18 +27,71 @@ Deno.test("resolveAsrLanguages: a Hebrew workspace gets English as the alternati
   assertEquals(alternatives, ["en-US"]);
 });
 
-Deno.test("resolveAsrLanguages: everyone else keeps their configured set", () => {
+Deno.test("resolveAsrLanguages: an English workspace on the SHIPPED default gets NO alternatives", () => {
+  // QA HOLD #3. call_settings.supported_languages defaults to
+  // ['en-US','es-US','fr-CA'], so "non-empty" cannot mean "configured". A
+  // dealership that never touched the setting must get exactly the
+  // single-language request it got before this unit — otherwise its English
+  // calls can come back partly transcribed as Spanish or French.
   const { primary, alternatives } = resolveAsrLanguages("en-US", ["en-US", "es-US", "fr-CA"]);
   assertEquals(primary, "en-US");
-  // The primary is never repeated in the alternatives (Google rejects that).
-  assertEquals(alternatives, ["es-US", "fr-CA"]);
+  assertEquals(alternatives, []);
 });
 
-Deno.test("resolveAsrLanguages: unset settings fall back to the defaults, capped at 3", () => {
+Deno.test("resolveAsrLanguages: an EXPLICITLY configured list is honoured", () => {
+  const { primary, alternatives } = resolveAsrLanguages("en-US", ["en-US", "es-US"]);
+  assertEquals(primary, "en-US");
+  // The primary is never repeated in the alternatives (Google rejects that).
+  assertEquals(alternatives, ["es-US"]);
+});
+
+Deno.test("resolveAsrLanguages: unset settings produce no alternatives at all", () => {
   const { primary, alternatives } = resolveAsrLanguages(null, null);
   assertEquals(primary, "en-US");
-  assert(alternatives.length <= 3);
+  assertEquals(alternatives, []);
+});
+
+Deno.test("resolveAsrLanguages: he-IL wins even when the list is the shipped default", () => {
+  // The Hebrew rule is keyed on the PRIMARY language, so an Israeli workspace
+  // that never edited supported_languages still gets English as its fallback.
+  const { alternatives } = resolveAsrLanguages("he-IL", ["en-US", "es-US", "fr-CA"]);
+  assertEquals(alternatives, ["en-US"]);
+});
+
+Deno.test("resolveAsrLanguages: alternatives are capped at Google's limit of 3", () => {
+  const { alternatives } = resolveAsrLanguages("en-US", ["de-DE", "it-IT", "pt-BR", "nl-NL", "pl-PL"]);
+  assertEquals(alternatives.length, 3);
   assert(!alternatives.includes("en-US"));
+});
+
+Deno.test("matchWorkspaceByNumber matches across formatting differences", () => {
+  // QA HOLD #2. A stored "+1 (415) 555-0123" and Twilio's "+14155550123" are
+  // the same number; if they fail to match, the workspace's press-1 DTMF
+  // consent gate silently reverts to OFF.
+  const rows = [
+    { workspace_id: "ws-a", default_twilio_number: "+1 (415) 555-0123" },
+    { workspace_id: "ws-b", default_twilio_number: "+972-50-000-0000" },
+  ];
+  assertEquals(matchWorkspaceByNumber(rows, "+14155550123"), "ws-a");
+  assertEquals(matchWorkspaceByNumber(rows, "+972500000000"), "ws-b");
+  // Missing leading + on the incoming side still matches.
+  assertEquals(matchWorkspaceByNumber(rows, "14155550123"), "ws-a");
+});
+
+Deno.test("matchWorkspaceByNumber fails closed — no single-workspace guess", () => {
+  // The C1/9 leak: one configured workspace must NOT swallow an unknown number.
+  const rows = [{ workspace_id: "ws-a", default_twilio_number: "+14155550123" }];
+  assertEquals(matchWorkspaceByNumber(rows, "+14155559999"), null);
+  assertEquals(matchWorkspaceByNumber([], "+14155550123"), null);
+  assertEquals(matchWorkspaceByNumber(null, "+14155550123"), null);
+  // A null stored number is not a wildcard.
+  assertEquals(matchWorkspaceByNumber([{ workspace_id: "ws-x", default_twilio_number: null }], "+1"), null);
+});
+
+Deno.test("normalizeE164 strips formatting and forces a leading +", () => {
+  assertEquals(normalizeE164("+1 (415) 555-0123"), "+14155550123");
+  assertEquals(normalizeE164("14155550123"), "+14155550123");
+  assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000");
 });
 
 Deno.test("outbound TwiML speaks the recording notice before dialing", () => {
