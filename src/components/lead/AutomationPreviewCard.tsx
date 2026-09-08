@@ -20,6 +20,7 @@ import {
 } from "@/lib/leadAutomationActions";
 import AutomationDraftPreviewDialog from "./AutomationDraftPreviewDialog";
 import CampaignStepPreview from "./CampaignStepPreview";
+import { PROMPT_ONLY_KEYS } from "@shared/followupRule";
 
 interface AutomationPreviewCardProps {
   lead: LeadDetail;
@@ -28,6 +29,98 @@ interface AutomationPreviewCardProps {
 
 // Step labels + enable/disable field builders live in @/lib/leadAutomationActions
 // so the slim AutomationToggleCard and this full control surface stay in lock-step.
+
+// ── Automation state, derived once ─────────────────────────────────
+//
+// `next_action_key` is NOT evidence of automation. The Queue also writes
+// prompts for the rep there (`followup_due`, `rate_limited` — Unit Q1), and
+// those carry no `eligible_at` by design, which is exactly the shape this card
+// used to read as "the user paused their sequence". It then offered Resume,
+// which armed an `eligible_at` and carried the prompt key through as if it were
+// a cadence step — and automation-executor selects on needs_action +
+// eligible_at + automation_mode WITHOUT looking at the key, so a rep pressing
+// "Resume" on a lead they never enrolled could send a real cold-cadence email.
+//
+// Enrolment is `automation_mode` (the consent record the executor itself gates
+// on) or a live cadence key; a Queue prompt is neither.
+export function automationCardState(lead: {
+  needs_action?: boolean | null;
+  next_action_key?: string | null;
+  eligible_at?: string | null;
+  automation_mode?: string | null;
+}): { hasAutomationEnabled: boolean; userPaused: boolean; automationEverEnabled: boolean } {
+  const promptOnlyKey = PROMPT_ONLY_KEYS.has(lead.next_action_key ?? "");
+  const hasCadenceKey = !!lead.next_action_key && !promptOnlyKey;
+  const enrolled = lead.automation_mode != null;
+  const hasAutomationEnabled = !!lead.eligible_at && !!lead.needs_action && !promptOnlyKey;
+  return {
+    hasAutomationEnabled,
+    // Enrolled-but-not-armed is still "paused" — the Resume path below is now
+    // safe for those leads because it refuses to carry a prompt key.
+    userPaused: !hasAutomationEnabled && (hasCadenceKey || enrolled),
+    automationEverEnabled: enrolled || !!lead.eligible_at || hasCadenceKey,
+  };
+}
+
+/**
+ * Fields written when the rep presses Resume. Extracted from the two identical
+ * inline copies so the safety rule lives in ONE place: a Queue prompt key is
+ * never carried into an armed `eligible_at`. (Without the guard,
+ * `parseInt("followup_due")` → NaN → a silent 2-day gap and a send from the
+ * wrong template.) Same arithmetic as before otherwise.
+ */
+export function buildResumeUpdateFields(
+  lead: {
+    next_action_key?: string | null;
+    last_outbound_at?: string | null;
+    motion?: string | null;
+    nurture_cadence?: string | null;
+    nurture_outbound_count?: number | null;
+  },
+  opts: { intervals: number[]; stepLabels: Record<string, string>; now?: Date },
+): Record<string, unknown> {
+  const now = opts.now ?? new Date();
+  if (lead.motion === "nurture") {
+    const gapDays = getNurtureCadenceDays(lead.nurture_cadence || "biweekly");
+    const stepNum = (lead.nurture_outbound_count || 0) + 1;
+    let eligibleAt = addDays(now, gapDays);
+    eligibleAt.setHours(9, 30, 0, 0);
+    if (eligibleAt.getTime() <= now.getTime()) eligibleAt = addDays(eligibleAt, 1);
+    return {
+      needs_action: true,
+      next_action_key: `nurture_${stepNum}`,
+      next_action_label: `Nurture Email ${stepNum}`,
+      eligible_at: eligibleAt.toISOString(),
+    };
+  }
+
+  const hasOutbound = !!lead.last_outbound_at;
+  // THE GUARD: only a real cadence key may be carried forward.
+  const carried = lead.next_action_key && !PROMPT_ONLY_KEYS.has(lead.next_action_key)
+    ? lead.next_action_key
+    : null;
+  const nextKey = hasOutbound ? (carried || "send_pre_2") : "send_pre_1";
+  const nextLabel = opts.stepLabels[nextKey] || "Follow-up";
+  const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
+  const gapDays = stepIdx > 0 && stepIdx < opts.intervals.length
+    ? opts.intervals[stepIdx] - opts.intervals[stepIdx - 1]
+    : (hasOutbound ? 2 : 0);
+  let eligibleAt: Date;
+  if (gapDays === 0) {
+    eligibleAt = new Date(now);
+    eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
+  } else {
+    eligibleAt = addDays(now, gapDays);
+    eligibleAt.setHours(9, 30, 0, 0);
+    if (eligibleAt.getTime() <= now.getTime()) eligibleAt = addDays(eligibleAt, 1);
+  }
+  return {
+    needs_action: true,
+    next_action_key: nextKey,
+    next_action_label: nextLabel,
+    eligible_at: eligibleAt.toISOString(),
+  };
+}
 
 function getMaxSteps(motion: string): number {
   const intervals = getMotionIntervals(motion);
@@ -117,17 +210,13 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
   const stage = lead.stage;
   const isUnsubscribed = (lead as any).unsubscribed === true;
 
-  const hasAutomationEnabled = !!(lead as any).eligible_at && lead.needs_action;
-  // "Has automation ever been enabled" — gates the safetyPaused badge so we don't
-  // show "Lead has replied — automation paused" on leads the user never enrolled
+  // `automationEverEnabled` gates the safetyPaused badge so we don't show
+  // "Lead has replied — automation paused" on leads the user never enrolled
   // (e.g. lookback-seeded leads whose backfill populated last_inbound_at).
-  const automationEverEnabled =
-    (lead as any).automation_mode != null ||
-    !!(lead as any).eligible_at ||
-    !!lead.next_action_key;
+  const { hasAutomationEnabled, userPaused, automationEverEnabled } =
+    automationCardState(lead as Parameters<typeof automationCardState>[0]);
   const blockers = useMemo(() => getAutomationBlockers(lead), [lead]);
   const safetyPaused = blockers.length > 0 && automationEverEnabled;
-  const userPaused = !hasAutomationEnabled && !!lead.next_action_key;
   const isPaused = safetyPaused || userPaused;
   const steps = useMemo(() => getNextTwoSteps(lead), [lead]);
 
@@ -176,8 +265,9 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
     }
   };
 
-  // Not enabled — show enable button
-  if (!hasAutomationEnabled && !lead.next_action_key) {
+  // Not enabled — show enable button. A lead carrying only a Queue prompt key
+  // (followup_due / rate_limited) lands here too: it was never enrolled.
+  if (!hasAutomationEnabled && !userPaused) {
     return (
       <div className="space-y-2">
         <div className="flex items-center gap-2">
@@ -357,44 +447,10 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                   toast.error(`Cannot resume: ${freshBlockers[0]}`);
                   return;
                 }
-                let updateFields: Record<string, any>;
-                if (motion === "nurture") {
-                  const cadence = (lead as any).nurture_cadence || "biweekly";
-                  const gapDays = getNurtureCadenceDays(cadence);
-                  const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
-                  let eligibleAt = addDays(new Date(), gapDays);
-                  eligibleAt.setHours(9, 30, 0, 0);
-                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                  updateFields = {
-                    needs_action: true,
-                    next_action_key: `nurture_${stepNum}`,
-                    next_action_label: `Nurture Email ${stepNum}`,
-                    eligible_at: eligibleAt.toISOString(),
-                  };
-                } else {
-                  const hasOutbound = !!(lead as any).last_outbound_at;
-                  const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                  const nextLabel = stepLabels[nextKey] || "Follow-up";
-                  const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-                  const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                    ? intervals[stepIdx] - intervals[stepIdx - 1]
-                    : (hasOutbound ? 2 : 0);
-                  let eligibleAt: Date;
-                  if (gapDays === 0) {
-                    eligibleAt = new Date();
-                    eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-                  } else {
-                    eligibleAt = addDays(new Date(), gapDays);
-                    eligibleAt.setHours(9, 30, 0, 0);
-                    if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                  }
-                  updateFields = {
-                    needs_action: true,
-                    next_action_key: nextKey,
-                    next_action_label: nextLabel,
-                    eligible_at: eligibleAt.toISOString(),
-                  };
-                }
+                const updateFields = buildResumeUpdateFields(
+                  lead as Parameters<typeof buildResumeUpdateFields>[0],
+                  { intervals, stepLabels },
+                );
                 await supabase
                   .from("leads")
                   .update(updateFields)
@@ -431,44 +487,10 @@ export default function AutomationPreviewCard({ lead, onUpdate }: AutomationPrev
                 toast.error(`Cannot resume: ${freshBlockers[0]}`);
                 return;
               }
-              let updateFields: Record<string, any>;
-              if (motion === "nurture") {
-                const cadence = (lead as any).nurture_cadence || "biweekly";
-                const gapDays = getNurtureCadenceDays(cadence);
-                const stepNum = ((lead as any).nurture_outbound_count || 0) + 1;
-                let eligibleAt = addDays(new Date(), gapDays);
-                eligibleAt.setHours(9, 30, 0, 0);
-                if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                updateFields = {
-                  needs_action: true,
-                  next_action_key: `nurture_${stepNum}`,
-                  next_action_label: `Nurture Email ${stepNum}`,
-                  eligible_at: eligibleAt.toISOString(),
-                };
-              } else {
-                const hasOutbound = !!(lead as any).last_outbound_at;
-                const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
-                const nextLabel = stepLabels[nextKey] || "Follow-up";
-                const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
-                const gapDays = stepIdx > 0 && stepIdx < intervals.length
-                  ? intervals[stepIdx] - intervals[stepIdx - 1]
-                  : (hasOutbound ? 2 : 0);
-                let eligibleAt: Date;
-                if (gapDays === 0) {
-                  eligibleAt = new Date();
-                  eligibleAt.setMinutes(eligibleAt.getMinutes() + 5);
-                } else {
-                  eligibleAt = addDays(new Date(), gapDays);
-                  eligibleAt.setHours(9, 30, 0, 0);
-                  if (eligibleAt.getTime() <= Date.now()) eligibleAt = addDays(eligibleAt, 1);
-                }
-                updateFields = {
-                  needs_action: true,
-                  next_action_key: nextKey,
-                  next_action_label: nextLabel,
-                  eligible_at: eligibleAt.toISOString(),
-                };
-              }
+              const updateFields = buildResumeUpdateFields(
+                lead as Parameters<typeof buildResumeUpdateFields>[0],
+                { intervals, stepLabels },
+              );
               await supabase
                 .from("leads")
                 .update(updateFields)

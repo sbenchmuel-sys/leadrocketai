@@ -129,16 +129,28 @@ Deno.test("post-meeting still gets post_meeting_followup", () => {
 
 // ── Guardrails are visible, not silent ─────────────────────────────
 
-Deno.test("same-day guardrail → rate_limited with a future date, still needs_action", () => {
+Deno.test("a lead emailed 10 minutes ago stays silent — the Queue must still empty", () => {
+  // The 16-hour-gap and same-day guardrails trip on every lead the rep just
+  // emailed, and postSendDeriveAction recomputes seconds after the send.
   const r = derive(metrics({
     first_outbound_at: daysAgo(30),
     last_inbound_at: daysAgo(20),
-    last_outbound_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    last_outbound_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
   }));
+  assertEquals(r.next_action_key, null);
+  assertEquals(r.needs_action, false);
+});
+
+Deno.test("7d volume cap → rate_limited with a future date, still needs_action", () => {
+  const r = derive(
+    metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: daysAgo(1) }),
+    { out7d: S.guardrails.max_emails_per_lead_per_7d },
+  );
   assertEquals(r.next_action_key, "rate_limited");
   assertEquals(r.needs_action, true);
   assert(new Date(r.eligible_at!).getTime() > Date.now());
-  assert(r.next_action_label!.startsWith("Follow up available "));
+  // Names the AUTOMATIC send as what is paused — the rep can still write now.
+  assert(r.next_action_label!.startsWith("Follow up anytime — auto-send paused until "));
 });
 
 Deno.test("7d cap does not hide a follow-up that is already owed", () => {
@@ -147,6 +159,18 @@ Deno.test("7d cap does not hide a follow-up that is already owed", () => {
     { out7d: S.guardrails.max_emails_per_lead_per_7d },
   );
   assertEquals(r.next_action_key, "followup_due");
+});
+
+Deno.test("a reply inside the reply-pending window is never buried under rate_limited", () => {
+  const r = derive(
+    metrics({
+      first_outbound_at: daysAgo(30),
+      last_outbound_at: daysAgo(4),
+      last_inbound_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    }),
+    { out7d: S.guardrails.max_emails_per_lead_per_7d },
+  );
+  assertEquals(r.next_action_key, null);
 });
 
 // ── Never a send trigger ───────────────────────────────────────────
@@ -167,20 +191,22 @@ Deno.test("buildLeadUpdate persists followup_due / rate_limited without eligible
   assertEquals(update.eligible_at, null);
 });
 
-Deno.test("an armed cadence no longer blanks the follow-up prompt", () => {
+Deno.test("an armed cadence keeps its anchor — the prompt does not overwrite it", () => {
+  // The cadence will send the follow-up itself, so the Queue prompt is
+  // redundant here; letting it through would also discard `eligible_at`.
   const m = metrics({
     first_outbound_at: daysAgo(30),
     last_inbound_at: daysAgo(20),
     last_outbound_at: daysAgo(4),
   });
-  const action = derive(m);
-  const update = buildLeadUpdate("engaged", m, action, null, {
+  const armedAt = new Date(Date.now() + 2 * DAY).toISOString();
+  const update = buildLeadUpdate("engaged", m, derive(m), null, {
     needs_action: true,
-    eligible_at: new Date(Date.now() + 2 * DAY).toISOString(),
+    eligible_at: armedAt,
     motion: "outbound_prospecting",
     nurture_status: "",
     ooo_until: null,
   }, "reactive");
-  assertEquals(update.next_action_key, "followup_due");
-  assertEquals(update.eligible_at, null);
+  assertEquals(update.next_action_key, null);
+  assertEquals(update.eligible_at, armedAt);
 });
