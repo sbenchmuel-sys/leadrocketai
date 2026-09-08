@@ -4,6 +4,8 @@
  * Used by gmail-sync, gmail-bulk-sync, outlook-sync, outlook-webhook.
  */
 
+import { stripQuotedReply } from "./unsubscribeDetection.ts";
+
 const MEETING_BODY_PATTERNS = [
   // "see you on Wednesday / Thursday / March 5"
   /\bsee you (?:on |this |next )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|\d{1,2}[\/-]\d{1,2})/i,
@@ -96,15 +98,31 @@ export interface MeetingConfirmationResult {
 }
 
 /**
- * Scan a calendar-accept body for substantive commercial questions.
+ * Scan a body for a substantive commercial question from the SENDER.
  * Returns the set of matched keywords if BOTH a question mark and at
- * least one commercial keyword are present; otherwise `[]`.
+ * least one commercial keyword are present in the sender's own prose;
+ * otherwise `[]`.
+ *
+ * QUOTED HISTORY IS STRIPPED FIRST. Reply clients quote the prior
+ * thread, and our own outbound pitch routinely contains exactly these
+ * words ("Would pricing details help?"). Scanning the raw body let a
+ * routine auto-reply that merely quoted us satisfy the check: the OOO
+ * was then stored as real inbound activity and a false `reply_now` was
+ * left on the board. Same class of false positive `stripQuotedReply`
+ * already guards for unsubscribe detection — fixed here, at the shared
+ * helper, so BOTH callers (oooDetection + detectMeetingConfirmation)
+ * get it rather than one of them. (Codex P2 on PR #143.)
+ *
+ * stripQuotedReply is safe to apply twice, so callers that already
+ * stripped lose nothing.
  *
  * Exported for unit testing and for callers that want to log the match.
  */
 export function detectSubstantiveQuestionInAccept(bodyText: string): string[] {
-  if (!bodyText || !bodyText.includes("?")) return [];
-  const matches = bodyText.match(KEYWORD_REGEX);
+  if (!bodyText) return [];
+  const senderProse = stripQuotedReply(bodyText);
+  if (!senderProse || !senderProse.includes("?")) return [];
+  const matches = senderProse.match(KEYWORD_REGEX);
   if (!matches || matches.length === 0) return [];
   // Dedupe + lowercase for stable logging order.
   const seen = new Set<string>();

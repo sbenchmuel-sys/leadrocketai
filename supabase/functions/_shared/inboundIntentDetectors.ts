@@ -40,6 +40,7 @@
 import { isOutOfOfficeReply, type OOOResult } from "./oooDetection.ts";
 import {
   detectMeetingConfirmation,
+  detectSubstantiveQuestionInAccept,
   type MeetingConfirmationResult,
 } from "./meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "./unsubscribeDetection.ts";
@@ -73,10 +74,55 @@ export const DETERMINISTIC_INTENTS: readonly DeterministicIntent[] = [
 export interface InboundDetectorInput {
   fromEmail: string;
   subject: string;
-  /** Raw body / snippet. May be "" once the 72h purge has run. */
+  /**
+   * The body to scan. In the live sync paths this is the FULL body; in
+   * `classify-inbound` it is `snippet_text`, which `timelineProjector`
+   * truncates to 500 characters — hence `substantiveQuestion` below.
+   * May be "" once the 72h purge has run.
+   */
   body: string;
   /** RFC headers when the caller has them (live sync). Empty is fine. */
   headers?: Array<{ name: string; value: string }>;
+  /**
+   * Authoritative "the sender asked a live commercial question" verdict,
+   * decided against the FULL body by the sync path and persisted on the
+   * timeline row (see SUBSTANTIVE_QUESTION_FLAG).
+   *
+   * WHY: `body` here is a 500-char snippet. A question sitting past that
+   * cut is invisible to us, so re-deriving the verdict would return
+   * `ooo_reply` / `calendar_accept`, the Queue would hide the card, and
+   * the live-sync override that deliberately kept the lead actionable
+   * would be silently defeated. (Codex P1 on PR #143.)
+   *
+   * `true`      → force the OOO / meeting branches to fall through to the AI.
+   * `false`     → trust it: the full body had no question. Do not re-derive.
+   * `undefined` → no verdict was persisted; derive from `body` as before.
+   */
+  substantiveQuestion?: boolean;
+}
+
+/**
+ * `metadata_json` key holding the full-body substantive-question verdict.
+ * Written by the sync paths at insert time, read by `classify-inbound`.
+ */
+export const SUBSTANTIVE_QUESTION_FLAG = "has_substantive_question";
+
+/**
+ * The verdict the sync paths persist. One helper so the four insert sites
+ * and the classifier cannot drift; `detectSubstantiveQuestionInAccept`
+ * strips quoted history internally, so our own quoted pitch cannot
+ * trigger it.
+ */
+export function hasSubstantiveQuestion(bodyText: string | null | undefined): boolean {
+  return detectSubstantiveQuestionInAccept(bodyText ?? "").length > 0;
+}
+
+/** Read the persisted verdict back off a timeline row's metadata_json. */
+export function readSubstantiveQuestionFlag(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean | undefined {
+  const v = (metadata ?? {})[SUBSTANTIVE_QUESTION_FLAG];
+  return typeof v === "boolean" ? v : undefined;
 }
 
 export interface InboundDetectorResult {
@@ -89,6 +135,15 @@ export interface InboundDetectorResult {
 }
 
 const NO_MATCH: InboundDetectorResult = { intent: null, ooo: null, meeting: null };
+
+/**
+ * The persisted full-body verdict wins over anything we can derive from a
+ * possibly-truncated `body`. Only falls back to the derived value when no
+ * verdict was persisted (`undefined`).
+ */
+function questionOverride(input: InboundDetectorInput, derived: boolean): boolean {
+  return input.substantiveQuestion ?? derived;
+}
 
 /**
  * Run the documented precedence chain (EDGE_CASES.md #1), first match wins:
@@ -125,7 +180,9 @@ export function detectInboundIntent(
   // applyOOOPause's job and it runs on the sync path, not here.
   const ooo = isOutOfOfficeReply(input.headers ?? [], subject, body);
   if (ooo.isOOO) {
-    if (ooo.hasSubstantiveQuestion) return { intent: null, ooo, meeting: null };
+    if (questionOverride(input, ooo.hasSubstantiveQuestion)) {
+      return { intent: null, ooo, meeting: null };
+    }
     return { intent: "ooo_reply", ooo, meeting: null };
   }
 
@@ -175,7 +232,9 @@ export function detectInboundIntent(
   // durable ai_summary, and stays on the rep's board.
   const meeting = detectMeetingConfirmation(subject, body);
   if (meeting.isConfirmed) {
-    if (meeting.hasSubstantiveQuestion) return { intent: null, ooo: null, meeting };
+    if (questionOverride(input, meeting.hasSubstantiveQuestion)) {
+      return { intent: null, ooo: null, meeting };
+    }
     return {
       intent: meeting.confidence === "subject"
         ? "calendar_accept"

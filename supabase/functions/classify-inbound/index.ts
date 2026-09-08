@@ -63,6 +63,7 @@ import { logger } from "../_shared/logger.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import {
   detectInboundIntent,
+  readSubstantiveQuestionFlag,
   senderIsLead,
 } from "../_shared/inboundIntentDetectors.ts";
 
@@ -491,10 +492,16 @@ Deno.serve(async (req) => {
         // header check can't run here — subject + body patterns only,
         // same limitation the Phase-1 backfill documented. The live sync
         // paths still get the header signal.
+        // `snippet_text` is truncated to 500 chars by timelineProjector, so
+        // a question sitting past that cut is invisible here. The sync path
+        // decided the substantive-question verdict against the FULL body and
+        // persisted it; honour that rather than re-deriving from the snippet
+        // and silently overturning it (Codex P1, PR #143).
         const deterministic = detectInboundIntent({
           fromEmail,
           subject: row.subject ?? "",
           body: row.snippet_text ?? "",
+          substantiveQuestion: readSubstantiveQuestionFlag(row.metadata_json),
         });
 
         if (deterministic.intent) {

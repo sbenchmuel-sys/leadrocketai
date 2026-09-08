@@ -3,6 +3,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
+import {
+  hasSubstantiveQuestion,
+  SUBSTANTIVE_QUESTION_FLAG,
+} from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
@@ -676,6 +680,11 @@ async function syncLeadEmails(
         gmail_thread_id: threadId,
         workspace_id: workspaceId,
         provider: "gmail",
+        // Decided against the FULL body; classify-inbound only sees the
+        // 500-char snippet (Codex P1, PR #143).
+        metadata_json: direction === "inbound"
+          ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
+          : {},
         dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
       });
 
@@ -864,6 +873,10 @@ async function syncLeadEmails(
           gmail_message_id: gmailMessageId, gmail_thread_id: threadId,
           workspace_id: workspaceId,
           provider: "gmail",
+          // Decided against the FULL body — see above.
+          metadata_json: direction === "inbound"
+            ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
+            : {},
           dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
         });
 

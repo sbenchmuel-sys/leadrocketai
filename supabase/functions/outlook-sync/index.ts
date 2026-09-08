@@ -15,6 +15,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { getFreshOutlookToken } from "../_shared/outlookTokens.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
+import {
+  hasSubstantiveQuestion,
+  SUBSTANTIVE_QUESTION_FLAG,
+} from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
@@ -617,7 +621,16 @@ serve(async (req) => {
           gmail_thread_id: msg.conversationId,
           workspace_id: leadData?.workspace_id ?? null,
           provider: "outlook",
-          metadata_json: { provider_message_id: messageId, conversation_id: msg.conversationId, from_email: msg.from?.emailAddress?.address },
+          metadata_json: {
+            provider_message_id: messageId,
+            conversation_id: msg.conversationId,
+            from_email: msg.from?.emailAddress?.address,
+            // Decided against the FULL body; classify-inbound only sees the
+            // 500-char snippet (Codex P1, PR #143).
+            ...(direction === "inbound"
+              ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
+              : {}),
+          },
           dedupe_key: emailDedupeKey("outlook", messageId, messageId),
         });
 

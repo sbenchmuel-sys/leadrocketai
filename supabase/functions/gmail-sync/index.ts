@@ -3,6 +3,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { safeDecryptToken, encryptToken } from "../_shared/encryption.ts";
 import { isOutOfOfficeReply, detectDeferSignal } from "../_shared/oooDetection.ts";
 import { applyOOOPause, applyDeferPause } from "../_shared/oooPauseActions.ts";
+import {
+  hasSubstantiveQuestion,
+  SUBSTANTIVE_QUESTION_FLAG,
+} from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
@@ -867,7 +871,17 @@ serve(async (req) => {
           gmail_thread_id: threadId,
           workspace_id: leadData?.workspace_id ?? null,
           provider: "gmail",
-          metadata_json: { gmail_message_id: gmailMessageId, gmail_thread_id: threadId, from_email: from, to_email: to },
+          metadata_json: {
+            gmail_message_id: gmailMessageId,
+            gmail_thread_id: threadId,
+            from_email: from,
+            to_email: to,
+            // Decided here against the FULL body; classify-inbound only ever
+            // sees the 500-char snippet (Codex P1, PR #143).
+            ...(direction === "inbound"
+              ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
+              : {}),
+          },
           dedupe_key: emailDedupeKey("gmail", gmailMessageId, gmailMessageId),
         });
 

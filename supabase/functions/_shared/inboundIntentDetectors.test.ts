@@ -13,7 +13,10 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   DETERMINISTIC_INTENTS,
   detectInboundIntent,
+  hasSubstantiveQuestion,
+  readSubstantiveQuestionFlag,
   senderIsLead,
+  SUBSTANTIVE_QUESTION_FLAG,
 } from "./inboundIntentDetectors.ts";
 import { detectMeetingConfirmation, isTentativeAccept } from "./meetingConfirmation.ts";
 import { isOutOfOfficeReply } from "./oooDetection.ts";
@@ -145,7 +148,13 @@ function fakeSupabase(captured: Captured[]) {
       return {
         update(payload: Record<string, unknown>) {
           captured.push({ table, payload });
-          return { eq: () => Promise.resolve({ error: null }) };
+          // .eq() is chained 1–2 deep depending on the call site, and the
+          // result is awaited. Self-returning + thenable covers both.
+          const node: Record<string, unknown> = {
+            then: (res: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(res),
+          };
+          node.eq = () => node;
+          return node;
         },
         // Chainable and self-returning so the timeline projection's
         // .eq().eq().maybeSingle() lookup resolves quietly too. (That call
@@ -211,7 +220,7 @@ Deno.test("OOO carrying a commercial question keeps needs_action", async () => {
   assertEquals(ooo.hasSubstantiveQuestion, true);
 
   // deno-lint-ignore no-explicit-any
-  await applyOOOPause({ supabase: fakeSupabase(captured) as any, ...OOO_ARGS, oooResult: ooo });
+  const r = await applyOOOPause({ supabase: fakeSupabase(captured) as any, ...OOO_ARGS, oooResult: ooo });
 
   const leadUpdate = captured.find((c) => c.table === "leads");
   assertEquals(leadUpdate?.payload.needs_action, true);
@@ -301,4 +310,106 @@ Deno.test("unsubscribe: a real opt-out WITH header context still classifies", ()
     }).intent,
     "unsubscribe",
   );
+});
+
+// ── the full-body verdict beats the truncated snippet (Codex P1) ──
+
+Deno.test("a persisted `true` overrides what the 500-char snippet shows", () => {
+  const truncated = "I am out of the office until March 5 with limited access to email.";
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: truncated,
+    }).intent,
+    "ooo_reply",
+  );
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: truncated,
+      substantiveQuestion: true,
+    }).intent,
+    null,
+  );
+});
+
+Deno.test("a persisted `false` is trusted, not re-derived", () => {
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: "I'm away. Can you resend the pricing?",
+      substantiveQuestion: false,
+    }).intent,
+    "ooo_reply",
+  );
+});
+
+Deno.test("the override flag round-trips through metadata_json", () => {
+  assertEquals(SUBSTANTIVE_QUESTION_FLAG, "has_substantive_question");
+  assertEquals(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: true }), true);
+  assertEquals(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: false }), false);
+  assertEquals(readSubstantiveQuestionFlag({}), undefined);
+  assertEquals(readSubstantiveQuestionFlag(null), undefined);
+  assertEquals(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: "yes" }), undefined);
+});
+
+// ── the question check reads only the sender's prose (Codex P2) ──
+
+Deno.test("our own quoted pitch is not the sender asking a question", () => {
+  const autoReply = [
+    "Automatic reply: I am out of the office until March 5.",
+    "",
+    "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+    "> Would pricing details help before we meet?",
+  ].join("\n");
+  assertEquals(hasSubstantiveQuestion(autoReply), false);
+  const r = detectInboundIntent({
+    fromEmail: "dana@acme.com",
+    subject: "Automatic reply: Re: pilot",
+    body: autoReply,
+  });
+  assertEquals(r.ooo?.hasSubstantiveQuestion, false);
+  assertEquals(r.intent, "ooo_reply");
+});
+
+Deno.test("a question the sender typed above the quote still counts", () => {
+  const body = [
+    "I'm out until March 5. Before then — can you send the updated pricing?",
+    "",
+    "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+    "> Here's the deck.",
+  ].join("\n");
+  assertEquals(hasSubstantiveQuestion(body), true);
+  assertEquals(
+    detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body,
+    }).intent,
+    null,
+  );
+});
+
+Deno.test("a quoted-pitch auto-reply is dropped, not stored as real inbound", async () => {
+  // The P2 and P1(1) fixes meeting: no real question → skipInbound true →
+  // the caller drops it → no false reply_now is left behind.
+  const captured: Captured[] = [];
+  const ooo = isOutOfOfficeReply(
+    [],
+    "Automatic reply: Re: pilot",
+    [
+      "I am out of the office until March 5.",
+      "",
+      "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+      "> Would pricing details help before we meet?",
+    ].join("\n"),
+  );
+  assertEquals(ooo.hasSubstantiveQuestion, false);
+  // deno-lint-ignore no-explicit-any
+  const r = await applyOOOPause({ supabase: fakeSupabase(captured) as any, ...OOO_ARGS, oooResult: ooo });
+  assertEquals(r.skipInbound, true);
+  assertEquals(captured.find((c) => c.table === "leads")?.payload.needs_action, false);
 });

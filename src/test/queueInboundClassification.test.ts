@@ -19,7 +19,10 @@ import path from "node:path";
 import {
   DETERMINISTIC_INTENTS,
   detectInboundIntent,
+  hasSubstantiveQuestion,
+  readSubstantiveQuestionFlag,
   senderIsLead,
+  SUBSTANTIVE_QUESTION_FLAG,
 } from "@shared/inboundIntentDetectors";
 import { detectMeetingConfirmation } from "@shared/meetingConfirmation";
 import { isOutOfOfficeReply } from "@shared/oooDetection";
@@ -669,5 +672,154 @@ describe("badgeMatchesQueue", () => {
     ]) {
       expect(shouldHideFromQueue(row)).toBe(true);
     }
+  });
+});
+
+// ── 11. overrideSurvivesEveryLayer (Codex P1/P1/P2, PR #143 round 2) ──
+// Findings 1 and 3 pull in opposite directions on purpose: 3 makes the
+// substantive-question override fire LESS often (quoted history no longer
+// counts), 1 makes it STICK when it does. Both are asserted here so a
+// future change cannot trade one for the other.
+describe("overrideSurvivesEveryLayer", () => {
+  const WEBHOOK = "supabase/functions/outlook-webhook/processor.ts";
+  const SYNC_PATHS = [
+    "supabase/functions/gmail-sync/index.ts",
+    "supabase/functions/gmail-bulk-sync/index.ts",
+    "supabase/functions/outlook-sync/index.ts",
+    WEBHOOK,
+  ];
+
+  // --- P1(1): pauseActiveAutomation must not blank the reply prompt ---
+  it("pausing the automation log can be told to keep the lead's action", () => {
+    const src = read(WEBHOOK);
+    expect(src).toContain("clearLeadAction = true,");
+    // The lead-clearing UPDATE is now behind the flag…
+    expect(src).toContain("if (clearLeadAction) {");
+    // …and the OOO caller passes skipInbound, so a kept-actionable OOO
+    // (skipInbound=false) does NOT clear needs_action.
+    const call = src.slice(src.indexOf("if (oooPause.paused) {"), src.indexOf("oooKeptActionable = true;"));
+    expect(call).toContain("oooPause.skipInbound,");
+  });
+
+  it("the lead-action clear is the ONLY thing gated — the log still pauses", () => {
+    const src = read(WEBHOOK);
+    const fn = src.slice(src.indexOf("async function pauseActiveAutomation("));
+    // status:"paused" writes are outside the flag, so the robot is always held.
+    const gated = fn.slice(fn.indexOf("if (clearLeadAction) {"));
+    expect(gated).not.toContain('status: "paused"');
+    expect(fn).toContain('status: "paused"');
+  });
+
+  // --- P1(2): the classifier honours the full-body verdict ---
+  it("a persisted `true` overrides what the truncated snippet shows", () => {
+    // The snippet cuts before the question, so deriving from it would say
+    // "routine OOO" and hide the card.
+    const truncated = "I am out of the office until March 5 with limited access to email.";
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Automatic reply: Re: pilot",
+        body: truncated,
+      }).intent,
+    ).toBe("ooo_reply");
+
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Automatic reply: Re: pilot",
+        body: truncated,
+        substantiveQuestion: true,
+      }).intent,
+    ).toBeNull();
+  });
+
+  it("a persisted `false` is trusted and not re-derived", () => {
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Automatic reply: Re: pilot",
+        body: "I'm away. Can you resend the pricing?",
+        substantiveQuestion: false,
+      }).intent,
+    ).toBe("ooo_reply");
+  });
+
+  it("the same override applies to calendar accepts", () => {
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Accepted: Demo @ Tue",
+        body: "See you then!",
+        substantiveQuestion: true,
+      }).intent,
+    ).toBeNull();
+  });
+
+  it("classify-inbound reads the flag instead of re-deriving", () => {
+    const src = read(CLASSIFY_INBOUND);
+    expect(src).toContain("substantiveQuestion: readSubstantiveQuestionFlag(row.metadata_json)");
+  });
+
+  it("every sync path persists the verdict on the inbound it stores", () => {
+    for (const rel of SYNC_PATHS) {
+      const src = read(rel);
+      expect(src).toContain("SUBSTANTIVE_QUESTION_FLAG");
+      expect(src).toContain("hasSubstantiveQuestion(bodyText)");
+    }
+  });
+
+  it("the flag round-trips through metadata_json", () => {
+    expect(SUBSTANTIVE_QUESTION_FLAG).toBe("has_substantive_question");
+    expect(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: true })).toBe(true);
+    expect(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: false })).toBe(false);
+    // Absent or malformed → undefined, i.e. "derive as before".
+    expect(readSubstantiveQuestionFlag({})).toBeUndefined();
+    expect(readSubstantiveQuestionFlag(null)).toBeUndefined();
+    expect(readSubstantiveQuestionFlag({ [SUBSTANTIVE_QUESTION_FLAG]: "yes" })).toBeUndefined();
+  });
+
+  // --- P2(3): the question check reads only the sender's own prose ---
+  it("our own quoted pitch does not count as the sender asking", () => {
+    const autoReply = [
+      "Automatic reply: I am out of the office until March 5.",
+      "",
+      "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+      "> Would pricing details help before we meet?",
+    ].join("\n");
+    expect(hasSubstantiveQuestion(autoReply)).toBe(false);
+    const r = detectInboundIntent({
+      fromEmail: "dana@acme.com",
+      subject: "Automatic reply: Re: pilot",
+      body: autoReply,
+    });
+    // Routine auto-reply after all → still hidden, and still dropped by
+    // the sync path rather than stored as real inbound activity.
+    expect(r.ooo?.hasSubstantiveQuestion).toBe(false);
+    expect(r.intent).toBe("ooo_reply");
+  });
+
+  it("a question the SENDER typed above the quote still counts", () => {
+    const body = [
+      "I'm out until March 5. Before then — can you send the updated pricing?",
+      "",
+      "On Mon, Mar 3, 2026 at 9:02 AM Rep <rep@us.com> wrote:",
+      "> Here's the deck.",
+    ].join("\n");
+    expect(hasSubstantiveQuestion(body)).toBe(true);
+    expect(
+      detectInboundIntent({
+        fromEmail: "dana@acme.com",
+        subject: "Automatic reply: Re: pilot",
+        body,
+      }).intent,
+    ).toBeNull();
+  });
+
+  it("the strip happens once, at the shared helper (both callers fixed)", () => {
+    const src = read("supabase/functions/_shared/meetingConfirmation.ts");
+    expect(src).toContain('import { stripQuotedReply } from "./unsubscribeDetection.ts"');
+    expect(src).toContain("const senderProse = stripQuotedReply(bodyText);");
+    // oooDetection gets it for free — it must NOT grow its own copy.
+    expect(read("supabase/functions/_shared/oooDetection.ts")).not.toContain("stripQuotedReply");
   });
 });
