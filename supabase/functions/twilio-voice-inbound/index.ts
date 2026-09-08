@@ -5,6 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
+import { resolveWorkspaceByAgentNumber } from "../_shared/phoneMapping.ts";
 import { CALL_DEFAULTS, buildOutboundDialTwiml, escapeXml } from "../_shared/callConfig.ts";
 
 const corsHeaders = {
@@ -226,17 +227,50 @@ Deno.serve(async (req) => {
     // ---------------------------------------------------------------
     const toNumber = params.To ?? "";
 
-    // Load workspace settings, scoped to the workspace that owns the number
-    // that was dialed. (This was an unscoped `.limit(1)` — the same
-    // "grab whichever row comes first" pattern removed from phoneMapping.ts in
-    // C1/9. On a second tenant it would apply another workspace's recording
-    // policy to this call.) No match → CALL_DEFAULTS, which are the safe ones:
-    // notice ON, DTMF consent OFF.
-    const { data: settings } = await supabase
-      .from("call_settings")
-      .select("recording_notice_enabled, recording_require_dtmf_consent")
-      .eq("default_twilio_number", toNumber)
-      .maybeSingle();
+    // ---- Resolve the WORKSPACE, then load ITS settings ----
+    // This was an unscoped `.limit(1)` — the same "grab whichever row comes
+    // first" pattern removed from phoneMapping.ts in C1/9. On a second tenant it
+    // would apply another workspace's recording policy to this call.
+    //
+    // But a raw string `.eq("default_twilio_number", toNumber)` is not enough
+    // either: a stored "+1 (415) 555-0123" would not equal Twilio's
+    // "+14155550123", no row would match, and `recording_require_dtmf_consent`
+    // would silently fall back to OFF — losing the press-1 consent gate in a
+    // two-party-consent state. That is the exact failure mode this unit exists
+    // to close, so resolution is deliberately layered:
+    //   1. normalized E.164 match on the dialed number (shared matcher, so the
+    //      rule has one definition — phoneMapping.matchWorkspaceByNumber);
+    //   2. failing that, the workspace on an existing call_sessions row for this
+    //      CallSid (a status callback may already have created it);
+    //   3. only when there is genuinely NO workspace, CALL_DEFAULTS — and that
+    //      is logged at error level, because it means a live call is being
+    //      handled under guessed consent settings.
+    let settingsWorkspaceId = await resolveWorkspaceByAgentNumber(supabase, toNumber);
+
+    if (!settingsWorkspaceId && params.CallSid) {
+      const { data: existingSession } = await supabase
+        .from("call_sessions")
+        .select("workspace_id")
+        .eq("call_sid", params.CallSid)
+        .maybeSingle();
+      settingsWorkspaceId = (existingSession?.workspace_id as string | undefined) ?? null;
+    }
+
+    let settings: { recording_notice_enabled?: boolean; recording_require_dtmf_consent?: boolean } | null = null;
+    if (settingsWorkspaceId) {
+      const { data } = await supabase
+        .from("call_settings")
+        .select("recording_notice_enabled, recording_require_dtmf_consent")
+        .eq("workspace_id", settingsWorkspaceId)
+        .maybeSingle();
+      settings = data ?? null;
+    } else {
+      logger.error("inbound_call_settings_no_workspace", {
+        to: toNumber,
+        callSid: params.CallSid,
+        note: "recording consent settings fell back to CALL_DEFAULTS — check call_settings.default_twilio_number",
+      });
+    }
 
     const recordingNotice = settings?.recording_notice_enabled ?? CALL_DEFAULTS.RECORDING_NOTICE_ENABLED;
     const requireDtmf = settings?.recording_require_dtmf_consent ?? CALL_DEFAULTS.RECORDING_REQUIRE_DTMF_CONSENT;

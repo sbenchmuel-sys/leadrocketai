@@ -172,6 +172,46 @@ describe("C1 — the paid functions are not open to the world", () => {
   });
 });
 
+describe("C1 — inbound recording-consent settings", () => {
+  // QA HOLD #2: an exact string match on the dialled number silently drops the
+  // press-1 DTMF consent gate whenever the stored number is formatted
+  // differently — in a two-party-consent state that is a compliance gap.
+  it("consentSettingsNormalisedMatch — the number match is normalised, not a raw string compare", () => {
+    const src = stripComments(voiceInbound());
+    // No raw string equality against the dialled number.
+    expect(src).not.toMatch(/\.eq\("default_twilio_number", toNumber\)/);
+    // The shared, normalised matcher is used instead.
+    expect(src).toMatch(/resolveWorkspaceByAgentNumber\(supabase, toNumber\)/);
+
+    // ...and that matcher normalises BOTH sides through one definition.
+    const pm = stripComments(phoneMapping());
+    expect(pm).toMatch(/export function normalizeE164\(/);
+    expect(pm).toMatch(/export function matchWorkspaceByNumber\(/);
+    expect(pm).toMatch(/normalizeE164\(r\.default_twilio_number\) === target/);
+    // resolvePhoneMapping uses the same matcher — one rule, not two.
+    expect(pm).toMatch(/result\.workspaceId = await resolveWorkspaceByAgentNumber\(/);
+  });
+
+  it("consentSettingsWorkspaceFallback — settings are workspace-scoped, defaults only when no workspace", () => {
+    const src = stripComments(voiceInbound());
+
+    // Fallback 2: an existing call_sessions row for this CallSid.
+    const numberMatch = src.indexOf("resolveWorkspaceByAgentNumber(supabase, toNumber)");
+    const sessionFallback = src.indexOf('.eq("call_sid", params.CallSid)');
+    expect(numberMatch).toBeGreaterThan(-1);
+    expect(sessionFallback).toBeGreaterThan(numberMatch);
+
+    // The settings row is always fetched BY WORKSPACE, never unscoped.
+    expect(src).toMatch(
+      /\.from\("call_settings"\)\s*\.select\("recording_notice_enabled, recording_require_dtmf_consent"\)\s*\.eq\("workspace_id", settingsWorkspaceId\)/,
+    );
+    // Whatever the workspace says about DTMF consent is what is honoured...
+    expect(src).toMatch(/settings\?\.recording_require_dtmf_consent \?\? CALL_DEFAULTS\.RECORDING_REQUIRE_DTMF_CONSENT/);
+    // ...and CALL_DEFAULTS is reached ONLY on the no-workspace branch, loudly.
+    expect(src).toMatch(/} else \{\s*logger\.error\("inbound_call_settings_no_workspace"/);
+  });
+});
+
 describe("C1 — transcription language", () => {
   it("hebrewAlternativeLanguages — Google gets alternatives, and he-IL falls back to English", () => {
     const asr = stripComments(asrProvider());
@@ -184,14 +224,35 @@ describe("C1 — transcription language", () => {
     // FOUNDER DECISION: he-IL primary → en-US alternative. Everyone else keeps
     // their configured supported_languages untouched.
     expect(config).toMatch(/"he-IL":\s*\["en-US"\]/);
-    expect(config).toMatch(/LANGUAGE_ALTERNATIVES\[primary\] \?\? configured/);
+    expect(config).toMatch(/LANGUAGE_ALTERNATIVES\[primary\]/);
     // The default set for non-Hebrew workspaces is unchanged.
     expect(config).toMatch(/SUPPORTED_LANGUAGES:\s*\["en-US", "es-US", "fr-CA"\]/);
+    // Alternatives come from LANGUAGE_ALTERNATIVES, else ONLY from an explicitly
+    // configured list — never from the shipped default (QA HOLD #3).
+    expect(config).toMatch(/hasExplicitLanguages\(supportedLanguages\) \? supportedLanguages! : \[\]/);
 
     // call-transcribe actually uses the resolver.
     const transcribe = stripComments(callTranscribe());
     expect(transcribe).toMatch(/resolveAsrLanguages\(/);
     expect(transcribe).toMatch(/allowedLanguages:\s*alternativeLangs/);
+  });
+
+  // QA HOLD #3: an English-only workspace that never configured languages must
+  // get EXACTLY the single-language request it got before this unit. Handing
+  // Google the shipped es-US/fr-CA default would let a dealership's English
+  // calls come back partly transcribed as Spanish or French.
+  it("englishOnlyWorkspaceUnchanged — the shipped default list yields no alternatives", () => {
+    const config = stripComments(callConfig());
+    const fn = /function hasExplicitLanguages\([\s\S]*?\n}\n/.exec(config)?.[0] ?? "";
+    expect(fn).toBeTruthy();
+    // A list equal to the shipped default counts as UNconfigured.
+    expect(fn).toMatch(/CALL_DEFAULTS\.SUPPORTED_LANGUAGES/);
+    expect(fn).toMatch(/return !sameAsShipped;/);
+
+    // And the ASR provider only attaches the field when the list is non-empty,
+    // so an empty alternatives list means no alternativeLanguageCodes at all.
+    const asr = stripComments(asrProvider());
+    expect(asr).toMatch(/alternativeLanguageCodes\.length > 0/);
   });
 });
 
@@ -209,10 +270,14 @@ describe("C1 — tenant isolation and lost recordings", () => {
     for (const q of leadQueries) expect(q).toMatch(/\.eq\("workspace_id"/);
   });
 
-  it("twilio-voice-inbound loads call_settings scoped to the dialed number", () => {
+  it("twilio-voice-inbound never loads call_settings unscoped", () => {
     const src = stripComments(voiceInbound());
+    // The original bug: `.select("*").limit(1)` — whichever row came first.
     expect(src).not.toMatch(/\.from\("call_settings"\)\s*\.select\("\*"\)\s*\.limit\(1\)/);
-    expect(src).toMatch(/\.from\("call_settings"\)[\s\S]{0,200}\.eq\("default_twilio_number", toNumber\)/);
+    // Every call_settings read in this file is keyed on a workspace id.
+    const reads = src.match(/\.from\("call_settings"\)[\s\S]{0,300}?\.maybeSingle\(\)/g) ?? [];
+    expect(reads.length).toBeGreaterThan(0);
+    for (const r of reads) expect(r).toMatch(/\.eq\("workspace_id"/);
   });
 
   it("an early recording callback creates a stub session instead of being dropped", () => {
@@ -227,7 +292,7 @@ describe("C1 — tenant isolation and lost recordings", () => {
 });
 
 describe("C1 — retention and removals", () => {
-  const MIGRATION = "supabase/migrations/20260908120000_purge_call_media.sql";
+  const MIGRATION = "supabase/migrations/20260908150000_purge_call_media.sql";
 
   it("purgeJobDisabled — the purge job is created but shipped OFF", () => {
     expect(existsSync(path.join(ROOT, MIGRATION))).toBe(true);

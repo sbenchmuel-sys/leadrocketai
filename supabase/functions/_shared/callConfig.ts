@@ -36,21 +36,49 @@ export const LANGUAGE_ALTERNATIVES: Readonly<Record<string, readonly string[]>> 
 };
 
 /**
+ * Has this workspace deliberately chosen its language list, or is it just
+ * carrying the column's out-of-the-box default?
+ *
+ * `call_settings.supported_languages` is NOT NULL DEFAULT
+ * ARRAY['en-US','es-US','fr-CA'], so every workspace row is non-empty and
+ * "non-empty" cannot mean "configured". A row matching the shipped default is
+ * treated as unconfigured.
+ *
+ * ponytail: a workspace that deliberately types the exact default set is
+ * indistinguishable from one that never touched it, and gets no alternatives.
+ * Ceiling: no "configured at" marker on the column. Upgrade path is a nullable
+ * `supported_languages` (NULL = untouched) or a separate opt-in flag.
+ */
+function hasExplicitLanguages(list: readonly string[] | null | undefined): boolean {
+  if (!list || list.length === 0) return false;
+  const shipped = CALL_DEFAULTS.SUPPORTED_LANGUAGES as readonly string[];
+  const sameAsShipped = list.length === shipped.length && shipped.every((l) => list.includes(l));
+  return !sameAsShipped;
+}
+
+/**
  * Resolve the primary ASR language and the alternatives Google should also try.
  *
  * Before this existed, `call-transcribe` sent ONE `languageCode` and no
  * alternatives, so a Hebrew call on an `en-US` workspace came back as English
  * gibberish (C1/7).
+ *
+ * Alternatives are sent in exactly two cases, and NO others:
+ *   1. the primary has a defined alternative (he-IL → en-US);
+ *   2. the workspace has EXPLICITLY configured extra languages.
+ * An out-of-the-box English workspace gets an EMPTY alternatives list — byte for
+ * byte the single-language request it got before this unit. Handing Google the
+ * shipped es-US/fr-CA default would let an English-only dealership's calls come
+ * back partly transcribed as Spanish or French, which is a regression, not a fix.
  */
 export function resolveAsrLanguages(
   defaultLanguage: string | null | undefined,
   supportedLanguages: readonly string[] | null | undefined,
 ): { primary: string; alternatives: string[] } {
   const primary = defaultLanguage || CALL_DEFAULTS.DEFAULT_LANGUAGE;
-  const configured = supportedLanguages && supportedLanguages.length > 0
-    ? supportedLanguages
-    : CALL_DEFAULTS.SUPPORTED_LANGUAGES;
-  const source = LANGUAGE_ALTERNATIVES[primary] ?? configured;
+
+  const source = LANGUAGE_ALTERNATIVES[primary]
+    ?? (hasExplicitLanguages(supportedLanguages) ? supportedLanguages! : []);
 
   const alternatives = Array.from(new Set(source))
     .filter((lang) => Boolean(lang) && lang !== primary)
