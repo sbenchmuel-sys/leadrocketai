@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { resolvePDFJS } from "https://cdn.jsdelivr.net/npm/pdfjs-serverless@0.5.0/+esm";
 import { BlobReader, ZipReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.52/index.js";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,18 +49,12 @@ async function extractWithAI(fileBase64: string, fileName: string, mimeType: str
 
   console.log(`[parse-document] Using AI vision to extract text from: ${fileName}`);
 
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-pro",
-      messages: [
-        {
-          role: "system",
-          content: `You are a document text extraction assistant. Extract ALL text content from the provided document image/file. 
+  const response = await aiGatewayFetch(LOVABLE_API_KEY, {
+    model: "google/gemini-2.5-pro",
+    messages: [
+      {
+        role: "system",
+        content: `You are a document text extraction assistant. Extract ALL text content from the provided document image/file. 
 Preserve the document structure including:
 - Headings and subheadings
 - Paragraphs and line breaks
@@ -68,26 +63,25 @@ Preserve the document structure including:
 - Any captions or footnotes
 
 Return ONLY the extracted text content, no commentary or explanations. If the document contains no readable text, return "NO_TEXT_FOUND".`
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Extract all text from this document: ${fileName}`
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${fileBase64}`
-              }
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Extract all text from this document: ${fileName}`
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${mimeType};base64,${fileBase64}`
             }
-          ]
-        }
-      ],
-      max_tokens: 16000,
-    }),
-  });
+          }
+        ]
+      }
+    ],
+    max_tokens: 16000,
+  }, { label: "parse-document", timeoutMs: 180_000 }); // vision fallback: gemini-2.5-pro, 16k tokens, non-streaming
 
   if (!response.ok) {
     const errText = await response.text();
