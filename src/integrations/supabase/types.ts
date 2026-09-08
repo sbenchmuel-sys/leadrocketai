@@ -1472,6 +1472,7 @@ export type Database = {
       gmail_connections: {
         Row: {
           access_token_encrypted: string | null
+          bulk_sync_cursor: number
           created_at: string
           gmail_email: string
           granted_scopes: string[]
@@ -1486,6 +1487,7 @@ export type Database = {
         }
         Insert: {
           access_token_encrypted?: string | null
+          bulk_sync_cursor?: number
           created_at?: string
           gmail_email: string
           granted_scopes?: string[]
@@ -1500,6 +1502,7 @@ export type Database = {
         }
         Update: {
           access_token_encrypted?: string | null
+          bulk_sync_cursor?: number
           created_at?: string
           gmail_email?: string
           granted_scopes?: string[]
