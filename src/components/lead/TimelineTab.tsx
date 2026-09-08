@@ -1122,8 +1122,12 @@ export default function TimelineTab({
   const loadTimeline = () => {
     setIsLoading(true);
     const reader = groupId
-      ? getGroupTimelineItems(groupId, { includeHidden: showHidden })
-      : getLeadTimeline(leadId, { includeHidden: showHidden });
+      // ALWAYS fetch hidden rows; `showHidden` only decides what we render.
+      // Fetching without them made hiddenCount collapse to 0 the moment a rep
+      // hid something, which took the "Show hidden" control off screen and left
+      // no way to restore the row (Codex P2).
+      ? getGroupTimelineItems(groupId, { includeHidden: true })
+      : getLeadTimeline(leadId, { includeHidden: true });
     reader
       .then(items => setTimelineItems(items))
       .catch(console.error)
@@ -1132,7 +1136,7 @@ export default function TimelineTab({
 
   useEffect(() => {
     loadTimeline();
-  }, [leadId, groupId, showHidden]);
+  }, [leadId, groupId]);
 
   // Live-refresh the timeline when a new event lands for this lead.
   // Group mode also receives updates for the current lead only — group
@@ -1333,9 +1337,10 @@ export default function TimelineTab({
 
   // Apply filter
   const filteredItems = useMemo(() => {
+    const visible = showHidden ? timelineItems : timelineItems.filter(i => !i.hidden);
     const base = activeFilter === "all"
-      ? timelineItems
-      : timelineItems.filter(i => matchesFilter(i, activeFilter));
+      ? visible
+      : visible.filter(i => matchesFilter(i, activeFilter));
     // Hide bare system_note rows (no subject AND no displayable snippet) —
     // they render as a date pill with no content and look broken.
     return base.filter(i => {
@@ -1344,7 +1349,7 @@ export default function TimelineTab({
       const hasSnippet = !!(i.snippet_text && formatSnippet(i).trim());
       return hasSubject || hasSnippet;
     });
-  }, [timelineItems, activeFilter]);
+  }, [timelineItems, activeFilter, showHidden]);
 
   const entries = useMemo(() => groupIntoThreads(filteredItems), [filteredItems]);
   const autoExpand = useMemo(() => getAutoExpandIds(entries), [entries]);
@@ -1361,7 +1366,7 @@ export default function TimelineTab({
 
   // ...unless the "+ Add a message" form is open — a brand-new lead has no
   // history yet and must still be able to log the first inbound message.
-  if (timelineItems.length === 0 && !showHidden && !showReplyForm) {
+  if (timelineItems.length === 0 && !showReplyForm) {
     return (
       <div className="py-12 text-center">
         <p className="text-sm text-muted-foreground">
