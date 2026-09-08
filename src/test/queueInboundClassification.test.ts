@@ -264,6 +264,27 @@ describe("tentativeAcceptNotAccepted", () => {
 describe("aiSignalsPersisted", () => {
   const src = read(CLASSIFY_INBOUND);
 
+  it("the intent_router prompt actually asks for all five fields", () => {
+    // Persisting a field the prompt never requests ships a dead column.
+    const prompts = read("supabase/functions/_shared/prompts.ts");
+    const schema = prompts.slice(
+      prompts.indexOf("intent_router: `"),
+      prompts.indexOf("email_intro_fast:"),
+    );
+    for (const field of [
+      '"reply_worthy"',
+      '"urgency"',
+      '"tone"',
+      '"questions_extracted"',
+      '"language"',
+    ]) {
+      expect(schema).toContain(field);
+    }
+    // …and language must be specified as ISO 639-1, which is what
+    // `extractSignals` validates (non-empty, <= 32 chars, lowercased).
+    expect(schema).toMatch(/language=.*ISO 639-1/);
+  });
+
   it("classify-inbound extracts all four signals plus language", () => {
     for (const field of [
       "reply_worthy",

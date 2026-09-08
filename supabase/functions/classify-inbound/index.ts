@@ -218,12 +218,10 @@ interface AiSignals {
   tone?: string;
   questions_extracted?: string[];
   /**
-   * ponytail: `language` is NOT in the intent_router prompt schema yet
-   * (supabase/functions/_shared/prompts.ts is owned by another unit), so
-   * today this is only populated if the model volunteers it. The read
-   * side is wired now so adding one line to the prompt schema is the
-   * whole remaining change. Ceiling: until that line lands, expect
-   * `language` to be absent on most rows.
+   * ISO 639-1 code of the language the sender wrote in, requested by
+   * `PROMPTS.intent_router`. Rows classified before that field was added
+   * to the schema simply don't carry it — the parser omits what isn't
+   * there rather than guessing.
    */
   language?: string;
 }

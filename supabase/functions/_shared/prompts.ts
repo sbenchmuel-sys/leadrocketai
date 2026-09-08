@@ -84,7 +84,8 @@ Return JSON ONLY in this exact schema:
   "reply_worthy": true,
   "suggested_motion": "outbound_prospecting|inbound_response|nurture|closing|post_meeting",
   "questions_extracted": ["..."],
-  "tone": "positive|neutral|negative"
+  "tone": "positive|neutral|negative",
+  "language": "en"
 }
 
 Rules:
@@ -92,6 +93,7 @@ Rules:
 - suggested_motion=inbound_response if urgency high OR explicit request for call/demo/pricing/procurement steps.
 - Extract explicit questions verbatim into questions_extracted.
 - If unclear, intent_primary="not_sure" and reply_worthy=true.
+- language=the ISO 639-1 two-letter code of the language the SENDER wrote in ("en", "de", "es", "fr", ...). Judge the sender's own prose, not any quoted reply beneath it. If genuinely undeterminable, use "en".
 
 Summary rules:
 - ai_summary: paraphrase what the sender said. Length scales with the
