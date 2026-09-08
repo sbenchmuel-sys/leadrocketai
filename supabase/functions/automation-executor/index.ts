@@ -975,13 +975,47 @@ serve(async (req) => {
           continue;
         }
 
-        // ── CAN-SPAM PRECONDITIONS (fail closed, BEFORE spending anything) ──
+        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
+
+        // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
+        // Uses the canonical resolver instead of ad-hoc text parsing.
+        // Prefers structured campaign steps from DB when available,
+        // falls back to legacy text parsing from action_instructions.
+        // Resolved HERE (before the draft lookup) so the step's CHANNEL is known
+        // before the email-only preconditions / floor below run.
+        let structuredCampaign = null;
+        try {
+          structuredCampaign = await loadCampaignForLead(lead.id, supabase);
+          if (structuredCampaign) {
+            console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
+          }
+        } catch (err) {
+          console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
+        }
+        const campaignInput: CampaignResolverInput = {
+          lead_id: lead.id,
+          action_key: lead.next_action_key,
+          motion: isInboundLead ? "inbound_response" : lead.motion,
+          outbound_tone: (lead as any).outbound_tone || "direct",
+          action_instructions: lead.action_instructions,
+          structured_campaign: structuredCampaign,
+          prior_steps_sent: undefined,
+          has_reply: !!freshLead.last_inbound_at,
+          meeting_booked: freshLead.has_future_meeting,
+          include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
+          calendar_link: repProfile?.calendar_link || null,
+          playbook_id: undefined,
+        };
+        const resolvedInstruction = resolveCampaignInstruction(campaignInput);
+        const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
+        // The step's channel — applies to cached AND generated drafts.
+        const resolvedChannel: string = resolvedInstruction?.channel || "email";
+
+        // ── CAN-SPAM PRECONDITIONS (email only; fail closed, BEFORE spending anything) ──
         // Checked here — ahead of the approved-draft consumption and the ai_task
         // call — so a misconfigured environment neither re-spends AI credits every
-        // tick nor marks a rep-approved draft "sent" without sending it. The
-        // channel is not resolved yet at this point, so these apply to every step;
-        // both are environment-level misconfigurations that must be fixed anyway.
-        if (!unsubSecret) {
+        // tick nor marks a rep-approved draft "sent" without sending it.
+        if (resolvedChannel !== "sms" && !unsubSecret) {
           console.error(`[automation-executor] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send email for lead ${lead.id} (fail closed)`);
           logEntry.status = "skipped";
           logEntry.error_message = "UNSUBSCRIBE_TOKEN_SECRET unset — cannot add unsubscribe link (fail closed)";
@@ -990,14 +1024,37 @@ serve(async (req) => {
           skipped++;
           continue;
         }
-        const postalAddress = await getPostalAddress(lead.workspace_id);
-        if (!postalAddress && requirePostalAddress()) {
+        const postalAddress = resolvedChannel !== "sms" ? await getPostalAddress(lead.workspace_id) : "";
+        if (resolvedChannel !== "sms" && !postalAddress && requirePostalAddress()) {
           logEntry.status = "skipped";
           logEntry.error_message = "No company postal address (CAN-SPAM) — set it in Settings → Cold Outreach Safety";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           skipped++;
           continue;
+        }
+
+        // ── EARLY SEND FLOOR (email only) — SAME helper as the cold path ──
+        // Runs BEFORE the cached draft is consumed / the AI call, so a permanent
+        // block (unsubscribed, invalid email, do-not-contact list) never spends
+        // credits or a rep-approved draft, and a transient read error leaves the
+        // approved draft untouched for the retry. The LATE floor immediately
+        // before the provider call (below) is the race closer.
+        if (resolvedChannel !== "sms") {
+          const earlyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!earlyFloor.ok) {
+            const transient = earlyFloor.reason === "suppression check failed" || earlyFloor.reason === "lead lookup failed";
+            console.warn(`[automation-executor] Lead ${lead.id}: send floor blocked (${earlyFloor.reason}) — ${transient ? "retry next tick" : "pausing automation"}`);
+            logEntry.status = "skipped";
+            logEntry.error_message = `Send floor: ${earlyFloor.reason}`.slice(0, 200);
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            if (!transient) {
+              await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            }
+            skipped++;
+            continue;
+          }
         }
 
         // --- STRATEGY 1: Draft Caching ---
@@ -1030,8 +1087,6 @@ serve(async (req) => {
 
         let draftBody: string;
         let subject: string;
-        let resolvedChannel: string = "email"; // default, overridden by campaign resolver
-        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
           const draftType = approvedDraft?.body_text ? "approved" : "pending";
@@ -1076,19 +1131,8 @@ serve(async (req) => {
             }
           }
 
-          // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
-          // Uses the canonical resolver instead of ad-hoc text parsing.
-          // Prefers structured campaign steps from DB when available,
-          // falls back to legacy text parsing from action_instructions.
-          let structuredCampaign = null;
-          try {
-            structuredCampaign = await loadCampaignForLead(lead.id, supabase);
-            if (structuredCampaign) {
-              console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
-            }
-          } catch (err) {
-            console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
-          }
+          // (Structured campaign + channel were resolved BEFORE the draft lookup —
+          // see STRUCTURED CAMPAIGN RESOLVER above.)
 
           // Campaign KB document for the LIVE send: when the (active) campaign has
           // a validated uploaded knowledge document, scope the draft's KB
@@ -1113,23 +1157,6 @@ serve(async (req) => {
               console.warn(`[automation-executor] Campaign KB doc validation failed for lead ${lead.id} — falling back to standard KB:`, err);
             }
           }
-
-          const campaignInput: CampaignResolverInput = {
-            lead_id: lead.id,
-            action_key: lead.next_action_key,
-            motion: isInboundLead ? "inbound_response" : lead.motion,
-            outbound_tone: (lead as any).outbound_tone || "direct",
-            action_instructions: lead.action_instructions,
-            structured_campaign: structuredCampaign,
-            prior_steps_sent: undefined,
-            has_reply: !!freshLead.last_inbound_at,
-            meeting_booked: freshLead.has_future_meeting,
-            include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
-            calendar_link: repProfile?.calendar_link || null,
-            playbook_id: undefined,
-          };
-          const resolvedInstruction = resolveCampaignInstruction(campaignInput);
-          const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
 
           // Legacy fallback: still pass custom_instructions for backward compat
           // with the existing ai_task prompt injection pipeline
@@ -1240,9 +1267,6 @@ serve(async (req) => {
             .replace(/\[Sender\s*Name\]/gi, repFirstName)
             .replace(/\{First\s*Name\}/gi, repFirstName)
             .replace(/\[First\s*Name\]/gi, repFirstName);
-
-          // Determine resolved channel for this step
-          resolvedChannel = resolvedInstruction?.channel || "email";
 
           // Append signature + footer only for email channel
           if (resolvedChannel === "email") {
@@ -1415,6 +1439,10 @@ serve(async (req) => {
               .eq("id", claimId);
             if (!transient) {
               await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            } else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {
+              // Retry path: give the rep-approved draft back so the next tick
+              // reuses it instead of regenerating copy via ai_task.
+              await supabase.from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id);
             }
             skipped++;
             continue;
@@ -2043,7 +2071,15 @@ serve(async (req) => {
             mail_account_id: mailAcct.id,
           };
           const { data: claim, error: claimErr } = await supabase.from("automation_log").insert(claimRow).select("id").single();
-          if (!coldTouchClaimAcquired(claimErr, claim)) { await logColdSkip(touch, "Another executor run already claimed this touch"); continue; } // 23505 → already claimed by a concurrent run; no double-send
+          if (!coldTouchClaimAcquired(claimErr, claim)) {
+            // 23505 → already claimed by a concurrent run (no double-send). Anything
+            // else is a real insert failure and must be logged as such.
+            const dup = (claimErr as any)?.code === "23505";
+            await logColdSkip(touch, dup
+              ? "Another executor run already claimed this touch"
+              : `claim failed: ${String((claimErr as any)?.message || "no claim row returned")}`);
+            continue;
+          }
 
           // LATE opt-out guard (closes the unsubscribe race). A recipient can POST the
           // unsubscribe form — or a bounce / admin / keyword path can set unsubscribed —

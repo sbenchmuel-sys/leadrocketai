@@ -99,7 +99,7 @@ describe("legacyPathFloorAndFooter", () => {
   it("the legacy email path calls coldSendFloor between the claim and the provider call", () => {
     const legacy = legacySection();
     const claim = legacy.indexOf('status: "claiming"');
-    const floor = legacy.indexOf("coldSendFloor(supabase, lead.id, lead.workspace_id)");
+    const floor = legacy.indexOf("const legacyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id)");
     const provider = legacy.indexOf("functions/v1/gmail-send");
     const outlook = legacy.indexOf("functions/v1/outlook-send");
     expect(floor).toBeGreaterThan(claim);
@@ -138,25 +138,43 @@ describe("legacyPathFloorAndFooter", () => {
     expect(legacy).toMatch(/if \(resolvedChannel !== "sms"\) \{\s*\n\s*const legacyFloor = await coldSendFloor/);
   });
 
-  it("the unsubscribe-secret and postal-address refusals run BEFORE the draft lookup and the AI call", () => {
+  it("the unsubscribe-secret and postal-address refusals run BEFORE the draft lookup and the AI call, email steps only", () => {
     const legacy = legacySection();
-    const secretCheck = legacy.indexOf("if (!unsubSecret) {");
-    const postalCheck = legacy.indexOf("if (!postalAddress && requirePostalAddress()) {");
+    const channelResolved = legacy.indexOf("const resolvedChannel: string = resolvedInstruction?.channel");
+    const secretCheck = legacy.indexOf('if (resolvedChannel !== "sms" && !unsubSecret) {');
+    const postalCheck = legacy.indexOf('if (resolvedChannel !== "sms" && !postalAddress && requirePostalAddress()) {');
     const draftLookup = legacy.indexOf('from("drafts")');
     const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
     const aiCall = legacy.indexOf("functions/v1/ai_task");
-    expect(secretCheck).toBeGreaterThan(-1);
-    expect(postalCheck).toBeGreaterThan(-1);
+    expect(channelResolved).toBeGreaterThan(-1);
+    expect(secretCheck).toBeGreaterThan(channelResolved); // channel known before the checks
+    expect(postalCheck).toBeGreaterThan(channelResolved);
     expect(secretCheck).toBeLessThan(draftLookup);
     expect(postalCheck).toBeLessThan(draftLookup);
     expect(postalCheck).toBeLessThan(approvedConsumed);
     expect(postalCheck).toBeLessThan(aiCall);
     // Each refusal writes the skip row and continues (no send, no claim).
     for (const at of [secretCheck, postalCheck]) {
-      const branch = legacy.slice(at, at + 500);
+      const branch = legacy.slice(at, at + 800);
       expect(branch).toContain('from("automation_log").insert(logEntry)');
       expect(branch).toContain("continue;");
     }
+    // The resolver itself (loadCampaignForLead) also precedes the draft lookup.
+    expect(legacy.indexOf("loadCampaignForLead(lead.id, supabase)")).toBeLessThan(draftLookup);
+  });
+
+  it("the EARLY floor runs before the cached approved draft is consumed; the LATE floor restores it on a transient failure", () => {
+    const legacy = legacySection();
+    const earlyFloor = legacy.indexOf("const earlyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id)");
+    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
+    const aiCall = legacy.indexOf("functions/v1/ai_task");
+    expect(earlyFloor).toBeGreaterThan(-1);
+    expect(earlyFloor).toBeLessThan(approvedConsumed);
+    expect(earlyFloor).toBeLessThan(aiCall);
+    expect(earlyFloor).toBeGreaterThan(legacy.indexOf("const resolvedChannel: string")); // email-only gate is meaningful
+    const lateFloor = legacy.indexOf("const legacyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id)");
+    expect(lateFloor).toBeGreaterThan(approvedConsumed);
+    expect(legacy.slice(lateFloor, lateFloor + 1400)).toContain('from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)');
   });
 });
 
@@ -205,6 +223,17 @@ describe("skipLogging", () => {
     }
     expect(branches).toBeGreaterThanOrEqual(24);
     expect(logged).toBe(branches);
+  });
+
+  it("a cold claim failure is only reported as a duplicate when the error code is 23505", () => {
+    const cold = coldSection();
+    const at = cold.indexOf("if (!coldTouchClaimAcquired(claimErr, claim)) {");
+    expect(at).toBeGreaterThan(-1);
+    const branch = cold.slice(at, at + 700);
+    expect(branch).toContain('(claimErr as any)?.code === "23505"');
+    expect(branch).toContain("Another executor run already claimed this touch");
+    expect(branch).toContain("`claim failed: ${");
+    expect(branch).toContain("continue;");
   });
 
   it("logColdSkip writes status 'skipped' to automation_log (singular) and never throws", () => {
