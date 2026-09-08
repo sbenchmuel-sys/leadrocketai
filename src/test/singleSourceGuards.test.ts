@@ -31,10 +31,9 @@ function offenders(dirs: string[], re: RegExp, allowed: (rel: string) => boolean
 }
 
 describe("single-source guards (enable per unit)", () => {
-  // [E-S1a] — enabled when _shared/aiGateway.ts lands and every edge function
-  // calls the Lovable gateway through it. Until then ~17 files fetch
-  // ai.lovable.dev directly.
-  it.skip('"lovable.dev" appears only in _shared/aiGateway.ts [E-S1a]', () => {
+  // [E-S1a] — live: every edge function calls the Lovable gateway through
+  // _shared/aiGateway.ts.
+  it('"lovable.dev" appears only in _shared/aiGateway.ts [E-S1a]', () => {
     const bad = offenders(
       ["supabase/functions"],
       /lovable\.dev/,
