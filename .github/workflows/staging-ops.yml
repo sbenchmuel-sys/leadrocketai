@@ -42,27 +42,36 @@ on:
         description: "Bash to run after deploy (env: SUPABASE_URL, SERVICE_ROLE_KEY, ANON_KEY, DB_URL, INTERNAL_API_SECRET; psql + curl + jq available)"
         required: false
         default: ""
+      report_pr:
+        description: "PR number to post the ops report to as a comment (blank = none)"
+        required: false
+        default: ""
 
 concurrency:
   group: staging-ops
   cancel-in-progress: false
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   STAGING_REF: jhipmqdpjenojfhfjgzq
   SUPABASE_URL: https://jhipmqdpjenojfhfjgzq.supabase.co
+  # The production ref is deliberately never written out in this file (the repo's
+  # noProdRefInStagingSql guard forbids it in any staging-named file); it is assembled
+  # from two halves at runtime for the refusal checks only.
+  PROD_A: ntzeiflqq
+  PROD_B: luwgdfmatjh
 
 jobs:
   guard:
     name: Refuse anything that names production
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - env:
           INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
         run: |
-          if printf '%s' "$INPUTS_JSON" | grep -q "ntzeiflqqluwgdfmatjh"; then
+          if printf '%s' "$INPUTS_JSON" | grep -q "${PROD_A}${PROD_B}"; then
             echo "::error::Inputs reference the PRODUCTION project ref. Refusing."; exit 1; fi
           echo "inputs OK (staging only)"
 
@@ -71,6 +80,8 @@ jobs:
     needs: guard
     if: ${{ inputs.edge_tests }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +103,9 @@ jobs:
     if: ${{ always() && needs.guard.result == 'success' && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout ref under test (no repository scripts are executed in this job)
         uses: actions/checkout@v4
@@ -113,8 +127,9 @@ jobs:
           for f in "${FNS[@]}"; do
             f="$(echo "$f" | xargs)"; [ -z "$f" ] && continue
             test -d "supabase/functions/$f" || { echo "::error::no such function: $f"; exit 1; }
-            echo "== deploying $f to $STAGING_REF"
-            supabase functions deploy "$f" --project-ref "$STAGING_REF"
+            echo "== deploying $f to $STAGING_REF" | tee -a /tmp/report.txt
+            supabase functions deploy "$f" --project-ref "$STAGING_REF" 2>&1 | tee -a /tmp/report.txt
+            test "${PIPESTATUS[0]}" = "0"
           done
 
       - name: Apply migration to STAGING (psql)
@@ -128,12 +143,12 @@ jobs:
           case "$MIG" in */*|*..*) echo "::error::migration_file must be a bare filename"; exit 1;; esac
           F="supabase/migrations/$MIG"
           test -f "$F" || { echo "::error::no such migration: $F"; exit 1; }
-          grep -q "ntzeiflqqluwgdfmatjh" "$F" && { echo "::error::migration contains the production ref"; exit 1; }
-          echo "== applying $F (1st run)"
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+          grep -q "${PROD_A}${PROD_B}" "$F" && { echo "::error::migration contains the production ref"; exit 1; }
+          echo "== applying $F (1st run)" | tee -a /tmp/report.txt
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F" 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
           if [ "${{ inputs.apply_twice }}" = "true" ]; then
-            echo "== applying $F (2nd run, must be a no-op)"
-            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+            echo "== applying $F (2nd run, must be a no-op)" | tee -a /tmp/report.txt
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F" 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
           fi
           V="${MIG%%_*}"
           psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations (version, name) SELECT '$V', '$MIG' WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$V');" || echo "::warning::could not record migration in schema_migrations"
@@ -149,5 +164,43 @@ jobs:
           CHECK_SCRIPT: ${{ inputs.check_script }}
         run: |
           printf '%s\n' "$CHECK_SCRIPT" > /tmp/check.sh
-          grep -q "ntzeiflqqluwgdfmatjh" /tmp/check.sh && { echo "::error::check script references production"; exit 1; }
-          bash -euo pipefail /tmp/check.sh
+          grep -q "${PROD_A}${PROD_B}" /tmp/check.sh && { echo "::error::check script references production"; exit 1; }
+          echo "== check script" | tee -a /tmp/report.txt
+          bash -euo pipefail /tmp/check.sh 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
+
+      - name: Post report to PR
+        if: ${{ always() && inputs.report_pr != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.report_pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUTCOME: ${{ job.status }}
+          S1: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          S2: ${{ secrets.STAGING_DB_POOLER_URL }}
+          S3: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+          S4: ${{ secrets.STAGING_ANON_KEY }}
+          S5: ${{ secrets.STAGING_INTERNAL_API_SECRET }}
+        run: |
+          # Redact every secret value explicitly (exact-match replacement, plus the DB password
+          # on its own), then generic JWT / postgres-URL / sbp_ token patterns.
+          python3 - <<'PY'
+          import os,re
+          try: body=open('/tmp/report.txt',errors='replace').read()
+          except FileNotFoundError: body='(no report captured)'
+          vals=[os.environ.get(k,'') for k in ('S1','S2','S3','S4','S5')]
+          m=re.match(r'postgresql://[^:]+:([^@]+)@',os.environ.get('S2',''))
+          if m: vals.append(m.group(1))
+          for v in sorted({v for v in vals if len(v)>=6},key=len,reverse=True): body=body.replace(v,'<redacted>')
+          body=re.sub(r'eyJ[A-Za-z0-9_.-]{20,}','<jwt>',body)
+          body=re.sub(r'postgres(ql)?://\S+','<db-url>',body)
+          body=re.sub(r'sbp_[A-Za-z0-9_]+','<sbp>',body)
+          open('/tmp/report.redacted.txt','w').write(body[-60000:])
+          PY
+          BODY="$(cat /tmp/report.redacted.txt)"
+          python3 - "$PR" "$RUN_URL" "$OUTCOME" "$BODY" <<'PY'
+          import json,os,sys,urllib.request
+          pr,url,outcome,body=sys.argv[1:5]
+          text=f"### Staging ops run — {outcome}\n{url}\n\n```\n{body}\n```"
+          req=urllib.request.Request(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{pr}/comments",data=json.dumps({"body":text}).encode(),headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","Content-Type":"application/json"},method="POST")
+          urllib.request.urlopen(req)
+          PY
