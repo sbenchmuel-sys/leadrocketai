@@ -4394,6 +4394,8 @@ export type Database = {
         Returns: {
           intent: string
           lead_id: string
+          reply_worthy: boolean
+          sender_is_lead: boolean
         }[]
       }
       get_workspace_role: {
