@@ -41,17 +41,24 @@ describe("AI gateway single source", () => {
     expect(src).not.toMatch(/import\.meta\.env/);
   });
 
-  it("whatsapp-events-processor: the WHATSAPP_AUTO_REPLY_ENABLED off-switch precedes the only auto-send", () => {
+  it("whatsapp-events-processor: WHATSAPP_AUTO_REPLY_ENABLED is evaluated before the audit row and again before the only auto-send", () => {
     const src = readFileSync(path.join(FUNCTIONS_ROOT, "whatsapp-events-processor/index.ts"), "utf8");
+    const policy = src.indexOf("const policyDecision = shouldAutoSend(");
+    const flag = src.indexOf('Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") === "true"');
+    const auditRow = src.indexOf('from("automation_logs").insert(', policy);
     const gate = src.indexOf('Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") !== "true"');
     const send = src.indexOf("svc.sendMessage(");
-    expect(gate).toBeGreaterThan(-1);
-    expect(send).toBeGreaterThan(-1);
+    for (const idx of [policy, flag, auditRow, gate, send]) expect(idx).toBeGreaterThan(-1);
+    // Switch is folded into the decision BEFORE automation_logs is written …
+    expect(policy).toBeLessThan(flag);
+    expect(flag).toBeLessThan(auditRow);
+    expect(src.slice(flag, auditRow)).toMatch(/allowed: false, reason: "auto-reply disabled \(WHATSAPP_AUTO_REPLY_ENABLED unset\)"/);
+    // … and the audit row derives from that folded decision, not the raw policy.
+    expect(src.slice(auditRow, auditRow + 300)).toMatch(/decision\.allowed \? "auto_sent" : "blocked"/);
+    // Belt and braces: a second check returns right before the single send site.
+    expect(auditRow).toBeLessThan(gate);
     expect(gate).toBeLessThan(send);
-    expect(src.indexOf("svc.sendMessage(", send + 1)).toBe(-1); // exactly one send site
-    // The gate must `return` before the send, not merely log.
-    const between = src.slice(gate, send);
-    expect(between).toMatch(/auto-reply disabled by default \(WHATSAPP_AUTO_REPLY_ENABLED unset\)/);
-    expect(between).toMatch(/\breturn;/);
+    expect(src.indexOf("svc.sendMessage(", send + 1)).toBe(-1);
+    expect(src.slice(gate, send)).toMatch(/\breturn;/);
   });
 });

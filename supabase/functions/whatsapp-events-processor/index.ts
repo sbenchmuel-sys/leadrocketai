@@ -568,7 +568,7 @@ Context:
 
     // ── Automation decision ────────────────────────────────
     const effectiveMode = getEffectiveMode(matchedLead, workspaceSettings);
-    const decision = shouldAutoSend({
+    const policyDecision = shouldAutoSend({
       effective_mode: effectiveMode,
       intent,
       confidence,
@@ -577,6 +577,22 @@ Context:
       message_text: bodyText,
       timezone: workspaceProfile?.meeting_timezone ?? undefined,
     });
+
+    // ponytail: hard off-switch for the only auto-SEND in this function, applied
+    // BEFORE the audit row so automation_logs never reports an unsent reply as
+    // "auto_sent". Routing the classifier through the canonical AI gateway (E-S1a)
+    // un-broke a path that had been silently failing, and everything above
+    // (auto-created leads with wa_opted_in=true, 24h acceleration, email
+    // full_auto enrolment) can now reach a real customer's phone. Default OFF
+    // until a human flips the env var per environment; classification, lead and
+    // draft creation still run. A second check sits in front of the send itself.
+    const autoReplyEnabled = Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") === "true";
+    const decision = policyDecision.allowed && !autoReplyEnabled
+      ? { allowed: false, reason: "auto-reply disabled (WHATSAPP_AUTO_REPLY_ENABLED unset)" }
+      : policyDecision;
+    if (policyDecision.allowed && !autoReplyEnabled) {
+      console.log("[processor] auto-reply disabled by default (WHATSAPP_AUTO_REPLY_ENABLED unset)");
+    }
 
     // Log the decision
     await supabase.from("automation_logs").insert({
@@ -614,24 +630,10 @@ Context:
       return;
     }
 
-    // ponytail: hard off-switch in front of the only auto-SEND in this function.
-    // Routing the classifier through the canonical AI gateway (E-S1a) un-broke a
-    // path that had been silently failing, and everything above (auto-created
-    // leads with wa_opted_in=true, 24h acceleration, email full_auto enrolment)
-    // can now reach a real customer's phone. Default OFF until a human flips the
-    // env var per environment; classification, lead and draft creation still run.
+    // Belt and braces: the switch above already turned this into a "blocked"
+    // decision; never send if it is somehow reached with the switch off.
     if (Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") !== "true") {
       console.log("[processor] auto-reply disabled by default (WHATSAPP_AUTO_REPLY_ENABLED unset)");
-      if (suggestedReply) {
-        await supabase.from("drafts").insert({
-          lead_id: matchedLead.id,
-          channel: "whatsapp",
-          draft_type: "ai_suggested",
-          body_text: suggestedReply,
-          to_recipient: normalizedPhone,
-          created_by: ownerUserId,
-        });
-      }
       return;
     }
 
