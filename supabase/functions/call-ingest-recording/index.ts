@@ -4,7 +4,7 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-import { CALL_DEFAULTS, enqueueCallJob } from "../_shared/callConfig.ts";
+import { CALL_DEFAULTS, authorizeCallJobCaller, enqueueCallJob } from "../_shared/callConfig.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +26,12 @@ Deno.serve(async (req) => {
 
   try {
     const { callSessionId, recordingId } = await req.json();
+
+    // ---- Auth gate (C1/6) — paid function (Twilio media download), must never
+    // be open to the world. Twilio never calls this directly; twilio-voice-webhook
+    // (signature-validated) fans out to it via enqueueCallJob. ----
+    const denied = await authorizeCallJobCaller(req, supabase, corsHeaders, callSessionId ?? null);
+    if (denied) return denied;
 
     if (!recordingId) {
       return new Response(JSON.stringify({ ok: false, error: "Missing recordingId" }), {
