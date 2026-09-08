@@ -113,6 +113,11 @@ function deriveSequenceType(motion: Motion, actionKey: string | null): string {
   if (actionKey?.startsWith("send_pre_")) return "outbound_prospecting";
   if (actionKey === "reply_now") return "inbound_response";
   if (actionKey === "generate_post_meeting_recap" || actionKey === "post_meeting_followup") return "post_meeting";
+  // Unit Q1 keys are prompts for the rep, not steps in a cadence: `followup_due`
+  // ("my message, unanswered N days") and `rate_limited` ("held until <date>")
+  // carry no sequence position, so the lead's motion decides the draft type and
+  // `deriveSequenceStep` leaves the step at 0.
+  if (actionKey === "followup_due" || actionKey === "rate_limited") return motion || "outbound_prospecting";
 
   return motion || "outbound_prospecting";
 }

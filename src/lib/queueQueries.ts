@@ -90,11 +90,16 @@ const QUEUE_URGENCY_PRIORITY: Record<string, number> = {
   send_pre_2: 5,
   send_pre_3: 6,
   send_pre_4: 7,
+  followup_due: 8, // Unit Q1: my message, unanswered N days — real rep work.
   reengage: 8,
   switch_to_nurture: 9,
+  // A send guardrail is holding this lead. It is visible on purpose (it used
+  // to vanish silently) but it is the least urgent thing in the tab — the rep
+  // can't act on it until the date in its label.
+  rate_limited: 50,
 };
 
-function urgencyOf(key: string | null | undefined): number {
+export function urgencyOf(key: string | null | undefined): number {
   if (!key) return 100; // unknown / null sort to the bottom
   if (QUEUE_URGENCY_PRIORITY[key] != null) return QUEUE_URGENCY_PRIORITY[key];
   // Nurture sequence buckets — every send_nurture_N collapses to 9.
@@ -155,7 +160,9 @@ export function chipForLead(input: {
   // Replied — customer is the one waiting.
   if (next_action_key === "reply_now") return "replied";
 
-  // Follow up — default for anything else with an action key.
+  // Follow up — default for anything else with an action key, including the
+  // two Unit Q1 keys (`followup_due`, `rate_limited`). Both are the rep's own
+  // move, so neither ever belongs under "Replied".
   if (next_action_key) return "followup_due";
 
   return null;
