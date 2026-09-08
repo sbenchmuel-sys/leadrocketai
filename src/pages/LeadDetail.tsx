@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { getLeadDetail, getLeadIntelligence, LeadDetail as LeadDetailType, LeadIntelligence, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDown, Calendar } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
 import TimelineTab from "@/components/lead/TimelineTab";
 import DraftsTab from "@/components/lead/DraftsTab";
@@ -17,49 +13,49 @@ import MeetingsTab from "@/components/lead/MeetingsTab";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
-import LeadOverviewPanel from "@/components/lead/LeadOverviewPanel";
-import LogMeetingDialog from "@/components/lead/LogMeetingDialog";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
+import PostMeetingRecapHint from "@/components/lead/PostMeetingRecapHint";
 import StakeholdersPartnersPanel from "@/components/lead/StakeholdersPartnersPanel";
+import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
+import NurturePreviewCard from "@/components/lead/NurturePreviewCard";
+import { getAutomationToggleState } from "@/lib/leadAutomationActions";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
-// Secondary panes — reachable from the "More" menu so the default view stays
-// Timeline-only (Unit 3). Old in-app navigations that set these tab values
-// (e.g. "see all meetings") still resolve to a valid pane, so nothing 404s.
-const MORE_TABS: { value: string; label: string }[] = [
-  { value: "drafts", label: "Saved drafts" },
-  { value: "meetings", label: "Meetings" },
-  { value: "partners", label: "People & partners" },
-  { value: "context", label: "Lead context" },
-  { value: "analysis", label: "Deep analysis" },
-  { value: "upload", label: "Upload files" },
-];
+/** One section of the "More about this deal" sheet. */
+function DealSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      {children}
+    </section>
+  );
+}
 
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [lead, setLead] = useState<LeadDetailType | null>(null);
-  // Canonical intelligence row, passed to the header so "Next move" reads
+  // Canonical intelligence row, passed to the header so "What to do next" reads
   // lead_intelligence rather than the leads.next_step mirror.
   const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [activeTab, setActiveTab] = useState("timeline");
-  const moreActive = MORE_TABS.some(t => t.value === activeTab);
   const [showDraftDialog, setShowDraftDialog] = useState(false);
   const [draftActionKey, setDraftActionKey] = useState<string | undefined>(undefined);
-  const [showLogDialog, setShowLogDialog] = useState(false);
+  // "More about this deal" — bottom sheet on a phone, side panel on desktop.
+  const [dealOpen, setDealOpen] = useState(false);
+  // History "+ Add a message" form (lives in TimelineTab, opened from the "…" menu).
+  const [addMessageOpen, setAddMessageOpen] = useState(false);
   // Latest route id — so an in-flight mark-handled / undo doesn't reload the
   // previous lead's data onto a lead the rep has since navigated to (Codex P2).
   const currentIdRef = useRef(id);
   currentIdRef.current = id;
-  // In-flight guard for "I handled this" — a double-tap would otherwise fire a
+  // In-flight guard for "Already did it" — a double-tap would otherwise fire a
   // second RPC that snapshots the already-cleared state, so its Undo would restore
   // the DISMISSED state instead of the original action (Codex P2). Ref = synchronous
-  // guard against fast double-clicks; state = disables the button.
+  // guard against fast double-clicks; state = disables the control.
   const markingHandledRef = useRef(false);
   const [markingHandled, setMarkingHandled] = useState(false);
   const location = useLocation();
@@ -77,11 +73,14 @@ export default function LeadDetail() {
     setShowDraftDialog(true);
   };
 
+  // Belt and braces on top of the render guard below: act on the lead that is
+  // ON SCREEN (`lead.id`), never on the raw URL id — the confirmation names
+  // `lead.name`, so the two can never disagree.
   const handleDelete = async () => {
-    if (!id) return;
+    if (!lead) return;
     setIsDeleting(true);
     try {
-      await deleteLead(id);
+      await deleteLead(lead.id);
       toast.success("Lead deleted successfully");
       navigate(backRoute);
     } catch (err) {
@@ -110,18 +109,18 @@ export default function LeadDetail() {
 
   const handleUpdate = async () => {
     await loadLead();
-    setRefreshKey(prev => prev + 1);
   };
 
-  // "I handled this" — dismiss the suggested next move WITHOUT sending. Reuses the
+  // "Already did it" — dismiss the suggested next move WITHOUT sending. Reuses the
   // same atomic RPC + Undo pattern as the Queue's "Mark as handled" (sets the
   // suggestion-dismissal flag only; sends/deletes nothing). syncEngine re-arms it
   // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
   const handleMarkHandled = async () => {
-    if (!id || markingHandledRef.current) return;
+    if (!lead || markingHandledRef.current) return;
     markingHandledRef.current = true;
     setMarkingHandled(true);
-    const actedId = id;
+    // Same rule as delete: dismiss the action of the lead being displayed.
+    const actedId = lead.id;
     try {
       const snapshot = await markActionHandled(actedId, { permanent: true });
       toast.success("Marked as handled", {
@@ -154,30 +153,37 @@ export default function LeadDetail() {
   };
 
   useEffect(() => {
-    // Reset on lead change so we never keep rendering the previous lead (and its
-    // stakeholder avatars / status) while the new one loads. Only the id-change
-    // effect clears — visibility refresh and in-page updates reload without a flash.
-    setLead(null);
-    setIntelligence(null);
+    // Unit L2: do NOT blank the lead on an id change — the page keeps the header
+    // it already has and shows a skeleton in the hero + history while the new
+    // lead loads, instead of collapsing to a spinner.
     setIsLoading(true);
+    setDealOpen(false);
+    setAddMessageOpen(false);
     loadLead();
   }, [id]);
 
   useVisibilityRefresh(() => {
     if (!id) return;
     loadLead();
-    setRefreshKey(prev => prev + 1);
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
-  }
-
-  if (!lead) {
+  // Show the skeleton whenever the lead in state is not the lead in the URL.
+  // Keeping a stale lead on screen while a NEW id loads would let the rep act on
+  // the wrong person: Delete/"Already did it"/WhatsApp all use the URL id, so the
+  // confirmation would name Bob while the action hit Jane. An in-place refresh of
+  // the SAME lead still re-renders without a flicker.
+  if (!lead || lead.id !== id) {
+    if (isLoading) {
+      return (
+        <div className="mx-auto w-full max-w-2xl space-y-4">
+          <Skeleton className="h-7 w-2/3" />
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-36 w-full rounded-xl" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-48 w-full" />
+        </div>
+      );
+    }
     return (
       <div className="text-center py-12">
         <p className="text-muted-foreground">Lead not found</p>
@@ -188,8 +194,21 @@ export default function LeadDetail() {
     );
   }
 
+  // Same gate the automation chip uses — a non-consented manual queue item must
+  // not reach AutomationPreviewCard's "Disable Automation" (it would wipe that
+  // lead's manual next_action_key). Turning the chip on (consent) reveals it.
+  // Slow-drip (nurture) leads are excluded for the same reason the chip is: the
+  // generic card's Pause/Disable clear needs_action / eligible_at /
+  // automation_mode WITHOUT touching nurture_status, which would leave the
+  // slow-drip card reading "Active" for a sequence the executor will never send.
+  // NurturePreviewCard above is the control surface for those leads.
+  const autoState = getAutomationToggleState(lead);
+  const isNurture = (lead as any).motion === "nurture";
+  const showAutomationDetails =
+    autoState.eligible && !autoState.isUnsubscribed && autoState.consented && !isNurture;
+
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-2xl space-y-4">
       <LeadDetailHeader
         lead={lead}
         intelligence={intelligence}
@@ -202,92 +221,76 @@ export default function LeadDetail() {
         onDraftIt={handleDraftIt}
         onMarkHandled={handleMarkHandled}
         markHandledBusy={markingHandled}
+        onOpenDeal={() => setDealOpen(true)}
+        onAddMessage={() => setAddMessageOpen(true)}
       />
 
-      {/* Split layout: Main content + Side panel */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main content — 2/3 */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Canonical Intelligence — always visible above tabs */}
-          <UnifiedIntelligenceCard lead={lead} mode="compact" onUpdated={handleUpdate} />
+      {/* Post-meeting recap pending / sent — the one hint that used to live in
+          the desktop-only right rail. Renders nothing when there's no meeting. */}
+      <PostMeetingRecapHint leadId={lead.id} />
 
-          {/* Mobile only — the desktop "Log a meeting" lives in the right rail,
-              which is hidden on phones (hidden lg:block). Surface it here so a rep
-              on the road can still log a meeting they just had in one tap. */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="lg:hidden w-full justify-center"
-            onClick={() => setShowLogDialog(true)}
-          >
-            <Calendar className="h-4 w-4 mr-2" /> Log a meeting
-          </Button>
-          <LogMeetingDialog
-            open={showLogDialog}
-            onOpenChange={setShowLogDialog}
+      {/* HISTORY */}
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">History</h2>
+        {isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : (
+          <TimelineTab
             leadId={lead.id}
-            onSaved={handleUpdate}
+            onWhatsAppReply={handleUpdate}
+            groupId={(lead as any).group_id ?? null}
+            addMessageOpen={addMessageOpen}
+            onAddMessageOpenChange={setAddMessageOpen}
+            currentLead={{
+              id: lead.id,
+              name: lead.name,
+              email: lead.email,
+              company: lead.company,
+              stage: lead.stage,
+              motion: (lead as any).motion ?? undefined,
+              job_title: lead.job_title ?? null,
+              unsubscribed: (lead as any).unsubscribed === true,
+            }}
           />
+        )}
+      </div>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="w-full justify-start">
-              <TabsTrigger value="timeline">Timeline</TabsTrigger>
-              {/* Everything else lives behind "More" so a rep sees Timeline by
-                  default. The trigger shows the active pane's name when on one. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      "inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-all",
-                      moreActive
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {moreActive ? MORE_TABS.find(t => t.value === activeTab)?.label : "More"}
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  {MORE_TABS.map(t => (
-                    <DropdownMenuItem
-                      key={t.value}
-                      onSelect={() => setActiveTab(t.value)}
-                      className={cn(activeTab === t.value && "bg-accent")}
-                    >
-                      {t.label}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </TabsList>
+      {/* MORE ABOUT THIS DEAL — bottom sheet on a phone, side panel on desktop.
+          Replaces the old "More" tab dropdown; every pane it held lives here. */}
+      <Sheet open={dealOpen} onOpenChange={setDealOpen}>
+        <SheetContent
+          side="bottom"
+          className="h-[88vh] overflow-y-auto p-4 sm:inset-y-0 sm:left-auto sm:right-0 sm:h-full sm:w-full sm:max-w-xl sm:border-l sm:border-t-0 sm:p-6"
+        >
+          <SheetHeader className="mb-4">
+            <SheetTitle>More about this deal</SheetTitle>
+          </SheetHeader>
 
-            <TabsContent value="timeline" className="mt-6">
-              <TimelineTab
-                leadId={lead.id}
-                onWhatsAppReply={handleUpdate}
-                groupId={(lead as any).group_id ?? null}
-                currentLead={{
-                  id: lead.id,
-                  name: lead.name,
-                  email: lead.email,
-                  company: lead.company,
-                  stage: lead.stage,
-                  motion: (lead as any).motion ?? undefined,
-                  job_title: lead.job_title ?? null,
-                  unsubscribed: (lead as any).unsubscribed === true,
-                }}
-              />
-            </TabsContent>
-            <TabsContent value="drafts" className="mt-6">
-              {/* Review-only — composing happens via the header "Draft it". */}
-              <DraftsTab lead={lead} onUpdate={handleUpdate} variant="review" />
-            </TabsContent>
-            <TabsContent value="meetings" className="mt-6">
+          <div className="space-y-6 pb-8">
+            <DealSection title="Meetings">
               <MeetingsTab leadId={lead.id} leadEmail={lead.email} leadName={lead.name} onMilestonesAdded={handleUpdate} />
-            </TabsContent>
-            <TabsContent value="partners" className="mt-6">
+            </DealSection>
+
+            <DealSection title="Automation details">
+              <NurturePreviewCard lead={lead} onUpdate={handleUpdate} />
+              {showAutomationDetails ? (
+                <AutomationPreviewCard lead={lead} onUpdate={handleUpdate} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {isNurture
+                    // Slow-drip leads have no automation chip at the top — their
+                    // controls appear in this section once a drip is running.
+                    ? "No slow drip running for this lead yet — its controls appear here once one starts."
+                    : "Turn on the automation chip at the top to schedule and preview the follow-ups."}
+                </p>
+              )}
+            </DealSection>
+
+            <DealSection title="Other people at this company">
               {workspaceId ? (
                 <StakeholdersPartnersPanel
                   leadId={lead.id}
@@ -299,35 +302,31 @@ export default function LeadDetail() {
               ) : (
                 <p className="text-sm text-muted-foreground">Loading workspace…</p>
               )}
-            </TabsContent>
-            <TabsContent value="context" className="mt-6">
+            </DealSection>
+
+            <DealSection title="Files & notes">
+              <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
               {workspaceId ? (
                 <LeadContextPanel leadId={lead.id} workspaceId={workspaceId} onUpdate={handleUpdate} />
               ) : (
                 <p className="text-sm text-muted-foreground">Loading workspace…</p>
               )}
-            </TabsContent>
-            <TabsContent value="analysis" className="mt-6">
-              <RecommendationsTab key={refreshKey} lead={lead} onUpdate={handleUpdate} />
-            </TabsContent>
-            <TabsContent value="upload" className="mt-6">
-              <UploadTab leadId={lead.id} onSuccess={handleUpdate} />
-            </TabsContent>
-          </Tabs>
-        </div>
+            </DealSection>
 
-        {/* Sticky side panel — 1/3. Unit 3: Automation toggle + Latest Meeting
-            only. Stakeholders/Partners and Lead Context moved to the More menu. */}
-        <div className="hidden lg:block space-y-4">
-          <LeadOverviewPanel
-            lead={lead}
-            onNavigateToMeetings={() => setActiveTab("meetings")}
-            onUpdate={handleUpdate}
-          />
-        </div>
-      </div>
+            <DealSection title="What we know">
+              <UnifiedIntelligenceCard lead={lead} onUpdated={handleUpdate} />
+              <RecommendationsTab lead={lead} onUpdate={handleUpdate} />
+            </DealSection>
 
-      {/* One-tap "Draft it" — review-and-send composer (manual send only) */}
+            <DealSection title="Saved drafts">
+              {/* Review-only — composing happens via the hero's message button. */}
+              <DraftsTab lead={lead} onUpdate={handleUpdate} variant="review" />
+            </DealSection>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* One-tap compose — review-and-send composer (manual send only) */}
       <EmailActionDialog
         lead={lead}
         actionKey={draftActionKey}

@@ -116,7 +116,7 @@ export default function StakeholdersPartnersPanel({
           <div className="flex items-center gap-2">
             <Users className="h-3.5 w-3.5 text-muted-foreground" />
             <h3 className="text-sm font-semibold text-foreground">
-              Stakeholders
+              People at their company
               {ctx.members.length > 0 && (
                 <span className="ml-1.5 text-xs font-normal text-muted-foreground">
                   ({ctx.members.length})

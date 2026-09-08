@@ -38,6 +38,11 @@ interface TimelineTabProps {
   groupId?: string | null;
   // PR 2.4 — current lead (for solo path + as fallback in group path).
   currentLead?: TimelineMinimalLead;
+  // Unit L2 — "+ Add a message" moved into the lead page's "…" overflow menu.
+  // When these are passed the in-tab button is not rendered and the parent
+  // controls the form. Uncontrolled (Queue/other callers) keeps the button.
+  addMessageOpen?: boolean;
+  onAddMessageOpenChange?: (open: boolean) => void;
 }
 
 // PR 2.4 — bounce/no-reply sender filter for the Reply visibility rule.
@@ -324,7 +329,8 @@ function HideButton({ itemId, isHidden, onToggle }: { itemId: string; isHidden: 
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(itemId, !isHidden); }}
       className={cn(
-        "opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent",
+        // Unit L2: no hover on a phone — always visible at sm and below.
+        "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent",
         isHidden && "opacity-100"
       )}
       title={isHidden ? "Unhide" : "Hide"}
@@ -541,7 +547,8 @@ function FollowupButton({
   const wrapperClass = cn(
     "inline-flex items-stretch rounded-md overflow-hidden text-muted-foreground",
     "hover:text-foreground hover:border hover:border-border transition-colors",
-    visibility === "hover" && "opacity-0 group-hover:opacity-100",
+    // Unit L2: no hover on a phone — always visible at sm and below.
+    visibility === "hover" && "opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
   );
 
   return (
@@ -1089,10 +1096,15 @@ function CallEntry({ item, onToggleHide }: { item: TimelineItem; onToggleHide: (
 }
 
 /* ── Main Component ── */
-export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentLead }: TimelineTabProps) {
+export default function TimelineTab({
+  leadId, onWhatsAppReply, groupId, currentLead, addMessageOpen, onAddMessageOpenChange,
+}: TimelineTabProps) {
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [showReplyForm, setShowReplyForm] = useState(false);
+  const [replyFormState, setReplyFormState] = useState(false);
+  const addMessageControlled = onAddMessageOpenChange !== undefined;
+  const showReplyForm = addMessageControlled ? !!addMessageOpen : replyFormState;
+  const setShowReplyForm = addMessageControlled ? onAddMessageOpenChange! : setReplyFormState;
   const [replyText, setReplyText] = useState("");
   const [isSavingReply, setIsSavingReply] = useState(false);
   const [activeFilter, setActiveFilter] = useState<TimelineFilter>("all");
@@ -1106,7 +1118,17 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
   const [replyTargetLead, setReplyTargetLead] = useState<TimelineMinimalLead | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const groupMode = !!groupId;
+  // How many rows this lead (or group) has hidden. Counted independently of the
+  // rendered list: that list is windowed AND filtered, so a count derived from
+  // it would drop to zero the moment a rep hid something — taking the only
+  // control that restores the row off screen with it.
+  const [hiddenCount, setHiddenCount] = useState(0);
 
+  // The readers apply a fixed 200-row window in SQL, so the fetch must ask for
+  // exactly what will be RENDERED: pulling hidden rows in and filtering them
+  // client-side let hidden rows eat the window and push older visible ones off
+  // the page (Codex P2). The "Show hidden" control is kept alive by a separate
+  // count query instead — see hiddenCount.
   const loadTimeline = () => {
     setIsLoading(true);
     const reader = groupId
@@ -1164,6 +1186,25 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
     })();
     return () => { cancelled = true; };
   }, [groupId]);
+
+  // Hidden-row count — one head-only query, independent of the windowed list.
+  const countLeadIds = useMemo(
+    () => (groupMode ? Array.from(groupMembers.keys()) : [leadId]),
+    [groupMode, groupMembers, leadId],
+  );
+  const refreshHiddenCount = useCallback(async () => {
+    if (countLeadIds.length === 0) return;
+    const { count, error } = await supabase
+      .from("lead_timeline_items")
+      .select("id", { count: "exact", head: true })
+      .in("lead_id", countLeadIds)
+      .eq("hidden", true);
+    if (!error) setHiddenCount(count ?? 0);
+  }, [countLeadIds]);
+
+  useEffect(() => {
+    refreshHiddenCount();
+  }, [refreshHiddenCount]);
 
   // PR 2.4 — unsubscribed gate map (across solo + group views).
   const leadUnsubscribedById = useMemo(() => {
@@ -1272,6 +1313,7 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
         toast.success("Item restored");
       }
       loadTimeline();
+      refreshHiddenCount();
     } catch (err) {
       console.error("[TimelineTab] Hide toggle error:", err);
       toast.error("Failed to update item");
@@ -1321,9 +1363,10 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
 
   // Apply filter
   const filteredItems = useMemo(() => {
+    const visible = showHidden ? timelineItems : timelineItems.filter(i => !i.hidden);
     const base = activeFilter === "all"
-      ? timelineItems
-      : timelineItems.filter(i => matchesFilter(i, activeFilter));
+      ? visible
+      : visible.filter(i => matchesFilter(i, activeFilter));
     // Hide bare system_note rows (no subject AND no displayable snippet) —
     // they render as a date pill with no content and look broken.
     return base.filter(i => {
@@ -1332,18 +1375,23 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
       const hasSnippet = !!(i.snippet_text && formatSnippet(i).trim());
       return hasSubject || hasSnippet;
     });
-  }, [timelineItems, activeFilter]);
+  }, [timelineItems, activeFilter, showHidden]);
 
   const entries = useMemo(() => groupIntoThreads(filteredItems), [filteredItems]);
   const autoExpand = useMemo(() => getAutoExpandIds(entries), [entries]);
 
-  const hiddenCount = useMemo(() => timelineItems.filter(i => i.hidden).length, [timelineItems]);
+  // Unit L2 — filters are noise on a short history; they appear once the lead
+  // has more than 20 logged items.
+  const showFilters = timelineItems.length > 20;
+  const showToolbar = showFilters || showHidden || hiddenCount > 0 || !addMessageControlled;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground py-8">Loading timeline...</p>;
   }
 
-  if (timelineItems.length === 0 && !showHidden) {
+  // ...unless the "+ Add a message" form is open — a brand-new lead has no
+  // history yet and must still be able to log the first inbound message.
+  if (timelineItems.length === 0 && hiddenCount === 0 && !showReplyForm) {
     return (
       <div className="py-12 text-center">
         <p className="text-sm text-muted-foreground">
@@ -1355,9 +1403,14 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
 
   return (
     <div className="space-y-0">
-      {/* Filter bar — "All" by default + a single Filter affordance */}
+      {/* Filter bar — hidden until this lead has enough history to need it
+          (Unit L2). The Show-hidden toggle is NOT part of that gate: it moved
+          out of the Filter popover so it stays one tap away on short lists. */}
+      {showToolbar && (
       <div className="flex items-center gap-2 pb-3">
         <div className="flex items-center gap-1.5 flex-1 min-w-0 flex-wrap">
+          {showFilters && (
+          <>
           <button
             onClick={() => setActiveFilter("all")}
             className={cn(
@@ -1404,32 +1457,38 @@ export default function TimelineTab({ leadId, onWhatsAppReply, groupId, currentL
                   {opt.label}
                 </button>
               ))}
-              <div className="my-1 border-t border-border" />
-              <button
-                onClick={() => { setShowHidden(!showHidden); setFilterMenuOpen(false); }}
-                className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 text-xs rounded hover:bg-accent"
-              >
-                {showHidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
-                {showHidden ? "Hide hidden items" : `Show hidden${hiddenCount > 0 ? ` (${hiddenCount})` : ""}`}
-              </button>
             </PopoverContent>
           </Popover>
+          </>
+          )}
 
-          {showHidden && (
-            <span className="text-[11px] text-muted-foreground">Showing hidden</span>
+          {/* Show / hide hidden items — always reachable in one tap. */}
+          {(showHidden || hiddenCount > 0) && (
+            <button
+              onClick={() => setShowHidden(!showHidden)}
+              className="inline-flex items-center gap-1 text-[12px] font-medium px-2.5 py-1 rounded-full border bg-muted/50 text-muted-foreground border-border hover:bg-accent hover:text-foreground transition-colors"
+            >
+              {showHidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              {showHidden ? "Hide hidden items" : `Show hidden${hiddenCount > 0 ? ` (${hiddenCount})` : ""}`}
+            </button>
           )}
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs shrink-0"
-          onClick={() => setShowReplyForm(!showReplyForm)}
-        >
-          <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
-          Log WhatsApp Reply
-        </Button>
+        {/* Uncontrolled callers keep the in-tab button; the lead page moved it
+            into its "…" overflow menu as "+ Add a message". */}
+        {!addMessageControlled && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs shrink-0"
+            onClick={() => setShowReplyForm(!showReplyForm)}
+          >
+            <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+            Log WhatsApp Reply
+          </Button>
+        )}
       </div>
+      )}
 
       {/* Inline reply form */}
       {showReplyForm && (

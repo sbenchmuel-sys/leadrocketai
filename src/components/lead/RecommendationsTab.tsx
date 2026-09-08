@@ -54,6 +54,46 @@ function extractJsonFromAIContent(content: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
+
+/** Raw deal-factor enums → sentences a rep would say. Unknown/empty values are
+ *  dropped rather than shown as a bare enum. */
+function dealFactorSentences(f: DealFactors): string[] {
+  const out: string[] = [];
+  const humanise = (v: string) => v.replace(/_/g, " ").trim();
+
+  const PROCUREMENT: Record<string, string> = {
+    not_started: "Buying process hasn't started on their side.",
+    early: "They're at the very start of their buying process.",
+    in_progress: "Their buying process is under way.",
+    legal_review: "It's with their legal team.",
+    security_review: "It's with their security team.",
+    contract_sent: "The contract is with them.",
+    complete: "Their buying process is done.",
+  };
+  const LATENCY: Record<string, string> = {
+    fast: "They reply quickly.",
+    immediate: "They reply almost straight away.",
+    medium: "They take a few days to reply.",
+    moderate: "They take a few days to reply.",
+    slow: "They're slow to reply.",
+    none: "They haven't replied yet.",
+  };
+
+  if (f.engagement_level) out.push(`Engagement: ${humanise(f.engagement_level)}.`);
+  if (f.reply_latency) out.push(LATENCY[f.reply_latency] ?? `They reply ${humanise(f.reply_latency)}.`);
+  const dm = f.decision_maker_involved;
+  if (dm !== undefined && dm !== null && dm !== "") {
+    const yes = dm === true || dm === "true" || dm === "yes";
+    out.push(yes ? "The decision maker is in the conversation." : "The decision maker isn't in the conversation yet.");
+  }
+  if (f.identified_champion) out.push(`Champion: ${f.identified_champion}.`);
+  if (f.budget_status) out.push(`Budget: ${humanise(f.budget_status)}.`);
+  if (f.timeline) out.push(`Timing: ${humanise(f.timeline)}.`);
+  if (f.procurement_stage) out.push(PROCUREMENT[f.procurement_stage] ?? `Buying process: ${humanise(f.procurement_stage)}.`);
+  if (f.overall_outlook) out.push(`Overall this looks ${humanise(f.overall_outlook)}.`);
+  return out;
+}
+
 export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTabProps) {
   const [isCleaning, setIsCleaning] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -169,8 +209,8 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">
           {lastComputedAt
-            ? `Analyzed ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
-            : "Never analyzed"}
+            ? `Checked ${formatDistanceToNow(new Date(lastComputedAt), { addSuffix: true })}`
+            : "Not checked yet"}
         </span>
         <Button
           size="sm"
@@ -180,61 +220,27 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
           disabled={isAnalyzing}
         >
           {isAnalyzing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Brain className="h-3 w-3" />}
-          {isAnalyzing ? "Analyzing…" : "Run analysis"}
+          {isAnalyzing ? "Updating…" : "Update"}
         </Button>
       </div>
 
-      {/* Deal Factors (unique to Deep Analysis — not shown elsewhere) */}
+      {/* Deal read — plain sentences. Unit L2 replaced the raw enum badges
+          (procurement_stage / reply_latency / decision_maker_involved) with
+          language a rep would actually say out loud. */}
       {dealFactors && (
         <Card>
           <CardHeader>
-            <CardTitle>Deal Factors</CardTitle>
+            <CardTitle>How this deal reads</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Engagement</p>
-                <Badge variant="outline">{dealFactors.engagement_level}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Reply Speed</p>
-                <Badge variant="outline">{dealFactors.reply_latency}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Budget</p>
-                <Badge variant="outline">{dealFactors.budget_status}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Timeline</p>
-                <Badge variant="outline">{dealFactors.timeline}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Procurement</p>
-                <Badge variant="outline">{dealFactors.procurement_stage}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Champion</p>
-                <Badge variant="outline">{dealFactors.identified_champion}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Decision Maker</p>
-                <Badge variant="outline">{String(dealFactors.decision_maker_involved)}</Badge>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Outlook</p>
-                <Badge
-                  className={
-                    dealFactors.overall_outlook === "positive"
-                      ? "bg-green-100 text-green-800"
-                      : dealFactors.overall_outlook === "negative"
-                      ? "bg-red-100 text-red-800"
-                      : ""
-                  }
-                >
-                  {dealFactors.overall_outlook}
-                </Badge>
-              </div>
-            </div>
+            <ul className="space-y-1.5 text-sm text-foreground">
+              {dealFactorSentences(dealFactors).map((line, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-muted-foreground">•</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
             {dealFactors.reasoning && (
               <p className="text-sm text-muted-foreground mt-4">{dealFactors.reasoning}</p>
             )}
@@ -249,7 +255,7 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="flex items-center gap-2">
               <CheckCircle className="h-5 w-5 text-green-600" />
-              Milestones
+              What we agreed to do
             </CardTitle>
             {milestones.length >= 2 && (
               <Button
@@ -270,7 +276,7 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
           </CardHeader>
           <CardContent>
             {milestones.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No milestones extracted yet</p>
+              <p className="text-muted-foreground text-sm">Nothing agreed yet</p>
             ) : (
               <div className="space-y-3">
                 {milestones.map((m, i) => (
@@ -327,12 +333,12 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-yellow-600" />
-              Risks
+              What could go wrong
             </CardTitle>
           </CardHeader>
           <CardContent>
             {risks.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No risks identified</p>
+              <p className="text-muted-foreground text-sm">Nothing worrying so far</p>
             ) : (
               <div className="space-y-3">
                 {risks.map((r, i) => (

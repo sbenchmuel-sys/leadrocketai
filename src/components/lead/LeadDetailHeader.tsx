@@ -1,24 +1,47 @@
+// LeadDetailHeader — the top of the ONE-COLUMN lead page (Unit L2).
+//
+// Order on a 390px phone: identity → chips (status / away / automation switch)
+// → status sentence → "What to do next" hero card with a single primary button
+// → provenance line ("From N messages · checked … · Update") → action row
+// (Call · WhatsApp · More about this deal). Everything secondary (Text, Edit,
+// mailbox sync, add a message, delete) lives in the "…" overflow at the far
+// right of the top row.
+//
+// No send / draft-generation / automation LOGIC changed here — only structure,
+// labels and placement.
+
 import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Mail, Trash2, Pause, Plane, AlertTriangle, Handshake, ShoppingCart, PenLine, Check, MessageSquare, MessageCircle } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  ArrowLeft, Mail, Trash2, Plane, Pause, AlertTriangle, Handshake, ShoppingCart, Check,
+  MessageSquare, MessageCircle, MoreHorizontal, Pencil, Plus, Loader2, ChevronRight,
+} from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import { resolveLeadQuickActions } from "@/lib/leadQuickActions";
 import { smsLink, whatsappLink } from "@/lib/outreachDeepLinks";
 import StakeholderAvatarRow from "@/components/lead/StakeholderAvatarRow";
 import type { LeadDetail, LeadIntelligence } from "@/lib/supabaseQueries";
+import { triggerIntelligenceRecompute } from "@/lib/supabaseQueries";
 import { getLeadStatusLine } from "@/lib/leadStatusLine";
+import { buildAwayChip, buildProvenanceLine, buildStatusChip } from "@/components/lead/leadHeaderText";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
 import { EditLeadDialog } from "@/components/lead/EditLeadDialog";
+import AutomationToggleCard from "@/components/lead/AutomationToggleCard";
 import { useMailSync } from "@/hooks/useMailSync";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import ReEngagementCard from "@/components/lead/ReEngagementCard";
+import { isReEngagementCandidate } from "@/lib/reEngagement";
 import type { MilestoneItem } from "@/lib/supabaseQueries";
 
 type OriginContext = "dashboard" | "leads" | "inbox";
@@ -37,11 +60,15 @@ interface LeadDetailHeaderProps {
   onSyncComplete: () => void;
   /** One-tap: generate the recommended draft and open it for review-and-send. */
   onDraftIt?: () => void;
-  /** "I handled this" — dismiss the suggested next move (reversible, no send). */
+  /** "Already did it" — dismiss the suggested next move (reversible, no send). */
   onMarkHandled?: () => void;
-  /** True while a mark-handled request is in flight — disables the button so a
+  /** True while a mark-handled request is in flight — disables the link so a
    *  double-tap can't fire a second dismiss (which would break Undo). */
   markHandledBusy?: boolean;
+  /** Opens the "More about this deal" sheet. */
+  onOpenDeal: () => void;
+  /** Opens the History "+ Add a message" form (logs an inbound WhatsApp reply). */
+  onAddMessage: () => void;
 }
 
 const BACK_ROUTES: Record<OriginContext, string> = {
@@ -50,33 +77,77 @@ const BACK_ROUTES: Record<OriginContext, string> = {
   inbox: "/app/inbox",
 };
 
+const CHIP = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium border shrink-0";
+
 export default function LeadDetailHeader({
-  lead, intelligence, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
+  lead, intelligence, isDeleting, originContext, onDelete, onUpdate, onSyncComplete,
+  onDraftIt, onMarkHandled, markHandledBusy, onOpenDeal, onAddMessage,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
+  const statusChip = buildStatusChip(lead);
+  const awayChip = buildAwayChip((lead as any).ooo_until);
   const nextStep = intelligence ? intelligence.recommended_next_step : lead.next_step;
   const nextStepReason = intelligence ? intelligence.next_step_reason : lead.next_step_reason;
   // Whether a mailbox is connected — read from the canonical mail_accounts
   // source (falls back to legacy gmail_connections inside the hook), scoped to
   // the ACTIVE workspace so a multi-workspace user doesn't pick another
   // workspace's mailbox. The `isConnected` prop passed from LeadDetail comes
-  // from the legacy-only check and is intentionally ignored here so the Refresh
-  // button shows for reps connected via the current flow (Gmail or Outlook).
+  // from the legacy-only check and is intentionally ignored here so the sync
+  // control shows for reps connected via the current flow (Gmail or Outlook).
   const { workspaceId } = useWorkspace();
   const { isConnected: mailConnected, isLoading: mailLoading } = useMailSync(workspaceId);
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+
   // Which "reach out directly" buttons to show (hide-when-missing + opt-out).
-  // Call is the existing in-app ClickToCallButton; Unit 4b adds WhatsApp + SMS.
   const quick = resolveLeadQuickActions(lead);
   const handled = (lead as any).action_permanently_dismissed === true;
-  // Only offer "I handled this" when the lead is ACTUALLY action-required now.
+  // Only offer "Already did it" when the lead is ACTUALLY action-required now.
   // Gate strictly on needs_action: syncEngine also stores next_action_key for
   // WAITING/PAUSED states (e.g. wait_reply_threshold, paused_meeting_scheduled)
   // with needs_action=false — dismissing those would set the permanent-dismiss
   // flag and suppress the eventual reply/follow-up reminder until a fresh inbound
-  // (Codex P2). When nothing is due, the card just shows the next-move + Draft it.
+  // (Codex P2).
   const hasPendingAction = lead.needs_action === true;
+
+  // Re-engagement lead? Then the hero's single primary button is the
+  // re-engagement draft ("Win them back") — never a second competing button.
+  const reEngagementGate = {
+    motion: (lead as any).motion ?? null,
+    source_type: (lead as any).source_type ?? null,
+    last_outbound_at: lead.last_outbound_at ?? null,
+    last_inbound_at: lead.last_inbound_at ?? null,
+    next_action_key: lead.next_action_key ?? null,
+    has_future_meeting: !!lead.has_future_meeting,
+    stage: lead.stage ?? null,
+  };
+  const reEngage = isReEngagementCandidate(reEngagementGate);
+
+  const provenance = buildProvenanceLine({
+    sourceCounts: intelligence?.source_counts_json ?? null,
+    lastComputedAt: intelligence?.last_computed_at ?? null,
+  });
+
+  // Same recompute action the "What we know" pane uses.
+  const handleRecompute = async () => {
+    setRecomputing(true);
+    try {
+      const result = await triggerIntelligenceRecompute(lead.id);
+      if (!result.ok) {
+        toast.error(result.error || "Couldn't update");
+      } else {
+        toast.success("Updated");
+        onUpdate();
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Couldn't update");
+    } finally {
+      setRecomputing(false);
+    }
+  };
 
   // Lightweight context badge counts
   const [contextFlags, setContextFlags] = useState<{ hasCaution: boolean; hasRelationship: boolean; hasProduct: boolean }>({
@@ -103,204 +174,251 @@ export default function LeadDetailHeader({
   }, [lead.id]);
 
   return (
-    <div className="space-y-0">
-      {/* Back + Actions row — slim */}
-      <div className="flex items-center justify-between pb-2">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(BACK_ROUTES[originContext])}>
+    <div className="space-y-3">
+      {/* TOP ROW — back, mailbox warning, overflow "…" */}
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="ghost" size="icon" className="h-9 w-9 -ml-2" onClick={() => navigate(BACK_ROUTES[originContext])}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div className="flex gap-1.5">
-          <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
-          {/* Reach out directly (Unit 4b): WhatsApp + SMS open the rep's OWN apps
-              via deep-links. Hidden when the number's missing or the lead opted
-              out (WhatsApp also needs wa_opted_in). No Email here — "Draft it"
-              below is the single compose entry. */}
-          {quick.whatsapp && (
-            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" asChild>
-              <a href={whatsappLink(quick.whatsapp.number, "")} target="_blank" rel="noopener noreferrer">
-                <MessageCircle className="h-3.5 w-3.5" />
-                WhatsApp
-              </a>
-            </Button>
-          )}
-          {quick.sms && (
-            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" asChild>
-              <a href={smsLink(quick.sms.phone, "")}>
-                <MessageSquare className="h-3.5 w-3.5" />
-                Text
-              </a>
-            </Button>
-          )}
-          {/* LinkedIn message button removed from the lead header (Unit 3) — it
-              didn't belong among the page-level actions. LinkedIn outreach stays
-              available in the Outreach flow (campaign LinkedIn touches). */}
-          <EditLeadDialog lead={lead} onUpdate={onUpdate} />
+        <div className="flex items-center gap-1.5">
           {/* Reconnect chip renders ONLY when a workspace mail_account has
-              needs_reconnect=true or status='error'. Rendered outside the
-              connection ternary so a revoked token still surfaces the chip
-              even when a mailbox row exists. */}
+              needs_reconnect=true or status='error'. */}
           <MailReconnectChip compact />
-          {mailLoading ? null : mailConnected ? (
-            <GmailSyncButton leadId={lead.id} leadEmail={lead.email} workspaceId={workspaceId} onSyncComplete={onSyncComplete} />
-          ) : (
-            <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
-              <Link to="/app/settings"><Mail className="h-3.5 w-3.5 mr-1.5" />Connect Gmail</Link>
-            </Button>
-          )}
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 w-8 p-0 text-destructive hover:text-destructive">
-                <Trash2 className="h-3.5 w-3.5" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="More actions">
+                <MoreHorizontal className="h-4 w-4" />
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete Lead</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Are you sure you want to delete <strong>{lead.name}</strong> from <strong>{lead.company}</strong>? This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={onDelete} disabled={isDeleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                  {isDeleting ? "Deleting..." : "Delete Lead"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </div>
-
-      {/* ROW 1 — Identity + Status Strip + Closing Power */}
-      <div className="flex items-center gap-6 py-3">
-        {/* LEFT — Identity */}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-lg font-bold text-foreground leading-tight truncate">{lead.name}</h1>
-            {(lead as any).ooo_until && new Date((lead as any).ooo_until) > new Date() && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 shrink-0">
-                <Plane className="h-2.5 w-2.5" />
-                OOO until {new Date((lead as any).ooo_until).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-              </span>
-            )}
-            {lead.manual_mode === true && (
-              <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 shrink-0"
-                title={lead.manual_mode_reason || "Automation paused"}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {quick.sms && (
+                <DropdownMenuItem asChild>
+                  <a href={smsLink(quick.sms.phone, "")}>
+                    <MessageSquare className="h-4 w-4 mr-2" /> Text
+                  </a>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => setEditOpen(true)}>
+                <Pencil className="h-4 w-4 mr-2" /> Edit details
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onAddMessage()}>
+                <Plus className="h-4 w-4 mr-2" /> Add a message
+              </DropdownMenuItem>
+              {/* Mailbox sync — rendered as a plain row (not a menu item) so the
+                  menu stays open while the sync runs and the rep sees it finish. */}
+              {mailLoading ? null : mailConnected ? (
+                <div className="px-2 py-1.5">
+                  <GmailSyncButton
+                    leadId={lead.id}
+                    leadEmail={lead.email}
+                    workspaceId={workspaceId}
+                    onSyncComplete={onSyncComplete}
+                    variant="ghost"
+                    showLastSync={false}
+                  />
+                </div>
+              ) : (
+                <DropdownMenuItem asChild>
+                  <Link to="/app/settings"><Mail className="h-4 w-4 mr-2" />Connect Gmail</Link>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={(e) => { e.preventDefault(); setDeleteOpen(true); }}
               >
-                <Pause className="h-2.5 w-2.5" />
-                Automation paused
-              </span>
-            )}
-            {contextFlags.hasCaution && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/20 shrink-0">
-                <AlertTriangle className="h-2.5 w-2.5" />
-                Caution
-              </span>
-            )}
-            {contextFlags.hasRelationship && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20 shrink-0">
-                <Handshake className="h-2.5 w-2.5" />
-                Prior Relationship
-              </span>
-            )}
-            {contextFlags.hasProduct && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground border border-border shrink-0">
-                <ShoppingCart className="h-2.5 w-2.5" />
-                Product Owned
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground leading-snug truncate">
-            {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}{lead.country ? ` · ${lead.country}` : ""}
-          </p>
-          <p className="text-xs text-muted-foreground/70 mt-0.5 truncate">{lead.email}</p>
-
-          {/* Plain-English status line — replaces the phase/closing-power cluster */}
-          <p className="text-sm font-medium text-foreground mt-1.5">{statusLine}</p>
-
-          {/* Stakeholder avatars — only when this is a 2+ person deal. */}
-          <StakeholderAvatarRow leadId={lead.id} currentLeadId={lead.id} />
+                <Trash2 className="h-4 w-4 mr-2" /> Delete lead
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {/* ROW 2 — Next move + one-tap Draft it (never a dead card). When the rep
-          has marked it handled, show a calm state instead of nagging — it comes
-          back on its own when the customer replies (existing re-arm). */}
-      <div className="border-t border-border/40" />
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 py-3">
+      {/* IDENTITY */}
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold text-foreground leading-tight break-words">{lead.name}</h1>
+        <p className="text-sm text-muted-foreground leading-snug break-words">
+          {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}{lead.country ? ` · ${lead.country}` : ""}
+        </p>
+        <p className="text-xs text-muted-foreground/70 mt-0.5 truncate">{lead.email}</p>
+        {/* Plain-English status sentence */}
+        <p className="text-sm font-medium text-foreground mt-2">{statusLine}</p>
+        {/* Stakeholder avatars — only when this is a 2+ person deal. */}
+        <StakeholderAvatarRow leadId={lead.id} currentLeadId={lead.id} />
+      </div>
+
+      {/* CHIPS — status, away, and the automation switch itself */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`${CHIP} bg-muted/50 text-muted-foreground border-border`}>{statusChip}</span>
+        {awayChip && (
+          <span className={`${CHIP} bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800/50`}>
+            <Plane className="h-3 w-3" />
+            {awayChip}
+          </span>
+        )}
+        {/* Handed back to the rep by the executor (e.g. more people joined the
+            thread). Nothing else in the app surfaces this flag, so it keeps its
+            own chip — and the reason is visible text, not a tooltip. */}
+        {lead.manual_mode === true && (
+          <span className={`${CHIP} bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800/50`}>
+            <Pause className="h-3 w-3" />
+            Automation paused
+          </span>
+        )}
+        {contextFlags.hasCaution && (
+          <span className={`${CHIP} bg-destructive/10 text-destructive border-destructive/20`}>
+            <AlertTriangle className="h-3 w-3" /> Caution
+          </span>
+        )}
+        {contextFlags.hasRelationship && (
+          <span className={`${CHIP} bg-primary/10 text-primary border-primary/20`}>
+            <Handshake className="h-3 w-3" /> Prior relationship
+          </span>
+        )}
+        {contextFlags.hasProduct && (
+          <span className={`${CHIP} bg-muted text-muted-foreground border-border`}>
+            <ShoppingCart className="h-3 w-3" /> Product owned
+          </span>
+        )}
+        {lead.manual_mode === true && lead.manual_mode_reason && (
+          <p className="w-full text-xs text-amber-700 dark:text-amber-300">
+            Paused: {lead.manual_mode_reason}
+          </p>
+        )}
+        {/* The automation chip IS the switch — shown on every screen size now
+            (it used to live in a desktop-only rail). Renders its own status
+            sentence underneath, and returns null when the lead isn't
+            automation-eligible. Last in the row so that sentence sits below. */}
+        <AutomationToggleCard lead={lead} onUpdate={onUpdate} />
+      </div>
+
+      {/* HERO — "What to do next": one sentence, one primary button. */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground block">What to do next</span>
+
         {handled ? (
           <>
-            <div className="flex-1 min-w-0 flex items-center gap-2 text-sm text-muted-foreground">
-              <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+            <div className="flex items-start gap-2 text-sm text-muted-foreground">
+              <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
               <span>You've handled this — it'll come back if they reply.</span>
             </div>
-            {/* Keep compose reachable (Unit 1: "Draft it" is the single compose
-                entry) but quiet — opens the normal composer with a sensible
-                default. NOT trying to re-draft the dismissed step (that was buggy). */}
             {onDraftIt && (
-              <Button variant="ghost" size="sm" onClick={onDraftIt} className="shrink-0 text-muted-foreground gap-1.5">
-                <PenLine className="h-4 w-4" />
-                Draft it
+              <Button variant="secondary" onClick={onDraftIt} className="w-full min-h-[44px]">
+                Send a message
               </Button>
             )}
           </>
         ) : (
           <>
-            <div className="flex-1 min-w-0">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Next move</span>
+            <div>
               <p className="text-sm font-medium text-foreground">
                 {nextStep || "Send a quick check-in to keep this moving"}
               </p>
               {nextStepReason && (
-                <p className="text-xs text-muted-foreground mt-0.5">{nextStepReason}</p>
+                <p className="text-xs text-muted-foreground mt-1">{nextStepReason}</p>
               )}
             </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-              {onMarkHandled && hasPendingAction && (
-                <Button variant="ghost" size="sm" onClick={onMarkHandled} disabled={markHandledBusy} className="text-muted-foreground gap-1.5">
-                  <Check className="h-4 w-4" />
-                  I handled this
+
+            {reEngage ? (
+              // One-line summary + the single primary button for this lead.
+              <ReEngagementCard
+                variant="hero"
+                lead={{
+                  id: lead.id,
+                  name: lead.name,
+                  company: lead.company ?? null,
+                  email: lead.email ?? null,
+                  stage: lead.stage ?? null,
+                  motion: (lead as any).motion ?? null,
+                  next_action_key: lead.next_action_key ?? null,
+                  next_action_label: (lead as any).next_action_label ?? null,
+                  job_title: (lead as any).job_title ?? null,
+                  industry: (lead as any).industry ?? null,
+                }}
+                gate={reEngagementGate}
+                milestones={(lead.milestones_json as unknown as MilestoneItem[] | null) ?? null}
+              />
+            ) : (
+              onDraftIt && (
+                <Button
+                  onClick={onDraftIt}
+                  variant={hasPendingAction ? "default" : "secondary"}
+                  className="w-full min-h-[44px]"
+                >
+                  Send a message
                 </Button>
-              )}
-              {onDraftIt && (
-                <Button onClick={onDraftIt} className="flex-1 sm:flex-none gap-1.5">
-                  <PenLine className="h-4 w-4" />
-                  Draft it
-                </Button>
-              )}
-            </div>
+              )
+            )}
+
+            {onMarkHandled && hasPendingAction && (
+              <button
+                type="button"
+                onClick={onMarkHandled}
+                disabled={markHandledBusy}
+                className="block w-full text-center text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50"
+              >
+                Already did it
+              </button>
+            )}
           </>
         )}
       </div>
 
-      {/* Re-engagement (warm/inbound-sourced, our last outbound is newer than their last inbound).
-          Component is self-gating — renders nothing for ineligible leads. UI-only; routing comes
-          from playbookResolver via streamDraft. */}
-      <ReEngagementCard
-        lead={{
-          id: lead.id,
-          name: lead.name,
-          company: lead.company ?? null,
-          email: lead.email ?? null,
-          stage: lead.stage ?? null,
-          motion: (lead as any).motion ?? null,
-          next_action_key: lead.next_action_key ?? null,
-          next_action_label: (lead as any).next_action_label ?? null,
-          job_title: (lead as any).job_title ?? null,
-          industry: (lead as any).industry ?? null,
-        }}
-        gate={{
-          motion: (lead as any).motion ?? null,
-          source_type: (lead as any).source_type ?? null,
-          last_outbound_at: lead.last_outbound_at ?? null,
-          last_inbound_at: lead.last_inbound_at ?? null,
-          next_action_key: lead.next_action_key ?? null,
-          has_future_meeting: !!lead.has_future_meeting,
-          stage: lead.stage ?? null,
-        }}
-        milestones={(lead.milestones_json as unknown as MilestoneItem[] | null) ?? null}
-      />
+      {/* PROVENANCE — what the suggestion was built from + when, always visible. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <span>{provenance}</span>
+        <span aria-hidden>·</span>
+        <button
+          type="button"
+          onClick={handleRecompute}
+          disabled={recomputing}
+          className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+        >
+          {recomputing && <Loader2 className="h-3 w-3 animate-spin" />}
+          {recomputing ? "Updating…" : "Update"}
+        </button>
+      </div>
+
+      {/* ACTION ROW — three thumb-sized buttons. */}
+      <div className="flex items-stretch gap-2">
+        {lead.phone && (
+          <div className="flex-1 [&>button]:w-full [&>button]:h-11 [&>button]:text-sm">
+            <ClickToCallButton leadId={lead.id} leadName={lead.name} leadPhone={lead.phone ?? null} />
+          </div>
+        )}
+        {quick.whatsapp && (
+          <Button variant="outline" className="flex-1 h-11 gap-1.5" asChild>
+            <a href={whatsappLink(quick.whatsapp.number, "")} target="_blank" rel="noopener noreferrer">
+              <MessageCircle className="h-4 w-4" />
+              WhatsApp
+            </a>
+          </Button>
+        )}
+        <Button variant="outline" className="flex-1 h-11 gap-1 min-w-0" onClick={onOpenDeal}>
+          <span className="truncate">More about this deal</span>
+          <ChevronRight className="h-4 w-4 shrink-0" />
+        </Button>
+      </div>
+
+      {/* Overflow-menu dialogs, rendered outside the menu so they survive it closing. */}
+      <EditLeadDialog lead={lead} onUpdate={onUpdate} open={editOpen} onOpenChange={setEditOpen} />
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Lead</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{lead.name}</strong> from <strong>{lead.company}</strong>? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={onDelete} disabled={isDeleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {isDeleting ? "Deleting..." : "Delete Lead"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
