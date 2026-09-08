@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { insertInteraction, getLeadDetail, getKnowledgeChunks, annotateInteractionAI } from "@/lib/supabaseQueries";
+import { insertInteraction, getLeadDetail, getKnowledgeChunks, annotateInteractionAI, saveLeadDeepAnalysis } from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -124,26 +124,22 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         }
       }
 
-      // Update the lead with all extracted data
-      const { error: updateError } = await supabase
-        .from("leads")
-        .update({
-          milestones_json: milestonesData.milestones,
-          risks_json: milestonesData.risks,
-          deal_factors_json: factorsData,
-          next_step: recsData.best_next_step?.title || null,
-          next_step_reason: recsData.best_next_step?.why || null,
-          deal_outlook: factorsData?.overall_outlook || null,
-          last_ai_run_at: new Date().toISOString(),
-          last_activity_at: new Date().toISOString(),
-        })
-        .eq("id", leadId);
-
-      if (updateError) {
+      // Persist: canonical lead_intelligence first (milestones merged by text,
+      // completed beats pending; deal factors merged — the recompute has no
+      // other writer for them), then the leads mirror as before.
+      try {
+        await saveLeadDeepAnalysis(leadId, {
+          milestones: milestonesData.milestones,
+          risks: milestonesData.risks,
+          dealFactors: factorsData,
+          nextStep: recsData.best_next_step?.title || null,
+          nextStepReason: recsData.best_next_step?.why || null,
+          dealOutlook: factorsData?.overall_outlook || null,
+        });
+        toast.success("Meeting analysis complete! Check Recommendations tab for insights.");
+      } catch (updateError) {
         console.error("Failed to update lead:", updateError);
         toast.error("Failed to save analysis to lead");
-      } else {
-        toast.success("Meeting analysis complete! Check Recommendations tab for insights.");
       }
     } catch (err) {
       console.error("Pipeline error:", err);
