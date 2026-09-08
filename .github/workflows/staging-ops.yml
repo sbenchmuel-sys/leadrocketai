@@ -42,6 +42,10 @@ on:
         description: "Bash to run after deploy (env: SUPABASE_URL, SERVICE_ROLE_KEY, ANON_KEY, DB_URL, INTERNAL_API_SECRET; psql + curl + jq available)"
         required: false
         default: ""
+      report_pr:
+        description: "PR number to post the ops report to as a comment (blank = none)"
+        required: false
+        default: ""
 
 concurrency:
   group: staging-ops
@@ -49,6 +53,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write
 
 env:
   STAGING_REF: jhipmqdpjenojfhfjgzq
@@ -113,8 +118,9 @@ jobs:
           for f in "${FNS[@]}"; do
             f="$(echo "$f" | xargs)"; [ -z "$f" ] && continue
             test -d "supabase/functions/$f" || { echo "::error::no such function: $f"; exit 1; }
-            echo "== deploying $f to $STAGING_REF"
-            supabase functions deploy "$f" --project-ref "$STAGING_REF"
+            echo "== deploying $f to $STAGING_REF" | tee -a /tmp/report.txt
+            supabase functions deploy "$f" --project-ref "$STAGING_REF" 2>&1 | tee -a /tmp/report.txt
+            test "${PIPESTATUS[0]}" = "0"
           done
 
       - name: Apply migration to STAGING (psql)
@@ -129,11 +135,11 @@ jobs:
           F="supabase/migrations/$MIG"
           test -f "$F" || { echo "::error::no such migration: $F"; exit 1; }
           grep -q "ntzeiflqqluwgdfmatjh" "$F" && { echo "::error::migration contains the production ref"; exit 1; }
-          echo "== applying $F (1st run)"
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+          echo "== applying $F (1st run)" | tee -a /tmp/report.txt
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F" 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
           if [ "${{ inputs.apply_twice }}" = "true" ]; then
-            echo "== applying $F (2nd run, must be a no-op)"
-            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F"
+            echo "== applying $F (2nd run, must be a no-op)" | tee -a /tmp/report.txt
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$F" 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
           fi
           V="${MIG%%_*}"
           psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations (version, name) SELECT '$V', '$MIG' WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$V');" || echo "::warning::could not record migration in schema_migrations"
@@ -150,4 +156,23 @@ jobs:
         run: |
           printf '%s\n' "$CHECK_SCRIPT" > /tmp/check.sh
           grep -q "ntzeiflqqluwgdfmatjh" /tmp/check.sh && { echo "::error::check script references production"; exit 1; }
-          bash -euo pipefail /tmp/check.sh
+          echo "== check script" | tee -a /tmp/report.txt
+          bash -euo pipefail /tmp/check.sh 2>&1 | tee -a /tmp/report.txt; test "${PIPESTATUS[0]}" = "0"
+
+      - name: Post report to PR
+        if: ${{ always() && inputs.report_pr != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.report_pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          # secrets are masked by Actions, but strip anything that looks like a JWT or a password URL anyway
+          BODY="$(sed -E 's/eyJ[A-Za-z0-9_.-]{20,}/<jwt>/g; s#postgresql://[^ ]+#<db-url>#g' /tmp/report.txt 2>/dev/null | tail -c 60000 || echo "(no report captured)")"
+          python3 - "$PR" "$RUN_URL" "$OUTCOME" "$BODY" <<'PY'
+          import json,os,sys,urllib.request
+          pr,url,outcome,body=sys.argv[1:5]
+          text=f"### Staging ops run — {outcome}\n{url}\n\n```\n{body}\n```"
+          req=urllib.request.Request(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{pr}/comments",data=json.dumps({"body":text}).encode(),headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","Content-Type":"application/json"},method="POST")
+          urllib.request.urlopen(req)
+          PY
