@@ -12,7 +12,7 @@ The QA gate every master-upgrade PR passes before merge. Copy-paste; nothing her
 ```bash
 set -a; . ./.env.staging; set +a
 ```
-`.env.staging` is gitignored; it carries `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (staging), `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_USER_A/B_EMAIL`, `TEST_USER_A/B_ID`, `TEST_USER_PASSWORD` (names documented in `.env.example`).
+`.env.staging` is gitignored; it carries `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (staging; the preflight signs in as `TEST_USER_A` for the `ai_task` probe — that function wants a user JWT), `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_USER_A/B_EMAIL`, `TEST_USER_A/B_ID`, `TEST_USER_PASSWORD` (names documented in `.env.example`).
 
 **2. Secrets preflight (read-only probes; `--print` shows the requests without sending):**
 ```bash

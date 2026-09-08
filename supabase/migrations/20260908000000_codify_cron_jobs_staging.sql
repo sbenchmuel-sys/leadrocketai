@@ -36,7 +36,9 @@
 -- Fail-closed at run time: if 'internal_api_secret' is missing the header is
 -- NULL and the dispatcher rejects the call; no unauthenticated work runs.
 --
--- Idempotent: unschedules the named jobs and recreates them. Apply with
+-- Idempotent and re-runnable end to end using ONLY cron.* API calls
+-- (cron.unschedule / cron.schedule / cron.alter_job — never a direct write to
+-- cron.job, which the pooler role cannot do). Apply with
 --   supabase db push --project-ref jhipmqdpjenojfhfjgzq
 -- (never without --project-ref: supabase/config.toml points at production).
 -- Guarded by src/test/noProdRefInStagingSql.test.ts (no prod ref in this file).
@@ -392,7 +394,14 @@ BEGIN
   -- Created above so the job exists (schedule/body mirror prod), disabled here
   -- so staging never auto-sends. The QA plan exercises the send path by manual
   -- invoke / review mode only (STAGING_TEST_PLAN.md → "Edge functions").
-  UPDATE cron.job SET active = false WHERE jobname = 'dispatch-automation-executor';
+  -- cron.alter_job, not UPDATE cron.job: on Supabase the pooler `postgres` role
+  -- has no direct write privilege on cron.job ("permission denied for table job");
+  -- the cron.* API functions are SECURITY DEFINER and are the supported path.
+  FOR jid IN
+    SELECT jobid FROM cron.job WHERE jobname = 'dispatch-automation-executor'
+  LOOP
+    PERFORM cron.alter_job(job_id => jid, active => false);
+  END LOOP;
 
   RAISE NOTICE 'codify_cron_jobs_staging: 17 dispatcher jobs (re)scheduled on staging; dispatch-automation-executor left inactive (the only inactive job).';
 END

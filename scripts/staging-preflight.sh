@@ -13,8 +13,12 @@
 # Needs from .env.staging (gitignored):
 #   SUPABASE_URL                 https://jhipmqdpjenojfhfjgzq.supabase.co   (must be the staging ref)
 #   SUPABASE_ANON_KEY            staging anon key (apikey header)
-#   SUPABASE_SERVICE_ROLE_KEY    staging service-role key — used ONLY as the Bearer
-#                                for ai_task / cron-dispatcher, which accept it as a caller.
+#   SUPABASE_SERVICE_ROLE_KEY    staging service-role key — Bearer for cron-dispatcher
+#                                (and a fallback attempt for ai_task).
+#   TEST_USER_A_EMAIL, TEST_USER_PASSWORD
+#                                staging test user; the ai_task probe signs in with them
+#                                (password grant) because ai_task wants a user JWT — the
+#                                service-role key is rejected there (401) on staging.
 #
 # Checks (each exits non-zero naming the missing secret):
 #   LOVABLE_API_KEY          ai_task {task:"intent_router"}  -> 200 (500 "AI gateway not configured" = missing)
@@ -105,16 +109,50 @@ ok()   { echo "   ok: $1"; }
 
 # ── 1. LOVABLE_API_KEY via ai_task intent_router (read-only classification) ──
 # Request shape from classify-inbound -> ai_task: {task, payload:{lead_context, email_text}}.
-# Service-role Bearer is accepted by ai_task (isServiceRole path); no lead_id, so nothing is looked up.
+# No lead_id, so nothing is looked up. Auth: a USER JWT for the staging test user
+# (password grant); the service-role key is tried only as a fallback.
 INTENT_BODY='{"task":"intent_router","payload":{"lead_context":"","email_text":"Hi, thanks for the demo yesterday. Could you send pricing for fifty seats and confirm the pilot terms still apply?"}}'
+TEST_EMAIL="${TEST_USER_A_EMAIL:-}"
+TEST_PASSWORD="${TEST_USER_PASSWORD:-}"
+
+# user_token: sign in as the staging test user; prints the access token or nothing.
+user_token() {
+  curl -sS -X POST "$URL/auth/v1/token?grant_type=password" \
+    -H "apikey: $ANON" -H "Content-Type: application/json" \
+    -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}" 2>/dev/null \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+}
+
 if [ "$PRINT_ONLY" -eq 1 ]; then
-  probe "LOVABLE_API_KEY (ai_task intent_router)" POST "ai_task" "SUPABASE_SERVICE_ROLE_KEY" "$INTENT_BODY"
+  echo "== sign in as staging test user (for the ai_task probe)"
+  echo "   curl -sS -X POST \"$URL/auth/v1/token?grant_type=password\" -H \"apikey: <anon>\" -H \"Content-Type: application/json\" -d '{\"email\":\"<TEST_USER_A_EMAIL>\",\"password\":\"<TEST_USER_PASSWORD>\"}'   # -> access_token"
+  probe "LOVABLE_API_KEY (ai_task intent_router)" POST "ai_task" "access_token of TEST_USER_A (fallback: SUPABASE_SERVICE_ROLE_KEY)" "$INTENT_BODY"
 else
-  probe "LOVABLE_API_KEY (ai_task intent_router)" POST "ai_task" "$SERVICE" "$INTENT_BODY"
+  echo "== sign in as staging test user (for the ai_task probe)"
+  TOKEN=""
+  if [ -z "$TEST_EMAIL" ] || [ -z "$TEST_PASSWORD" ]; then
+    echo "   TEST_USER_A_EMAIL / TEST_USER_PASSWORD not set in .env.staging — ai_task needs a user JWT; trying service-role as a fallback only"
+  else
+    TOKEN="$(user_token)"
+    if [ -z "$TOKEN" ]; then
+      fail "could not sign in as $TEST_EMAIL on staging (password grant returned no access_token) — check TEST_USER_A_EMAIL / TEST_USER_PASSWORD"
+    else
+      ok "signed in as $TEST_EMAIL"
+    fi
+  fi
+  if [ -n "$TOKEN" ]; then
+    probe "LOVABLE_API_KEY (ai_task intent_router, user JWT)" POST "ai_task" "$TOKEN" "$INTENT_BODY"
+  else
+    probe "LOVABLE_API_KEY (ai_task intent_router, service-role fallback)" POST "ai_task" "$SERVICE" "$INTENT_BODY"
+  fi
   case "$STATUS" in
     200) ok "LOVABLE_API_KEY is set (intent_router returned 200)" ;;
     500) fail "LOVABLE_API_KEY is MISSING on staging (ai_task returned 500 'AI gateway not configured')" ;;
-    401) fail "SUPABASE_SERVICE_ROLE_KEY is not staging's service key (ai_task 401) — cannot assess LOVABLE_API_KEY" ;;
+    401) if [ -n "$TOKEN" ]; then
+           fail "ai_task rejected the test user's JWT (401) — cannot assess LOVABLE_API_KEY; check the user exists/is confirmed on staging"
+         else
+           fail "ai_task rejected the service-role fallback (401) — set TEST_USER_A_EMAIL / TEST_USER_PASSWORD in .env.staging so the probe can use a user JWT"
+         fi ;;
     *)   fail "ai_task returned HTTP $STATUS — inspect function logs (LOVABLE_API_KEY undetermined)" ;;
   esac
 fi
