@@ -81,7 +81,7 @@ Return ONLY the extracted text content, no commentary or explanations. If the do
       }
     ],
     max_tokens: 16000,
-  }, { label: "parse-document" });
+  }, { label: "parse-document", timeoutMs: 180_000 }); // vision fallback: gemini-2.5-pro, 16k tokens, non-streaming
 
   if (!response.ok) {
     const errText = await response.text();

@@ -40,4 +40,18 @@ describe("AI gateway single source", () => {
     expect(src).not.toMatch(/createClient/);
     expect(src).not.toMatch(/import\.meta\.env/);
   });
+
+  it("whatsapp-events-processor: the WHATSAPP_AUTO_REPLY_ENABLED off-switch precedes the only auto-send", () => {
+    const src = readFileSync(path.join(FUNCTIONS_ROOT, "whatsapp-events-processor/index.ts"), "utf8");
+    const gate = src.indexOf('Deno.env.get("WHATSAPP_AUTO_REPLY_ENABLED") !== "true"');
+    const send = src.indexOf("svc.sendMessage(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(send).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(send);
+    expect(src.indexOf("svc.sendMessage(", send + 1)).toBe(-1); // exactly one send site
+    // The gate must `return` before the send, not merely log.
+    const between = src.slice(gate, send);
+    expect(between).toMatch(/auto-reply disabled by default \(WHATSAPP_AUTO_REPLY_ENABLED unset\)/);
+    expect(between).toMatch(/\breturn;/);
+  });
 });

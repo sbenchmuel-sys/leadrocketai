@@ -3,6 +3,7 @@
 // straight from the edge-function tree.
 import { describe, expect, it } from "vitest";
 import {
+  AI_GATEWAY_TIMEOUT_MS,
   AI_GATEWAY_URL,
   AiGatewayError,
   aiGatewayFetch,
@@ -44,20 +45,23 @@ describe("aiGatewayFetch", () => {
     expect(typeof line.ms).toBe("number");
   });
 
-  it("does not retry on 400 and returns the response untouched", async () => {
-    const seen: Seen[] = [];
-    const res = await aiGatewayFetch("k", { model: "m" }, {
-      fetchImpl: fakeFetch([() => new Response("bad", { status: 400 })], seen),
-      sleep: noSleep,
-      log: () => {},
-    });
-    expect(res.status).toBe(400);
-    expect(seen).toHaveLength(1);
-    expect(await res.text()).toBe("bad");
+  it("does not retry on 400 or 402 (credits) and returns the response untouched", async () => {
+    for (const status of [400, 402]) {
+      const seen: Seen[] = [];
+      const res = await aiGatewayFetch("k", { model: "m" }, {
+        fetchImpl: fakeFetch([() => new Response("bad", { status })], seen),
+        sleep: noSleep,
+        log: () => {},
+      });
+      expect(res.status).toBe(status);
+      expect(seen).toHaveLength(1);
+      expect(await res.text()).toBe("bad");
+    }
+    expect(isRetryableGatewayStatus(402)).toBe(false);
   });
 
-  it("retries exactly once on 402 / 5xx and returns the second failure as-is", async () => {
-    for (const status of [402, 500, 503]) {
+  it("retries exactly once on 5xx and returns the second failure as-is", async () => {
+    for (const status of [500, 503]) {
       const seen: Seen[] = [];
       const res = await aiGatewayFetch("k", { model: "m" }, {
         fetchImpl: fakeFetch([() => new Response("x", { status })], seen),
@@ -80,6 +84,19 @@ describe("aiGatewayFetch", () => {
     const p = aiGatewayFetch("k", { model: "m" }, { fetchImpl: hanging, timeoutMs: 10, log: () => {} });
     await expect(p).rejects.toBeInstanceOf(AiGatewayError);
     await expect(p).rejects.toMatchObject({ kind: "timeout" });
+  });
+
+  it("per-call timeoutMs override is honoured (default is 90s)", async () => {
+    expect(AI_GATEWAY_TIMEOUT_MS).toBe(90_000);
+    const slow = ((_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(() => resolve(okJson()), 40);
+        init.signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); });
+      })) as unknown as typeof fetch;
+    const ok = await aiGatewayFetch("k", { model: "m" }, { fetchImpl: slow, timeoutMs: 2_000, log: () => {} });
+    expect(ok.status).toBe(200);
+    await expect(aiGatewayFetch("k", { model: "m" }, { fetchImpl: slow, timeoutMs: 5, log: () => {} }))
+      .rejects.toMatchObject({ kind: "timeout" });
   });
 
   it("network failure surfaces AiGatewayError(kind=network)", async () => {
