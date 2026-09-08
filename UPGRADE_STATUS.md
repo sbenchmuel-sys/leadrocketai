@@ -8,7 +8,7 @@ Updated: 2026-09-09 00:40 (Israel time) · origin/main `5f818be7` · **6 units m
 
 **2. C1 — calling (PR #145).** Once a staging Twilio subaccount exists: answer an outbound call from a second phone and **hear the recording notice yourself** — the rep should hear only ringing. Codex caught that the first fix played the notice to the rep instead of the person being recorded.
 
-**3. Q1 — the follow-up rule (PR #146, new today).** Three things a person has to look at, all in the app: send a real email and confirm the lead **leaves** the Queue instead of reappearing at the bottom of "Follow up"; on a lead showing a follow-up prompt, confirm the automation card reads "Automation: Off / Enable" and **not** "Resume Anyway"; and confirm the "Follow up anytime — auto-send paused until the 12th" card's own Follow up button still sends.
+**3. Q1 — the follow-up rule (PR #146, new today — everything else about it is finished).** Three things a person has to look at, all in the app: send a real email and confirm the lead **leaves** the Queue instead of reappearing at the bottom of "Follow up"; on a lead showing a follow-up prompt, confirm the automation card reads "Automation: Off / Enable" and **not** "Resume Anyway"; and confirm the "Follow up anytime — auto-send paused until the 12th" card's own Follow up button still sends.
 
 **4. L2 — the new lead page (#144, merged).** A 20-step phone walkthrough is on the PR. Worth 15 minutes on a 390px screen when convenient; not blocking anything.
 
@@ -31,11 +31,15 @@ Nothing is leaking and no customer is harmed, but the commitment is not being me
 
 **3. [NEW] One in five inbound messages was never classified, and the classifier times out a quarter of the time.** 407 inbound messages have no AI label at all — 403 of them older than a week — going back to 2025. Separately, `classify-inbound` runs every minute and **times out at 55 seconds on 88 of 360 runs** (24%). New mail is keeping up, so the 407 look like a stuck historical set the job retries and chokes on. Consequence: those messages can never be hidden by the Queue's bounce/out-of-office filter, and their bodies sit unpurged to the hard cap. **Default I'm holding:** a small unit after Q1 that makes the job skip what it has already failed on and process a bounded batch, plus a one-off backfill for the 407. Free to overturn.
 
-**4. Staging Twilio subaccount — still unknown.** Default: C1's Twilio checks deferred, C2 queued behind it. Free to change until C1 reaches QA.
+**4. [NEW] Should a lead nobody has touched in a year be allowed to send itself an email?** Q1 was going to include a scheduled job giving Outlook the periodic re-check it has never had — Gmail gets one, Outlook doesn't, which is why an Outlook rep's unanswered mail never comes back as a follow-up. I built it and then **threw it away before it merged**, because the reviewer drove the real code and found it would have quietly re-armed the automatic sender on dormant leads: contacts silent for a year would have received a machine-written "re-engagement" email, oldest-silent first, with no rep involved. It also had a starvation bug that would have made it report success while doing nothing useful.
 
-**5. Settled defaults you can still overturn:** uploaded-notes risks expire at the next re-analysis (L1) · WhatsApp auto-replies stay OFF behind a switch (E-S1a) · warm follow-ups obey the "require a postal address" setting like cold email does (G-C — check `COLD_REQUIRE_POSTAL_ADDRESS` in production before redeploying) · follow-up wait is 3 days on fast motion, 5 on nurture, calendar days (Q1) · "call me then connect" default · Hebrew-first transcription.
+Rebuilding it properly hinges on one question that is yours, not mine: **when a lead has been quiet for a very long time, should the system be allowed to wake it up on its own, or should it only ever put a card in front of a human?** My default: **only a card.** That makes the rebuild much smaller and removes the whole class of risk by construction. Say the word if you want the automatic version and I'll build it with an explicit age limit instead.
 
-**6. GitHub token is in the chat history — revoke when the program ends.**
+**5. Staging Twilio subaccount — still unknown.** Default: C1's Twilio checks deferred, C2 queued behind it. Free to change until C1 reaches QA.
+
+**6. Settled defaults you can still overturn:** uploaded-notes risks expire at the next re-analysis (L1) · WhatsApp auto-replies stay OFF behind a switch (E-S1a) · warm follow-ups obey the "require a postal address" setting like cold email does (G-C — check `COLD_REQUIRE_POSTAL_ADDRESS` in production before redeploying) · follow-up wait is 3 days on fast motion, 5 on nurture, calendar days (Q1) · "call me then connect" default · Hebrew-first transcription.
+
+**7. GitHub token is in the chat history — revoke when the program ends.**
 
 ## Units
 
@@ -49,7 +53,8 @@ Nothing is leaking and no customer is harmed, but the commitment is not being me
 | G-C executor safety | 1 | PR open · Codex green · QA SHIP WITH NOTES · kill switch, stagger cap and skip ledger **proven on staging** · only the email-content observation left | [#138](https://github.com/sbenchmuel-sys/leadrocketai/pull/138) @ `ac4e3a76` |
 | E-S1a aiGateway | 2 | PR open · Codex green · QA SHIP WITH NOTES · all 16 rerouted functions boot on staging · holding the merge until one real AI call can be proven | [#140](https://github.com/sbenchmuel-sys/leadrocketai/pull/140) @ `3bf46b93` |
 | C1 calling safety | 1 | PR open · Codex green · QA HOLD→fixed · blocked on a staging Twilio subaccount | [#145](https://github.com/sbenchmuel-sys/leadrocketai/pull/145) @ `2778674e` |
-| **Q1 follow-up rule** | 1 | **new** · QA HOLD → HOLD → **SHIP WITH NOTES** · Codex + staging gate running | [#146](https://github.com/sbenchmuel-sys/leadrocketai/pull/146) @ `cd66630f` |
+| **Q1 follow-up rule** | 1 | **new** · QA HOLD → HOLD → SHIP → HOLD → **cleared after splitting one piece out** · Codex's three findings all addressed · **staging gate green, Deno suite green in CI** · waiting only on your three observations | [#146](https://github.com/sbenchmuel-sys/leadrocketai/pull/146) @ `648737b5` |
+| Q1b Outlook second look | 1 | **not started — needs DECIDE 4 first** | — |
 | G-B / Q2 / E-S1b / C2 / L3 / C3 / G-M / E-S2 / E-S3 / retention | | queued — each one needs Q1, G-C, C1 or E-S1a to merge first; they share files with the open PRs, so starting one now would only create conflicts | |
 
 ## Things that were quietly broken in production, found by this program
@@ -69,6 +74,8 @@ Nothing is leaking and no customer is harmed, but the commitment is not being me
 Every unit goes through four gates: the worker builds it → an independent reviewer reads every line → Codex reviews the PR → the staging job runs it against the real database.
 
 Q1 is the clearest example yet. The reviewer held it **twice**. First: every email a rep sent would have bounced straight back into the Queue seconds later as a "follow up" card — the Queue would never have emptied. Second, and far worse: pressing "Resume" on a lead would have armed a **real automated email to a real customer**, two days later, from the wrong template, that nobody asked for. When that was fixed, the reviewer found the identical bug surviving in the "Enable Automation" button next to it. All three are closed and pinned by tests that genuinely fail without them — the reviewer proved that by putting the old code back and watching exactly three tests break.
+
+Round four caught the biggest one of the whole program so far: a scheduled job I wrote would have started sending automated emails to customers who had heard nothing for over a year. Its own safety test passed — because the test read the file's text for the word "send" rather than watching what the code actually wrote to the database. I threw the job away rather than patch it. That is what the four gates are for.
 
 Running total of real defects caught before merge: a wrong-customer delete race on the lead page, an automatic WhatsApp reply that would have texted strangers, three ways a genuine customer question could have been buried by the new Queue filters, a misconfigured sender that would have re-spent AI credits every 15 minutes, and Q1's three. **None reached production.**
 
