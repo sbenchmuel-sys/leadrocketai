@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:edge": "deno test --allow-read --allow-env supabase/functions",
-    "test:isolation": "vitest run -c vitest.integration.config.ts"
+    "test:isolation": "vitest run -c vitest.integration.config.ts",
+    "preflight:staging": "bash scripts/staging-preflight.sh"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
