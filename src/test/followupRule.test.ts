@@ -22,8 +22,6 @@ import path from "node:path";
 
 import {
   DEFAULT_FOLLOWUP_WAIT_DAYS,
-  followupSweepCutoffIso,
-  isFollowupSweepCandidate,
   deriveFollowupDue,
   followupWaitDays,
   FOLLOWUP_DUE_KEY,
@@ -616,80 +614,6 @@ describe("action-key registry", () => {
 });
 
 
-// ── The Outlook hole: something must revisit a quiet lead ──────────
-//
-// The post-send recompute runs seconds after the send, when the answer is
-// correctly "nothing to do". Gmail gets a second look from its bulk-sync cron;
-// Outlook had none, so the lead was never re-derived and the six-week hole
-// stayed open for Outlook reps. `outlook-followup-sweep` is that second look.
-
-describe("outlook-followup-sweep — the lead a manual Outlook send leaves behind", () => {
-  // Exactly the row a manual Outlook send leaves: analyze_outgoing_email wrote
-  // needs_action=false, and postSendDeriveAction agreed (nothing was due yet).
-  // A warm lead: they wrote two months ago, the rep answered from Outlook four
-  // days ago, and nothing has come back.
-  const fourDaysAfterAnOutlookSend = {
-    needs_action: false,
-    next_action_key: null,
-    last_outbound_at: daysAgo(4),
-    last_inbound_at: daysAgo(60),
-    unsubscribed: false,
-    status: "active",
-    action_permanently_dismissed: false,
-    action_dismissed_at: null,
-  };
-
-  it("picks the lead up four days later", () => {
-    expect(isFollowupSweepCandidate(fourDaysAfterAnOutlookSend, NOW)).toBe(true);
-  });
-
-  it("and re-deriving it puts it in the Queue", () => {
-    // The other half of the proof: the sweep hands this lead to the same
-    // deriveAction a sync would, and it comes back as work for the rep.
-    const r = withFrozenClock(() => derive(metrics({
-      first_outbound_at: daysAgo(70),
-      last_outbound_at: fourDaysAfterAnOutlookSend.last_outbound_at,
-      last_inbound_at: fourDaysAfterAnOutlookSend.last_inbound_at,
-    })));
-    expect(r.next_action_key).toBe(FOLLOWUP_DUE_KEY);
-    expect(r.needs_action).toBe(true);
-    expect(chipForLead({ next_action_key: r.next_action_key, action_resurfaced_at: null }))
-      .toBe("followup_due");
-  });
-
-  it("leaves alone leads that need nothing", () => {
-    const skip = (over: Record<string, unknown>) =>
-      expect(isFollowupSweepCandidate({ ...fourDaysAfterAnOutlookSend, ...over }, NOW)).toBe(false);
-    skip({ needs_action: true });                       // already in the Queue
-    skip({ unsubscribed: true });
-    skip({ status: "closed_won" });
-    skip({ action_permanently_dismissed: true });
-    skip({ action_dismissed_at: daysAgo(1) });          // snoozed / handled
-    skip({ last_outbound_at: null });                   // never emailed
-    skip({ last_outbound_at: hoursAgo(2) });            // too recent to be due
-    skip({ last_inbound_at: daysAgo(1) });              // they wrote last — reply_now's job
-    skip({ last_outbound_at: null, last_inbound_at: null }); // never emailed at all
-  });
-
-  it("cuts off at the wait floor, not at the 3/5-day default", () => {
-    // The sweep must not second-guess the per-workspace wait; deriveAction
-    // applies the real number.
-    expect(followupSweepCutoffIso(NOW)).toBe(new Date(NOW - 86_400_000).toISOString());
-  });
-
-  it("is a recompute-only job — it must never send or arm", () => {
-    const fn = readFileSync(
-      path.join(ROOT, "supabase/functions/outlook-followup-sweep/index.ts"), "utf8");
-    // Reuses the one recompute path rather than copying the rule.
-    expect(fn).toContain("recomputeLeadAction(");
-    expect(fn).toContain("isFollowupSweepCandidate(");
-    // Cron-only entry point.
-    expect(fn).toContain("requireScheduledCaller(");
-    // No sending, no arming, no consent writes.
-    expect(fn).not.toMatch(/gmail-send|outlook-send|automation_mode|eligible_at:/);
-  });
-});
-
 describe("campaign-origin leads reach the Follow up tab", () => {
   // The flow: a campaign prospect replies, the enrolment is stopped, the rep
   // answers, days pass. Outbound is now NEWER than inbound and
@@ -821,11 +745,5 @@ describe("recomputeLeadAction — preserveStage", () => {
         /postSendDeriveAction\([\s\S]{0,400}preserveStage: true/,
       );
     }
-  });
-
-  it("the sweep does NOT ask for it — no AI ran, so deriveStage is canonical there", () => {
-    const fn = readFileSync(
-      path.join(ROOT, "supabase/functions/outlook-followup-sweep/index.ts"), "utf8");
-    expect(fn).not.toContain("preserveStage");
   });
 });

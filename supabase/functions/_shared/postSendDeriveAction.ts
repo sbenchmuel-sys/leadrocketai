@@ -17,10 +17,12 @@
 //     fire-and-forget otherwise) so the caller doesn't await.
 //   • Unit Q1 wired gmail-send AND outlook-send into this same helper
 //     (manual sends only — automation-executor still owns the state of
-//     its own sends). Outlook has no sync cron at all, so before that a
-//     rep's Outlook mail never came back as a follow-up. The AI
-//     `analyze_outgoing_email` write still runs first; this helper is
-//     the last word on next_action_key / needs_action.
+//     its own sends). The AI `analyze_outgoing_email` write runs first;
+//     this helper is the last word on next_action_key / needs_action,
+//     so the post-send state is the follow-up rule's answer. It is a
+//     recompute AT SEND TIME only — nothing here revisits the lead when
+//     the wait later expires. Gmail relies on gmail-bulk-sync's cron for
+//     that; Outlook has no equivalent (its own unit).
 //
 // What this does NOT do (deliberate scope):
 //   • Does not WRITE meeting_packs bookkeeping — gmail-sync /
@@ -100,9 +102,17 @@ export function postSendDeriveAction(
 }
 
 /**
- * The awaitable core. Exported so the scheduled `outlook-followup-sweep` can
- * re-derive a lead with the SAME code path a send uses — one rule, one place.
- * Throws on nothing: callers that can't fail (sends) wrap it; the sweep counts.
+ * The awaitable core, split out of the fire-and-forget wrapper above.
+ *
+ * Exported because `preserveStage` is safety-relevant behaviour that has to be
+ * testable: `src/test/followupRule.test.ts` drives this directly with a
+ * recording stub client to prove the write omits `stage` (and that the
+ * unguarded call really would downgrade `closing` to `engaged`). The wrapper
+ * can't serve that test — it is deliberately not awaitable. Any future
+ * scheduled re-derive should reuse this rather than copy the sequence, but note
+ * it persists whatever `deriveAction` returns, INCLUDING keys in
+ * OUTBOUND_SEND_KEYS with a past `eligible_at`; a caller that re-derives
+ * dormant leads must constrain that itself.
  */
 export async function recomputeLeadAction(
   supabase: SupabaseClient,

@@ -172,9 +172,6 @@ verify_jwt = false
 # in-code gate runs and the cron silently never executes. Safe to expose at the
 # gateway only because cron-dispatcher itself is now auth-gated (Codex P1 PR #109):
 # an unauthenticated caller can no longer reach these through the dispatcher.
-[functions.outlook-followup-sweep]
-verify_jwt = false
-
 [functions.promote-winning-interactions]
 verify_jwt = false
 
