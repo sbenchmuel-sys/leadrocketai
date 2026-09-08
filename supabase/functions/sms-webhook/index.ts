@@ -237,7 +237,7 @@ Deno.serve(async (req) => {
     snippet_text: body.substring(0, 500),
     metadata_json: { twilio_message_sid: messageSid, from, to },
     dedupe_key: dedupeKey,
-  }).catch(e => console.warn("[sms-webhook] Timeline projection failed:", e));
+  }, { triggerRecompute: true }).catch(e => console.warn("[sms-webhook] Timeline projection failed:", e));
 
   // ── Update lead timestamps ────────────────────────
   await supabase
@@ -251,18 +251,8 @@ Deno.serve(async (req) => {
       if (error) console.warn("[sms-webhook] Lead update error:", error.message);
     });
 
-  // ── Fire-and-forget: trigger intelligence recompute ──
-  const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
-  if (internalSecret) {
-    fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/recompute-lead-intelligence`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Secret": internalSecret,
-      },
-      body: JSON.stringify({ lead_id: leadId }),
-    }).catch(err => console.warn("[sms-webhook] Recompute trigger failed:", err.message));
-  }
+  // Intelligence recompute: enqueued once via projectTimelineItem's
+  // triggerRecompute (coalescing queue) — no direct recompute call here.
 
   // Return TwiML empty response
   return new Response("<Response></Response>", {

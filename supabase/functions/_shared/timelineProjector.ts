@@ -128,41 +128,41 @@ export async function projectTimelineItem(
 
 /**
  * Queue an async intelligence recompute for a lead.
- * Uses internal secret header to bypass user auth.
+ *
+ * Enqueues into `lead_intelligence_recompute_queue` via the
+ * `enqueue_lead_intelligence_recompute` RPC (PK lead_id, ON CONFLICT DO
+ * NOTHING) instead of invoking recompute-lead-intelligence directly, so N
+ * signals in one drain window cost ONE recompute. `intelligence-queue-drain`
+ * (cron, every 5 min) performs the actual recompute.
  * Fire-and-forget — failures are logged but don't block the caller.
  */
 export async function queueRecompute(
-  _supabase: SupabaseClient,
+  supabase: SupabaseClient,
   leadId: string,
 ): Promise<void> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
-
-  if (!supabaseUrl || !internalSecret) {
-    console.warn("[timelineProjector] Cannot queue recompute: missing env vars");
-    return;
-  }
-
   try {
-    const res = await fetch(`${supabaseUrl}/functions/v1/recompute-lead-intelligence`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Secret": internalSecret,
-      },
-      body: JSON.stringify({ lead_id: leadId }),
-    });
+    const { data: lead, error: leadErr } = await supabase
+      .from("leads")
+      .select("workspace_id")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (leadErr || !lead?.workspace_id) {
+      console.warn("[timelineProjector] Cannot queue recompute: lead/workspace not found", { leadId, error: leadErr?.message });
+      return;
+    }
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.warn(`[timelineProjector] Recompute returned ${res.status}: ${body.substring(0, 200)}`);
+    const { error } = await supabase.rpc("enqueue_lead_intelligence_recompute", {
+      p_lead_id: leadId,
+      p_workspace_id: lead.workspace_id,
+      p_source: "timeline_projector",
+    });
+    if (error) {
+      console.warn("[timelineProjector] Recompute enqueue failed:", error.message, { leadId });
     } else {
-      // Consume body to free connection
-      await res.text();
-      console.log(`[timelineProjector] Recompute queued for lead ${leadId}`);
+      console.log(`[timelineProjector] Recompute enqueued for lead ${leadId}`);
     }
   } catch (err: any) {
-    console.warn("[timelineProjector] Recompute fetch error:", err.message);
+    console.warn("[timelineProjector] Recompute enqueue error:", err?.message ?? String(err));
   }
 }
 
