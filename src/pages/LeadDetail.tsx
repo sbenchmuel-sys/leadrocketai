@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { getLeadDetail, LeadDetail as LeadDetailType, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
+import { getLeadDetail, getLeadIntelligence, LeadDetail as LeadDetailType, LeadIntelligence, deleteLead, markActionHandled, undoMarkActionHandled } from "@/lib/supabaseQueries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +41,9 @@ export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [lead, setLead] = useState<LeadDetailType | null>(null);
+  // Canonical intelligence row, passed to the header so "Next move" reads
+  // lead_intelligence rather than the leads.next_step mirror.
+  const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -91,11 +94,12 @@ export default function LeadDetail() {
   const loadLead = async () => {
     if (!id) return;
     try {
-      const data = await getLeadDetail(id);
+      const [data, intel] = await Promise.all([getLeadDetail(id), getLeadIntelligence(id)]);
       // If the rep navigated to another lead while this fetch was in flight, drop
       // the result — never render the previous lead's data on the new route (Codex P2).
       if (currentIdRef.current !== id) return;
       setLead(data);
+      setIntelligence(intel);
     } catch (err) {
       if (currentIdRef.current !== id) return;
       toast.error("Failed to load lead");
@@ -154,6 +158,7 @@ export default function LeadDetail() {
     // stakeholder avatars / status) while the new one loads. Only the id-change
     // effect clears — visibility refresh and in-page updates reload without a flash.
     setLead(null);
+    setIntelligence(null);
     setIsLoading(true);
     loadLead();
   }, [id]);
@@ -187,6 +192,7 @@ export default function LeadDetail() {
     <div className="space-y-6">
       <LeadDetailHeader
         lead={lead}
+        intelligence={intelligence}
         isConnected={isConnected}
         isDeleting={isDeleting}
         originContext={originContext}

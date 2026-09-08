@@ -53,6 +53,17 @@ Deno.serve(async (req) => {
   const internalSecret = Deno.env.get("INTERNAL_API_SECRET")!;
   const admin = createClient(supabaseUrl, serviceKey);
 
+  // `recompute-lead-intelligence` has no verify_jwt=false entry in
+  // supabase/config.toml, so the Supabase gateway rejects a call that carries
+  // only X-Internal-Secret ("Missing authorization header") BEFORE the
+  // function's own internal-secret check runs. Send the service-role key as
+  // the bearer to satisfy the gateway; X-Internal-Secret remains the real
+  // authorization check inside the function.
+  if (!serviceKey) {
+    console.error("[intelligence-queue-drain] SUPABASE_SERVICE_ROLE_KEY missing — recompute calls would be rejected by the gateway (401). Aborting drain.");
+    return jsonResp({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY not configured" }, 500);
+  }
+
   const startedAt = Date.now();
   const results: Array<{ lead_id: string; status: "ok" | "failed" | "skipped"; error?: string }> = [];
 
@@ -102,6 +113,7 @@ Deno.serve(async (req) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceKey}`,
           "X-Internal-Secret": internalSecret,
         },
         body: JSON.stringify({ lead_id: row.lead_id }),

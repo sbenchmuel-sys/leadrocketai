@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import type { Json } from "@/integrations/supabase/types";
-import { LeadDetail, updateLeadMilestoneStatus, getLeadIntelligence, triggerIntelligenceRecompute } from "@/lib/supabaseQueries";
+import {
+  LeadDetail, updateLeadMilestoneStatus, deleteLeadMilestone, replaceLeadMilestonesDeduped,
+  getLeadIntelligence, triggerIntelligenceRecompute,
+} from "@/lib/supabaseQueries";
 import { useAITask } from "@/hooks/useAITask";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -111,17 +112,19 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
     }
   };
 
-  const handleDeleteMilestone = async (index: number) => {
-    const updated = milestones.filter((_, i) => i !== index);
-    const { error } = await supabase
-      .from("leads")
-      .update({ milestones_json: updated as unknown as Json })
-      .eq("id", lead.id);
-    if (error) {
-      toast.error("Failed to delete milestone");
-    } else {
+  // Keyed by description text, not array index — the recompute reorders the
+  // list, so an index captured at render time can point at a different row.
+  const reloadIntelligence = async () => setIntelligence(await getLeadIntelligence(lead.id));
+
+  const handleDeleteMilestone = async (description: string) => {
+    try {
+      await deleteLeadMilestone(lead.id, description);
       toast.success("Milestone deleted");
+      await reloadIntelligence();
       onUpdate();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete milestone");
     }
   };
 
@@ -138,15 +141,13 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
       if (result.ok && result.content) {
         const deduped = JSON.parse(extractJsonFromAIContent(result.content));
         if (deduped.unique_milestones?.length > 0) {
-          const { error } = await supabase
-            .from("leads")
-            .update({ milestones_json: deduped.unique_milestones as unknown as Json })
-            .eq("id", lead.id);
-          if (error) {
-            toast.error("Failed to save cleaned milestones");
-          } else {
-            toast.success(`Removed ${deduped.duplicates_removed} duplicate${deduped.duplicates_removed !== 1 ? "s" : ""}`);
+          const removed = await replaceLeadMilestonesDeduped(lead.id, deduped.unique_milestones);
+          if (removed > 0) {
+            toast.success(`Removed ${removed} duplicate${removed !== 1 ? "s" : ""}`);
+            await reloadIntelligence();
             onUpdate();
+          } else {
+            toast.info("No duplicates found");
           }
         } else {
           toast.info("No duplicates found");
@@ -273,17 +274,16 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
             ) : (
               <div className="space-y-3">
                 {milestones.map((m, i) => (
-                  <div key={i} className="flex items-start gap-3 p-2 rounded border bg-muted/30 group">
+                  <div key={`${i}-${m.description}`} className="flex items-start gap-3 p-2 rounded border bg-muted/30 group">
                     <Checkbox
                       id={`rec-milestone-${i}`}
                       checked={m.status === "completed"}
                       onCheckedChange={async (checked) => {
                         try {
-                          await updateLeadMilestoneStatus(lead.id, i, !!checked);
+                          await updateLeadMilestoneStatus(lead.id, m.description, !!checked);
                           toast.success(`Milestone ${checked ? "completed" : "reopened"}`);
                           // Reload intelligence to reflect canonical update
-                          const updated = await getLeadIntelligence(lead.id);
-                          setIntelligence(updated);
+                          await reloadIntelligence();
                           onUpdate();
                         } catch (err) {
                           console.error(err);
@@ -311,7 +311,7 @@ export default function RecommendationsTab({ lead, onUpdate }: RecommendationsTa
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => handleDeleteMilestone(i)}
+                      onClick={() => handleDeleteMilestone(m.description)}
                     >
                       <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
                     </Button>

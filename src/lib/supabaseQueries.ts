@@ -5,6 +5,14 @@ import { supabase } from '@/integrations/supabase/client';
 import type { Database, Json } from '@/integrations/supabase/types';
 import { isDemoMode } from '@/lib/demoMode';
 import { getDemoLeadDetail, getDemoInteractions, getDemoDrafts } from '@/lib/demoData';
+// Pure text-keyed milestone rules shared with recompute-lead-intelligence.
+// ponytail: relative path until the harness adds the @shared/* alias.
+import {
+  mergeMilestonesByText,
+  removeMilestoneByText,
+  setMilestoneStatusByText,
+  milestoneKey,
+} from '../../supabase/functions/_shared/milestoneMerge.ts';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Lead = Database['public']['Tables']['leads']['Row'];
@@ -134,7 +142,9 @@ export type LeadDetail = Pick<Lead,
   'wa_opted_in' | 'automation_mode' | 'action_instructions' |
   'website' | 'linkedin_url' | 'company_linkedin_url' | 'city' | 'state' |
   // Unit 4b: quick-action contact/consent + "I handled this" suggestion state.
-  'whatsapp_number' | 'unsubscribed' | 'action_permanently_dismissed'
+  'whatsapp_number' | 'unsubscribed' | 'action_permanently_dismissed' |
+  // Unit L1: OOO badge / status line + group timeline read these.
+  'ooo_until' | 'group_id'
 > & {
   // Phase 1 multi-contact thread support — populated by automation-executor when
   // a thread becomes multi-participant. Optional because Lovable will regenerate
@@ -143,6 +153,10 @@ export type LeadDetail = Pick<Lead,
   manual_mode_reason?: string | null;
   manual_mode_set_at?: string | null;
 };
+
+// Exported so a unit test can fail if a column the lead page reads goes missing
+// (ooo_until → OOO badge + "Out of office until" status line; group_id → group timeline).
+export const LEAD_DETAIL_SELECT = 'id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode, action_instructions, website, linkedin_url, company_linkedin_url, city, state, whatsapp_number, unsubscribed, action_permanently_dismissed, manual_mode, manual_mode_reason, manual_mode_set_at, ooo_until, group_id';
 
 export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
   if (!leadId) throw new Error('Missing leadId');
@@ -165,7 +179,7 @@ export async function getLeadDetail(leadId: string): Promise<LeadDetail> {
 
   const { data: lead, error: leadErr } = await supabase
     .from('leads')
-    .select('id, company, name, email, strategy, status, stage, owner_user_id, created_at, last_activity_at, meeting_link, personal_notes, pref_email_drafts, pref_linkedin_drafts, milestones_json, risks_json, next_step, next_step_reason, deal_outlook, deal_factors_json, last_ai_run_at, job_title, phone, industry, country, initial_message, motion, source_type, needs_action, next_action_key, next_action_label, has_future_meeting, last_inbound_at, last_outbound_at, eligible_at, nurture_cadence, mode_changed_at, nurture_status, nurture_mode, nurture_theme, wa_opted_in, automation_mode, action_instructions, website, linkedin_url, company_linkedin_url, city, state, whatsapp_number, unsubscribed, action_permanently_dismissed, manual_mode, manual_mode_reason, manual_mode_set_at')
+    .select(LEAD_DETAIL_SELECT)
     .eq('id', leadId)
     .single();
   if (leadErr) throw leadErr;
@@ -1436,77 +1450,176 @@ export async function deleteMeetingPack(id: string): Promise<void> {
 // MILESTONE STATUS UPDATES
 // ============================================
 
-export async function updateLeadMilestoneStatus(
-  leadId: string, 
-  milestoneIndex: number, 
-  completed: boolean
-): Promise<void> {
-  if (!leadId) throw new Error('Missing leadId');
-
-  const now = new Date().toISOString();
-
-  // Update canonical lead_intelligence milestones (primary source)
-  const { data: intel, error: intelFetchErr } = await supabase
+/**
+ * Read the lead's milestone list from the canonical source.
+ * Canonical = lead_intelligence.milestones_json when that row exists; the
+ * leads.milestones_json mirror otherwise (the row is absent before the first
+ * recompute and gets deleted whenever lead_context_items change).
+ */
+async function readCanonicalMilestones(leadId: string): Promise<{ hasIntel: boolean; milestones: MilestoneItem[] }> {
+  const { data: intel } = await supabase
     .from('lead_intelligence')
     .select('milestones_json')
     .eq('lead_id', leadId)
     .maybeSingle();
-
-  if (!intelFetchErr && intel) {
-    const intelMilestones = (intel.milestones_json as unknown as MilestoneItem[] | null) ?? [];
-    if (milestoneIndex >= 0 && milestoneIndex < intelMilestones.length) {
-      const updatedIntel = intelMilestones.map((m, i) => {
-        if (i === milestoneIndex) {
-          return {
-            ...m,
-            status: completed ? 'completed' as const : 'pending' as const,
-            date: completed ? now.split('T')[0] : (m as any).date || null,
-            completedAt: completed ? now : undefined,
-          };
-        }
-        return m;
-      });
-      await supabase
-        .from('lead_intelligence')
-        .update({ milestones_json: updatedIntel as unknown as Database['public']['Tables']['lead_intelligence']['Update']['milestones_json'] })
-        .eq('lead_id', leadId);
-    }
+  if (intel) {
+    return { hasIntel: true, milestones: (intel.milestones_json as unknown as MilestoneItem[] | null) ?? [] };
   }
-
-  // Also update legacy leads.milestones_json for backwards compatibility
-  const { data: lead, error: fetchErr } = await supabase
+  const { data: lead, error } = await supabase
     .from('leads')
     .select('milestones_json')
     .eq('id', leadId)
     .single();
+  if (error) throw error;
+  return { hasIntel: false, milestones: (lead?.milestones_json as unknown as MilestoneItem[] | null) ?? [] };
+}
 
-  if (fetchErr) throw fetchErr;
-
-  const milestones = (lead?.milestones_json as unknown as MilestoneItem[] | null) ?? [];
-  
-  if (milestoneIndex >= 0 && milestoneIndex < milestones.length) {
-    const updatedMilestones = milestones.map((m, i) => {
-      if (i === milestoneIndex) {
-        return {
-          ...m,
-          status: completed ? 'completed' as const : 'pending' as const,
-          date: completed ? now.split('T')[0] : null,
-          completedAt: completed ? now : undefined,
-        };
-      }
-      return m;
-    });
-
-    const { error: updateErr } = await supabase
-      .from('leads')
-      .update({ 
-        milestones_json: updatedMilestones as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
-        last_activity_at: now
-      })
-      .eq('id', leadId);
-
-    if (updateErr) throw updateErr;
+/**
+ * Write the full milestone list: lead_intelligence.milestones_json is canonical
+ * (updated when the row exists — RLS only allows UPDATE for authenticated
+ * users, never INSERT), then mirrored to leads.milestones_json so the hidden
+ * mirror readers (inbox panels, re-engagement card, dashboard metrics) and the
+ * next recompute's seed stay in sync.
+ */
+export async function writeLeadMilestones(leadId: string, milestones: MilestoneItem[], hasIntel?: boolean): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+  const now = new Date().toISOString();
+  const intelExists = hasIntel ?? (await readCanonicalMilestones(leadId)).hasIntel;
+  if (intelExists) {
+    const { error } = await supabase
+      .from('lead_intelligence')
+      .update({ milestones_json: milestones as unknown as Database['public']['Tables']['lead_intelligence']['Update']['milestones_json'] })
+      .eq('lead_id', leadId);
+    if (error) throw error;
   }
+  const { error: mirrorErr } = await supabase
+    .from('leads')
+    .update({
+      milestones_json: milestones as unknown as Database['public']['Tables']['leads']['Update']['milestones_json'],
+      last_activity_at: now,
+    })
+    .eq('id', leadId);
+  if (mirrorErr) throw mirrorErr;
+}
+
+/**
+ * Toggle one milestone's status, keyed by its description text (never by
+ * array index — the recompute reorders the list). A numeric `milestone` is
+ * still accepted for the legacy MeetingsTab callers and is resolved against
+ * the canonical list before the text-keyed write.
+ */
+export async function updateLeadMilestoneStatus(
+  leadId: string,
+  milestone: string | number,
+  completed: boolean
+): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+  const { hasIntel, milestones } = await readCanonicalMilestones(leadId);
+  const description = typeof milestone === 'number' ? milestones[milestone]?.description : milestone;
+  if (!description) return;
+  const updated = setMilestoneStatusByText(milestones, description, completed, new Date().toISOString());
+  await writeLeadMilestones(leadId, updated, hasIntel);
+}
+
+/** Delete one milestone by description text (canonical + mirror). */
+export async function deleteLeadMilestone(leadId: string, description: string): Promise<void> {
+  const { hasIntel, milestones } = await readCanonicalMilestones(leadId);
+  await writeLeadMilestones(leadId, removeMilestoneByText(milestones, description), hasIntel);
+}
+
+/**
+ * Replace the milestone list with a deduped one (AI "Clean duplicates").
+ * Guard: `kept` must be a text-subset of the current list; anything the AI
+ * invented or renamed is dropped, and status is escalated from the current
+ * entry so a completed milestone can't be reopened by the cleanup.
+ */
+export async function replaceLeadMilestonesDeduped(leadId: string, kept: MilestoneItem[]): Promise<number> {
+  const { hasIntel, milestones } = await readCanonicalMilestones(leadId);
+  const current = mergeMilestonesByText(milestones, []); // collapse exact-text dupes
+  const keptKeys = new Set(kept.map(m => milestoneKey(m.description)));
+  const next = current.filter(m => keptKeys.has(milestoneKey(m.description)));
+  const removed = milestones.length - next.length;
+  if (removed > 0) await writeLeadMilestones(leadId, next, hasIntel);
+  return removed;
+}
+
+export interface LeadDeepAnalysisWrite {
+  milestones: MilestoneItem[];
+  risks: unknown[];
+  dealFactors: Record<string, unknown> | null;
+  nextStep: string | null;
+  nextStepReason: string | null;
+  dealOutlook: string | null;
+}
+
+/**
+ * Persist a client-side `lead_deep_analysis` result (UploadTab meeting pipeline).
+ * Canonical first: merge milestones by text (completed beats pending) and
+ * risks by issue text into lead_intelligence when the row exists; deal factors
+ * are merged over the existing object (the recompute has no other writer for
+ * them). Then mirror to `leads` exactly as before so nothing downstream goes stale.
+ */
+export async function saveLeadDeepAnalysis(leadId: string, input: LeadDeepAnalysisWrite): Promise<void> {
+  if (!leadId) throw new Error('Missing leadId');
+  const now = new Date().toISOString();
+  const { data: intel } = await supabase
+    .from('lead_intelligence')
+    .select('milestones_json, risks_json, deal_factors_json')
+    .eq('lead_id', leadId)
+    .maybeSingle();
+
+  const { data: lead } = intel ? { data: null } : await supabase
+    .from('leads')
+    .select('milestones_json, risks_json, deal_factors_json')
+    .eq('id', leadId)
+    .maybeSingle();
+  const base = (intel ?? lead) as { milestones_json?: unknown; risks_json?: unknown; deal_factors_json?: unknown } | null;
+
+  const milestones = mergeMilestonesByText(
+    (base?.milestones_json as MilestoneItem[] | null) ?? [],
+    input.milestones,
+  );
+  const existingRisks = (Array.isArray(base?.risks_json) ? base!.risks_json : []) as Array<{ issue?: string }>;
+  const seen = new Set(existingRisks.map(r => milestoneKey(r?.issue)));
+  const risks = [
+    ...existingRisks,
+    ...(input.risks as Array<{ issue?: string }>).filter(r => r?.issue && !seen.has(milestoneKey(r.issue))),
+  ];
+  const dealFactors = {
+    ...((base?.deal_factors_json as Record<string, unknown> | null) ?? {}),
+    ...(input.dealFactors ?? {}),
+  };
+
+  if (intel) {
+    const { error } = await supabase
+      .from('lead_intelligence')
+      .update({
+        milestones_json: milestones as unknown as Json,
+        risks_json: risks as unknown as Json,
+        deal_factors_json: dealFactors as unknown as Json,
+        // Always written (null included) so canonical and the leads mirror
+        // below never diverge — the header reads canonical.
+        recommended_next_step: input.nextStep,
+        next_step_reason: input.nextStepReason,
+      })
+      .eq('lead_id', leadId);
+    if (error) throw error;
+  }
+
+  const { error: mirrorErr } = await supabase
+    .from('leads')
+    .update({
+      milestones_json: milestones as unknown as Json,
+      risks_json: risks as unknown as Json,
+      deal_factors_json: (input.dealFactors ? dealFactors : null) as unknown as Json,
+      next_step: input.nextStep,
+      next_step_reason: input.nextStepReason,
+      deal_outlook: input.dealOutlook,
+      last_ai_run_at: now,
+      last_activity_at: now,
+    })
+    .eq('id', leadId);
+  if (mirrorErr) throw mirrorErr;
 }
 
 export async function updateMeetingPackMilestoneStatus(

@@ -819,7 +819,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                                         try {
                                           await updateMeetingPackMilestoneStatus(linkedPack.id, i, !!checked);
                                           if (linkedPack.milestones_saved_to_lead) {
-                                            await updateLeadMilestoneStatus(leadId, i, !!checked);
+                                            await updateLeadMilestoneStatus(leadId, m.description, !!checked);
                                           }
                                           loadMeetingPacks();
                                           onMilestonesAdded?.();
@@ -1161,7 +1161,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                                   await updateMeetingPackMilestoneStatus(pack.id, i, !!checked);
                                   // Also update lead milestones if synced
                                   if (pack.milestones_saved_to_lead) {
-                                    await updateLeadMilestoneStatus(leadId, i, !!checked);
+                                    await updateLeadMilestoneStatus(leadId, m.description, !!checked);
                                   }
                                   loadMeetingPacks();
                                   onMilestonesAdded?.();

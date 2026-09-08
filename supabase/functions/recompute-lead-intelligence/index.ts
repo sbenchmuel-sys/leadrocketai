@@ -5,6 +5,7 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertLeadAccess, isInternalCaller } from "../_shared/authz.ts";
+import { higherMilestoneStatus, mergeMilestonesByText } from "../_shared/milestoneMerge.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -127,7 +128,7 @@ Deno.serve(async (req) => {
     evidenceRegistry.length = 0;
 
     // ── 2. Parallel fetch all evidence sources ──
-    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes, contextItemsRes] = await Promise.all([
+    const [timelineRes, convoAnalysisRes, callAnalysisRes, meetingRes, contextItemsRes, priorIntelRes] = await Promise.all([
       admin.from("lead_timeline_items")
         .select("id, channel, direction, event_type, occurred_at, snippet_text, subject, metadata_json, source_table, source_id")
         .eq("lead_id", lead_id)
@@ -178,6 +179,13 @@ Deno.serve(async (req) => {
         .eq("is_active", true)
         .order("created_at", { ascending: true })
         .limit(30),
+
+      // Prior canonical milestones (rep toggles/deletes land here first; the
+      // leads.milestones_json mirror is the fallback when no row exists yet).
+      admin.from("lead_intelligence")
+        .select("milestones_json")
+        .eq("lead_id", lead_id)
+        .maybeSingle(),
     ]);
 
     const timelineItems = timelineRes.data ?? [];
@@ -253,6 +261,13 @@ Deno.serve(async (req) => {
         const existing = milestonesMap.get(matchKey)!;
         existing.evidence_ids.push(evidenceId);
         if (!existing.source_types.includes(sourceType)) existing.source_types.push(sourceType);
+        // Completed beats pending: a rep's manual tick (seeded from the stored
+        // list) must not be reset by a fresh "pending" from call/meeting evidence.
+        const merged = higherMilestoneStatus(existing.status, status);
+        if (merged !== existing.status) {
+          existing.status = merged;
+          if (!existing.date && date) existing.date = date;
+        }
       } else {
         milestonesMap.set(key, { description: desc, status: (status || "pending") as any, date, evidence_ids: [evidenceId], source_types: [sourceType] });
       }
@@ -377,20 +392,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── From lead's existing milestones/risks ──
-    const leadMilestones = Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]) : [];
-    const leadRisks = Array.isArray(lead.risks_json) ? (lead.risks_json as any[]) : [];
+    // ── From the stored milestone lists (canonical lead_intelligence MERGED with the leads mirror) ──
+    // Merge, not first-non-empty: under RLS only the lead owner can update the
+    // canonical row, so a non-owner's tick or an upload may exist only in the
+    // mirror. Text-keyed merge, completed beats pending, so neither side's
+    // "done" is lost.
+    // Risks are deliberately NOT re-seeded from leads.risks_json any more: that
+    // loop made every risk immortal (each recompute copied the previous output
+    // back in), so a resolved risk could never leave the list. Risks now come
+    // only from live evidence (cautions, call analyses).
+    const priorIntelMilestones = (priorIntelRes as { data?: { milestones_json?: unknown } | null }).data?.milestones_json;
+    const leadMilestones = mergeMilestonesByText(
+      Array.isArray(priorIntelMilestones) ? (priorIntelMilestones as any[]) : [],
+      Array.isArray(lead.milestones_json) ? (lead.milestones_json as any[]) : [],
+    );
 
     for (const m of leadMilestones) {
-      if (m.description && !milestonesMap.has(m.description.toLowerCase().trim())) {
+      if (m?.description) {
         const evId = registerEvidence("lead_analysis", lead.id, m.evidence || m.description, undefined);
         addMilestone(m.description, m.status || "pending", m.date || null, evId, "lead_analysis");
-      }
-    }
-    for (const r of leadRisks) {
-      if (r.issue && !risksMap.has(r.issue.toLowerCase().trim())) {
-        const evId = registerEvidence("lead_analysis", lead.id, r.evidence || r.issue, undefined);
-        addRisk(r.issue, r.level || "medium", evId, "lead_analysis");
       }
     }
 

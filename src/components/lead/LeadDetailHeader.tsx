@@ -9,7 +9,7 @@ import { ClickToCallButton } from "@/components/call/ClickToCallButton";
 import { resolveLeadQuickActions } from "@/lib/leadQuickActions";
 import { smsLink, whatsappLink } from "@/lib/outreachDeepLinks";
 import StakeholderAvatarRow from "@/components/lead/StakeholderAvatarRow";
-import type { LeadDetail } from "@/lib/supabaseQueries";
+import type { LeadDetail, LeadIntelligence } from "@/lib/supabaseQueries";
 import { getLeadStatusLine } from "@/lib/leadStatusLine";
 import { GmailSyncButton } from "@/components/gmail/GmailSyncButton";
 import { MailReconnectChip } from "@/components/mail/MailReconnectChip";
@@ -25,6 +25,10 @@ type OriginContext = "dashboard" | "leads" | "inbox";
 
 interface LeadDetailHeaderProps {
   lead: LeadDetail;
+  /** Canonical lead_intelligence row (loaded by LeadDetail). Next move reads
+   *  recommended_next_step / next_step_reason from here; falls back to the
+   *  leads.next_step mirror only when no row exists yet. */
+  intelligence?: LeadIntelligence | null;
   isConnected: boolean;
   isDeleting: boolean;
   originContext: OriginContext;
@@ -47,10 +51,12 @@ const BACK_ROUTES: Record<OriginContext, string> = {
 };
 
 export default function LeadDetailHeader({
-  lead, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
+  lead, intelligence, isDeleting, originContext, onDelete, onUpdate, onSyncComplete, onDraftIt, onMarkHandled, markHandledBusy,
 }: LeadDetailHeaderProps) {
   const navigate = useNavigate();
   const statusLine = getLeadStatusLine(lead);
+  const nextStep = intelligence ? intelligence.recommended_next_step : lead.next_step;
+  const nextStepReason = intelligence ? intelligence.next_step_reason : lead.next_step_reason;
   // Whether a mailbox is connected — read from the canonical mail_accounts
   // source (falls back to legacy gmail_connections inside the hook), scoped to
   // the ACTIVE workspace so a multi-workspace user doesn't pick another
@@ -244,10 +250,10 @@ export default function LeadDetailHeader({
             <div className="flex-1 min-w-0">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-0.5">Next move</span>
               <p className="text-sm font-medium text-foreground">
-                {lead.next_step || "Send a quick check-in to keep this moving"}
+                {nextStep || "Send a quick check-in to keep this moving"}
               </p>
-              {lead.next_step_reason && (
-                <p className="text-xs text-muted-foreground mt-0.5">{lead.next_step_reason}</p>
+              {nextStepReason && (
+                <p className="text-xs text-muted-foreground mt-0.5">{nextStepReason}</p>
               )}
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
