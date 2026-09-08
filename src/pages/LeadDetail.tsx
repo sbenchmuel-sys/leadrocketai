@@ -14,6 +14,7 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useVisibilityRefresh } from "@/hooks/useVisibilityRefresh";
 import LeadDetailHeader from "@/components/lead/LeadDetailHeader";
 import LeadContextPanel from "@/components/lead/LeadContextPanel";
+import PostMeetingRecapHint from "@/components/lead/PostMeetingRecapHint";
 import StakeholdersPartnersPanel from "@/components/lead/StakeholdersPartnersPanel";
 import AutomationPreviewCard from "@/components/lead/AutomationPreviewCard";
 import NurturePreviewCard from "@/components/lead/NurturePreviewCard";
@@ -72,11 +73,14 @@ export default function LeadDetail() {
     setShowDraftDialog(true);
   };
 
+  // Belt and braces on top of the render guard below: act on the lead that is
+  // ON SCREEN (`lead.id`), never on the raw URL id — the confirmation names
+  // `lead.name`, so the two can never disagree.
   const handleDelete = async () => {
-    if (!id) return;
+    if (!lead) return;
     setIsDeleting(true);
     try {
-      await deleteLead(id);
+      await deleteLead(lead.id);
       toast.success("Lead deleted successfully");
       navigate(backRoute);
     } catch (err) {
@@ -112,10 +116,11 @@ export default function LeadDetail() {
   // suggestion-dismissal flag only; sends/deletes nothing). syncEngine re-arms it
   // when a fresh inbound arrives. Reversible via the 5s Undo toast — no confirm.
   const handleMarkHandled = async () => {
-    if (!id || markingHandledRef.current) return;
+    if (!lead || markingHandledRef.current) return;
     markingHandledRef.current = true;
     setMarkingHandled(true);
-    const actedId = id;
+    // Same rule as delete: dismiss the action of the lead being displayed.
+    const actedId = lead.id;
     try {
       const snapshot = await markActionHandled(actedId, { permanent: true });
       toast.success("Marked as handled", {
@@ -162,8 +167,12 @@ export default function LeadDetail() {
     loadLead();
   });
 
-  // First-ever load (nothing to keep on screen yet).
-  if (!lead) {
+  // Show the skeleton whenever the lead in state is not the lead in the URL.
+  // Keeping a stale lead on screen while a NEW id loads would let the rep act on
+  // the wrong person: Delete/"Already did it"/WhatsApp all use the URL id, so the
+  // confirmation would name Bob while the action hit Jane. An in-place refresh of
+  // the SAME lead still re-renders without a flicker.
+  if (!lead || lead.id !== id) {
     if (isLoading) {
       return (
         <div className="mx-auto w-full max-w-2xl space-y-4">
@@ -208,6 +217,10 @@ export default function LeadDetail() {
         onOpenDeal={() => setDealOpen(true)}
         onAddMessage={() => setAddMessageOpen(true)}
       />
+
+      {/* Post-meeting recap pending / sent — the one hint that used to live in
+          the desktop-only right rail. Renders nothing when there's no meeting. */}
+      <PostMeetingRecapHint leadId={lead.id} />
 
       {/* HISTORY */}
       <div className="space-y-2">

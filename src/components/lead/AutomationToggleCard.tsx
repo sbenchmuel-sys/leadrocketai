@@ -42,6 +42,11 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
   const { eligible, isUnsubscribed, safetyPaused, userPaused, isOn, primaryBlocker } =
     getAutomationToggleState(lead);
   if (!eligible) return null;
+  // Slow-drip (nurture) leads are governed by their own controls in
+  // "More about this deal" → Automation details. Showing this chip too would
+  // let the page say "Automation off" while the slow drip is running — the
+  // pre-Unit-2 right rail hid the toggle for nurture for the same reason.
+  if (motion === "nurture") return null;
 
   let description: string;
   if (isUnsubscribed) {
@@ -113,23 +118,29 @@ export default function AutomationToggleCard({ lead, onUpdate }: Props) {
     <>
       <span
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
+          "inline-flex items-center gap-1.5 rounded-full border pl-2.5 pr-1.5 py-1.5 text-xs font-medium",
           isOn && !safetyPaused
             ? "border-primary/30 bg-primary/10 text-primary"
             : "border-border bg-muted/50 text-muted-foreground",
         )}
-        title={description}
       >
         {isUnsubscribed ? <Ban className="h-3 w-3 shrink-0" /> : <Zap className="h-3 w-3 shrink-0" />}
         {chipLabel}
+        {/* 44px tappable area via a transparent pseudo-element — the switch
+            itself stays small, the thumb target does not (the chip sits in a
+            scrolling page, so an accidental brush must not start real emails). */}
         <Switch
           checked={isOn}
           disabled={busy || isUnsubscribed}
           onCheckedChange={handleToggle}
           aria-label="Turn automation on or off"
-          className="ml-0.5 scale-90"
+          className="ml-1 relative before:absolute before:content-[''] before:-inset-y-2.5 before:-inset-x-1 before:rounded-full"
         />
       </span>
+
+      {/* The status sentence is VISIBLE text, not a tooltip — phones can't hover
+          and this control starts real emails to real customers. */}
+      <p className="w-full text-xs text-muted-foreground">{description}</p>
 
       <AlertDialog open={confirmOpen} onOpenChange={(o) => { if (!busy) setConfirmOpen(o); }}>
         <AlertDialogContent>

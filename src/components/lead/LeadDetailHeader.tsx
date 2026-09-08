@@ -21,7 +21,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  ArrowLeft, Mail, Trash2, Plane, AlertTriangle, Handshake, ShoppingCart, Check,
+  ArrowLeft, Mail, Trash2, Plane, Pause, AlertTriangle, Handshake, ShoppingCart, Check,
   MessageSquare, MessageCircle, MoreHorizontal, Pencil, Plus, Loader2, ChevronRight,
 } from "lucide-react";
 import { ClickToCallButton } from "@/components/call/ClickToCallButton";
@@ -238,7 +238,7 @@ export default function LeadDetailHeader({
       <div className="min-w-0">
         <h1 className="text-xl font-bold text-foreground leading-tight break-words">{lead.name}</h1>
         <p className="text-sm text-muted-foreground leading-snug break-words">
-          {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}
+          {lead.job_title ? `${lead.job_title} · ` : ""}{lead.company}{lead.country ? ` · ${lead.country}` : ""}
         </p>
         <p className="text-xs text-muted-foreground/70 mt-0.5 truncate">{lead.email}</p>
         {/* Plain-English status sentence */}
@@ -256,10 +256,15 @@ export default function LeadDetailHeader({
             {awayChip}
           </span>
         )}
-        {/* The automation chip IS the switch — shown on every screen size now
-            (it used to live in a desktop-only rail). Returns null when the lead
-            isn't automation-eligible. */}
-        <AutomationToggleCard lead={lead} onUpdate={onUpdate} />
+        {/* Handed back to the rep by the executor (e.g. more people joined the
+            thread). Nothing else in the app surfaces this flag, so it keeps its
+            own chip — and the reason is visible text, not a tooltip. */}
+        {lead.manual_mode === true && (
+          <span className={`${CHIP} bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800/50`}>
+            <Pause className="h-3 w-3" />
+            Automation paused
+          </span>
+        )}
         {contextFlags.hasCaution && (
           <span className={`${CHIP} bg-destructive/10 text-destructive border-destructive/20`}>
             <AlertTriangle className="h-3 w-3" /> Caution
@@ -275,6 +280,16 @@ export default function LeadDetailHeader({
             <ShoppingCart className="h-3 w-3" /> Product owned
           </span>
         )}
+        {lead.manual_mode === true && lead.manual_mode_reason && (
+          <p className="w-full text-xs text-amber-700 dark:text-amber-300">
+            Paused: {lead.manual_mode_reason}
+          </p>
+        )}
+        {/* The automation chip IS the switch — shown on every screen size now
+            (it used to live in a desktop-only rail). Renders its own status
+            sentence underneath, and returns null when the lead isn't
+            automation-eligible. Last in the row so that sentence sits below. */}
+        <AutomationToggleCard lead={lead} onUpdate={onUpdate} />
       </div>
 
       {/* HERO — "What to do next": one sentence, one primary button. */}

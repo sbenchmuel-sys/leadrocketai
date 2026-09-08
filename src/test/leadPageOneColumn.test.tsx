@@ -244,6 +244,9 @@ describe("featurePreservation", () => {
     ["show-hidden toggle", () => timeline.includes("setShowHidden(!showHidden)")],
     ["log an inbound message", () => timeline.includes("handleLogWhatsAppReply")],
     ["mark-handled (Already did it)", () => header.includes("onMarkHandled")],
+    ["post-meeting recap hint", () => page.includes("<PostMeetingRecapHint")],
+    ["automation hand-back reason (manual_mode)", () => header.includes("lead.manual_mode_reason")],
+    ["country on the identity line", () => header.includes("lead.country")],
   ];
 
   for (const [name, check] of KEPT) {
@@ -318,5 +321,36 @@ describe("headerChipWording", () => {
       .toBe("Nothing to read yet · not checked yet");
     expect(buildProvenanceLine({ sourceCounts: { timeline_items: 1, meetings: 0 }, lastComputedAt: null }))
       .toBe("From 1 message · not checked yet");
+  });
+});
+
+/* ── 8. QA round 1 fixes ─────────────────────────────────────────────── */
+
+describe("automationChipIsReadableAndTappable", () => {
+  it("shows the status sentence as visible text, not a tooltip", () => {
+    renderHeader(makeLead({ automation_mode: null } as Partial<LeadDetail>));
+    expect(screen.getByText(/turn on and we'll send the follow-ups for you/i)).toBeInTheDocument();
+    // The old hover-only tooltip is gone.
+    expect(src(TOGGLE)).not.toContain("title={description}");
+  });
+
+  it("gives the switch a 44px hit area", () => {
+    // Transparent pseudo-element around the 24px switch → 44px tappable.
+    expect(src(TOGGLE)).toContain("before:-inset-y-2.5");
+  });
+
+  it("does not contradict a running slow drip", () => {
+    expect(src(TOGGLE)).toContain('if (motion === "nurture") return null;');
+    const { container } = renderHeader(makeLead({ motion: "nurture" } as Partial<LeadDetail>));
+    expect(container.textContent).not.toMatch(/Automation (on|off|paused)/);
+  });
+
+  it("keeps the hand-back reason visible when automation was paused for the rep", () => {
+    renderHeader(makeLead({
+      manual_mode: true,
+      manual_mode_reason: "More people joined the thread",
+    } as Partial<LeadDetail>));
+    expect(screen.getByText("Automation paused")).toBeInTheDocument();
+    expect(screen.getByText(/More people joined the thread/)).toBeInTheDocument();
   });
 });
