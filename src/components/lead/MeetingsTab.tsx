@@ -378,7 +378,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
     try {
       await appendLeadMilestones(leadId, pack.milestones);
       await updateMeetingPack(pack.id, { milestones_saved_to_lead: true });
-      toast.success("Milestones added to lead");
+      toast.success("Added to what we agreed to do");
       loadMeetingPacks();
       onMilestonesAdded?.();
     } catch (err) {
@@ -544,7 +544,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                     <div className="space-y-2">
                       <h4 className="text-sm font-medium flex items-center gap-2">
                         <Clock className="h-4 w-4 text-blue-500" />
-                        Milestones
+                        What we agreed to do
                       </h4>
                       <div className="space-y-1">
                         {milestones.map((m: any, i: number) => (
@@ -791,7 +791,7 @@ export default function MeetingsTab({ leadId, leadEmail, leadName, onMilestonesA
                               <div className="flex items-center justify-between">
                                 <h4 className="text-sm font-medium flex items-center gap-2">
                                   <Clock className="h-4 w-4 text-blue-500" />
-                                  Milestones
+                                  What we agreed to do
                                 </h4>
                                 {!linkedPack.milestones_saved_to_lead && (
                                   <Button 
