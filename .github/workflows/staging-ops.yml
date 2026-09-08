@@ -82,6 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -94,7 +95,40 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: npm run test:edge
+      - name: Deno edge suite
+        id: edge
+        run: |
+          set +e
+          npm run test:edge 2>&1 | tee /tmp/edge.txt
+          echo "${PIPESTATUS[0]}" > /tmp/edge.status
+          exit 0
+      # The Deno suite is the ONE suite the build sandbox cannot run (deno.land is
+      # network-blocked there), so its output is the only place some failures ever
+      # appear. Actions logs are not readable by the orchestrator, so post it to the
+      # PR whether it passed or failed, then fail the job on the captured status.
+      - name: Post Deno suite output to PR
+        if: ${{ always() && inputs.report_pr != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.report_pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - "$PR" "$RUN_URL" <<'PY'
+          import json,os,subprocess,sys
+          pr,run_url=sys.argv[1],sys.argv[2]
+          try: out=open('/tmp/edge.txt',errors='replace').read()
+          except FileNotFoundError: out='(no output captured)'
+          try: status=open('/tmp/edge.status').read().strip()
+          except FileNotFoundError: status='?'
+          head='passed' if status=='0' else f'FAILED (exit {status})'
+          body=f"### Deno edge suite \u2014 {head}\n{run_url}\n\n```\n{out[-55000:]}\n```"
+          repo=os.environ['GITHUB_REPOSITORY']
+          subprocess.run(['gh','api','repos/'+repo+'/issues/'+pr+'/comments',
+                          '-f','body='+body],check=False)
+          PY
+      - name: Fail if the Deno suite failed
+        if: ${{ always() }}
+        run: test "$(cat /tmp/edge.status 2>/dev/null || echo 1)" = "0"
 
   ops:
     name: Staging-only deploy / migrate / checks
