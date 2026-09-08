@@ -1597,7 +1597,10 @@ export async function saveLeadDeepAnalysis(leadId: string, input: LeadDeepAnalys
         milestones_json: milestones as unknown as Json,
         risks_json: risks as unknown as Json,
         deal_factors_json: dealFactors as unknown as Json,
-        ...(input.nextStep ? { recommended_next_step: input.nextStep, next_step_reason: input.nextStepReason } : {}),
+        // Always written (null included) so canonical and the leads mirror
+        // below never diverge — the header reads canonical.
+        recommended_next_step: input.nextStep,
+        next_step_reason: input.nextStepReason,
       })
       .eq('lead_id', leadId);
     if (error) throw error;

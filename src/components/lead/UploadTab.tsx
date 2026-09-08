@@ -113,15 +113,24 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       let milestonesData = { milestones: [], risks: [] };
       let factorsData = null;
       let recsData = { recommendations: [], best_next_step: null };
+      let analysisOk = false;
       if (deepResult.ok && deepResult.content) {
         try {
           const parsed = JSON.parse(extractJson(deepResult.content));
           milestonesData = { milestones: parsed.milestones || [], risks: parsed.risks || [] };
           factorsData = parsed.deal_factors || null;
           recsData = { recommendations: parsed.recommendations || [], best_next_step: parsed.best_next_step || null };
+          analysisOk = true;
         } catch (e) {
           console.error("Failed to parse deep analysis:", e);
         }
+      }
+
+      // Failed / unparseable analysis: save nothing (neither canonical nor
+      // mirror) so we never clear a good next step with an empty result.
+      if (!analysisOk) {
+        toast.error("Failed to save analysis to lead");
+        return;
       }
 
       // Persist: canonical lead_intelligence first (milestones merged by text,

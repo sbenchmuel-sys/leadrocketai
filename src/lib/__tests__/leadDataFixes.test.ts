@@ -150,3 +150,22 @@ describe("risksNotReseeded", () => {
     expect(src).toContain("higherMilestoneStatus(existing.status, status)");
   });
 });
+
+describe("deep analysis save keeps canonical and mirror in sync", () => {
+  it("saveLeadDeepAnalysis writes next step to canonical unconditionally (null included)", () => {
+    const src = read("src/lib/supabaseQueries.ts");
+    const fn = src.slice(src.indexOf("export async function saveLeadDeepAnalysis"));
+    const body = fn.slice(0, fn.indexOf("\n}\n") + 3);
+    expect(body).not.toMatch(/input\.nextStep\s*\?\s*\{/);
+    expect((body.match(/recommended_next_step: input\.nextStep/g) ?? []).length).toBe(1);
+    expect((body.match(/\bnext_step: input\.nextStep/g) ?? []).length).toBe(1);
+  });
+  it("UploadTab skips the save entirely when the analysis failed or could not be parsed", () => {
+    const src = read("src/components/lead/UploadTab.tsx");
+    const skip = src.indexOf("if (!analysisOk)");
+    const save = src.indexOf("await saveLeadDeepAnalysis(");
+    expect(skip).toBeGreaterThan(-1);
+    expect(save).toBeGreaterThan(skip);
+    expect(src.slice(skip, save)).toMatch(/return;/);
+  });
+});
