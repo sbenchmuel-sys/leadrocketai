@@ -52,6 +52,26 @@
 // error must not throw out of the batch. Counts are logged at the
 // end of every run.
 //
+// Retry backoff (Unit Q1c): every terminal failure branch now stamps
+// `metadata_json` with `classify_attempts` / `classify_last_attempt_at`
+// / `classify_last_error` / `classify_next_at` via
+// `_shared/classifyRetry.ts`, and the candidate query filters on
+// `classify_next_at` so a just-failed row cannot be re-selected on the
+// next tick. Before this, a downstream outage (ai_task returning 402 on
+// every call) froze the head of this deterministic order and starved
+// every row behind it indefinitely. `intent` is still left NULL even at
+// the retry ceiling — writing a terminal value would release the body
+// for purging at 72h instead of the 7-day hard cap, and could hide a
+// real customer question in the Queue.
+//
+// Run budget (Unit Q1c, second pass): the per-row loop stops starting
+// new rows at CLASSIFY_RUN_BUDGET_MS (35 s), 20 s under the 55 s kill
+// cron-dispatcher imposes. With the gateway restored, 25 rows of real
+// AI calls took 47-55 s and every run was being killed, so the backlog
+// stopped draining. Each row is committed by its own UPDATE as it
+// completes, so stopping early banks the work; rows the budget never
+// reached carry NO retry mark and are ordinary candidates next tick.
+//
 // Re-entrancy: the cron schedule is every minute. If a run overruns
 // 60s, a second run can start while the first is in flight. Each
 // UPDATE is guarded by `.is("intent", null)` so the loser of any
@@ -66,6 +86,21 @@ import {
   readSubstantiveQuestionFlag,
   senderIsLead,
 } from "../_shared/inboundIntentDetectors.ts";
+import {
+  type ClassifyFailureReason,
+  CLASSIFY_AI_TIMEOUT_MS,
+  CLASSIFY_OBSERVED_MS_PER_ROW,
+  CLASSIFY_RUN_BUDGET_MS,
+  BACKLOG_EXHAUSTED_AT,
+  classifyBacklogState,
+  CLASSIFY_NEXT_AT_KEY,
+  classifyEligibilityFilter,
+  isRunBudgetSpent,
+  stripClassifyMarks,
+  markClassifyFailure,
+  recordFailedAttempt,
+  selectClassifiable,
+} from "../_shared/classifyRetry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -73,10 +108,48 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-internal-secret",
 };
 
-// Small batch — keeps each run under the 60-second Edge Function
-// budget even when ai_task takes a few seconds per call. 322 legacy
-// rows ÷ 25 per minute ≈ 13 minutes to drain after deploy.
-const BATCH_SIZE = 25;
+// Sized off MEASURED latency against a healthy gateway, not a guess.
+//
+// Production, 2026-09-13: with the gateway 402ing, 25 rows failed fast
+// in 6–9 s. The minute credits were restored, the same 25 rows took
+// 47–49 s of real AI calls and then tipped over cron-dispatcher's 55 s
+// kill into back-to-back timeouts. BATCH_SIZE = 25 was tuned in the
+// broken regime and does not survive the working one.
+//
+// 15 × ~1.9 s ≈ 29 s, inside CLASSIFY_RUN_BUDGET_MS (35 s) and barely
+// half the 55 s kill, so a typical run finishes its whole batch. THE
+// LATENCY ASSUMPTION THIS ENCODES: mean ai_task.intent_router
+// round-trip ≈ 1.9 s — and that mean is DILUTED by deterministic rows
+// that cost ~0, so a mostly-AI batch is nearer 2.2 s/row ≈ 33 s, about
+// 93% of the budget. Still inside; the headroom is thinner than the
+// arithmetic looks. Past ~2.3 s/row the budget truncates batches, which
+// is safe (every row commits as it completes) but is the signal to
+// lower this number.
+//
+// THIS NUMBER IS THE DRAIN RATE. The cron fires once a minute and works
+// at most BATCH_SIZE rows, so throughput is BATCH_SIZE/minute FULL
+// STOP — it is not wall-clock-bound. A batch of cheap deterministic
+// rows finishes the RUN in 2 s instead of 29; it does not then go and
+// work a 16th row. Fast rows shorten the run, never the drain. (The
+// budget is a backstop, not a limiter — that is the whole design.) So
+// 1,346 backlogged rows ÷ 15 = ~90 minutes regardless of email mix.
+const BATCH_SIZE = 15;
+
+// Rows are over-fetched so that a row parked by retry backoff can never
+// consume one of the working slots. `classifyEligibilityFilter` is
+// what actually keeps parked rows out, SERVER-SIDE; this headroom plus
+// the in-memory `selectClassifiable` pass is a DETECTOR, not a spare
+// tyre. ponytail: 2x is a guess, not a proof. It absorbs at most
+// BATCH_SIZE leaked parked rows — TODAY 15, down from 25 when the batch
+// shrank, so the margin is thinner than it was. With a backlog in the
+// thousands, a server-side filter that stops matching parks all
+// FETCH_LIMIT (30) fetched rows, selects none, and the queue
+// re-freezes. Loudly (see
+// `classify_inbound_server_backoff_filter_leaked`), but it freezes.
+// Ceiling: a non-zero `parked` is not "handled", it is an incident —
+// fix the server-side filter, do not raise this number.
+const FETCH_LIMIT = BATCH_SIZE * 2;
+
 
 // Classifier identifier written to `intent_version`. Bump the suffix
 // when the prompt or model selection changes in a way that should
@@ -149,6 +222,8 @@ interface TimelineRow {
   subject: string | null;
   snippet_text: string | null;
   metadata_json: Record<string, unknown> | null;
+  /** Read so a write can refuse to land on a row that moved under it. */
+  updated_at: string | null;
 }
 
 interface LeadRow {
@@ -162,7 +237,54 @@ interface BatchCounts {
   fetched: number;
   classified: number;
   failed: number;
-  skipped: number;
+  /**
+   * Fetched but NOT worked because retry backoff still parks them.
+   * Should be 0 — the server-side filter is supposed to exclude these
+   * before they reach us. Non-zero means that filter stopped matching.
+   * (Replaces the old `skipped` counter, which was initialised and then
+   * never incremented anywhere.)
+   */
+  parked: number;
+  /**
+   * Rows that hit the retry ceiling ON THIS RUN — counted when the
+   * final failure mark is durably written, not from the pre-loop
+   * candidate snapshot (a row is not exhausted yet when that is taken,
+   * and is invisible to it forever after). Non-zero here is the signal
+   * that a backlog is starting to give up.
+   */
+  exhausted: number;
+  /**
+   * Outstanding rows that gave up for good, probed on an otherwise-idle
+   * run only (0 on a working run). Non-zero means the backlog is dead
+   * and needs the MANUAL RECOVERY statement in
+   * `_shared/classifyRetry.ts`. THIS is the number worth waking for.
+   */
+  backlog_exhausted: number;
+  /**
+   * Outstanding rows merely inside a retry window, same probe. These
+   * resume by themselves — informational, never an incident, and
+   * explicitly NOT a reason to run the recovery statement (doing so
+   * would delete the backoff that is protecting a failing dependency).
+   */
+  backlog_backed_off: number;
+  /**
+   * Rows actually worked this run: `min(fetched - parked, BATCH_SIZE)`.
+   *
+   * `fetched` counts what the query RETURNED (up to FETCH_LIMIT = 50),
+   * which is deliberately more than one batch — so `fetched` alone does
+   * NOT add up against `classified + failed`. `worked` does. This log
+   * line is the only observability this function has; it has to be
+   * readable without the source open.
+   */
+  worked: number;
+  /**
+   * Selected but never started, because the run budget ran out first.
+   * These rows carry NO retry mark — they were not attempted — and are
+   * ordinary candidates again on the next tick.
+   */
+  unreached: number;
+  /** True when the run stopped on the clock rather than finishing. */
+  budget_stopped: boolean;
   /** Subset of classified — rows that got the NO_SIGNAL_INTENT fallback. */
   no_signal: number;
   /** Subset of classified — matched a deterministic detector, no AI call. */
@@ -386,11 +508,100 @@ Deno.serve(async (req) => {
     fetched: 0,
     classified: 0,
     failed: 0,
-    skipped: 0,
+    parked: 0,
+    exhausted: 0,
+    worked: 0,
+    unreached: 0,
+    budget_stopped: false,
+    backlog_exhausted: 0,
+    backlog_backed_off: 0,
     no_signal: 0,
     deterministic: 0,
   };
   const startedAt = Date.now();
+
+  // One tally per reason code instead of 25 individual warn lines —
+  // a run summary is what an operator can actually act on, and
+  // cron-dispatcher does not persist this function's response body
+  // (pg_net times out at 5s first), so the log IS the only record.
+  const failureReasons: Record<string, number> = {};
+
+  /**
+   * The ONLY way this function is allowed to give up on a row.
+   *
+   * Writes the attempt record back to `metadata_json` so the row is
+   * (a) distinguishable from one never touched and (b) excluded from
+   * the next candidate query until its backoff expires. Never writes
+   * `intent` — see `_shared/classifyRetry.ts` for why a terminal intent
+   * would purge the body early and hide a real customer question.
+   */
+  const failRow = async (
+    row: TimelineRow,
+    reason: ClassifyFailureReason,
+  ): Promise<void> => {
+    // recordFailedAttempt owns BOTH the bookkeeping and the write, and
+    // never throws — so a transient failure of this UPDATE cannot
+    // re-enter through the per-row catch and book the same row twice.
+    // (Codex P2: the failure counter moves before the write, so a throw
+    // here used to double-count and break the
+    // `worked === classified + failed` reconciliation on the one path
+    // where the numbers matter most.)
+    //
+    // `updated_at` is deliberately NOT touched: a failed read of an
+    // email is not activity on the lead.
+    const mark = markClassifyFailure(
+      row.metadata_json,
+      reason,
+      new Date().toISOString(),
+    );
+    const { error: markError, applied } = await recordFailedAttempt(
+      counts,
+      failureReasons,
+      reason,
+      mark,
+      () => {
+        // Read-modify-write hazard: `mark` was merged onto the copy of
+        // metadata_json read at the top of the run, up to 35 s ago.
+        // Putting the whole object back would silently revert anything
+        // written to this row in between — `_shared/timelineProjector.ts`
+        // merges sync metadata into existing rows on every re-sync and
+        // does not touch `intent`, so it is a live counterparty.
+        //
+        // `updated_at` is the precondition: every writer that can reach
+        // one of our rows sets it, so a mismatch means the row moved and
+        // this write must not land. It then lands NOWHERE, which is the
+        // already-modelled "unmarkable row" outcome — counted once,
+        // unmarked, retried next tick against fresh data. Losing a
+        // backoff is recoverable; reverting someone else's write is not.
+        let q = admin
+          .from("lead_timeline_items")
+          .update({ metadata_json: mark }, { count: "exact" })
+          .eq("id", row.id)
+          .is("intent", null);
+        q = row.updated_at === null
+          ? q.is("updated_at", null)
+          : q.eq("updated_at", row.updated_at);
+        return q;
+      },
+    );
+    if (markError) {
+      // The row is counted, but unmarked — so it comes back next minute
+      // with no backoff. Loud, because this is the old freeze condition.
+      logger.error("classify_inbound_attempt_mark_failed", {
+        row_id: row.id,
+        reason,
+        error: markError,
+      });
+    } else if (!applied) {
+      // Not an error: the row moved under us and we declined to revert
+      // whoever moved it. Same outcome as above (unmarked, retried next
+      // tick), but a different cause, so it gets its own event.
+      logger.info("classify_inbound_attempt_mark_skipped_stale_row", {
+        row_id: row.id,
+        reason,
+      });
+    }
+  };
 
   try {
     // Priority sort: `expires_at ASC NULLS LAST, occurred_at ASC` —
@@ -399,14 +610,41 @@ Deno.serve(async (req) => {
     // (e.g. a workspace just hooked up Gmail and 2k inbounds arrive in
     // a single batch — without this, the oldest occurred_at ties up the
     // first N runs while the freshest-but-about-to-purge rows wait).
-    const { data: rows, error: fetchErr } = await admin
-      .from("lead_timeline_items")
-      .select("id, lead_id, subject, snippet_text, metadata_json")
-      .eq("event_type", "email_inbound")
-      .is("intent", null)
-      .order("expires_at", { ascending: true, nullsFirst: false })
-      .order("occurred_at", { ascending: true })
-      .limit(BATCH_SIZE);
+    //
+    // Retry backoff (the Q1c fix): `.or(classifyEligibilityFilter(...))`
+    // drops rows whose next attempt is still in the future SERVER-SIDE,
+    // so a row parked after a failure cannot occupy a slot. Without it,
+    // a downstream outage freezes the head of this deterministic order
+    // and starves every row behind it — which is exactly what happened
+    // when ai_task started returning 402 on every call.
+    const nowIso = new Date().toISOString();
+    const candidates = (withBackoffFilter: boolean) => {
+      const q = admin
+        .from("lead_timeline_items")
+        .select("id, lead_id, subject, snippet_text, metadata_json, updated_at")
+        .eq("event_type", "email_inbound")
+        .is("intent", null);
+      if (withBackoffFilter) q.or(classifyEligibilityFilter(nowIso));
+      return q
+        .order("expires_at", { ascending: true, nullsFirst: false })
+        .order("occurred_at", { ascending: true })
+        .limit(FETCH_LIMIT);
+    };
+
+    let { data: rows, error: fetchErr } = await candidates(true);
+
+    if (fetchErr) {
+      // The JSON-path predicate is the only new thing in that query, so
+      // a fetch error here most likely means this PostgREST build won't
+      // filter on `metadata_json->>key`. Degrade to the in-memory pass
+      // (which is why FETCH_LIMIT over-fetches) rather than doing no
+      // work at all — but say so loudly, because parked rows are now
+      // eating slots again.
+      logger.error("classify_inbound_backoff_filter_unsupported", {
+        error: fetchErr.message,
+      });
+      ({ data: rows, error: fetchErr } = await candidates(false));
+    }
 
     if (fetchErr) {
       logger.error("classify_inbound_fetch_failed", { error: fetchErr.message });
@@ -416,15 +654,130 @@ Deno.serve(async (req) => {
       );
     }
 
-    const batch = (rows ?? []) as TimelineRow[];
-    counts.fetched = batch.length;
+    const fetched = (rows ?? []) as TimelineRow[];
+    const { selected: batch, parked, exhausted: parkedExhausted } =
+      selectClassifiable(fetched, nowIso, BATCH_SIZE);
+    counts.fetched = fetched.length;
+    counts.parked = parked;
+    // counts.exhausted is NOT set from this snapshot. A row becomes
+    // exhausted during the loop, after the snapshot is taken, and from
+    // the next tick the server-side filter hides it from the candidate
+    // set — so a snapshot-derived count is structurally always 0.
+    // recordFailedAttempt increments it when the final mark lands.
+    // Counted DOWN as rows are worked, so it stays truthful even if the
+    // outer catch fires mid-batch (where a post-loop tally would read 0).
+    counts.unreached = batch.length;
+    // counts.worked is set after the loop — the run budget can stop it
+    // short, and `classified + failed` must always reconcile against it.
+    if (parked > 0) {
+      // The server-side predicate should have made this impossible.
+      logger.warn("classify_inbound_server_backoff_filter_leaked", {
+        parked,
+        parked_exhausted: parkedExhausted,
+        fetched: fetched.length,
+      });
+    }
 
     if (batch.length === 0) {
-      logger.info("classify_inbound_empty_batch", {
-        duration_ms: Date.now() - startedAt,
-      });
+      // WHY an idle run is idle. Three states, three responses: nothing
+      // to do / wait for the backoff / act. Splitting the middle case
+      // out is the point — the first quiet minute of any ordinary blip
+      // has every row inside its five-minute backoff, and telling an
+      // operator to run the recovery statement then would DELETE that
+      // backoff and hurl the whole batch back at a failing dependency.
+      //
+      // COUNTS, not rows. PostgREST caps a response (hosted default
+      // 1,000 rows; no max_rows override in this project), so scanning
+      // rows would have answered from an arbitrary subset at exactly the
+      // scale this alarm exists for — and could have missed the
+      // exhausted ones entirely. A count is exact whatever the cap.
+      //
+      // Idle runs ONLY — never on a run that has work. Three small
+      // queries, each returning a number or a single row.
+      const outstanding = admin
+        .from("lead_timeline_items")
+        .select("id", { count: "exact", head: true })
+        .eq("event_type", "email_inbound")
+        .is("intent", null);
+
+      // (1) The number that fires the alarm. No ordering, no row cap in
+      // play, and independent of the other two — if they fail, this one
+      // still decides correctly.
+      const { count: exhaustedCount, error: exhaustedErr } = await outstanding
+        .eq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT);
+
+      // (2) Backed off = parked but not given up.
+      const { count: backedOffCount, error: backedOffErr } = await admin
+        .from("lead_timeline_items")
+        .select("id", { count: "exact", head: true })
+        .eq("event_type", "email_inbound")
+        .is("intent", null)
+        .gt(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, nowIso)
+        .neq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT);
+
+      // (3) When work resumes. Purely informational, and the ONLY query
+      // here that needs an ordering — so if ordering on a JSON path is
+      // unsupported, the alarm above is unaffected and only this goes
+      // null.
+      const { data: soonest, error: soonestErr } = await admin
+        .from("lead_timeline_items")
+        .select(`next_at:metadata_json->>${CLASSIFY_NEXT_AT_KEY}`)
+        .eq("event_type", "email_inbound")
+        .is("intent", null)
+        .gt(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, nowIso)
+        .neq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT)
+        .order(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, { ascending: true })
+        .limit(1);
+
+      const probeErr = exhaustedErr ?? backedOffErr ?? soonestErr;
+      if (probeErr) {
+        // A failed probe must not manufacture an alarm — but it must
+        // not hide one either, so say which part failed.
+        logger.warn("classify_inbound_backlog_probe_failed", {
+          error: probeErr.message,
+          exhausted_ok: !exhaustedErr,
+          backed_off_ok: !backedOffErr,
+          soonest_ok: !soonestErr,
+        });
+      }
+
+      const backlog = {
+        exhausted: exhaustedCount ?? 0,
+        backed_off: backedOffCount ?? 0,
+        next_retry_at:
+          ((soonest ?? []) as { next_at: string | null }[])[0]?.next_at ?? null,
+      };
+      counts.backlog_exhausted = backlog.exhausted;
+      counts.backlog_backed_off = backlog.backed_off;
+
+      const state = classifyBacklogState(batch.length, backlog);
+      if (state === "exhausted") {
+        // The ONLY line that means "act": rows have burned the whole
+        // retry ladder and will never resume without the MANUAL
+        // RECOVERY statement in _shared/classifyRetry.ts.
+        logger.warn("classify_inbound_backlog_exhausted", {
+          ...backlog,
+          duration_ms: Date.now() - startedAt,
+        });
+      } else if (state === "backed_off") {
+        // Informational on purpose. This is the system working.
+        logger.info("classify_inbound_backlog_backed_off", {
+          ...backlog,
+          duration_ms: Date.now() - startedAt,
+        });
+      } else {
+        logger.info("classify_inbound_empty_batch", {
+          duration_ms: Date.now() - startedAt,
+        });
+      }
       return new Response(
-        JSON.stringify({ ok: true, ...counts, duration_ms: Date.now() - startedAt }),
+        JSON.stringify({
+          ok: true,
+          ...counts,
+          backlog_state: state,
+          backlog_next_retry_at: backlog.next_retry_at,
+          duration_ms: Date.now() - startedAt,
+        }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -447,6 +800,22 @@ Deno.serve(async (req) => {
     }
 
     for (const row of batch) {
+      // Wall-clock budget, checked BEFORE any work on this row.
+      //
+      // A partial batch that banks its work beats a full batch that
+      // gets killed at 55 s. Breaking here (rather than marking) is
+      // load-bearing: a row we never reached was never ATTEMPTED, so it
+      // must carry no retry mark and must be a first-class candidate on
+      // the next tick. `failRow` is deliberately not called on this
+      // path. Pinned by src/test/classifyInboundResilience.test.ts.
+      if (isRunBudgetSpent(Date.now() - startedAt)) {
+        counts.budget_stopped = true;
+        break;
+      }
+      // Incremented here, not tallied after the loop, so the count is
+      // still truthful if the outer catch fires mid-batch.
+      counts.worked++;
+      counts.unreached--;
       try {
         const emailText = buildEmailText(row);
 
@@ -458,6 +827,7 @@ Deno.serve(async (req) => {
             .update({
               intent: NO_SIGNAL_INTENT,
               intent_version: INTENT_VERSION,
+              metadata_json: stripClassifyMarks({ ...(row.metadata_json ?? {}) }),
               updated_at: new Date().toISOString(),
             })
             .eq("id", row.id)
@@ -467,7 +837,7 @@ Deno.serve(async (req) => {
               row_id: row.id,
               error: updErr.message,
             });
-            counts.failed++;
+            await failRow(row, "db_update_failed");
           } else {
             counts.classified++;
             counts.no_signal++;
@@ -510,11 +880,11 @@ Deno.serve(async (req) => {
             .update({
               intent: deterministic.intent,
               intent_version: INTENT_VERSION,
-              metadata_json: {
+              metadata_json: stripClassifyMarks({
                 ...(row.metadata_json ?? {}),
                 intent_source: "deterministic",
                 sender_is_lead,
-              },
+              }),
               updated_at: new Date().toISOString(),
             })
             .eq("id", row.id)
@@ -526,7 +896,7 @@ Deno.serve(async (req) => {
               intent: deterministic.intent,
               error: detErr.message,
             });
-            counts.failed++;
+            await failRow(row, "db_update_failed");
           } else {
             counts.classified++;
             counts.deterministic++;
@@ -536,8 +906,16 @@ Deno.serve(async (req) => {
 
         const leadContext = buildLeadContext(lead);
 
+        // AbortSignal is what makes CLASSIFY_RUN_BUDGET_MS mean
+        // anything: the budget gates STARTING a row, it cannot bound a
+        // call already in flight, and Deno's fetch has no default
+        // timeout. Without this, one hung gateway call blows straight
+        // through cron-dispatcher's 55 s kill. An abort throws and is
+        // caught below as an ordinary AI failure, so the row marks and
+        // backs off like any other.
         const aiRes = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
           method: "POST",
+          signal: AbortSignal.timeout(CLASSIFY_AI_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${serviceKey}`,
@@ -552,18 +930,16 @@ Deno.serve(async (req) => {
         });
 
         if (!aiRes.ok) {
-          logger.warn("classify_inbound_ai_http_error", {
-            row_id: row.id,
-            status: aiRes.status,
-          });
-          counts.failed++;
+          // No per-row log line: with the gateway down this fires for
+          // every row in the batch. The reason code (incl. the HTTP
+          // status) lands on the row AND in the run summary.
+          await failRow(row, `ai_http_${aiRes.status}`);
           continue;
         }
 
         const aiData = (await aiRes.json()) as { ok?: boolean; content?: string };
         if (!aiData?.ok || typeof aiData.content !== "string" || !aiData.content) {
-          logger.warn("classify_inbound_ai_no_content", { row_id: row.id });
-          counts.failed++;
+          await failRow(row, "ai_no_content");
           continue;
         }
 
@@ -584,7 +960,7 @@ Deno.serve(async (req) => {
             row_id: row.id,
             content_preview: aiData.content.slice(0, 120),
           });
-          counts.failed++;
+          await failRow(row, "ai_parse_failed");
           continue;
         }
 
@@ -608,7 +984,7 @@ Deno.serve(async (req) => {
             intent: intentPrimary,
             content_preview: aiData.content.slice(0, 120),
           });
-          counts.failed++;
+          await failRow(row, "ai_summary_missing");
           continue;
         }
 
@@ -624,12 +1000,14 @@ Deno.serve(async (req) => {
         // already paid for them in the same call.
         const shouldWriteSummary = ai_summary !== null && !isSkipListIntent;
 
-        const nextMetadata: Record<string, unknown> = {
+        // stripClassifyMarks: a row that eventually classifies must not
+        // keep the retry bookkeeping from the outage it lived through.
+        const nextMetadata: Record<string, unknown> = stripClassifyMarks({
           ...(row.metadata_json ?? {}),
           intent_source: "ai",
           sender_is_lead,
           ai_signals: signals,
-        };
+        });
         if (shouldWriteSummary) {
           nextMetadata.ai_summary = ai_summary;
           nextMetadata.ai_summary_version = AI_SUMMARY_VERSION;
@@ -657,7 +1035,7 @@ Deno.serve(async (req) => {
             intent: intentPrimary,
             error: updErr.message,
           });
-          counts.failed++;
+          await failRow(row, "db_update_failed");
           continue;
         }
 
@@ -667,21 +1045,38 @@ Deno.serve(async (req) => {
         // thrown error from ai_task fetch, JSON parsing, or the
         // supabase client lands here and the batch keeps going.
         const msg = err instanceof Error ? err.message : String(err);
+        // AbortSignal.timeout rejects with a TimeoutError DOMException;
+        // an explicit abort would be AbortError. Both mean "the gateway
+        // did not answer in time", which is a distinct, actionable
+        // reason — not the generic one.
+        const name = (err as { name?: string } | null)?.name;
+        const timedOut = name === "TimeoutError" || name === "AbortError";
         logger.error("classify_inbound_row_unexpected_error", {
           row_id: row.id,
           error: msg,
+          timed_out: timedOut,
         });
-        counts.failed++;
+        // Best-effort mark; if this throws too the outer loop continues.
+        // No .catch needed: failRow cannot reject (recordFailedAttempt
+        // fences its own write), which is what keeps this row counted
+        // exactly once.
+        await failRow(row, timedOut ? "ai_timeout" : "unexpected_error");
       }
     }
 
     logger.info("classify_inbound_batch_done", {
       duration_ms: Date.now() - startedAt,
       ...counts,
+      failure_reasons: failureReasons,
     });
 
     return new Response(
-      JSON.stringify({ ok: true, ...counts, duration_ms: Date.now() - startedAt }),
+      JSON.stringify({
+        ok: true,
+        ...counts,
+        failure_reasons: failureReasons,
+        duration_ms: Date.now() - startedAt,
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
