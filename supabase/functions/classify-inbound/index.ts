@@ -52,6 +52,18 @@
 // error must not throw out of the batch. Counts are logged at the
 // end of every run.
 //
+// Retry backoff (Unit Q1c): every terminal failure branch now stamps
+// `metadata_json` with `classify_attempts` / `classify_last_attempt_at`
+// / `classify_last_error` / `classify_next_at` via
+// `_shared/classifyRetry.ts`, and the candidate query filters on
+// `classify_next_at` so a just-failed row cannot be re-selected on the
+// next tick. Before this, a downstream outage (ai_task returning 402 on
+// every call) froze the head of this deterministic order and starved
+// every row behind it indefinitely. `intent` is still left NULL even at
+// the retry ceiling — writing a terminal value would release the body
+// for purging at 72h instead of the 7-day hard cap, and could hide a
+// real customer question in the Queue.
+//
 // Re-entrancy: the cron schedule is every minute. If a run overruns
 // 60s, a second run can start while the first is in flight. Each
 // UPDATE is guarded by `.is("intent", null)` so the loser of any
@@ -66,6 +78,13 @@ import {
   readSubstantiveQuestionFlag,
   senderIsLead,
 } from "../_shared/inboundIntentDetectors.ts";
+import {
+  type ClassifyFailureReason,
+  classifyEligibilityFilter,
+  stripClassifyMarks,
+  markClassifyFailure,
+  selectClassifiable,
+} from "../_shared/classifyRetry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -77,6 +96,18 @@ const corsHeaders = {
 // budget even when ai_task takes a few seconds per call. 322 legacy
 // rows ÷ 25 per minute ≈ 13 minutes to drain after deploy.
 const BATCH_SIZE = 25;
+
+// Rows are over-fetched so that a row parked by retry backoff can never
+// consume one of the 25 working slots. The `classifyEligibilityFilter`
+// predicate should already have excluded parked rows SERVER-SIDE, which
+// makes this headroom pure insurance: if that PostgREST JSON predicate
+// ever silently stops matching, the in-memory `selectClassifiable` pass
+// still finds live rows instead of the queue re-freezing at the head.
+// A non-zero `parked` count in the run summary is the alarm for exactly
+// that. ponytail: 2x is a guess, not a proof — it survives up to 25
+// leaked parked rows at the head. Ceiling: if `parked` is ever 25, raise
+// this or fix the server-side filter.
+const FETCH_LIMIT = BATCH_SIZE * 2;
 
 // Classifier identifier written to `intent_version`. Bump the suffix
 // when the prompt or model selection changes in a way that should
@@ -162,7 +193,18 @@ interface BatchCounts {
   fetched: number;
   classified: number;
   failed: number;
-  skipped: number;
+  /**
+   * Fetched but NOT worked because retry backoff still parks them.
+   * Should be 0 — the server-side filter is supposed to exclude these
+   * before they reach us. Non-zero means that filter stopped matching.
+   * (Replaces the old `skipped` counter, which was initialised and then
+   * never incremented anywhere.)
+   */
+  parked: number;
+  /** Subset of `parked` — rows that hit the retry ceiling for good. */
+  exhausted: number;
+  // NB: `fetched` counts rows the query RETURNED; `fetched - parked` is
+  // how many were actually worked this run.
   /** Subset of classified — rows that got the NO_SIGNAL_INTENT fallback. */
   no_signal: number;
   /** Subset of classified — matched a deterministic detector, no AI call. */
@@ -386,11 +428,57 @@ Deno.serve(async (req) => {
     fetched: 0,
     classified: 0,
     failed: 0,
-    skipped: 0,
+    parked: 0,
+    exhausted: 0,
     no_signal: 0,
     deterministic: 0,
   };
   const startedAt = Date.now();
+
+  // One tally per reason code instead of 25 individual warn lines —
+  // a run summary is what an operator can actually act on, and
+  // cron-dispatcher does not persist this function's response body
+  // (pg_net times out at 5s first), so the log IS the only record.
+  const failureReasons: Record<string, number> = {};
+
+  /**
+   * The ONLY way this function is allowed to give up on a row.
+   *
+   * Writes the attempt record back to `metadata_json` so the row is
+   * (a) distinguishable from one never touched and (b) excluded from
+   * the next candidate query until its backoff expires. Never writes
+   * `intent` — see `_shared/classifyRetry.ts` for why a terminal intent
+   * would purge the body early and hide a real customer question.
+   */
+  const failRow = async (
+    row: TimelineRow,
+    reason: ClassifyFailureReason,
+  ): Promise<void> => {
+    counts.failed++;
+    failureReasons[reason] = (failureReasons[reason] ?? 0) + 1;
+    // `updated_at` is deliberately NOT touched: a failed read of an
+    // email is not activity on the lead.
+    const { error } = await admin
+      .from("lead_timeline_items")
+      .update({
+        metadata_json: markClassifyFailure(
+          row.metadata_json,
+          reason,
+          new Date().toISOString(),
+        ),
+      })
+      .eq("id", row.id)
+      .is("intent", null);
+    if (error) {
+      // If we cannot even record the attempt the row WILL be retried
+      // next minute. Loud, because this is the old freeze condition.
+      logger.error("classify_inbound_attempt_mark_failed", {
+        row_id: row.id,
+        reason,
+        error: error.message,
+      });
+    }
+  };
 
   try {
     // Priority sort: `expires_at ASC NULLS LAST, occurred_at ASC` —
@@ -399,14 +487,41 @@ Deno.serve(async (req) => {
     // (e.g. a workspace just hooked up Gmail and 2k inbounds arrive in
     // a single batch — without this, the oldest occurred_at ties up the
     // first N runs while the freshest-but-about-to-purge rows wait).
-    const { data: rows, error: fetchErr } = await admin
-      .from("lead_timeline_items")
-      .select("id, lead_id, subject, snippet_text, metadata_json")
-      .eq("event_type", "email_inbound")
-      .is("intent", null)
-      .order("expires_at", { ascending: true, nullsFirst: false })
-      .order("occurred_at", { ascending: true })
-      .limit(BATCH_SIZE);
+    //
+    // Retry backoff (the Q1c fix): `.or(classifyEligibilityFilter(...))`
+    // drops rows whose next attempt is still in the future SERVER-SIDE,
+    // so a row parked after a failure cannot occupy a slot. Without it,
+    // a downstream outage freezes the head of this deterministic order
+    // and starves every row behind it — which is exactly what happened
+    // when ai_task started returning 402 on every call.
+    const nowIso = new Date().toISOString();
+    const candidates = (withBackoffFilter: boolean) => {
+      const q = admin
+        .from("lead_timeline_items")
+        .select("id, lead_id, subject, snippet_text, metadata_json")
+        .eq("event_type", "email_inbound")
+        .is("intent", null);
+      if (withBackoffFilter) q.or(classifyEligibilityFilter(nowIso));
+      return q
+        .order("expires_at", { ascending: true, nullsFirst: false })
+        .order("occurred_at", { ascending: true })
+        .limit(FETCH_LIMIT);
+    };
+
+    let { data: rows, error: fetchErr } = await candidates(true);
+
+    if (fetchErr) {
+      // The JSON-path predicate is the only new thing in that query, so
+      // a fetch error here most likely means this PostgREST build won't
+      // filter on `metadata_json->>key`. Degrade to the in-memory pass
+      // (which is why FETCH_LIMIT over-fetches) rather than doing no
+      // work at all — but say so loudly, because parked rows are now
+      // eating slots again.
+      logger.error("classify_inbound_backoff_filter_unsupported", {
+        error: fetchErr.message,
+      });
+      ({ data: rows, error: fetchErr } = await candidates(false));
+    }
 
     if (fetchErr) {
       logger.error("classify_inbound_fetch_failed", { error: fetchErr.message });
@@ -416,8 +531,23 @@ Deno.serve(async (req) => {
       );
     }
 
-    const batch = (rows ?? []) as TimelineRow[];
-    counts.fetched = batch.length;
+    const fetched = (rows ?? []) as TimelineRow[];
+    const { selected: batch, parked, exhausted } = selectClassifiable(
+      fetched,
+      nowIso,
+      BATCH_SIZE,
+    );
+    counts.fetched = fetched.length;
+    counts.parked = parked;
+    counts.exhausted = exhausted;
+    if (parked > 0) {
+      // The server-side predicate should have made this impossible.
+      logger.warn("classify_inbound_server_backoff_filter_leaked", {
+        parked,
+        exhausted,
+        fetched: fetched.length,
+      });
+    }
 
     if (batch.length === 0) {
       logger.info("classify_inbound_empty_batch", {
@@ -458,6 +588,7 @@ Deno.serve(async (req) => {
             .update({
               intent: NO_SIGNAL_INTENT,
               intent_version: INTENT_VERSION,
+              metadata_json: stripClassifyMarks({ ...(row.metadata_json ?? {}) }),
               updated_at: new Date().toISOString(),
             })
             .eq("id", row.id)
@@ -467,7 +598,7 @@ Deno.serve(async (req) => {
               row_id: row.id,
               error: updErr.message,
             });
-            counts.failed++;
+            await failRow(row, "db_update_failed");
           } else {
             counts.classified++;
             counts.no_signal++;
@@ -510,11 +641,11 @@ Deno.serve(async (req) => {
             .update({
               intent: deterministic.intent,
               intent_version: INTENT_VERSION,
-              metadata_json: {
+              metadata_json: stripClassifyMarks({
                 ...(row.metadata_json ?? {}),
                 intent_source: "deterministic",
                 sender_is_lead,
-              },
+              }),
               updated_at: new Date().toISOString(),
             })
             .eq("id", row.id)
@@ -526,7 +657,7 @@ Deno.serve(async (req) => {
               intent: deterministic.intent,
               error: detErr.message,
             });
-            counts.failed++;
+            await failRow(row, "db_update_failed");
           } else {
             counts.classified++;
             counts.deterministic++;
@@ -552,18 +683,16 @@ Deno.serve(async (req) => {
         });
 
         if (!aiRes.ok) {
-          logger.warn("classify_inbound_ai_http_error", {
-            row_id: row.id,
-            status: aiRes.status,
-          });
-          counts.failed++;
+          // No per-row log line: with the gateway down this fires for
+          // every row in the batch. The reason code (incl. the HTTP
+          // status) lands on the row AND in the run summary.
+          await failRow(row, `ai_http_${aiRes.status}`);
           continue;
         }
 
         const aiData = (await aiRes.json()) as { ok?: boolean; content?: string };
         if (!aiData?.ok || typeof aiData.content !== "string" || !aiData.content) {
-          logger.warn("classify_inbound_ai_no_content", { row_id: row.id });
-          counts.failed++;
+          await failRow(row, "ai_no_content");
           continue;
         }
 
@@ -584,7 +713,7 @@ Deno.serve(async (req) => {
             row_id: row.id,
             content_preview: aiData.content.slice(0, 120),
           });
-          counts.failed++;
+          await failRow(row, "ai_parse_failed");
           continue;
         }
 
@@ -608,7 +737,7 @@ Deno.serve(async (req) => {
             intent: intentPrimary,
             content_preview: aiData.content.slice(0, 120),
           });
-          counts.failed++;
+          await failRow(row, "ai_summary_missing");
           continue;
         }
 
@@ -624,12 +753,14 @@ Deno.serve(async (req) => {
         // already paid for them in the same call.
         const shouldWriteSummary = ai_summary !== null && !isSkipListIntent;
 
-        const nextMetadata: Record<string, unknown> = {
+        // stripClassifyMarks: a row that eventually classifies must not
+        // keep the retry bookkeeping from the outage it lived through.
+        const nextMetadata: Record<string, unknown> = stripClassifyMarks({
           ...(row.metadata_json ?? {}),
           intent_source: "ai",
           sender_is_lead,
           ai_signals: signals,
-        };
+        });
         if (shouldWriteSummary) {
           nextMetadata.ai_summary = ai_summary;
           nextMetadata.ai_summary_version = AI_SUMMARY_VERSION;
@@ -657,7 +788,7 @@ Deno.serve(async (req) => {
             intent: intentPrimary,
             error: updErr.message,
           });
-          counts.failed++;
+          await failRow(row, "db_update_failed");
           continue;
         }
 
@@ -671,17 +802,24 @@ Deno.serve(async (req) => {
           row_id: row.id,
           error: msg,
         });
-        counts.failed++;
+        // Best-effort mark; if this throws too the outer loop continues.
+        await failRow(row, "db_update_failed").catch(() => {});
       }
     }
 
     logger.info("classify_inbound_batch_done", {
       duration_ms: Date.now() - startedAt,
       ...counts,
+      failure_reasons: failureReasons,
     });
 
     return new Response(
-      JSON.stringify({ ok: true, ...counts, duration_ms: Date.now() - startedAt }),
+      JSON.stringify({
+        ok: true,
+        ...counts,
+        failure_reasons: failureReasons,
+        duration_ms: Date.now() - startedAt,
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
