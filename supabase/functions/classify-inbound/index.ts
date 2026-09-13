@@ -88,6 +88,7 @@ import {
 } from "../_shared/inboundIntentDetectors.ts";
 import {
   type ClassifyFailureReason,
+  CLASSIFY_AI_TIMEOUT_MS,
   CLASSIFY_OBSERVED_MS_PER_ROW,
   CLASSIFY_RUN_BUDGET_MS,
   classifyEligibilityFilter,
@@ -111,14 +112,23 @@ const corsHeaders = {
 // kill into back-to-back timeouts. BATCH_SIZE = 25 was tuned in the
 // broken regime and does not survive the working one.
 //
-// 15 × ~1.9 s ≈ 29 s — about 81% of CLASSIFY_RUN_BUDGET_MS (35 s) and
-// barely half the 55 s kill, so a typical run finishes its whole batch
-// with room to spare. THE LATENCY ASSUMPTION THIS ENCODES: mean
-// ai_task.intent_router round-trip ≈ 1.9 s. It holds up to ~2.3 s/row;
-// past that the run budget starts truncating batches (which is safe —
-// every row is committed as it completes — but it means this number
-// should come down). Deterministic rows (bounce / OOO / calendar
-// accept / unsubscribe) cost no AI call at all and barely register.
+// 15 × ~1.9 s ≈ 29 s, inside CLASSIFY_RUN_BUDGET_MS (35 s) and barely
+// half the 55 s kill, so a typical run finishes its whole batch. THE
+// LATENCY ASSUMPTION THIS ENCODES: mean ai_task.intent_router
+// round-trip ≈ 1.9 s — and that mean is DILUTED by deterministic rows
+// that cost ~0, so a mostly-AI batch is nearer 2.2 s/row ≈ 33 s, about
+// 93% of the budget. Still inside; the headroom is thinner than the
+// arithmetic looks. Past ~2.3 s/row the budget truncates batches, which
+// is safe (every row commits as it completes) but is the signal to
+// lower this number.
+//
+// THIS NUMBER IS THE DRAIN RATE. The cron fires once a minute and works
+// at most BATCH_SIZE rows, so throughput is BATCH_SIZE/minute FULL
+// STOP — it is not wall-clock-bound. A batch of cheap deterministic
+// rows finishes the RUN in 2 s instead of 29; it does not then go and
+// work a 16th row. Fast rows shorten the run, never the drain. (The
+// budget is a backstop, not a limiter — that is the whole design.) So
+// 1,346 backlogged rows ÷ 15 = ~90 minutes regardless of email mix.
 const BATCH_SIZE = 15;
 
 // Rows are over-fetched so that a row parked by retry backoff can never
@@ -126,9 +136,11 @@ const BATCH_SIZE = 15;
 // what actually keeps parked rows out, SERVER-SIDE; this headroom plus
 // the in-memory `selectClassifiable` pass is a DETECTOR, not a spare
 // tyre. ponytail: 2x is a guess, not a proof. It absorbs at most
-// BATCH_SIZE leaked parked rows — with a backlog in the thousands, a
-// server-side filter that stops matching parks all FETCH_LIMIT fetched
-// rows, selects none, and the queue re-freezes. Loudly (see
+// BATCH_SIZE leaked parked rows — TODAY 15, down from 25 when the batch
+// shrank, so the margin is thinner than it was. With a backlog in the
+// thousands, a server-side filter that stops matching parks all
+// FETCH_LIMIT (30) fetched rows, selects none, and the queue
+// re-freezes. Loudly (see
 // `classify_inbound_server_backoff_filter_leaked`), but it freezes.
 // Ceiling: a non-zero `parked` is not "handled", it is an incident —
 // fix the server-side filter, do not raise this number.
@@ -584,6 +596,9 @@ Deno.serve(async (req) => {
     counts.fetched = fetched.length;
     counts.parked = parked;
     counts.exhausted = exhausted;
+    // Counted DOWN as rows are worked, so it stays truthful even if the
+    // outer catch fires mid-batch (where a post-loop tally would read 0).
+    counts.unreached = batch.length;
     // counts.worked is set after the loop — the run budget can stop it
     // short, and `classified + failed` must always reconcile against it.
     if (parked > 0) {
@@ -638,6 +653,7 @@ Deno.serve(async (req) => {
       // Incremented here, not tallied after the loop, so the count is
       // still truthful if the outer catch fires mid-batch.
       counts.worked++;
+      counts.unreached--;
       try {
         const emailText = buildEmailText(row);
 
@@ -728,8 +744,16 @@ Deno.serve(async (req) => {
 
         const leadContext = buildLeadContext(lead);
 
+        // AbortSignal is what makes CLASSIFY_RUN_BUDGET_MS mean
+        // anything: the budget gates STARTING a row, it cannot bound a
+        // call already in flight, and Deno's fetch has no default
+        // timeout. Without this, one hung gateway call blows straight
+        // through cron-dispatcher's 55 s kill. An abort throws and is
+        // caught below as an ordinary AI failure, so the row marks and
+        // backs off like any other.
         const aiRes = await fetch(`${supabaseUrl}/functions/v1/ai_task`, {
           method: "POST",
+          signal: AbortSignal.timeout(CLASSIFY_AI_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${serviceKey}`,
@@ -859,16 +883,22 @@ Deno.serve(async (req) => {
         // thrown error from ai_task fetch, JSON parsing, or the
         // supabase client lands here and the batch keeps going.
         const msg = err instanceof Error ? err.message : String(err);
+        // AbortSignal.timeout rejects with a TimeoutError DOMException;
+        // an explicit abort would be AbortError. Both mean "the gateway
+        // did not answer in time", which is a distinct, actionable
+        // reason — not the generic one.
+        const name = (err as { name?: string } | null)?.name;
+        const timedOut = name === "TimeoutError" || name === "AbortError";
         logger.error("classify_inbound_row_unexpected_error", {
           row_id: row.id,
           error: msg,
+          timed_out: timedOut,
         });
         // Best-effort mark; if this throws too the outer loop continues.
-        await failRow(row, "db_update_failed").catch(() => {});
+        await failRow(row, timedOut ? "ai_timeout" : "unexpected_error")
+          .catch(() => {});
       }
     }
-
-    counts.unreached = batch.length - counts.worked;
 
     logger.info("classify_inbound_batch_done", {
       duration_ms: Date.now() - startedAt,

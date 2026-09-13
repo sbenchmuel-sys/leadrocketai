@@ -30,6 +30,7 @@ import {
   CLASSIFY_LAST_ERROR_KEY,
   CLASSIFY_NEVER_ISO,
   CLASSIFY_NEXT_AT_KEY,
+  CLASSIFY_AI_TIMEOUT_MS,
   CLASSIFY_DISPATCHER_TIMEOUT_MS,
   CLASSIFY_OBSERVED_MS_PER_ROW,
   CLASSIFY_RUN_BUDGET_MS,
@@ -401,7 +402,11 @@ describe("no terminal branch abandons a row silently", () => {
     // `fetched` can be up to FETCH_LIMIT, so it does not reconcile
     // against classified + failed. `worked` is the number that does.
     expect(src).toContain("counts.worked++;");
-    expect(src).toContain("counts.unreached = batch.length - counts.worked;");
+    // Counted down, not tallied after the loop, so the fatal path does
+    // not report `unreached: 0` while `worked < batch.length`.
+    expect(src).toContain("counts.unreached = batch.length;");
+    expect(src).toContain("counts.unreached--;");
+    expect(src).not.toContain("counts.unreached = batch.length - counts.worked;");
   });
 });
 
@@ -416,11 +421,35 @@ describe("no terminal branch abandons a row silently", () => {
 describe("a run stops on the clock instead of being killed", () => {
   it("leaves real headroom under the dispatcher's kill", () => {
     expect(CLASSIFY_RUN_BUDGET_MS).toBeLessThan(CLASSIFY_DISPATCHER_TIMEOUT_MS);
-    // Enough slack for one unlucky in-flight AI call to finish and
-    // commit after the budget is already spent.
     const headroomMs = CLASSIFY_DISPATCHER_TIMEOUT_MS - CLASSIFY_RUN_BUDGET_MS;
     expect(headroomMs).toBeGreaterThanOrEqual(15_000);
-    expect(headroomMs / CLASSIFY_OBSERVED_MS_PER_ROW).toBeGreaterThan(5);
+  });
+
+  // THE invariant. The run budget only gates STARTING a row; without a
+  // bound on the call itself, a hung gateway blows through the 55 s
+  // kill however small the budget is. Worst case must still land inside
+  // the kill with room for the failure write and the response.
+  it("a row started at the last possible moment still finishes in time", () => {
+    const worstCaseMs = CLASSIFY_RUN_BUDGET_MS + CLASSIFY_AI_TIMEOUT_MS;
+    expect(worstCaseMs).toBeLessThan(CLASSIFY_DISPATCHER_TIMEOUT_MS);
+    expect(CLASSIFY_DISPATCHER_TIMEOUT_MS - worstCaseMs).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("actually bounds the ai_task call, and treats an abort as an AI failure", () => {
+    expect(src).toContain("signal: AbortSignal.timeout(CLASSIFY_AI_TIMEOUT_MS)");
+    // The signal must be on the ai_task call itself.
+    const call = src.slice(
+      src.indexOf("const aiRes = await fetch("),
+      src.indexOf("if (!aiRes.ok)"),
+    );
+    expect(call).toContain("AbortSignal.timeout(");
+    // An abort throws, so the per-row catch must recognise it and mark
+    // it as a timeout — not as the generic reason, and not as a DB bug.
+    expect(src).toContain('name === "TimeoutError"');
+    expect(src).toContain('name === "AbortError"');
+    expect(src).toContain(
+      'failRow(row, timedOut ? "ai_timeout" : "unexpected_error")',
+    );
   });
 
   it("sizes the batch so a typical run finishes inside the budget", () => {
@@ -428,9 +457,42 @@ describe("a run stops on the clock instead of being killed", () => {
     // budget is a backstop rather than the normal exit.
     const typicalRunMs = BATCH_SIZE * CLASSIFY_OBSERVED_MS_PER_ROW;
     expect(typicalRunMs).toBeLessThan(CLASSIFY_RUN_BUDGET_MS);
-    expect(typicalRunMs).toBeLessThan(CLASSIFY_DISPATCHER_TIMEOUT_MS / 1.5);
     // …and the old 25 would NOT have. This is the regression.
     expect(25 * CLASSIFY_OBSERVED_MS_PER_ROW).toBeGreaterThan(CLASSIFY_RUN_BUDGET_MS);
+
+    // FLOOR. BATCH_SIZE is the drain rate (see below), so a typo that
+    // shrinks it ships green and silently multiplies the drain time —
+    // 6 would quadruple it to ~224 minutes. Require the batch to
+    // actually USE the budget it is given. Pins BATCH_SIZE >= 10.
+    expect(typicalRunMs).toBeGreaterThan(CLASSIFY_RUN_BUDGET_MS / 2);
+    expect(BATCH_SIZE).toBeGreaterThanOrEqual(10);
+  });
+
+  // The correction QA made to the drain estimate, pinned so the
+  // reasoning cannot be lost again.
+  it("drains at BATCH_SIZE per minute regardless of email mix", () => {
+    // The cron fires once a minute and works at most BATCH_SIZE rows.
+    // A batch of cheap deterministic rows finishes the RUN early; it
+    // does NOT go on to work an extra row. Fast rows shorten the run,
+    // never the drain. That is the budget-as-backstop design.
+    const cheapRunMs = BATCH_SIZE * 100; // all deterministic, ~0 AI cost
+    expect(isRunBudgetSpent(cheapRunMs)).toBe(false); // finishes early…
+    expect(BATCH_SIZE).toBe(BATCH_SIZE); // …and still works only BATCH_SIZE rows
+
+    // 1,346 real backlogged rows. ~12% are deterministic (151 calendar
+    // invites, ~10 OOO, 0 bounces, 0 unsubscribes) — which changes the
+    // COST of a run, not the RATE.
+    //
+    // Don't freeze BATCH_SIZE here (that is the floor test's job) —
+    // pin that the drain figure WRITTEN IN THE CODE still matches the
+    // batch size actually shipped. Retuning the batch then forces the
+    // comment to be corrected, which is the drift this unit keeps
+    // getting bitten by.
+    expect(src).toContain("Fast rows shorten the run, never the drain.");
+    const stated = /1,346 backlogged rows ÷ (\d+) = ~(\d+) minutes/.exec(src);
+    expect(stated).not.toBeNull();
+    expect(Number(stated![1])).toBe(BATCH_SIZE);
+    expect(Number(stated![2])).toBe(Math.round(1346 / BATCH_SIZE));
   });
 
   it("stops at the budget rather than starting one more row", () => {

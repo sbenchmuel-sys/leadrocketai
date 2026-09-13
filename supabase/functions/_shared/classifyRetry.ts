@@ -125,12 +125,27 @@ export const CLASSIFY_DISPATCHER_TIMEOUT_MS = 55_000;
 /**
  * Stop starting new rows after this much elapsed time.
  *
- * 20 s of headroom under the dispatcher's kill — enough for one slow
- * in-flight AI call to finish and commit after the budget is already
- * spent. Measured tail was ~1.9 s/row; the headroom covers roughly ten
- * times that for a single unlucky call.
+ * 20 s of headroom under the dispatcher's kill, so a call already in
+ * flight when the budget expires can still finish and commit. That is
+ * only a real guarantee because `CLASSIFY_AI_TIMEOUT_MS` bounds the
+ * call — the budget gates STARTING a row, it cannot bound one already
+ * running, and Deno's fetch has no default timeout.
  */
 export const CLASSIFY_RUN_BUDGET_MS = 35_000;
+
+/**
+ * Hard ceiling on a single `ai_task` round-trip, via AbortSignal.
+ *
+ * The invariant this exists to satisfy (pinned by a test):
+ *   CLASSIFY_RUN_BUDGET_MS + CLASSIFY_AI_TIMEOUT_MS
+ *     < CLASSIFY_DISPATCHER_TIMEOUT_MS
+ * i.e. 35 s + 15 s = 50 s < 55 s, leaving 5 s for the failure write and
+ * the response. Without it, one hung gateway call blows through the
+ * 55 s kill no matter what the run budget says. An abort is treated as
+ * an ordinary AI failure, so the row marks and backs off like any other
+ * — it does NOT burn the run.
+ */
+export const CLASSIFY_AI_TIMEOUT_MS = 15_000;
 
 /**
  * Observed mean seconds-per-row against a HEALTHY gateway (47–49 s for
@@ -138,6 +153,15 @@ export const CLASSIFY_RUN_BUDGET_MS = 35_000;
  * this. If mean latency rises above ~2.3 s/row the budget starts
  * truncating batches — harmless (work is banked per row), but it is the
  * signal to lower BATCH_SIZE rather than let every run stop short.
+ *
+ * CAVEAT — this is a DILUTED mean. Some of those 25 rows were almost
+ * certainly deterministic and cost ~0, so the true cost of an AI row is
+ * nearer 2.2 s and a mostly-AI batch of 15 lands around 33 s: ~93% of
+ * the run budget, not the ~81% a naive 1.9 × 15 suggests. Still inside,
+ * and it degrades gracefully (the budget truncates, work is banked) —
+ * but the headroom is thinner than the arithmetic looks. Deliberately
+ * NOT re-tuned off a four-run sample; re-measure after a day of real
+ * traffic and adjust BATCH_SIZE then.
  */
 export const CLASSIFY_OBSERVED_MS_PER_ROW = 1_900;
 
@@ -152,6 +176,8 @@ export function isRunBudgetSpent(elapsedMs: number): boolean {
 /** Short, stable reason codes stored in `classify_last_error`. */
 export type ClassifyFailureReason =
   | `ai_http_${number}`
+  | "ai_timeout"
+  | "unexpected_error"
   | "ai_no_content"
   | "ai_parse_failed"
   | "ai_summary_missing"
