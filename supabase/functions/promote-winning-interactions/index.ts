@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
 
         const aiResp = await aiGatewayFetch(lovableApiKey, {
           model: "google/gemini-2.5-flash-lite",
-          prompt,
+          messages: [{ role: "user", content: prompt }],
           max_tokens: 400,
         }, { label: "promote-winning-interactions" });
 
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
         }
 
         const aiData = await aiResp.json();
-        const summary = aiData?.content ?? aiData?.text ?? "";
+        const summary = aiData?.choices?.[0]?.message?.content ?? "";
 
         if (!summary) {
           errors.push(`Row ${row.id}: No summary returned`);
