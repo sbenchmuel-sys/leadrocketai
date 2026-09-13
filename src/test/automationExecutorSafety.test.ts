@@ -184,10 +184,14 @@ describe("legacyPathFloorAndFooter", () => {
     expect(postalCheck).toBeLessThan(approvedConsumed);
     expect(postalCheck).toBeLessThan(aiCall);
     // Each refusal writes the skip row and continues (no send, no claim).
+    // Window widened 800 -> 1400: both branches now also defer the lead (Codex
+    // P1), which sits between the ledger insert and the `continue`.
     for (const at of [secretCheck, postalCheck]) {
-      const branch = legacy.slice(at, at + 800);
+      const branch = legacy.slice(at, at + 1400);
       expect(branch).toContain('from("automation_log").insert(logEntry)');
       expect(branch).toContain("continue;");
+      // The rep still gets a findable explanation AND the row stops holding the page.
+      expect(branch).toContain("blockedRowRetryAt()");
     }
     // The resolver itself (loadCampaignForLead) also precedes the draft lookup.
     expect(legacy.indexOf("loadCampaignForLead(lead.id, supabase)")).toBeLessThan(draftLookup);
@@ -619,7 +623,10 @@ describe("failClosedAndStarvation", () => {
     // Was EXECUTOR_CRON_INTERVAL_MIN — deferring by exactly one tick put the row
     // straight back in the next scan, so the paused set rotated through the page
     // forever (Codex P1). The deferral must be materially longer than one tick.
-    expect(branch).toContain("PAUSED_FALLBACK_DEFER_MIN * 60 * 1000");
+    // Constant renamed PAUSED_FALLBACK_DEFER_MIN -> BLOCKED_ROW_DEFER_MIN: it is
+    // now used by EVERY refusal that needs time or a human, not just the paused
+    // fallback, so the name had to stop describing one caller.
+    expect(branch).toContain("BLOCKED_ROW_DEFER_MIN * 60 * 1000");
     // And when the exclusion IS applied, the lead is untouched so un-pausing
     // resumes on the next tick (the behaviour the docs promise).
     expect(branch).toContain("un-pausing resumes instantly");
@@ -703,7 +710,7 @@ describe("cappedScanStarvationSweep", () => {
     const branch = cold.slice(pause, pause + 1400);
     expect(branch).toContain("if (!pausedOwnerFilterApplied)");
     expect(branch).toContain('from("campaign_touch")');
-    expect(branch).toContain("PAUSED_FALLBACK_DEFER_MIN * 60 * 1000");
+    expect(branch).toContain("BLOCKED_ROW_DEFER_MIN * 60 * 1000");
   });
 
   it("WhatsApp no-reply scan: the lookback is bounded so answered threads age out", () => {
@@ -725,7 +732,10 @@ describe("cappedScanStarvationSweep", () => {
     const cap = legacy.indexOf("if (dailyCount >= dailyCap)");
     expect(cap).toBeGreaterThan(-1);
     const branch = legacy.slice(cap, cap + 900);
-    expect(branch).toContain('from("leads").update({ eligible_at: tomorrow.toISOString() })');
+    // Was `tomorrow.toISOString()` (tomorrow 09:30 local). The per-owner counter
+    // resets at UTC midnight, so "tomorrow 09:30" woke the lead ~9.5h AFTER the
+    // reset (Codex P2). It now wakes at the reset instant itself.
+    expect(branch).toContain('from("leads").update({ eligible_at: capResetAt.toISOString() })');
     expect(branch).toContain('from("automation_log").insert(logEntry)');
     expect(branch).toContain("Daily send cap reached for this account");
   });
@@ -746,11 +756,11 @@ describe("degradedPathCannotRotate", () => {
 
   it("the fallback deferral is many cron intervals, not one — with the margin computed", () => {
     const tick = Number(src.match(/const EXECUTOR_CRON_INTERVAL_MIN = (\d+);/)![1]);
-    const deferExpr = src.match(/const PAUSED_FALLBACK_DEFER_MIN = ([^;]+);/)![1].trim();
+    const deferExpr = src.match(/const BLOCKED_ROW_DEFER_MIN = ([^;]+);/)![1].trim();
     // Parse the literal product rather than eval'ing source text.
     const defer = deferExpr.split("*").reduce((acc, part) => {
       const n = Number(part.trim());
-      expect(Number.isFinite(n), `PAUSED_FALLBACK_DEFER_MIN must stay a literal number or product, got "${deferExpr}"`).toBe(true);
+      expect(Number.isFinite(n), `BLOCKED_ROW_DEFER_MIN must stay a literal number or product, got "${deferExpr}"`).toBe(true);
       return acc * n;
     }, 1);
 
@@ -772,8 +782,11 @@ describe("degradedPathCannotRotate", () => {
     expect(src).toContain("P >= 480 legacy /  P >= 4,800 cold");
   });
 
-  it("both degraded paths use the same constant — no second magic number", () => {
-    expect([...src.matchAll(/PAUSED_FALLBACK_DEFER_MIN \* 60 \* 1000/g)].length).toBe(2);
+  it("every time/config deferral uses the same constant — no second magic number", () => {
+    // Was 2 (the two paused fallbacks); the constant is now shared by every
+    // refusal that needs time or a human, via blockedRowRetryAt().
+    expect([...src.matchAll(/BLOCKED_ROW_DEFER_MIN \* 60 \* 1000/g)].length).toBeGreaterThanOrEqual(2);
+    expect([...src.matchAll(/blockedRowRetryAt\(\)/g)].length).toBeGreaterThanOrEqual(5);
     // The old one-interval deferral is gone from both.
     expect(src).not.toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
   });
@@ -804,5 +817,128 @@ describe("smsApprovedDraftSurvivesRetry", () => {
       const before = legacy.slice(Math.max(0, m.index! - 400), m.index!);
       expect(before).toMatch(/if \(!transient\) \{|if \(!smsOptOutUnreadable\) \{/);
     }
+  });
+});
+
+// ── STRUCTURAL GUARD: a refusal must MOVE the row, or justify not moving it ──
+//
+// This class of bug has now been found six times in this file — the legacy scan,
+// the cold scan, the WhatsApp check, the degraded paused fallback, the CAN-SPAM
+// preconditions and the cold caps. Every instance is the same sentence: a branch
+// refuses a row and `continue`s WITHOUT changing anything the capped scan filters
+// on, so the same rows refill the page every tick and everything behind them
+// starves — silently, with the run still reporting success.
+//
+// Fixing instances has not ended the class, so this test ends it: every
+// `continue` / `break` in either send loop must either move the row out of its
+// scan, or appear below with a written reason why leaving it is safe. A new
+// refusal branch that does neither fails CI. The allow-list is the audit — it is
+// meant to be read, and to be argued with.
+type Exempt = { match: string; why: string };
+
+/** Branches that deliberately leave the row in place. Each needs a reason. */
+const LEAVE_IN_PLACE_LEGACY: Exempt[] = [
+  { match: "if (processed >= maxSendsPerRun)",
+    why: "control flow, not a refusal — the per-run send cap ends the loop; it refuses nobody and moves nothing" },
+  { match: "Could not re-fetch lead",
+    why: "transient read error; if it persisted for a whole page the database is down and nothing sends anyway" },
+  { match: "Consent withdrawn mid-flight",
+    why: "the candidate query requires automation_mode IS NOT NULL, so these rows cannot be selected again" },
+  { match: "Duplicate send guard: email sent/pending within last hour",
+    why: "self-clearing within 1h (4 ticks); a full page of these blocks at most 4 ticks, then drains" },
+  { match: "if (claimError)",
+    why: "lost the claim race; the claim unique index is per (lead, action_key, claim_date), so it cannot repeat today" },
+  { match: "No phone number for SMS",
+    why: "parks the lead — see the branch; listed because the claim row, not the lead, carries the skip" },
+];
+
+const LEAVE_IN_PLACE_COLD: Exempt[] = [
+  { match: "if (processed >= maxSendsPerRun)",
+    why: "control flow, not a refusal — the per-run send cap ends the cold loop, refusing nobody" },
+  { match: "Touch is no longer scheduled",
+    why: "the scan filters status='scheduled'; this row can no longer be selected" },
+  { match: "Touch is not due yet",
+    why: "the scan filters eligible_at <= now; an advanced touch is already out of the page" },
+  { match: "Not the next step in line",
+    why: "self-clearing: the earlier step sorts OLDER in the eligible_at ASC scan, so it is reached first and its send re-anchors this one" },
+  { match: "Campaign is not active or not in automatic send mode",
+    why: "the scan filters campaign_id IN (active + automatic); defense in depth only" },
+  { match: "Workspace cold auto-send gate is off",
+    why: "the scan already filters to gated workspaces; defense in depth only" },
+  { match: "Lead no longer exists",
+    why: "leads!inner join — a touch with no lead is not returned by the scan" },
+  { match: "Another executor run already claimed this touch",
+    why: "claim unique index makes a same-day repeat impossible" },
+  { match: "claim failed:",
+    why: "real insert failure; transient, and the touch is retried next tick without holding a slot it already lost" },
+  { match: "send failed",
+    why: "deliberate: the provider call failed, the touch stays scheduled so the next tick retries (documented at the branch)" },
+];
+
+/** Writes that take a row out of its scan's filters. */
+const MOVES_ROW = [
+  "needs_action: false", "eligible_at:", "unsubscribed: true", "manual_mode: true",
+  'status: "skipped"', "endColdEnrollment", "advanceColdEnrollment",
+];
+
+/** The `{`-delimited branch containing the statement at line index `i`. */
+function branchBodyAt(lines: string[], i: number, floor: number): string {
+  if (/\{[^{}]*\b(continue|break);/.test(lines[i])) return lines[i]; // single-line branch
+  let depth = 0;
+  for (let j = i; j >= floor; j--) {
+    const line = lines[j];
+    for (let k = line.length - 1; k >= 0; k--) {
+      const ch = line[k];
+      if (ch === "}") depth++;
+      else if (ch === "{") {
+        if (depth === 0) return lines.slice(j, i + 1).join("\n");
+        depth--;
+      }
+    }
+  }
+  return lines.slice(Math.max(floor, i - 25), i + 1).join("\n");
+}
+
+function auditLoop(name: string, startPat: string, endPat: string, exempt: Exempt[]) {
+  const lines = src.split("\n");
+  const start = lines.findIndex((l) => l.includes(startPat));
+  const end = lines.findIndex((l, n) => n > start && l.includes(endPat));
+  expect(start, `${name}: loop start not found`).toBeGreaterThan(-1);
+  expect(end, `${name}: loop end not found`).toBeGreaterThan(start);
+
+  const offenders: string[] = [];
+  let audited = 0;
+  for (let i = start; i < end; i++) {
+    if (!/\b(continue|break);/.test(lines[i])) continue;
+    audited++;
+    const body = branchBodyAt(lines, i, start);
+    if (MOVES_ROW.some((m) => body.includes(m))) continue;
+    if (exempt.some((e) => body.includes(e.match))) continue;
+    offenders.push(`line ${i + 1}: ${lines[i].trim().slice(0, 100)}`);
+  }
+  return { audited, offenders };
+}
+
+describe("everyRefusalMovesTheRowOrIsJustified", () => {
+  it("legacy loop: no refusal leaves a lead where the 20-row scan will find it again", () => {
+    const { audited, offenders } = auditLoop(
+      "legacy", "for (const lead of legacyLeads)", "if (privileged) try {", LEAVE_IN_PLACE_LEGACY);
+    expect(audited, "guard went vacuous — no branches found").toBeGreaterThanOrEqual(25);
+    expect(offenders, `Refusal(s) that neither move the lead nor appear in LEAVE_IN_PLACE_LEGACY:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("cold loop: no refusal leaves a touch at the front of the eligible_at ASC page", () => {
+    const { audited, offenders } = auditLoop(
+      "cold", "for (const touch of (coldDue || []))", "VOLUME TRIPWIRE", LEAVE_IN_PLACE_COLD);
+    expect(audited, "guard went vacuous — no branches found").toBeGreaterThanOrEqual(25);
+    expect(offenders, `Refusal(s) that neither move the touch nor appear in LEAVE_IN_PLACE_COLD:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("every exemption carries a written reason (the allow-list is an audit, not a mute button)", () => {
+    for (const e of [...LEAVE_IN_PLACE_LEGACY, ...LEAVE_IN_PLACE_COLD]) {
+      expect(e.why.length, `exemption "${e.match}" needs a real reason`).toBeGreaterThan(30);
+    }
+    // Keep the list small enough to stay reviewable.
+    expect(LEAVE_IN_PLACE_LEGACY.length + LEAVE_IN_PLACE_COLD.length).toBeLessThanOrEqual(20);
   });
 });
