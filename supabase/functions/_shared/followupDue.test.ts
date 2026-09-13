@@ -116,6 +116,18 @@ Deno.test("cold cadence still gets send_pre_N, not followup_due", () => {
   assert(r.next_action_key?.startsWith("send_pre_"), `got ${r.next_action_key}`);
 });
 
+Deno.test("post-meeting stays quiet until ITS 7-day rule, then uses its own key", () => {
+  // The generic 3-day fallback must not overtake D2's deliberate 7-day wait.
+  const at = (days: number) => metrics({
+    first_outbound_at: daysAgo(60),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(days),
+    meeting_summary_count: 1,
+  });
+  assertEquals(derive(at(4), { stage: "post_meeting" }).next_action_key, null);
+  assertEquals(derive(at(7), { stage: "post_meeting" }).next_action_key, "post_meeting_followup");
+});
+
 Deno.test("post-meeting still gets post_meeting_followup", () => {
   const r = derive(
     metrics({

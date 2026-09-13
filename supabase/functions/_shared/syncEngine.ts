@@ -95,6 +95,14 @@ export interface CadenceSettingsV1 {
   flows: Flows;
 }
 
+/**
+ * Thresholds two specialised branches deliberately wait for. Named because the
+ * generic `followup_due` fallback has to defer to them — a literal in two
+ * places would drift and the fallback would start overtaking them again.
+ */
+export const CLOSING_FOLLOWUP_DAYS = 3;
+export const POST_MEETING_FOLLOWUP_DAYS = 7;
+
 export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
   version: 1,
   time_rules: {
@@ -555,9 +563,9 @@ export function deriveAction(
 
   // B) CLOSING STAGE
   if (stage === "closing") {
-    if (now - lastOutTime > 3 * DAY) {
+    if (now - lastOutTime > CLOSING_FOLLOWUP_DAYS * DAY) {
       const jitter = getDeterministicJitter(leadId, "closing_followup", guardrails.jitter_percent);
-      const eligibleAt = new Date(lastOutTime + (3 * DAY) * (1 + jitter));
+      const eligibleAt = new Date(lastOutTime + (CLOSING_FOLLOWUP_DAYS * DAY) * (1 + jitter));
       return { needs_action: true, next_action_key: "closing_followup", next_action_label: "Follow up on proposal/contract", eligible_at: eligibleAt.toISOString(), action_reason_code: "CLOSING_FOLLOWUP_DUE" };
     }
   }
@@ -615,10 +623,10 @@ export function deriveAction(
     const lastInboundTime = metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0;
     if (lastOutboundTime > 0 && lastOutboundTime > lastInboundTime) {
       const daysSinceOutbound = (now - lastOutboundTime) / DAY;
-      if (daysSinceOutbound >= 7) {
+      if (daysSinceOutbound >= POST_MEETING_FOLLOWUP_DAYS) {
         const jitter = getDeterministicJitter(leadId, "post_meeting_followup", guardrails.jitter_percent);
-        const eligibleAt = new Date(lastOutboundTime + (7 * DAY) * (1 + jitter));
-        return { needs_action: true, next_action_key: "post_meeting_followup", next_action_label: "Follow up (no response in 7 days)", eligible_at: eligibleAt.toISOString(), action_reason_code: "POST_MEETING_FOLLOWUP_DUE" };
+        const eligibleAt = new Date(lastOutboundTime + (POST_MEETING_FOLLOWUP_DAYS * DAY) * (1 + jitter));
+        return { needs_action: true, next_action_key: "post_meeting_followup", next_action_label: `Follow up (no response in ${POST_MEETING_FOLLOWUP_DAYS} days)`, eligible_at: eligibleAt.toISOString(), action_reason_code: "POST_MEETING_FOLLOWUP_DUE" };
       }
     }
   }
@@ -656,7 +664,38 @@ export function deriveAction(
   // Nothing more specific applies. Before this unit every lead landing here
   // dropped out of the Queue; now an unanswered outbound older than N days
   // surfaces as `followup_due`.
-  return followupDue ?? { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+  //
+  // …EXCEPT where a specialised rule deliberately waits LONGER than the generic
+  // 3/5-day wait. The fallback is stage-blind by design (that blindness is what
+  // closes the six-week hole), so without this it overtakes those rules and the
+  // rep gets a generic "Follow up (no reply in 3 days)" days early instead of
+  // the specialised key — which then never fires, because the generic one
+  // already claimed the lead. Same class as the closed-stage exit above.
+  //
+  // Deferred to:
+  //   • post_meeting — D2 waits 7 days for `post_meeting_followup`.
+  //   • closing      — B waits 3 days for `closing_followup` (only reachable if
+  //                    a stored wait were shorter than 3; free to state anyway).
+  //   • an active nurture cadence — E fires `send_nurture_N` on the campaign's
+  //     own 7/14/30-day interval, and the campaign will send it automatically;
+  //     a human prompt two days early would duplicate that work.
+  //
+  // NOT deferred to: F) re-engagement at 45 days. That one IS meant to be
+  // overtaken — a warm lead waiting six weeks for `reengage` is precisely the
+  // hole this unit exists to close. Do not "fix" it by adding it here.
+  const daysSinceLastOut = (now - lastOutTime) / DAY;
+  const specialisedWaitDays = stage === "post_meeting"
+    ? POST_MEETING_FOLLOWUP_DAYS
+    : stage === "closing"
+      ? CLOSING_FOLLOWUP_DAYS
+      : 0;
+  const nurtureCadenceOwnsIt = flows.nurture_campaigns.enabled
+    && metrics.nurture_outbound_count > 0
+    && !!nurtureCadence;
+  const specialisedRulePending = nurtureCadenceOwnsIt || daysSinceLastOut < specialisedWaitDays;
+
+  if (followupDue && !specialisedRulePending) return followupDue;
+  return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
 }
 
 // ============================================

@@ -412,9 +412,7 @@ describe("deriveAction wiring", () => {
   });
 
   it("falls back to followup_due instead of dropping the lead entirely", () => {
-    expect(syncEngineSrc).toContain(
-      "return followupDue ?? { needs_action: false, next_action_key: null",
-    );
+    expect(syncEngineSrc).toContain("if (followupDue && !specialisedRulePending) return followupDue;");
   });
 });
 
@@ -1172,5 +1170,73 @@ describe("post-send recompute vs a freshly written cadence", () => {
       expect(src).toMatch(/postSendDeriveAction\(/);
       expect(src).not.toMatch(/await postSendDeriveAction\(/);
     }
+  });
+});
+
+
+// ── The fallback must not overtake a rule that waits longer ────────
+
+describe("deriveAction — specialised rules keep their turn", () => {
+  const unansweredSince = (days: number) => metrics({
+    first_outbound_at: daysAgo(60),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(days),
+  });
+
+  it("a post-meeting lead stays quiet on day 4", () => {
+    // D2 deliberately waits 7 days. The generic 3-day fallback used to claim
+    // the lead first, four days early and under the wrong label — and then
+    // post_meeting_followup never fired, because the generic key had won.
+    const r = withFrozenClock(() => derive(unansweredSince(4), { stage: "post_meeting" }));
+    expect(r.next_action_key).toBeNull();
+    expect(r.needs_action).toBe(false);
+  });
+
+  it("and gets post_meeting_followup — not followup_due — on day 7", () => {
+    const r = withFrozenClock(() => derive(unansweredSince(7), { stage: "post_meeting" }));
+    expect(r.next_action_key).toBe("post_meeting_followup");
+    expect(r.action_reason_code).toBe("POST_MEETING_FOLLOWUP_DUE");
+  });
+
+  it("an active nurture cadence owns its lead until its own interval", () => {
+    // E sends `send_nurture_N` on the campaign's 7/14/30-day interval; a human
+    // prompt two days earlier would duplicate work the campaign will do itself.
+    const onCadence = metrics({
+      first_outbound_at: daysAgo(60),
+      last_inbound_at: daysAgo(30),
+      last_outbound_at: daysAgo(4),
+      nurture_outbound_count: 1,
+      last_nurture_outbound_at: daysAgo(4),
+    });
+    const S = engine.DEFAULT_CADENCE_SETTINGS;
+    const derived = withFrozenClock(() => engine.deriveAction(
+      "lead-q1", onCadence, "weekly", "engaged", false, false, 0, 0,
+      S.modes.fast, S.guardrails, S.stop_pause_rules, S.flows, "UTC", "fast", "outbound_prospecting",
+    ));
+    expect(derived.next_action_key).toBeNull();
+    // …and once the weekly interval is up, the nurture key wins on its own.
+    const due = { ...onCadence, last_nurture_outbound_at: daysAgo(8), last_outbound_at: daysAgo(8) };
+    expect(withFrozenClock(() => engine.deriveAction(
+      "lead-q1", due, "weekly", "engaged", false, false, 0, 0,
+      S.modes.fast, S.guardrails, S.stop_pause_rules, S.flows, "UTC", "fast", "outbound_prospecting",
+    )).next_action_key).toBe("send_nurture_2");
+  });
+
+  it("but re-engagement at 45 days IS still overtaken — that is the whole point", () => {
+    // The one deliberate overtake: a warm lead must not wait six weeks.
+    const r = withFrozenClock(() => derive(unansweredSince(10), { stage: "engaged" }));
+    expect(r.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+  });
+
+  it("an ordinary engaged lead is unaffected", () => {
+    expect(withFrozenClock(() => derive(unansweredSince(4), { stage: "engaged" })).next_action_key)
+      .toBe(FOLLOWUP_DUE_KEY);
+  });
+
+  it("the deferral reads the same constants the branches do", () => {
+    // A literal in two places would drift and the overtaking would come back.
+    expect(syncEngineSrc).toContain("POST_MEETING_FOLLOWUP_DAYS * DAY");
+    expect(syncEngineSrc).toContain("CLOSING_FOLLOWUP_DAYS * DAY");
+    expect(syncEngineSrc).toMatch(/stage === "post_meeting"\s*\?\s*POST_MEETING_FOLLOWUP_DAYS/);
   });
 });
