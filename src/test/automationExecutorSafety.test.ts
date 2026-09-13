@@ -616,7 +616,10 @@ describe("failClosedAndStarvation", () => {
     const pause = legacy.indexOf("if (execSettings.owner_automation_paused)");
     const branch = legacy.slice(pause, pause + 1800);
     expect(branch).toContain("if (!pausedOwnerFilterApplied)");
-    expect(branch).toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
+    // Was EXECUTOR_CRON_INTERVAL_MIN — deferring by exactly one tick put the row
+    // straight back in the next scan, so the paused set rotated through the page
+    // forever (Codex P1). The deferral must be materially longer than one tick.
+    expect(branch).toContain("PAUSED_FALLBACK_DEFER_MIN * 60 * 1000");
     // And when the exclusion IS applied, the lead is untouched so un-pausing
     // resumes on the next tick (the behaviour the docs promise).
     expect(branch).toContain("un-pausing resumes instantly");
@@ -700,7 +703,7 @@ describe("cappedScanStarvationSweep", () => {
     const branch = cold.slice(pause, pause + 1400);
     expect(branch).toContain("if (!pausedOwnerFilterApplied)");
     expect(branch).toContain('from("campaign_touch")');
-    expect(branch).toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
+    expect(branch).toContain("PAUSED_FALLBACK_DEFER_MIN * 60 * 1000");
   });
 
   it("WhatsApp no-reply scan: the lookback is bounded so answered threads age out", () => {
@@ -734,5 +737,72 @@ describe("cappedScanStarvationSweep", () => {
     expect(cap).toBeGreaterThan(channel);
     // ...and there is only ONE such check in the legacy loop.
     expect([...legacy.matchAll(/const dailyCap = await getDailyCapForOwner\(/g)].length).toBe(1);
+  });
+});
+
+// ── Codex round 5 ───────────────────────────────────────────────────────────
+describe("degradedPathCannotRotate", () => {
+  const legacy = legacySection();
+
+  it("the fallback deferral is many cron intervals, not one — with the margin computed", () => {
+    const tick = Number(src.match(/const EXECUTOR_CRON_INTERVAL_MIN = (\d+);/)![1]);
+    const deferExpr = src.match(/const PAUSED_FALLBACK_DEFER_MIN = ([^;]+);/)![1].trim();
+    // Parse the literal product rather than eval'ing source text.
+    const defer = deferExpr.split("*").reduce((acc, part) => {
+      const n = Number(part.trim());
+      expect(Number.isFinite(n), `PAUSED_FALLBACK_DEFER_MIN must stay a literal number or product, got "${deferExpr}"`).toBe(true);
+      return acc * n;
+    }, 1);
+
+    const ticks = defer / tick;
+    expect(ticks).toBeGreaterThan(1);          // one tick was the bug
+    expect(ticks).toBeGreaterThanOrEqual(24);  // today: 6h / 15min
+
+    // Sustained starvation needs P >= L x (D / T) paused rows simultaneously due.
+    const legacyLimit = 20;
+    const coldLimit = Number(src.match(/const COLD_DUE_SCAN_LIMIT = (\d+);/)![1]);
+    expect(legacyLimit * ticks).toBeGreaterThanOrEqual(480);
+    expect(coldLimit * ticks).toBeGreaterThanOrEqual(4800);
+    // The legacy page size the arithmetic assumes is the real one.
+    const scan = src.slice(src.indexOf("// Find eligible leads (existing automation email flow)"));
+    expect(scan.slice(0, scan.indexOf("const { data: eligibleLeads"))).toContain(`.limit(${legacyLimit})`);
+
+    // The arithmetic lives next to the constant so it can't rot silently.
+    expect(src).toContain("P >= L x (D / T)");
+    expect(src).toContain("P >= 480 legacy /  P >= 4,800 cold");
+  });
+
+  it("both degraded paths use the same constant — no second magic number", () => {
+    expect([...src.matchAll(/PAUSED_FALLBACK_DEFER_MIN \* 60 \* 1000/g)].length).toBe(2);
+    // The old one-interval deferral is gone from both.
+    expect(src).not.toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
+  });
+});
+
+describe("smsApprovedDraftSurvivesRetry", () => {
+  const legacy = legacySection();
+
+  it("a transient SMS opt-out failure restores the rep-approved draft, like the email floor", () => {
+    const smsBranch = legacy.slice(legacy.indexOf('if (resolvedChannel === "sms") {'));
+    const body = smsBranch.slice(0, smsBranch.indexOf("} else if (mailProvider"));
+    const guard = body.indexOf("if (smsOptOutUnreadable || smsOptOut.unsubscribed)");
+    expect(guard).toBeGreaterThan(-1);
+    const branch = body.slice(guard, body.indexOf("functions/v1/sms-send"));
+    // Permanent opt-out parks the lead; transient restores the draft and retries.
+    expect(branch).toContain("if (!smsOptOutUnreadable) {");
+    expect(branch).toContain("} else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {");
+    expect(branch).toContain('from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)');
+  });
+
+  it("the SMS restore is an exact mirror of the email late-floor restore", () => {
+    const restore = 'from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)';
+    // Exactly two: the email late floor and the SMS late opt-out guard.
+    expect([...legacy.matchAll(new RegExp(restore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))].length).toBe(2);
+    // Both sit on the TRANSIENT arm — a permanent block must not hand the draft
+    // back, or an opted-out lead keeps a live approved draft forever.
+    for (const m of legacy.matchAll(/} else if \(approvedDraft\?\.id && cachedDraft\?\.id === approvedDraft\.id\) \{/g)) {
+      const before = legacy.slice(Math.max(0, m.index! - 400), m.index!);
+      expect(before).toMatch(/if \(!transient\) \{|if \(!smsOptOutUnreadable\) \{/);
+    }
   });
 });

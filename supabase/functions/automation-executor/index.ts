@@ -57,6 +57,42 @@ const INTER_SEND_STAGGER_MS = 8_000;
 // window is already twice that mailbox's per-tick share — worth a look during the
 // pilot. Override with the VOLUME_ALERT_THRESHOLD secret.
 const EXECUTOR_CRON_INTERVAL_MIN = 15; // `*/15` in cron.job — keep in sync
+
+// ── Degraded-path deferral for paused rows (Codex P1) ────────────────────────
+// Used ONLY when the paused-owner prefilter could not be built (the list read
+// failed, or more owners are paused than one `not.in` can express). The main
+// path never defers — paused owners are simply absent from the scan — so an
+// un-pause still resumes on the very next tick.
+//
+// THE ARITHMETIC, because the previous value was one cron interval and that WAS
+// the bug: a row deferred by exactly one interval is due again on the very next
+// tick, so the paused set just rotates through the page forever.
+//
+// Let L = page limit, T = cron interval, D = this deferral, P = paused rows that
+// are simultaneously due. Rows come back at a steady rate of P x (T / D) per
+// tick, so paused rows can fill the page indefinitely only while
+//     P >= L x (D / T)
+//   old (D = T, 1 tick):   P >= 20 legacy  /  P >= 200 cold      <- the bug
+//   now (D = 6h, 24 ticks): P >= 480 legacy /  P >= 4,800 cold
+// There is also a one-off drain of ceil(P / L) ticks before the deferrals spread
+// out; at the new threshold that is the same 24 ticks, i.e. ~6h of degraded
+// service, not permanent starvation.
+//
+// Why 480 / 4,800 is out of reach in practice — this is a margin argument, not a
+// proof, and the prefilter (not this) is what actually removes the category:
+//   1. This path only runs when the prefilter failed. If it failed because
+//      workspace_profiles is unreadable, then every per-lead settings read fails
+//      too, so EVERY owner is paused (fail-closed, see executionSettings.ts) and
+//      nothing sends at all — there is no one left to starve.
+//   2. The residual case is >200 paused owners, who must between them also own
+//      480 (or 4,800) consented, action-due rows at the same moment.
+//   3. The cold scan is ordered by eligible_at ASC, so a deferred touch sorts
+//      BEHIND every currently-due touch; for cold, deferring at all — by any
+//      amount — already prevents the rotation. The 4,800 above is the
+//      order-blind worst case.
+// 6h also matches the deferral this file already uses for "needs a human to fix
+// it" refusals (no connected mailbox, no generated content).
+const PAUSED_FALLBACK_DEFER_MIN = 6 * 60;
 const VOLUME_ALERT_WINDOW_MIN = 15;
 // A trailing window of W minutes can straddle floor(W / interval) + 1 batches.
 const VOLUME_ALERT_MAX_BATCHES_IN_WINDOW =
@@ -609,11 +645,12 @@ serve(async (req) => {
           // Normally the lead is left untouched so un-pausing resumes instantly —
           // paused owners were already dropped from the scan above. But if that
           // exclusion could not be built this tick, this branch is the only thing
-          // between a paused owner and a permanently monopolised page, so defer
-          // by one cron interval to let the page drain.
+          // between a paused owner and a permanently monopolised page, so defer.
+          // PAUSED_FALLBACK_DEFER_MIN, not one cron interval: one interval puts
+          // the row back in the very next scan, which is a rotation, not a fix.
           if (!pausedOwnerFilterApplied) {
             await supabase.from("leads")
-              .update({ eligible_at: new Date(Date.now() + EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000).toISOString() })
+              .update({ eligible_at: new Date(Date.now() + PAUSED_FALLBACK_DEFER_MIN * 60 * 1000).toISOString() })
               .eq("id", lead.id);
           }
           skipped++;
@@ -1703,6 +1740,13 @@ serve(async (req) => {
             // email floor's terminal branch.
             if (!smsOptOutUnreadable) {
               await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            } else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {
+              // Retry path — EXACT mirror of the email late floor above. The
+              // approved draft was already flipped to "sent" when it was
+              // consumed, so without this the next tick finds no approved copy
+              // and regenerates the text via ai_task: the rep's own words,
+              // silently replaced by machine copy on a retry they never saw.
+              await supabase.from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id);
             }
             skipped++;
             continue;
@@ -2272,10 +2316,13 @@ serve(async (req) => {
             // tick — paused owners were already excluded from the scan above. If
             // that exclusion could not be built, this branch is all that stands
             // between a paused owner and a permanently monopolised page, so defer
-            // by one cron interval to let it drain.
+            // by PAUSED_FALLBACK_DEFER_MIN (see the constant for the arithmetic;
+            // one cron interval just rotates the same rows back in). The cold
+            // scan is ordered eligible_at ASC, so a deferred touch also sorts
+            // behind every currently-due one.
             if (!pausedOwnerFilterApplied) {
               await supabase.from("campaign_touch")
-                .update({ eligible_at: new Date(Date.now() + EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000).toISOString() })
+                .update({ eligible_at: new Date(Date.now() + PAUSED_FALLBACK_DEFER_MIN * 60 * 1000).toISOString() })
                 .eq("id", touch.id);
             }
             continue;
