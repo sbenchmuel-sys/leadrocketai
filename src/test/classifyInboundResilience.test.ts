@@ -23,8 +23,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  BACKLOG_EXHAUSTED_AT,
   classifyBacklogState,
-  summarizeBacklog,
   CLASSIFY_ATTEMPTS_KEY,
   CLASSIFY_BACKOFF_MINUTES,
   CLASSIFY_EXHAUSTED_KEY,
@@ -875,98 +875,116 @@ describe("exhaustion is visible in the run that causes it", () => {
 // batch straight back at a dependency that is already failing. Wrong in
 // the direction of the harmful action, on the common case.
 describe("an empty run says WHY it is empty", () => {
-  const PROBE_LIMIT = 5_000;
   const NOW = iso(T0);
   const soon = iso(T0 + 5 * MIN);
-  const later = iso(T0 + 45 * MIN);
-  const sum = (vals: (string | null)[]) => summarizeBacklog(vals, NOW, PROBE_LIMIT);
+  /** What the three count queries come back with. */
+  const probe = (exhausted: number, backed_off: number, next_retry_at: string | null = null) =>
+    ({ exhausted, backed_off, next_retry_at });
 
   it("a backlog inside its first backoff window is NOT dead", () => {
-    // The exact scenario: every row failed once, all are five minutes
-    // out. This must not fire the alarm and must not mention recovery.
-    const b = sum(Array.from({ length: 1346 }, () => soon));
-
-    expect(b.exhausted).toBe(0);
-    expect(b.backed_off).toBe(1346);
-    expect(b.next_retry_at).toBe(soon);
+    // The scenario that motivated the split: every row failed once and
+    // is five minutes out. Must not fire the alarm, must not mention
+    // recovery — running it here would delete the backoff protecting a
+    // dependency that is already failing.
+    const b = probe(0, 1346, soon);
     expect(classifyBacklogState(0, b)).toBe("backed_off");
     expect(classifyBacklogState(0, b)).not.toBe("exhausted");
+    expect(b.next_retry_at).toBe(soon);
   });
 
   it("a genuinely exhausted backlog IS dead", () => {
-    const b = sum(Array.from({ length: 1346 }, () => CLASSIFY_NEVER_ISO));
-
-    expect(b.exhausted).toBe(1346);
-    expect(b.backed_off).toBe(0);
-    expect(b.next_retry_at).toBeNull(); // nothing is coming back on its own
+    const b = probe(1346, 0, null);
     expect(classifyBacklogState(0, b)).toBe("exhausted");
+    expect(b.next_retry_at).toBeNull(); // nothing resumes on its own
   });
 
   it("a mixed backlog reports both, and the alarm follows the dead half", () => {
-    const b = sum([
-      ...Array.from({ length: 40 }, () => CLASSIFY_NEVER_ISO),
-      ...Array.from({ length: 200 }, () => later),
-      ...Array.from({ length: 100 }, () => soon),
-    ]);
-
-    expect(b.exhausted).toBe(40);
-    expect(b.backed_off).toBe(300);
-    expect(b.next_retry_at).toBe(soon); // soonest, not just the first seen
-    // Exhaustion wins: that half needs a human, and the backed-off half
-    // is still visible in the breakdown rather than being masked.
+    const b = probe(40, 300, soon);
     expect(classifyBacklogState(0, b)).toBe("exhausted");
+    expect(b.backed_off).toBe(300); // not masked by the alarm
   });
 
   it("the backed-off half alone never fires the alarm", () => {
-    // Same 300 backed-off rows, minus the exhausted ones.
-    const b = sum([
-      ...Array.from({ length: 200 }, () => later),
-      ...Array.from({ length: 100 }, () => soon),
-    ]);
-    expect(classifyBacklogState(0, b)).toBe("backed_off");
+    expect(classifyBacklogState(0, probe(0, 300, soon))).toBe("backed_off");
   });
 
   it("a drained queue is still drained", () => {
-    const b = sum([]);
-    expect(b).toMatchObject({ exhausted: 0, backed_off: 0, eligible: 0 });
-    expect(b.next_retry_at).toBeNull();
-    expect(classifyBacklogState(0, b)).toBe("drained");
+    expect(classifyBacklogState(0, probe(0, 0))).toBe("drained");
   });
 
   it("any work at all outranks the backlog state", () => {
-    const b = sum(Array.from({ length: 1346 }, () => CLASSIFY_NEVER_ISO));
-    expect(classifyBacklogState(15, b)).toBe("working");
-    expect(classifyBacklogState(1, b)).toBe("working");
+    expect(classifyBacklogState(15, probe(1346, 0))).toBe("working");
+    expect(classifyBacklogState(1, probe(0, 0))).toBe("working");
   });
 
-  it("counts a row whose window has already passed as eligible, not parked", () => {
-    // Defensive: such a row should have been fetched. If it shows up
-    // here it is the server-side-filter leak, not a dead backlog — and
-    // it must not be reported as exhausted.
-    const b = sum([iso(T0 - MIN), null]);
-    expect(b.eligible).toBe(2);
-    expect(b.exhausted).toBe(0);
-    expect(classifyBacklogState(0, b)).toBe("backed_off");
+  // ── The cap. This is the finding. ────────────────────────────────
+  it("is exact past any response cap, and never infers from row count", () => {
+    // PostgREST's hosted default caps a response at 1,000 rows and this
+    // project sets no max_rows override. Production already has 1,346
+    // outstanding. A row-scanning probe would have answered from an
+    // arbitrary 74% — and since nothing ordered it, the missing 26%
+    // could have been the exhausted ones, leaving the alarm silent on
+    // the day it should fire.
+    const CAP = 1000;
+    const beyondCap = probe(1346, 0);
+    expect(beyondCap.exhausted).toBeGreaterThan(CAP);
+    expect(classifyBacklogState(0, beyondCap)).toBe("exhausted");
+
+    // Exhaustion hiding behind the cap in a large mixed backlog.
+    const hidden = probe(1, 20_000, soon);
+    expect(hidden.backed_off).toBeGreaterThan(CAP);
+    expect(classifyBacklogState(0, hidden)).toBe("exhausted");
+
+    // The state depends only on the counts — there is no row list to
+    // be short, and no truncation concept left to get wrong.
+    expect(Object.keys(probe(1, 2))).toEqual([
+      "exhausted",
+      "backed_off",
+      "next_retry_at",
+    ]);
   });
 
-  it("flags a truncated probe so the counts read as lower bounds", () => {
-    expect(sum(Array.from({ length: 10 }, () => soon)).truncated).toBe(false);
-    expect(
-      summarizeBacklog(Array.from({ length: 4 }, () => soon), NOW, 4).truncated,
-    ).toBe(true);
-  });
-
-  it("probes the backlog ONLY on an idle run", () => {
-    // It runs every minute forever, so the probe must not ride along on
-    // runs that already have work to do.
+  it("uses exact counts, not a row scan, and left no stale field behind", () => {
     const emptyBranch = src.slice(
       src.indexOf("if (batch.length === 0) {"),
       src.indexOf("// Single bulk lead-context fetch"),
     );
-    expect(emptyBranch).toContain("BACKLOG_PROBE_LIMIT");
-    expect(emptyBranch).toContain("summarizeBacklog(");
-    // …and nowhere else in the function.
-    expect(src.match(/summarizeBacklog\(/g) ?? []).toHaveLength(1);
+    // Three head-counts / single-row queries; no bulk row fetch.
+    expect(emptyBranch.match(/count: "exact", head: true/g) ?? []).toHaveLength(2);
+    expect(emptyBranch).toContain(".limit(1)");
+    expect(emptyBranch).not.toMatch(/BACKLOG_PROBE_LIMIT/);
+    // The response shape QA and the staging gate read must not carry a
+    // field that no longer means anything. (Match the FIELD, not the
+    // word — "truncated" appears in unrelated prose about JSON parsing
+    // and batch budgets.)
+    const mod = readFileSync(
+      path.join(ROOT, "supabase/functions/_shared/classifyRetry.ts"),
+      "utf8",
+    );
+    for (const text of [src, mod]) {
+      expect(text).not.toMatch(/\btruncated\s*[:?]/);
+      expect(text).not.toContain("summarizeBacklog");
+      expect(text).not.toContain("backlog_parked");
+    }
+  });
+
+  it("keeps the alarm query independent of the informational ones", () => {
+    const emptyBranch = src.slice(
+      src.indexOf("if (batch.length === 0) {"),
+      src.indexOf("// Single bulk lead-context fetch"),
+    );
+    // Only the soonest-retry query is ordered, and it is the one whose
+    // failure cannot suppress the alarm.
+    expect(emptyBranch.match(/\.order\(/g) ?? []).toHaveLength(1);
+    const alarmQuery = emptyBranch.slice(
+      emptyBranch.indexOf("const { count: exhaustedCount"),
+      emptyBranch.indexOf("// (2)"),
+    );
+    expect(alarmQuery).toContain("BACKLOG_EXHAUSTED_AT");
+    expect(alarmQuery).not.toContain(".order(");
+    expect(alarmQuery).not.toContain(".limit(");
+    // A partial probe failure says which part failed.
+    expect(emptyBranch).toContain("exhausted_ok: !exhaustedErr");
   });
 
   it("matches log level to severity: warn to act, info to wait", () => {
@@ -974,13 +992,9 @@ describe("an empty run says WHY it is empty", () => {
       src.indexOf("if (batch.length === 0) {"),
       src.indexOf("// Single bulk lead-context fetch"),
     );
-    // Exactly one warn in the branch, and it is the dead-backlog one.
     expect(emptyBranch).toContain('logger.warn("classify_inbound_backlog_exhausted"');
     expect(emptyBranch).toContain('logger.info("classify_inbound_backlog_backed_off"');
-    // The waiting state must never be raised to warn, or it stops being
-    // believed on the day it means something.
     expect(emptyBranch).not.toMatch(/logger\.warn\("classify_inbound_backlog_backed_off"/);
-    expect(emptyBranch).not.toContain("all_parked");
   });
 
   it("reports the breakdown on the response so it is visible without logs", () => {
@@ -991,11 +1005,14 @@ describe("an empty run says WHY it is empty", () => {
   });
 
   it("survives a failed probe without manufacturing an alarm", () => {
-    // A probe that errors must degrade to `drained` — the run itself did
-    // nothing wrong, and a broken probe must not tell anyone to act.
+    // A probe that errors degrades to zeros, i.e. `drained` — the run
+    // did nothing wrong and a broken probe must not tell anyone to act.
     expect(src).toContain("classify_inbound_backlog_probe_failed");
-    expect(src).toContain("(outstanding ?? [])");
-    expect(sum([])).toMatchObject({ exhausted: 0 });
-    expect(classifyBacklogState(0, sum([]))).toBe("drained");
+    expect(src).toContain("exhaustedCount ?? 0");
+    expect(classifyBacklogState(0, probe(0, 0))).toBe("drained");
+  });
+
+  it("pins what `exhausted` means to the sentinel the writer uses", () => {
+    expect(BACKLOG_EXHAUSTED_AT).toBe(CLASSIFY_NEVER_ISO);
   });
 });

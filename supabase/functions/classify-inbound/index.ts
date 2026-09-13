@@ -91,6 +91,7 @@ import {
   CLASSIFY_AI_TIMEOUT_MS,
   CLASSIFY_OBSERVED_MS_PER_ROW,
   CLASSIFY_RUN_BUDGET_MS,
+  BACKLOG_EXHAUSTED_AT,
   classifyBacklogState,
   CLASSIFY_NEXT_AT_KEY,
   classifyEligibilityFilter,
@@ -99,7 +100,6 @@ import {
   markClassifyFailure,
   recordFailedAttempt,
   selectClassifiable,
-  summarizeBacklog,
 } from "../_shared/classifyRetry.ts";
 
 const corsHeaders = {
@@ -150,16 +150,6 @@ const BATCH_SIZE = 15;
 // fix the server-side filter, do not raise this number.
 const FETCH_LIMIT = BATCH_SIZE * 2;
 
-// Row cap on the idle-run backlog probe. The probe selects ONE short
-// JSON path per outstanding row, so this is a few tens of KB at the
-// pilot's scale — and it is free in the healthy case, where there are
-// no outstanding rows to return. ponytail: a cap, not a count query,
-// because one query has to yield three facts (exhausted vs backed off,
-// and when work resumes). Ceiling: past this many outstanding rows the
-// breakdown is a lower bound and reports `truncated: true`; the STATE
-// stays correct either way, since one exhausted row in the sample is
-// enough to warrant the alarm.
-const BACKLOG_PROBE_LIMIT = 5_000;
 
 // Classifier identifier written to `intent_version`. Bump the suffix
 // when the prompt or model selection changes in a way that should
@@ -668,30 +658,67 @@ Deno.serve(async (req) => {
       // operator to run the recovery statement then would DELETE that
       // backoff and hurl the whole batch back at a failing dependency.
       //
-      // One query on idle runs ONLY (never on a run that has work),
-      // selecting a single JSON path per outstanding row, which is what
-      // lets it answer all three questions at once: how many gave up,
-      // how many are merely waiting, and when the waiting ones resume.
-      // Free in the healthy case — a drained queue returns no rows.
-      const { data: outstanding, error: backlogErr } = await admin
+      // COUNTS, not rows. PostgREST caps a response (hosted default
+      // 1,000 rows; no max_rows override in this project), so scanning
+      // rows would have answered from an arbitrary subset at exactly the
+      // scale this alarm exists for — and could have missed the
+      // exhausted ones entirely. A count is exact whatever the cap.
+      //
+      // Idle runs ONLY — never on a run that has work. Three small
+      // queries, each returning a number or a single row.
+      const outstanding = admin
+        .from("lead_timeline_items")
+        .select("id", { count: "exact", head: true })
+        .eq("event_type", "email_inbound")
+        .is("intent", null);
+
+      // (1) The number that fires the alarm. No ordering, no row cap in
+      // play, and independent of the other two — if they fail, this one
+      // still decides correctly.
+      const { count: exhaustedCount, error: exhaustedErr } = await outstanding
+        .eq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT);
+
+      // (2) Backed off = parked but not given up.
+      const { count: backedOffCount, error: backedOffErr } = await admin
+        .from("lead_timeline_items")
+        .select("id", { count: "exact", head: true })
+        .eq("event_type", "email_inbound")
+        .is("intent", null)
+        .gt(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, nowIso)
+        .neq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT);
+
+      // (3) When work resumes. Purely informational, and the ONLY query
+      // here that needs an ordering — so if ordering on a JSON path is
+      // unsupported, the alarm above is unaffected and only this goes
+      // null.
+      const { data: soonest, error: soonestErr } = await admin
         .from("lead_timeline_items")
         .select(`next_at:metadata_json->>${CLASSIFY_NEXT_AT_KEY}`)
         .eq("event_type", "email_inbound")
         .is("intent", null)
-        .limit(BACKLOG_PROBE_LIMIT);
-      if (backlogErr) {
-        // Degrade to "drained": the run itself did nothing wrong, and a
-        // failed probe must not manufacture an alarm.
+        .gt(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, nowIso)
+        .neq(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, BACKLOG_EXHAUSTED_AT)
+        .order(`metadata_json->>${CLASSIFY_NEXT_AT_KEY}`, { ascending: true })
+        .limit(1);
+
+      const probeErr = exhaustedErr ?? backedOffErr ?? soonestErr;
+      if (probeErr) {
+        // A failed probe must not manufacture an alarm — but it must
+        // not hide one either, so say which part failed.
         logger.warn("classify_inbound_backlog_probe_failed", {
-          error: backlogErr.message,
+          error: probeErr.message,
+          exhausted_ok: !exhaustedErr,
+          backed_off_ok: !backedOffErr,
+          soonest_ok: !soonestErr,
         });
       }
 
-      const backlog = summarizeBacklog(
-        ((outstanding ?? []) as { next_at: string | null }[]).map((r) => r.next_at),
-        nowIso,
-        BACKLOG_PROBE_LIMIT,
-      );
+      const backlog = {
+        exhausted: exhaustedCount ?? 0,
+        backed_off: backedOffCount ?? 0,
+        next_retry_at:
+          ((soonest ?? []) as { next_at: string | null }[])[0]?.next_at ?? null,
+      };
       counts.backlog_exhausted = backlog.exhausted;
       counts.backlog_backed_off = backlog.backed_off;
 

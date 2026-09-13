@@ -403,68 +403,38 @@ export interface BacklogBreakdown {
   exhausted: number;
   /** Inside a retry window; will resume by itself. */
   backed_off: number;
-  /**
-   * Eligible right now yet not selected. Should be 0 by construction —
-   * an eligible row would have been fetched. Non-zero is the same
-   * server-side-filter leak the run summary warns about.
-   */
-  eligible: number;
   /** Soonest `classify_next_at` among backed-off rows — when work resumes. */
   next_retry_at: string | null;
-  /** True when the probe hit its row cap and the counts are lower bounds. */
-  truncated: boolean;
 }
+
+// The probe takes these as COUNTS from the server, never by scanning
+// rows. An earlier revision selected one JSON path per outstanding row
+// and inferred truncation from `returned >= requested` — which only
+// detects the SERVER honouring our limit, and cannot detect the server
+// imposing its own. PostgREST's hosted default caps a response at 1,000
+// rows and this project sets no `max_rows` override, so at the 1,346
+// rows the alarm was built for it would have answered confidently from
+// an arbitrary 74% of the data. Nothing ordered the query, so the
+// missing 26% could have been the exhausted ones: the alarm stays
+// silent on the day it should fire, which is the one direction that
+// matters. Counts are exact whatever the cap, so the truncation concept
+// is gone rather than merely made more accurate.
 
 /**
- * Bucket the outstanding rows' `classify_next_at` values.
- *
- * Takes the raw values rather than rows so the probe can select just
- * that one JSON path — the whole backlog breakdown in one query, and
- * near-free in the healthy case where there are no outstanding rows at
- * all.
+ * Predicate values the probe's count queries filter on. Exported so the
+ * queries and this module cannot drift on what "exhausted" means.
  */
-export function summarizeBacklog(
-  nextAtValues: readonly (string | null | undefined)[],
-  nowIso: string,
-  probeLimit: number,
-): BacklogBreakdown {
-  let exhausted = 0;
-  let backedOff = 0;
-  let eligible = 0;
-  let soonest: string | null = null;
-
-  for (const raw of nextAtValues) {
-    const next = typeof raw === "string" && raw.length > 0 ? raw : null;
-    if (next === null || next <= nowIso) {
-      eligible++;
-      continue;
-    }
-    if (next === CLASSIFY_NEVER_ISO) {
-      exhausted++;
-      continue;
-    }
-    backedOff++;
-    if (soonest === null || next < soonest) soonest = next;
-  }
-
-  return {
-    exhausted,
-    backed_off: backedOff,
-    eligible,
-    next_retry_at: soonest,
-    truncated: nextAtValues.length >= probeLimit,
-  };
-}
+export const BACKLOG_EXHAUSTED_AT = CLASSIFY_NEVER_ISO;
 
 /** Which of the three an idle run is in. `selected > 0` means neither. */
 export function classifyBacklogState(
   selected: number,
-  breakdown: Pick<BacklogBreakdown, "exhausted" | "backed_off" | "eligible">,
+  breakdown: Pick<BacklogBreakdown, "exhausted" | "backed_off">,
 ): ClassifyBacklogState {
   if (selected > 0) return "working";
   // Exhaustion wins a mixed backlog: it is the half that needs a human.
   if (breakdown.exhausted > 0) return "exhausted";
-  if (breakdown.backed_off > 0 || breakdown.eligible > 0) return "backed_off";
+  if (breakdown.backed_off > 0) return "backed_off";
   return "drained";
 }
 
