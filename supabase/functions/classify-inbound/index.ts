@@ -91,6 +91,7 @@ import {
   CLASSIFY_AI_TIMEOUT_MS,
   CLASSIFY_OBSERVED_MS_PER_ROW,
   CLASSIFY_RUN_BUDGET_MS,
+  classifyBacklogState,
   classifyEligibilityFilter,
   isRunBudgetSpent,
   stripClassifyMarks,
@@ -239,8 +240,22 @@ interface BatchCounts {
    * never incremented anywhere.)
    */
   parked: number;
-  /** Subset of `parked` — rows that hit the retry ceiling for good. */
+  /**
+   * Rows that hit the retry ceiling ON THIS RUN — counted when the
+   * final failure mark is durably written, not from the pre-loop
+   * candidate snapshot (a row is not exhausted yet when that is taken,
+   * and is invisible to it forever after). Non-zero here is the signal
+   * that a backlog is starting to give up.
+   */
   exhausted: number;
+  /**
+   * Unclassified inbound rows still outstanding when a run finds NO
+   * eligible candidates — i.e. every one of them is parked or
+   * exhausted. Only probed on an otherwise-idle run; 0 on a working
+   * run. Non-zero means the backlog is dead and needs the MANUAL
+   * RECOVERY statement in `_shared/classifyRetry.ts`.
+   */
+  backlog_parked: number;
   /**
    * Rows actually worked this run: `min(fetched - parked, BATCH_SIZE)`.
    *
@@ -487,6 +502,7 @@ Deno.serve(async (req) => {
     worked: 0,
     unreached: 0,
     budget_stopped: false,
+    backlog_parked: 0,
     no_signal: 0,
     deterministic: 0,
   };
@@ -521,20 +537,20 @@ Deno.serve(async (req) => {
     //
     // `updated_at` is deliberately NOT touched: a failed read of an
     // email is not activity on the lead.
+    const mark = markClassifyFailure(
+      row.metadata_json,
+      reason,
+      new Date().toISOString(),
+    );
     const markError = await recordFailedAttempt(
       counts,
       failureReasons,
       reason,
+      mark,
       () =>
         admin
           .from("lead_timeline_items")
-          .update({
-            metadata_json: markClassifyFailure(
-              row.metadata_json,
-              reason,
-              new Date().toISOString(),
-            ),
-          })
+          .update({ metadata_json: mark })
           .eq("id", row.id)
           .is("intent", null),
     );
@@ -601,14 +617,15 @@ Deno.serve(async (req) => {
     }
 
     const fetched = (rows ?? []) as TimelineRow[];
-    const { selected: batch, parked, exhausted } = selectClassifiable(
-      fetched,
-      nowIso,
-      BATCH_SIZE,
-    );
+    const { selected: batch, parked, exhausted: parkedExhausted } =
+      selectClassifiable(fetched, nowIso, BATCH_SIZE);
     counts.fetched = fetched.length;
     counts.parked = parked;
-    counts.exhausted = exhausted;
+    // counts.exhausted is NOT set from this snapshot. A row becomes
+    // exhausted during the loop, after the snapshot is taken, and from
+    // the next tick the server-side filter hides it from the candidate
+    // set — so a snapshot-derived count is structurally always 0.
+    // recordFailedAttempt increments it when the final mark lands.
     // Counted DOWN as rows are worked, so it stays truthful even if the
     // outer catch fires mid-batch (where a post-loop tally would read 0).
     counts.unreached = batch.length;
@@ -618,17 +635,51 @@ Deno.serve(async (req) => {
       // The server-side predicate should have made this impossible.
       logger.warn("classify_inbound_server_backoff_filter_leaked", {
         parked,
-        exhausted,
+        parked_exhausted: parkedExhausted,
         fetched: fetched.length,
       });
     }
 
     if (batch.length === 0) {
-      logger.info("classify_inbound_empty_batch", {
-        duration_ms: Date.now() - startedAt,
-      });
+      // "Nothing to do" and "everything is parked" produced identical
+      // output until now — which after a long outage are the two states
+      // an operator most needs to tell apart. One HEAD count, on idle
+      // runs ONLY (never on a run that has work), over the same
+      // predicate as the candidate query minus the eligibility clause:
+      // if nothing is eligible yet unclassified rows remain, then by
+      // definition every one of them is parked or exhausted.
+      const { count, error: backlogErr } = await admin
+        .from("lead_timeline_items")
+        .select("id", { count: "exact", head: true })
+        .eq("event_type", "email_inbound")
+        .is("intent", null);
+      if (backlogErr) {
+        logger.warn("classify_inbound_backlog_probe_failed", {
+          error: backlogErr.message,
+        });
+      }
+      counts.backlog_parked = count ?? 0;
+
+      const state = classifyBacklogState(batch.length, counts.backlog_parked);
+      if (state === "all_parked") {
+        // The one line that says "this backlog is dead, run the manual
+        // recovery statement in _shared/classifyRetry.ts".
+        logger.warn("classify_inbound_backlog_all_parked", {
+          backlog_parked: counts.backlog_parked,
+          duration_ms: Date.now() - startedAt,
+        });
+      } else {
+        logger.info("classify_inbound_empty_batch", {
+          duration_ms: Date.now() - startedAt,
+        });
+      }
       return new Response(
-        JSON.stringify({ ok: true, ...counts, duration_ms: Date.now() - startedAt }),
+        JSON.stringify({
+          ok: true,
+          ...counts,
+          backlog_state: state,
+          duration_ms: Date.now() - startedAt,
+        }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

@@ -336,21 +336,53 @@ export function markClassifyFailure(
  * worked, it did fail) but carries no mark, so it comes back as an
  * ordinary unmarked candidate on the very next tick — no backoff, which
  * is the original freeze condition and why the caller logs it loudly.
+ *
+ * `mark` is the metadata this attempt is about to persist. Exhaustion
+ * is counted HERE, at the moment the final mark is written, because it
+ * cannot be counted anywhere else: the candidate set is snapshotted
+ * before the loop, a row only becomes exhausted during it, and from the
+ * next tick the server-side filter hides it from the candidate set
+ * entirely. Counting it off the snapshot makes the number structurally
+ * always 0 — which is how a permanently parked backlog would look
+ * exactly like a drained one.
  */
 export async function recordFailedAttempt(
-  counts: { failed: number },
+  counts: { failed: number; exhausted: number },
   reasons: Record<string, number>,
   reason: ClassifyFailureReason,
+  mark: Record<string, unknown>,
   write: () => PromiseLike<{ error: { message: string } | null }>,
 ): Promise<string | null> {
   counts.failed++;
   reasons[reason] = (reasons[reason] ?? 0) + 1;
   try {
     const { error } = await write();
-    return error ? error.message : null;
+    if (error) return error.message;
+    // Only once it is durably on the row. An unwritten mark means the
+    // row is not actually exhausted in the database.
+    if (isClassifyExhausted(mark)) counts.exhausted++;
+    return null;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
+}
+
+/**
+ * What an otherwise-empty run means.
+ *
+ * "No candidates" has two very different causes and, until now, one
+ * output. `drained` is the healthy steady state. `all_parked` means
+ * every remaining inbound is sitting behind a backoff or has given up
+ * — the state that needs the MANUAL RECOVERY statement above, and the
+ * one an operator would never think to look for if it reported the
+ * same "nothing to do" as a healthy queue.
+ */
+export function classifyBacklogState(
+  selected: number,
+  unclassifiedRemaining: number,
+): "working" | "drained" | "all_parked" {
+  if (selected > 0) return "working";
+  return unclassifiedRemaining > 0 ? "all_parked" : "drained";
 }
 
 /**

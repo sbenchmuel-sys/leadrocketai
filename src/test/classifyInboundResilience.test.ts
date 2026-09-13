@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  classifyBacklogState,
   CLASSIFY_ATTEMPTS_KEY,
   CLASSIFY_BACKOFF_MINUTES,
   CLASSIFY_EXHAUSTED_KEY,
@@ -591,12 +592,17 @@ describe("a run stops on the clock instead of being killed", () => {
 // red. Two reviewers signed off on that invariant; it took a third
 // reader to break it in a paragraph.
 describe("a failing failure-write cannot double-count the row", () => {
-  const freshTally = () => ({ counts: { failed: 0 }, reasons: {} as Record<string, number> });
+  const freshTally = () => ({
+    counts: { failed: 0, exhausted: 0 },
+    reasons: {} as Record<string, number>,
+  });
+  /** A mark for a row that still has retries left. */
+  const liveMark = () => markClassifyFailure(null, "ai_http_402", iso(T0));
 
   it("does not throw when the write rejects", async () => {
     const { counts, reasons } = freshTally();
     await expect(
-      recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+      recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
         Promise.reject(new Error("network down")),
       ),
     ).resolves.toBe("network down");
@@ -604,7 +610,7 @@ describe("a failing failure-write cannot double-count the row", () => {
 
   it("books the row exactly once when the write rejects", async () => {
     const { counts, reasons } = freshTally();
-    const err = await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+    const err = await recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
       Promise.reject(new Error("network down")),
     );
     expect(err).toBe("network down");
@@ -614,7 +620,7 @@ describe("a failing failure-write cannot double-count the row", () => {
 
   it("books it once when the write returns an error object too", async () => {
     const { counts, reasons } = freshTally();
-    const err = await recordFailedAttempt(counts, reasons, "ai_timeout", () =>
+    const err = await recordFailedAttempt(counts, reasons, "ai_timeout", liveMark(), () =>
       Promise.resolve({ error: { message: "row locked" } }),
     );
     expect(err).toBe("row locked");
@@ -626,20 +632,20 @@ describe("a failing failure-write cannot double-count the row", () => {
     // Drive the real loop shape: worked++, give up on the row, and —
     // because failRow can no longer reject — the per-row catch never
     // fires, so the row is not booked a second time.
-    const counts = { worked: 0, classified: 0, failed: 0 };
+    const counts = { worked: 0, classified: 0, failed: 0, exhausted: 0 };
     const reasons: Record<string, number> = {};
 
     for (let i = 0; i < 3; i++) {
       counts.worked++;
       try {
         // Every one of these rows fails, and every mark write rejects.
-        await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+        await recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
           Promise.reject(new Error("network down")),
         );
       } catch {
         // The per-row catch. Must never be reached from the give-up
         // path — if it is, it books the row again and the sum breaks.
-        await recordFailedAttempt(counts, reasons, "unexpected_error", () =>
+        await recordFailedAttempt(counts, reasons, "unexpected_error", liveMark(), () =>
           Promise.resolve({ error: null }),
         );
       }
@@ -657,7 +663,7 @@ describe("a failing failure-write cannot double-count the row", () => {
     // back. That is deliberate (and why the caller logs it loudly).
     const { counts, reasons } = freshTally();
     const r = row("unmarkable", null);
-    await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+    await recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
       Promise.reject(new Error("network down")),
     );
 
@@ -769,5 +775,127 @@ describe("manual recovery unparks an exhausted row", () => {
   it("no longer tells the operator that clearing one field is enough", () => {
     expect(mod).not.toMatch(/operator to clear `classify_exhausted_at`/);
     expect(mod).toContain("Clearing `classify_exhausted_at` on its own does nothing.");
+  });
+});
+
+// ── 10. A dead backlog must announce itself ────────────────────────
+//
+// Codex P2. `exhausted` was computed from the pre-loop candidate
+// snapshot, so it could never be non-zero: a row is not exhausted yet
+// when the snapshot is taken, and from the next tick the server-side
+// filter hides it from the candidate set entirely. The one number that
+// would tell an operator "this backlog is dead, run the recovery
+// statement" was structurally always 0 — and once everything exhausted,
+// the run reported an empty batch, i.e. the same output as a healthy
+// drained queue. That is this unit's own failure mode: a job reporting
+// "nothing to do" while sitting on a dead backlog.
+describe("exhaustion is visible in the run that causes it", () => {
+  const tally = () => ({
+    counts: { failed: 0, exhausted: 0 },
+    reasons: {} as Record<string, number>,
+  });
+
+  /** Metadata one failure short of the ceiling. */
+  const oneShortOfCeiling = () => {
+    let meta: Record<string, unknown> | null = null;
+    for (let n = 0; n < MAX_CLASSIFY_ATTEMPTS - 1; n++) {
+      meta = markClassifyFailure(meta, "ai_http_402", iso(T0));
+    }
+    return meta!;
+  };
+
+  it("counts the row on the run where its FINAL mark is written", () => {
+    const { counts, reasons } = tally();
+    const mark = markClassifyFailure(oneShortOfCeiling(), "ai_http_402", iso(T0));
+    expect(isClassifyExhausted(mark)).toBe(true);
+
+    return recordFailedAttempt(counts, reasons, "ai_http_402", mark, () =>
+      Promise.resolve({ error: null }),
+    ).then(() => {
+      expect(counts.exhausted).toBe(1);
+      expect(counts.failed).toBe(1);
+    });
+  });
+
+  it("does not count a row that still has retries left", async () => {
+    const { counts, reasons } = tally();
+    const mark = markClassifyFailure(null, "ai_http_402", iso(T0));
+    expect(isClassifyExhausted(mark)).toBe(false);
+
+    await recordFailedAttempt(counts, reasons, "ai_http_402", mark, () =>
+      Promise.resolve({ error: null }),
+    );
+    expect(counts.exhausted).toBe(0);
+    expect(counts.failed).toBe(1);
+  });
+
+  // The mark says exhausted, but the write did not land — so the row is
+  // NOT exhausted in the database and must not be reported as such.
+  // BOTH failure shapes matter: supabase-js normally RETURNS `{ error }`
+  // and only throws on a transport failure, so testing one covers half
+  // the branch. (Caught by mutation testing: an early-return that
+  // counted on the `{ error }` path slipped past a reject-only test.)
+  it.each([
+    ["the write rejects", () => Promise.reject(new Error("network down"))],
+    ["the write returns an error", () => Promise.resolve({ error: { message: "row locked" } })],
+  ])("does not count exhaustion the database never saw — %s", async (_label, write) => {
+    const { counts, reasons } = tally();
+    const mark = markClassifyFailure(oneShortOfCeiling(), "ai_http_402", iso(T0));
+    expect(isClassifyExhausted(mark)).toBe(true);
+
+    await recordFailedAttempt(counts, reasons, "ai_http_402", mark, write);
+    expect(counts.failed).toBe(1);
+    expect(counts.exhausted).toBe(0);
+  });
+
+  it("a whole batch giving up reports a non-zero exhausted", async () => {
+    // The outage end-state, driven: every row on its last attempt.
+    const { counts, reasons } = tally();
+    for (let i = 0; i < BATCH_SIZE; i++) {
+      const mark = markClassifyFailure(oneShortOfCeiling(), "ai_http_402", iso(T0));
+      await recordFailedAttempt(counts, reasons, "ai_http_402", mark, () =>
+        Promise.resolve({ error: null }),
+      );
+    }
+    expect(counts.exhausted).toBe(BATCH_SIZE);
+    expect(counts.failed).toBe(BATCH_SIZE);
+  });
+});
+
+describe("an empty run says WHY it is empty", () => {
+  it("tells a drained queue from a fully parked one", () => {
+    // Healthy steady state: nothing selected, nothing outstanding.
+    expect(classifyBacklogState(0, 0)).toBe("drained");
+    // The dead backlog: nothing eligible, but rows still unclassified —
+    // so by definition every one of them is parked or exhausted.
+    expect(classifyBacklogState(0, 1346)).toBe("all_parked");
+    // Any work at all means neither.
+    expect(classifyBacklogState(15, 1346)).toBe("working");
+    expect(classifyBacklogState(1, 0)).toBe("working");
+  });
+
+  it("probes the backlog ONLY on an idle run", () => {
+    // It runs every minute forever, so the count must not ride along on
+    // runs that already have work to do.
+    const emptyBranch = src.slice(
+      src.indexOf("if (batch.length === 0) {"),
+      src.indexOf("// Single bulk lead-context fetch"),
+    );
+    expect(emptyBranch).toContain('{ count: "exact", head: true }');
+    expect(emptyBranch).toContain("classify_inbound_backlog_all_parked");
+    // …and nowhere else in the function.
+    expect(src.match(/count: "exact"/g) ?? []).toHaveLength(1);
+  });
+
+  it("reports the state on the response so it is visible without logs", () => {
+    expect(src).toContain("backlog_state: state,");
+    expect(src).toContain("counts.backlog_parked = count ?? 0;");
+  });
+
+  it("survives a failed probe without failing the run", () => {
+    // A backlog probe that errors must degrade to `drained`, not throw
+    // — the run itself did nothing wrong.
+    expect(src).toContain("classify_inbound_backlog_probe_failed");
+    expect(src).toContain("count ?? 0");
   });
 });
