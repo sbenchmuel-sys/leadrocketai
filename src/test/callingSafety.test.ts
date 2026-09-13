@@ -95,6 +95,58 @@ describe("C1 — outbound call safety", () => {
     expect(src).toMatch(/if \(!isValid\)[\s\S]{0,400}status:\s*403/);
   });
 
+  // P1: a user removed from the workspace keeps their auth account and their
+  // rep_profiles row (with its twilio_phone_number), and twilio-voice-token
+  // issues a Voice token to any authenticated user. Guarding on the caller ID
+  // alone therefore let them dial out on the workspace's Twilio account — and
+  // with resolvedWorkspaceId null the call_sessions insert was skipped, so the
+  // call was unbilled, unlogged and invisible to the admin who removed them.
+  //
+  // Source-text guard, not behavioural: twilio-voice-inbound is a Deno module
+  // vitest cannot import. The behaviour of the helper it calls is executed by
+  // supabase/functions/_shared/callSafety.test.ts in the Deno suite.
+  it("removedUserCannotDial — outbound needs a membership AND a caller ID", () => {
+    const src = stripComments(voiceInbound());
+
+    // The guard runs on the browser/outbound branch, before any TwiML that dials.
+    const guard = src.indexOf("denyBrowserOutbound(");
+    const dial = src.indexOf("buildOutboundDialTwiml(");
+    expect(guard).toBeGreaterThan(-1);
+    expect(dial).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(dial);
+
+    // Both inputs are passed — a guard given only the caller ID is the bug.
+    expect(src).toMatch(
+      /denyBrowserOutbound\(\{\s*workspaceId:\s*resolvedWorkspaceId,\s*callerId\s*\}\)/,
+    );
+
+    // And it returns before dialling, speaking a refusal rather than nothing.
+    expect(src).toMatch(/if \(denial\)[\s\S]{0,400}browserOutboundDenialTwiml\(denial\)/);
+
+    // The old caller-ID-only guard is gone.
+    expect(src).not.toMatch(/if \(!callerId\) \{/);
+
+    // The session row stays keyed on the resolved workspace, which the guard now
+    // guarantees — so a dialled browser call always leaves an audit row.
+    expect(src).toMatch(/if \(resolvedWorkspaceId && callSid\)/);
+  });
+
+  it("removedUserCannotDial — the inbound PSTN path is NOT gated by it", () => {
+    const src = stripComments(voiceInbound());
+    // The guard must sit inside the browser branch: an inbound caller is not an
+    // authenticated user and has no membership, so gating them would kill every
+    // incoming call.
+    const browserBranch = src.indexOf("if (isBrowserCall && clientToNumber)");
+    const inboundFlow = src.indexOf("const toNumber = params.To");
+    const guard = src.indexOf("denyBrowserOutbound(");
+    expect(browserBranch).toBeGreaterThan(-1);
+    expect(inboundFlow).toBeGreaterThan(browserBranch);
+    expect(guard).toBeGreaterThan(browserBranch);
+    expect(guard).toBeLessThan(inboundFlow);
+    // Only one call site — the refusal cannot leak onto another branch.
+    expect(src.match(/denyBrowserOutbound\(/g) ?? []).toHaveLength(1);
+  });
+
   // The first version of this fix put a <Say> before <Dial>. That plays on the
   // REP's Twilio Client leg, before the number is even dialled — the prospect
   // heard nothing and was still recorded without notice. A test that only
@@ -157,8 +209,11 @@ describe("C1 — outbound call safety", () => {
     // The workspace default is applied ONLY when the rep has no number.
     expect(src).toMatch(/if \(!callerId && callSettings\?\.default_twilio_number\)/);
 
-    // Fail-safe preserved: never dial from an arbitrary number.
-    expect(src).toMatch(/if \(!callerId\)[\s\S]{0,600}<Hangup\/>/);
+    // Fail-safe preserved: never dial from an arbitrary number. The check moved
+    // into denyBrowserOutbound when the membership requirement was added (it now
+    // refuses on "no_caller_id"), so assert the guard still gates the dial.
+    expect(src).toMatch(/denyBrowserOutbound\([\s\S]{0,400}browserOutboundDenialTwiml\(denial\)/);
+    expect(callConfig()).toMatch(/if \(!args\.callerId\) return "no_caller_id";/);
   });
 
   it("telFallbackSurvives — the mobile tel: dialer path still exists", () => {

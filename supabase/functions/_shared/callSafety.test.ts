@@ -7,11 +7,13 @@
 // ============================================================================
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  browserOutboundDenialTwiml,
   buildCalleeNoticeTwiml,
   buildOutboundDialTwiml,
   CALLEE_NOTICE_PARAM,
   CALLEE_NOTICE_VALUE,
   calleeNoticeUrl,
+  denyBrowserOutbound,
   RECORDING_NOTICE_TEXT,
   resolveAsrLanguages,
 } from "./callConfig.ts";
@@ -165,4 +167,49 @@ Deno.test("outbound TwiML escapes callback URLs so a query string cannot break t
   });
   assert(twiml.includes("a=1&amp;b=2"));
   assert(!twiml.includes("a=1&b=2"));
+});
+
+// ── Browser outbound authorization (P1: a removed user could still dial) ─────
+
+Deno.test("denyBrowserOutbound: a caller ID alone is NOT enough to dial", () => {
+  // The exact hole: a user removed from the workspace keeps rep_profiles
+  // (and its twilio_phone_number), so callerId resolves while the membership
+  // lookup returns nothing. Before the fix this dialled — and left no
+  // call_sessions row, because that insert is keyed on the workspace.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: null, callerId: "+14155550123" }),
+    "not_a_member",
+  );
+});
+
+Deno.test("denyBrowserOutbound: a member with no number still cannot dial", () => {
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-1", callerId: null }),
+    "no_caller_id",
+  );
+});
+
+Deno.test("denyBrowserOutbound: neither → the membership reason wins", () => {
+  // A removed user hears why they were refused, not "set up a number".
+  assertEquals(denyBrowserOutbound({ workspaceId: null, callerId: null }), "not_a_member");
+});
+
+Deno.test("denyBrowserOutbound: both present → the legitimate rep dials", () => {
+  assertEquals(denyBrowserOutbound({ workspaceId: "ws-1", callerId: "+14155550123" }), null);
+  // undefined (a lookup that returned nothing) is refused exactly like null.
+  assertEquals(denyBrowserOutbound({ workspaceId: undefined, callerId: "+1" }), "not_a_member");
+});
+
+Deno.test("a refused call hears a spoken reason and hangs up — never empty TwiML", () => {
+  for (const reason of ["not_a_member", "no_caller_id"] as const) {
+    const twiml = browserOutboundDenialTwiml(reason);
+    assert(twiml.includes("<Say"), `${reason} must speak`);
+    assert(twiml.includes("<Hangup/>"), `${reason} must hang up`);
+    // Never a dial: a refusal that still contains <Dial> would place the call.
+    assert(!twiml.includes("<Dial"), `${reason} must not dial`);
+  }
+  assert(
+    browserOutboundDenialTwiml("not_a_member") !== browserOutboundDenialTwiml("no_caller_id"),
+    "the two refusals must be distinguishable to the rep",
+  );
 });

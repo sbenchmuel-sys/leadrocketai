@@ -10,9 +10,11 @@ import {
   CALL_DEFAULTS,
   CALLEE_NOTICE_PARAM,
   CALLEE_NOTICE_VALUE,
+  browserOutboundDenialTwiml,
   buildCalleeNoticeTwiml,
   buildOutboundDialTwiml,
   calleeNoticeUrl,
+  denyBrowserOutbound,
   escapeXml,
 } from "../_shared/callConfig.ts";
 
@@ -202,16 +204,34 @@ Deno.serve(async (req) => {
         // Leave callerId unresolved → fail safe below.
       }
 
-      // Fail safe: no configured caller ID → speak a message and hang up. Never dial.
-      if (!callerId) {
-        logger.warn("browser_call_no_caller_id", {
+      // Fail closed unless BOTH a workspace membership AND a caller ID resolved.
+      //
+      // Checking `callerId` alone was an authorization hole: a user removed from
+      // the workspace keeps their auth account and their rep_profiles row (and
+      // its twilio_phone_number), and twilio-voice-token hands any authenticated
+      // user a Voice token without checking membership — so `callerId` was set,
+      // `resolvedWorkspaceId` was null, and the call went out on the workspace's
+      // Twilio account. Worse, the call_sessions insert below is keyed on the
+      // workspace, so the call left NO session row: unbilled, unlogged and
+      // invisible to the admin who removed them.
+      //
+      // Requiring the membership here restores the is_workspace_member() rule
+      // CLAUDE.md states for every workspace-scoped path, and guarantees the
+      // invariant that a dialled browser call always has a session row.
+      // Defence in depth: twilio-voice-token should ALSO refuse a non-member a
+      // token — see the report; that function is outside this unit's files.
+      const denial = denyBrowserOutbound({ workspaceId: resolvedWorkspaceId, callerId });
+      if (denial) {
+        logger.warn("browser_call_denied", {
+          reason: denial,
           userId: callerUserId,
           workspaceId: resolvedWorkspaceId,
+          to: toNormalized,
         });
-        return new Response(
-          `<Response><Say voice="Polly.Joanna">No calling number is set up for your account. Please set one in settings, then try again.</Say><Hangup/></Response>`,
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/xml" } },
-        );
+        return new Response(browserOutboundDenialTwiml(denial), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        });
       }
 
       // Build callback URLs for status tracking & recording

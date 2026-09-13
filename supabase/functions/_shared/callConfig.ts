@@ -128,6 +128,53 @@ export function buildCalleeNoticeTwiml(): string {
 }
 
 /**
+ * Whether a browser-originated outbound call may proceed — and if not, why.
+ *
+ * BOTH conditions are required, and this is the whole point of the helper:
+ *
+ *   • `workspaceId` — the caller must still resolve to a `workspace_members`
+ *     row. Removing someone from a workspace deletes only that row: their
+ *     `auth.users` row and their `rep_profiles` row (keyed by `user_id` alone,
+ *     with no workspace column and nothing cascading into it) both survive, so
+ *     they keep a `twilio_phone_number` and `twilio-voice-token` still issues
+ *     them a Voice token — it authenticates but does not check membership.
+ *   • `callerId` — placing a call from the wrong number is worse than not
+ *     calling at all.
+ *
+ * Checking the caller ID alone let a removed user dial out on the workspace's
+ * Twilio account, AND — because the `call_sessions` insert is keyed on the
+ * workspace — with NO session row: unbilled, unlogged, invisible to the admin
+ * who removed them. Access with the audit trail missing.
+ *
+ * Membership is checked first so a removed user hears the accurate reason
+ * rather than "no number configured".
+ */
+export type BrowserOutboundDenial = "not_a_member" | "no_caller_id";
+
+export function denyBrowserOutbound(args: {
+  workspaceId: string | null | undefined;
+  callerId: string | null | undefined;
+}): BrowserOutboundDenial | null {
+  if (!args.workspaceId) return "not_a_member";
+  if (!args.callerId) return "no_caller_id";
+  return null;
+}
+
+/**
+ * What a refused browser call hears. A spoken refusal + `<Hangup/>`, never an
+ * empty `<Response/>` — an empty document leaves the rep listening to silence
+ * with no idea why, and reads in the Twilio logs like a bug rather than a
+ * deliberate refusal. Returned with HTTP 200 because that is the only way
+ * Twilio plays the message at all.
+ */
+export function browserOutboundDenialTwiml(reason: BrowserOutboundDenial): string {
+  const text = reason === "not_a_member"
+    ? "Your account is no longer active in a workspace, so this call cannot be placed. Please contact your administrator."
+    : "No calling number is set up for your account. Please set one in settings, then try again.";
+  return `<Response><Say voice="Polly.Joanna">${escapeXml(text)}</Say><Hangup/></Response>`;
+}
+
+/**
  * TwiML for a browser-originated OUTBOUND call.
  *
  * WHICH LEG HEARS WHAT — this is the whole point, and getting it wrong is why
