@@ -8,7 +8,7 @@
 // provider call, the SMS branch can see `phone`, the cold pass honours OOO, and
 // every cold skip branch writes a ledger row.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(__dirname, "../..");
@@ -54,24 +54,45 @@ describe("killSwitch", () => {
     expect(body).not.toMatch(/status: 500|status: 4\d\d/);
   });
 
-  it("workspace pause is a settings key (default false) and skips in BOTH the legacy loop and the cold pass", () => {
-    expect(settingsSrc).toContain("automation_paused: boolean");
-    expect(settingsSrc).toContain("automation_paused: false");
-    expect(settingsSrc).toContain("automation_paused: raw.automation_paused === true");
+  it("the pause is an OWNER-scoped settings key (default false) and skips in BOTH the legacy loop and the cold pass", () => {
+    // Named for what it actually scopes to. The STORED json key stays
+    // `automation_paused` (production rows already use it).
+    expect(settingsSrc).toContain("owner_automation_paused: boolean");
+    expect(settingsSrc).toContain("owner_automation_paused: false");
+    expect(settingsSrc).toContain("owner_automation_paused: raw.automation_paused === true");
     // Legacy loop: after loading execSettings, before the send-window check.
     const legacy = legacySection();
-    const pause = legacy.indexOf("if (execSettings.automation_paused)");
+    const pause = legacy.indexOf("if (execSettings.owner_automation_paused)");
     const window = legacy.indexOf("checkSendWindow(execSettings)");
     expect(pause).toBeGreaterThan(-1);
     expect(pause).toBeLessThan(window);
-    expect(legacy.slice(pause, pause + 500)).toContain('from("automation_log").insert(logEntry)');
+    expect(legacy.slice(pause, pause + 700)).toContain('from("automation_log").insert(logEntry)');
     // Cold pass: after loading exec, before any claim.
     const cold = coldSection();
-    const coldPause = cold.indexOf("if (exec.automation_paused)");
+    const coldPause = cold.indexOf("if (exec.owner_automation_paused)");
     const coldClaim = cold.indexOf('status: "claiming"');
     expect(coldPause).toBeGreaterThan(-1);
     expect(coldPause).toBeLessThan(coldClaim);
-    expect(cold.slice(coldPause, coldPause + 200)).toContain("logColdSkip(");
+    expect(cold.slice(coldPause, coldPause + 300)).toContain("logColdSkip(");
+  });
+
+  it("no rep-facing string calls the owner pause a WORKSPACE pause (Codex P2 — it pauses every workspace the owner is in)", () => {
+    // The switch is stored on workspace_profiles, which is UNIQUE(user_id), so
+    // it can only ever be owner-wide. Anything that tells a rep otherwise is a
+    // mislabelled safety control.
+    for (const m of src.matchAll(/error_message[^\n]*automation_paused[^\n]*/g)) {
+      expect(m[0]).not.toMatch(/for this workspace/i);
+    }
+    for (const m of src.matchAll(/logColdSkip\(touch, "[^"]*automation_paused[^"]*"/g)) {
+      expect(m[0]).not.toMatch(/for this workspace/i);
+    }
+    // Both skip reasons say "account" / "all of this owner's workspaces".
+    const reasons = [...src.matchAll(/"Automation paused[^"]*"/g)].map((m) => m[0]);
+    expect(reasons.length).toBe(2); // legacy loop + cold pass
+    for (const r of reasons) expect(r).toMatch(/all of this owner's workspaces/);
+    // The interface doc warns the next reader before they reach for it.
+    expect(settingsSrc).toMatch(/UNIQUE\(user_id\)/);
+    expect(settingsSrc).toMatch(/ponytail: per-workspace scoping needs a schema change/);
   });
 
   it("the kill switch is not referenced by the manual/review send function", () => {
@@ -236,14 +257,15 @@ describe("skipLogging", () => {
     expect(branch).toContain("continue;");
   });
 
-  it("logColdSkip writes status 'skipped' to automation_log (singular) and never throws", () => {
+  it("logColdSkip queues status 'skipped' rows for automation_log (singular) and the flush never throws", () => {
     const cold = coldSection();
-    const helper = cold.slice(cold.indexOf("async function logColdSkip("), cold.indexOf("for (const touch of (coldDue || []))"));
-    expect(helper).toContain('from("automation_log").insert(');
-    expect(helper).not.toContain("automation_logs");
+    const helper = cold.slice(cold.indexOf("function logColdSkip("), cold.indexOf("for (const touch of (coldDue || []))"));
     expect(helper).toContain('status: "skipped"');
-    expect(helper).toContain("try {");
-    expect(helper).toContain("catch (logErr)");
+    expect(helper).not.toContain("automation_logs");
+    const flush = cold.slice(cold.indexOf("async function flushColdSkips("), cold.indexOf("function logColdSkip("));
+    expect(flush).toContain('from("automation_log").insert(rows)');
+    expect(flush).toContain("try {");
+    expect(flush).toContain("catch (logErr)");
     // Owner must come from the touch→lead join, since automation_log.owner_user_id is NOT NULL.
     expect(cold).toContain("leads!inner(owner_user_id)");
   });
@@ -253,5 +275,153 @@ describe("skipLogging", () => {
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBeLessThan(40);
     expect(src).toContain("parsedThreshold > 0 ? parsedThreshold : VOLUME_ALERT_DEFAULT_THRESHOLD");
+  });
+});
+
+// ── Codex P2 #2: the skip ledger must not starve the run ────────────────────
+// cron-dispatcher aborts the forwarded request at FORWARD_TIMEOUT_MS (55s).
+// Production logs ~8,200 cold skips per 14 days, so "most of the 200 scanned
+// touches are blocked" is the normal case. A per-skip SELECT+INSERT (≈400 serial
+// round trips) could therefore burn the whole run before the loop reached a
+// touch that would actually have sent. These guards pin the batched shape.
+describe("skipLedgerOffTheScanPath", () => {
+  const DISPATCHER = readFileSync(path.join(ROOT, "supabase/functions/cron-dispatcher/index.ts"), "utf8");
+
+  it("cron-dispatcher still aborts at 55s — the budget these guards protect", () => {
+    const m = DISPATCHER.match(/const FORWARD_TIMEOUT_MS = ([\d_]+);/);
+    expect(m).not.toBeNull();
+    expect(Number(m![1].replace(/_/g, ""))).toBeLessThanOrEqual(55_000);
+  });
+
+  it("logColdSkip is synchronous: no await, no query builder, no network on the scan path", () => {
+    const cold = coldSection();
+    const start = cold.indexOf("function logColdSkip(");
+    expect(start).toBeGreaterThan(-1);
+    // Not `async function logColdSkip(`.
+    expect(cold.slice(Math.max(0, start - 6), start)).not.toContain("async ");
+    const helper = cold.slice(start, cold.indexOf("for (const touch of (coldDue || []))"));
+    expect(helper).toContain("): void {");
+    expect(helper).not.toMatch(/\bawait\b/);
+    expect(helper).not.toContain("supabase.from(");
+    // It only touches the in-memory dedupe set and the pending queue.
+    expect(helper).toContain("coldSkipSeen.has(key)");
+    expect(helper).toContain("coldSkipPending.push(");
+  });
+
+  it("not one skip call site is awaited (an awaited ledger write is the starvation bug)", () => {
+    expect(src).not.toMatch(/await\s+logColdSkip\(/);
+    // The ledger still covers every branch it used to.
+    const calls = [...coldSection().matchAll(/\blogColdSkip\(/g)].length;
+    expect(calls).toBeGreaterThanOrEqual(24);
+  });
+
+  it("the 6h dedupe set is prefetched ONCE for the batch, in chunks, before the loop", () => {
+    const cold = coldSection();
+    const prefetch = cold.indexOf('.in("action_key", allKeys.slice(i, i + COLD_SKIP_PREFETCH_CHUNK))');
+    const loop = cold.indexOf("for (const touch of (coldDue || []))");
+    expect(prefetch).toBeGreaterThan(-1);
+    expect(prefetch).toBeLessThan(loop);
+    const window = cold.slice(prefetch - 400, prefetch + 400);
+    expect(window).toContain('.eq("status", "skipped")');
+    expect(window).toContain('.gte("created_at", skipSince)');
+    // Chunked so a 200-row scan can't blow the PostgREST URL length.
+    const chunk = cold.match(/const COLD_SKIP_PREFETCH_CHUNK = (\d+);/);
+    expect(chunk).not.toBeNull();
+    expect(Number(chunk![1])).toBeGreaterThan(0);
+    expect(Number(chunk![1])).toBeLessThanOrEqual(100);
+  });
+
+  it("rows are flushed in batches inside the loop AND once after it", () => {
+    const cold = coldSection();
+    const threshold = cold.match(/const COLD_SKIP_FLUSH_AT = (\d+);/);
+    expect(threshold).not.toBeNull();
+    const flushAt = Number(threshold![1]);
+    expect(flushAt).toBeGreaterThan(1);   // 1 would be a per-skip insert again
+    expect(flushAt).toBeLessThanOrEqual(50);
+    const loop = cold.indexOf("for (const touch of (coldDue || []))");
+    const inLoop = cold.indexOf("if (coldSkipPending.length >= COLD_SKIP_FLUSH_AT) await flushColdSkips();");
+    expect(inLoop).toBeGreaterThan(loop);
+    // Final flush lives after the loop body's catch, before the tripwire.
+    const finalFlush = cold.lastIndexOf("await flushColdSkips();");
+    expect(finalFlush).toBeGreaterThan(inLoop);
+  });
+
+  it("worst case for a 200-touch all-blocked scan is a dozen round trips, not hundreds", () => {
+    const cold = coldSection();
+    const scan = Number(src.match(/const COLD_DUE_SCAN_LIMIT = (\d+);/)![1]);
+    const chunk = Number(cold.match(/const COLD_SKIP_PREFETCH_CHUNK = (\d+);/)![1]);
+    const flushAt = Number(cold.match(/const COLD_SKIP_FLUSH_AT = (\d+);/)![1]);
+    const roundTrips = Math.ceil(scan / chunk) + Math.ceil(scan / flushAt);
+    expect(roundTrips).toBeLessThanOrEqual(20);
+    // The old shape was one SELECT + one INSERT per skip.
+    expect(roundTrips).toBeLessThan(scan * 2);
+  });
+});
+
+// ── Codex P2 #1: the send-window timezone must follow the LEAD's workspace ──
+// Before this, loadExecutionSettings read the timezone from an arbitrary
+// workspace_members row, so an owner in two workspaces had "9–5" evaluated in
+// whichever timezone came back first — a send could land at 5am for the
+// recipient. The workspace id is now a required argument and part of the cache
+// key, and every caller in supabase/functions must pass one.
+describe("executionSettingsWorkspaceScope", () => {
+  it("loadExecutionSettings takes a required workspaceId and keys its cache by it", () => {
+    expect(settingsSrc).toMatch(/export async function loadExecutionSettings\(\s*ownerUserId: string,\s*serviceClient: ReturnType<typeof createClient>,\s*workspaceId: string,\s*\)/);
+    expect(settingsSrc).toContain("const cacheKey = `${ownerUserId}");
+    expect(settingsSrc).toContain("workspaceId ?? \"\"");
+    expect(settingsSrc).toContain("cache.set(cacheKey, settings)");
+  });
+
+  it("the timezone is read from THIS workspace by id — the arbitrary workspace_members pick is gone", () => {
+    // Comments are stripped: the doc block legitimately *describes* the old
+    // workspace_members pick while the code must no longer do it.
+    const code = settingsSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    expect(code).toContain('.from("workspaces")');
+    expect(code).toContain('.eq("id", workspaceId)');
+    expect(code).not.toContain("workspace_members");
+    expect(code).not.toContain("workspaces:workspace_id");
+    // An unknown / empty workspace id yields no timezone → checkSendWindow
+    // fails closed rather than guessing one.
+    expect(settingsSrc).toContain("Promise.resolve({ data: null })");
+    expect(settingsSrc).toContain('reason: "Workspace timezone not configured');
+  });
+
+  it("every caller under supabase/functions passes three arguments", () => {
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const name of readdirSync(path.join(ROOT, dir))) {
+        const rel = path.posix.join(dir, name);
+        if (statSync(path.join(ROOT, rel)).isDirectory()) out.push(...walk(rel));
+        else if (name.endsWith(".ts")) out.push(rel);
+      }
+      return out;
+    };
+    /** Top-level arguments of the call starting at `open` (a "(" index). */
+    const topLevelArgs = (text: string, open: number): string[] => {
+      let depth = 0;
+      const args: string[] = [];
+      let cur = "";
+      for (let i = open; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === "(" || ch === "[" || ch === "{") { depth++; if (depth === 1) continue; }
+        else if (ch === ")" || ch === "]" || ch === "}") { depth--; if (depth === 0) { args.push(cur); return args; } }
+        else if (ch === "," && depth === 1) { args.push(cur); cur = ""; continue; }
+        cur += ch;
+      }
+      return args;
+    };
+    const calls: string[] = [];
+    for (const rel of walk("supabase/functions")) {
+      const text = readFileSync(path.join(ROOT, rel), "utf8");
+      for (const m of text.matchAll(/loadExecutionSettings\(/g)) {
+        const args = topLevelArgs(text, m.index! + "loadExecutionSettings".length)
+          .map((a) => a.trim()).filter((a) => a.length > 0);
+        // Skip the declaration itself (its params carry type annotations).
+        if (args.some((a) => /: (string|ReturnType)/.test(a))) continue;
+        calls.push(`${rel}: ${args.join(" | ")}`);
+        expect(args.length, `${rel} → loadExecutionSettings(${args.join(", ")})`).toBe(3);
+      }
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(4);
   });
 });

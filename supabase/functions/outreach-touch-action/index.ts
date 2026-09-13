@@ -162,7 +162,8 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "This lead opted out — removed from outreach.", optedOut: true }, 409);
   }
 
-  const exec = await loadExecutionSettings(lead.owner_user_id, admin);
+  // workspaceId scopes the timezone used for the next-touch schedule (Unit G-C).
+  const exec = await loadExecutionSettings(lead.owner_user_id, admin, lead.workspace_id);
 
   // Atomically CLAIM the queued touch: flip queued → <status> in ONE update guarded
   // on status='queued'. The DB guarantees only one concurrent request wins, so a

@@ -1,6 +1,7 @@
 // ============================================
 // EXECUTION SETTINGS LOADER
-// Loads workspace cadence/automation settings for the executor.
+// Loads an owner's cadence/automation settings, scoped to ONE workspace for
+// everything the schema actually stores per workspace (currently: timezone).
 // Single source of truth for all "when/whether to send" rules.
 // ============================================
 
@@ -43,21 +44,32 @@ export interface ExecutionSettings {
   stop_pause_rules: StopPauseRules;
   whatsapp: WhatsAppExecutionSettings;
   /**
-   * IANA timezone for this workspace (e.g. "America/New_York"). Loaded from
-   * workspaces.timezone via workspace_members join. NULL means the workspace
-   * has not configured a timezone — checkSendWindow will fail-closed in that
-   * case. Set in loadExecutionSettings, never derived from cadence_settings.
+   * IANA timezone for THE workspace passed to loadExecutionSettings (e.g.
+   * "America/New_York"), read from workspaces.timezone by id. NULL means that
+   * workspace has not configured a timezone (or the id was unknown) —
+   * checkSendWindow fails CLOSED in that case. Set in loadExecutionSettings,
+   * never derived from cadence_settings.
    */
   timezone: string | null;
   /**
-   * Workspace-level pause for ALL automatic sends (legacy + cold). Read from
+   * OWNER-level pause for ALL automatic sends (legacy + cold). Read from
    * cadence_settings.automation_paused (boolean, default false). The executor
    * skips and logs every due send for this owner while it is true; nothing is
    * deferred, so un-pausing resumes on the next tick. No UI toggle yet — set the
    * key in workspace_profiles.cadence_settings (see CadenceSettingsCard for the
    * natural home of the switch).
+   *
+   * SCOPE — read this before calling it a "workspace pause": cadence_settings
+   * lives on workspace_profiles, which is UNIQUE(user_id) and has NO
+   * workspace_id column. One owner has exactly ONE row, so this flag pauses
+   * that owner's automatic sends in EVERY workspace they belong to, and there
+   * is no way to pause only one workspace. The field is named
+   * `owner_automation_paused` so no call site can mistake its blast radius.
+   * ponytail: per-workspace scoping needs a schema change (workspace_id on
+   * workspace_profiles, or a cadence row keyed by (user_id, workspace_id)) plus
+   * a UI toggle — out of scope for Unit G-C; tracked in CLEANUP.md.
    */
-  automation_paused: boolean;
+  owner_automation_paused: boolean;
 }
 
 // ── Defaults (match DEFAULT_CADENCE_SETTINGS) ──────────────────────
@@ -89,44 +101,58 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
     max_messages_before_pause: 3,
   },
   timezone: null,
-  automation_paused: false,
+  owner_automation_paused: false,
 };
 
-// ── Loader (cached per-owner within a single executor run) ─────────
+// ── Loader (cached per owner+workspace within a single executor run) ─
 
 const cache = new Map<string, ExecutionSettings>();
 
+/**
+ * Load the send rules for one owner acting in ONE workspace.
+ *
+ * `workspaceId` is REQUIRED and must be the workspace of the lead being sent to
+ * (leads.workspace_id / campaigns.workspace_id). It decides the timezone every
+ * send-window and next-eligible calculation runs in. Before Unit G-C this was
+ * read from an arbitrary `workspace_members` row, so an owner who belongs to two
+ * workspaces had their send window evaluated in whichever timezone happened to
+ * come back first — a 9–5 window could fire at 5am for the recipient. An unknown
+ * or empty workspaceId yields timezone=null, which checkSendWindow fails CLOSED
+ * on, so a bad id refuses the send rather than guessing.
+ *
+ * Everything else (guardrails, stop rules, the pause) comes from
+ * workspace_profiles, which is UNIQUE(user_id) — those values are OWNER-level and
+ * identical across the owner's workspaces. See `owner_automation_paused`.
+ */
 export async function loadExecutionSettings(
   ownerUserId: string,
   serviceClient: ReturnType<typeof createClient>,
+  workspaceId: string,
 ): Promise<ExecutionSettings> {
-  const cached = cache.get(ownerUserId);
+  const cacheKey = `${ownerUserId}\u0000${workspaceId ?? ""}`;
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  // Load cadence settings + workspace timezone in parallel.
-  // Timezone lives on workspaces (NOT workspace_profiles) so we join via
-  // workspace_members. A user may belong to multiple workspaces; we take
-  // the first match — automation runs per-owner, so a single owner's
-  // sends are gated by whichever workspace they happen to belong to.
+  // Load owner cadence settings + THIS workspace's timezone in parallel.
   const [profileRes, wsRes] = await Promise.all([
     serviceClient
       .from("workspace_profiles")
       .select("cadence_settings")
       .eq("user_id", ownerUserId)
       .maybeSingle(),
-    serviceClient
-      .from("workspace_members")
-      .select("workspace_id, workspaces:workspace_id (timezone)")
-      .eq("user_id", ownerUserId)
-      .limit(1)
-      .maybeSingle(),
+    workspaceId
+      ? serviceClient
+          .from("workspaces")
+          .select("timezone")
+          .eq("id", workspaceId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
 
   // `as any`: workspace_profiles isn't in the Deno-side generated types, so the
   // query builder infers `data` as `never`. Same pattern as the wsRes access below.
   const raw = ((profileRes.data as any)?.cadence_settings as Record<string, unknown>) ?? {};
-  const timezone =
-    ((wsRes.data as any)?.workspaces?.timezone as string | null | undefined) ?? null;
+  const timezone = ((wsRes.data as any)?.timezone as string | null | undefined) ?? null;
 
   const settings: ExecutionSettings = {
     time_rules: {
@@ -150,12 +176,14 @@ export async function loadExecutionSettings(
       ...(raw.whatsapp as Record<string, unknown> || {}),
     },
     timezone: timezone && timezone.trim() ? timezone.trim() : null,
-    // Only a literal boolean true pauses — a string "true" or 1 does not, so a
-    // malformed value can never silently stop a workspace's sends.
-    automation_paused: raw.automation_paused === true,
+    // Stored JSON key stays `automation_paused` (production rows already use it);
+    // only the in-code name says what it really scopes to. Only a literal boolean
+    // true pauses — a string "true" or 1 does not, so a malformed value can never
+    // silently stop an owner's sends.
+    owner_automation_paused: raw.automation_paused === true,
   };
 
-  cache.set(ownerUserId, settings);
+  cache.set(cacheKey, settings);
   return settings;
 }
 
