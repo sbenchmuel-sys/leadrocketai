@@ -341,6 +341,53 @@ describe("C1 — retention and removals", () => {
     expect(sql).toMatch(/audio_retention_days/);
   });
 
+  // NOTE: these are source-text guards over the migration, not behavioural
+  // tests — the purge is pure SQL and no Postgres is reachable from the unit
+  // suite. They fail if the analyses purge stops clearing one of the three
+  // quote-bearing columns, or stops selecting rows by all three.
+  it("the analyses purge clears every column that holds verbatim transcript quotes", () => {
+    const sql = read(MIGRATION);
+
+    // call-analyze writes all three; all three must be cleared in one UPDATE.
+    const update = sql.slice(sql.indexOf("UPDATE public.call_analyses"));
+    expect(update).toMatch(/SET signals_json = '\{\}'::jsonb/);
+    expect(update).toMatch(/action_items_json = public\.strip_call_evidence\(a\.action_items_json\)/);
+    expect(update).toMatch(
+      /recommended_next_steps_json = public\.strip_call_evidence\(a\.recommended_next_steps_json\)/,
+    );
+
+    // Eligibility covers all three, so a row already emptied of signals_json by
+    // the earlier signals-only predicate is still revisited and finished off.
+    const predicate = update.slice(update.indexOf("WHERE"), update.indexOf("RETURNING"));
+    expect(predicate).toMatch(/signals_json <> '\{\}'::jsonb/);
+    expect(predicate).toMatch(/strip_call_evidence\(a\.action_items_json\) IS DISTINCT FROM a\.action_items_json/);
+    expect(predicate).toMatch(
+      /strip_call_evidence\(a\.recommended_next_steps_json\)\s*\n?\s*IS DISTINCT FROM a\.recommended_next_steps_json/,
+    );
+
+    // The durable paraphrases are NOT touched (same rule as the email purge).
+    expect(update).not.toMatch(/summary_short/);
+    expect(update).not.toMatch(/summary_long/);
+  });
+
+  it("strip_call_evidence removes only the evidence arrays, and is re-runnable", () => {
+    const sql = read(MIGRATION);
+    const fn = sql.slice(
+      sql.indexOf("CREATE OR REPLACE FUNCTION public.strip_call_evidence"),
+      sql.indexOf("CREATE OR REPLACE FUNCTION public.purge_call_media"),
+    );
+    expect(fn).toMatch(/IMMUTABLE/);
+    // Only the `evidence` key is dropped — text/owner/priority/rank/rationale stay.
+    expect(fn).toMatch(/elem - 'evidence'/);
+    expect(fn.match(/ - '/g) ?? []).toHaveLength(1);
+    // Non-array / NULL input is returned unchanged, so a second run is a no-op.
+    expect(fn).toMatch(/WHEN jsonb_typeof\(p_items\) <> 'array' THEN p_items/);
+  });
+
+  it("the purge migration carries no production project ref", () => {
+    expect(read(MIGRATION)).not.toMatch(/ntzeiflqqluwgdfmatjh/);
+  });
+
   it("CLAUDE.md says the purge is off rather than claiming a 90-day purge happens", () => {
     const claude = read("CLAUDE.md");
     expect(claude).toMatch(/call-media-purge/);
