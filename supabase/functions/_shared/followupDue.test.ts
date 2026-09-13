@@ -323,3 +323,32 @@ Deno.test("the workspace wait override reaches gmail-bulk-sync's rule", () => {
     "followup_due",
   );
 });
+
+
+// ── The sweep must not erase a verdict it cannot compute ───────────
+
+Deno.test("gmail-bulk-sync's rule has no rate_limited in its vocabulary", () => {
+  // The premise of the preserve-guard in gmail-bulk-sync: this rule takes no
+  // guardrails and no outbound counts, so it can only ever return something
+  // else — which is why its verdict must not overwrite an active rate_limited.
+  const quietAfterACappedBurst = {
+    first_outbound_at: daysAgo(10),
+    last_inbound_at: daysAgo(20),
+    last_outbound_at: daysAgo(1),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+  };
+  const r = bulkDeriveAction(quietAfterACappedBurst, 0, null, "engaged", "fast");
+  assertEquals(r.next_action_key, null);
+  assertEquals(r.needs_action, false);
+
+  // …and once it DOES have something to say, that verdict is a real one, so
+  // letting it through (the guard's `!actionResult.needs_action` condition)
+  // never hides a customer.
+  const withAFreshReply = {
+    ...quietAfterACappedBurst,
+    last_inbound_at: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
+  };
+  assertEquals(bulkDeriveAction(withAFreshReply, 0, null, "engaged", "fast").next_action_key, "reply_now");
+});

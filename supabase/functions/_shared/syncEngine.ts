@@ -44,9 +44,9 @@ export interface ModeSettings {
   reply_pending_hours: number;
   /**
    * Calendar days to wait on MY unanswered message before the Queue asks the
-   * rep to follow up (Unit Q1). Optional so a workspace whose stored
-   * `cadence_settings` predates this field still type-checks; the default
-   * (fast 3 / nurture 5) comes from `followupWaitDays()`.
+   * rep to follow up (Unit Q1). Optional because nothing in the product writes
+   * it — the settings UI uses a different schema (see `followupWaitDays`), so
+   * in practice every workspace gets the fast-3 / nurture-5 default.
    */
   followup_wait_days?: number;
   outbound_followups_days: number[];

@@ -14,7 +14,7 @@ import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { deriveAction } from "../_shared/bulkSyncAction.ts";
-import { mustClearEligibleAt } from "../_shared/followupRule.ts";
+import { mustClearEligibleAt, RATE_LIMITED_KEY } from "../_shared/followupRule.ts";
 import { deepMergeCadence, DEFAULT_CADENCE_SETTINGS } from "../_shared/syncEngine.ts";
 
 /** Per-strategy mode settings for one owner's workspace profile. */
@@ -903,7 +903,7 @@ async function syncLeadEmails(
   // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
-    .select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed")
+    .select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed, next_action_key")
     .eq("id", leadId)
     .single();
 
@@ -972,6 +972,28 @@ async function syncLeadEmails(
   } else if (hasRecentAutoSend) {
     // CRITICAL: Recently-sent guard -- executor sent an email recently, don't re-arm.
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Recent automation send detected (${recentAutoSendCount} in last 2h) -- suppressing action overwrite`);
+  } else if (
+    currentState?.next_action_key === RATE_LIMITED_KEY
+    && currentState?.needs_action === true
+    && !actionResult.needs_action
+  ) {
+    // Preserve an active `rate_limited` explanation (Unit Q1).
+    //
+    // `rate_limited` is written by the SHARED rule, which knows the workspace's
+    // volume caps and this lead's recent outbound counts. This private rule has
+    // neither input, so it cannot re-derive that verdict — and its `null` would
+    // be written straight over it, silently turning "auto-send paused until the
+    // 18th" into a blank card within one 20-minute cycle. Same defect this unit
+    // exists to fix, wearing a different key.
+    //
+    // Same shape as the three guards above: don't overwrite what this path is
+    // not equipped to evaluate. Deliberately narrow — it only holds when the
+    // sweep has NOTHING of its own to say. The moment it derives anything
+    // (reply_now on a fresh inbound, followup_due once the wait passes,
+    // closing_followup, …) that verdict wins, so a preserved rate_limited can
+    // never go stale for longer than the follow-up wait and a customer's reply
+    // is never hidden behind it.
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: preserving rate_limited — this path has no volume-cap inputs`);
   } else if (!hasActivity && !actionResult.needs_action) {
     // No interactions on record and nothing to flag — leave existing action fields
     // untouched rather than clearing flags set elsewhere (manual / candidate) on

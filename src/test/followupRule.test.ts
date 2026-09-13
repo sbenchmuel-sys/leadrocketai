@@ -303,7 +303,7 @@ describe("deriveFollowupDue — my unanswered message after N days", () => {
   });
 });
 
-describe("followupWaitDays — 3 fast, 5 nurture, workspace can override", () => {
+describe("followupWaitDays — 3 fast, 5 nurture (the only values in play today)", () => {
   it("defaults to 3 days for fast motion", () => {
     expect(followupWaitDays("fast", undefined)).toBe(DEFAULT_FOLLOWUP_WAIT_DAYS.fast);
     expect(followupWaitDays("fast", {})).toBe(3);
@@ -314,7 +314,10 @@ describe("followupWaitDays — 3 fast, 5 nurture, workspace can override", () =>
     expect(followupWaitDays("nurture", { followup_wait_days: null })).toBe(5);
   });
 
-  it("uses the workspace setting when one is configured", () => {
+  it("honours a stored modes.<strategy>.followup_wait_days if one is ever present", () => {
+    // NOT reachable from the settings UI today — the client CadenceSettingsV1
+    // has `motions`, not `modes`, and no such field. Pinned because every read
+    // path (send, sync, cron) must agree the day it becomes settable.
     expect(followupWaitDays("fast", { followup_wait_days: 7 })).toBe(7);
     expect(followupWaitDays("nurture", { followup_wait_days: 1 })).toBe(1);
   });
@@ -955,7 +958,7 @@ describe("every writer of a prompt-only key nulls eligible_at", () => {
   });
 });
 
-describe("the workspace wait override reaches the scheduled path", () => {
+describe("a stored wait, if present, reaches the scheduled path too", () => {
   const warmAndQuiet = {
     first_outbound_at: daysAgo(70),
     last_inbound_at: daysAgo(60),
@@ -965,13 +968,13 @@ describe("the workspace wait override reaches the scheduled path", () => {
     last_nurture_outbound_at: null,
   };
 
-  it("waits longer when the workspace says so", () => {
+  it("waits longer when a stored setting says so", () => {
     expect(withFrozenClock(() =>
       bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "fast", { followup_wait_days: 10 })
     ).next_action_key).toBeNull();
   });
 
-  it("surfaces sooner when the workspace says so", () => {
+  it("surfaces sooner when a stored setting says so", () => {
     expect(withFrozenClock(() =>
       bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "nurture", { followup_wait_days: 2 })
     ).next_action_key).toBe(FOLLOWUP_DUE_KEY);
@@ -985,5 +988,82 @@ describe("the workspace wait override reaches the scheduled path", () => {
     const perLead = src.slice(src.indexOf("async function syncLeadEmails("), src.indexOf("async function resolveWorkspaceIds("));
     expect(perLead).not.toContain("loadCadenceModes(");
     expect((src.match(/await loadCadenceModes\(/g) ?? []).length).toBe(2);
+  });
+});
+
+
+// ── The claim matches reality ──────────────────────────────────────
+
+describe("followup_wait_days is not advertised as workspace-configurable", () => {
+  it("the client settings schema genuinely has no such field", () => {
+    // If this ever fails, the field became settable — go update the docblocks
+    // in followupRule/syncEngine/bulkSyncAction that currently say it is not.
+    const client = readFileSync(path.join(ROOT, "src/lib/cadenceSettingsTypes.ts"), "utf8");
+    expect(client).not.toContain("followup_wait_days");
+    expect(client).toContain("motions: {");   // a different shape from `modes`
+  });
+
+  it("no docblock calls it a workspace override", () => {
+    for (const rel of [
+      "supabase/functions/_shared/followupRule.ts",
+      "supabase/functions/_shared/syncEngine.ts",
+      "supabase/functions/_shared/bulkSyncAction.ts",
+    ]) {
+      const src = readFileSync(path.join(ROOT, rel), "utf8");
+      expect(src).not.toMatch(/Workspace override|workspace can (set|configure|override)/i);
+    }
+  });
+});
+
+// ── The sweep must not erase rate_limited ──────────────────────────
+
+describe("gmail-bulk-sync preserves a verdict it cannot compute", () => {
+  const branch = () => {
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    return src.slice(src.indexOf("  if (isActiveNurture) {"), src.indexOf("// CONSENT GATE (defensive)"));
+  };
+
+  it("has no volume-cap inputs, so it can never re-derive rate_limited", () => {
+    // The premise of the guard: this rule takes no guardrails and no outbound
+    // counts, so `rate_limited` is not in its vocabulary at all.
+    const rule = readFileSync(path.join(ROOT, "supabase/functions/_shared/bulkSyncAction.ts"), "utf8");
+    expect(rule).not.toContain("rate_limited");
+    expect(rule).not.toContain("max_emails_per_lead");
+  });
+
+  it("leaves an active rate_limited lead alone when it has nothing to say", () => {
+    // A rep reading "auto-send paused until the 18th" must not watch the card
+    // blank itself twenty minutes later.
+    expect(branch()).toMatch(
+      /currentState\?\.next_action_key === RATE_LIMITED_KEY[\s\S]{0,200}!actionResult\.needs_action/,
+    );
+    // It is a guard branch — it writes nothing, exactly like the nurture/OOO ones.
+    const guard = branch().slice(branch().indexOf("RATE_LIMITED_KEY"));
+    const body = guard.slice(0, guard.indexOf("} else if (!hasActivity"));
+    expect(body).not.toContain("updatePayload.");
+  });
+
+  it("still lets a real verdict through — a reply is never hidden behind it", () => {
+    // The guard is conditioned on `!actionResult.needs_action`, so reply_now,
+    // followup_due, closing_followup … all still overwrite it.
+    expect(branch()).toContain("&& !actionResult.needs_action");
+    // And the sweep really does produce those verdicts for such a lead.
+    const warmWithReply = {
+      first_outbound_at: daysAgo(70),
+      last_inbound_at: hoursAgo(8),
+      last_outbound_at: daysAgo(4),
+      meeting_summary_count: 0,
+      nurture_outbound_count: 0,
+      last_nurture_outbound_at: null,
+    };
+    expect(withFrozenClock(() => bulkDeriveAction(warmWithReply, 0, null, "engaged", "fast"))
+      .next_action_key).toBe("reply_now");
+  });
+
+  it("reads next_action_key from the state it already fetches (no new query)", () => {
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    expect(src).toContain(
+      '.select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed, next_action_key")',
+    );
   });
 });

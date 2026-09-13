@@ -112,14 +112,27 @@ export const NON_QUEUE_ACTION_KEYS: readonly string[] = [
   "wait_reply_threshold",
 ];
 
-/** Calendar-day defaults, per the recorded decision: fast 3, nurture 5. */
+/** Calendar-day waits, per the recorded decision: fast 3, nurture 5. In
+ *  practice these are the ONLY values in play — see `followupWaitDays`. */
 export const DEFAULT_FOLLOWUP_WAIT_DAYS = { fast: 3, nurture: 5 } as const;
 
 /**
- * How many calendar days to wait on my own unanswered message before the
- * Queue asks the rep to follow up. Workspace override lives in
+ * How many calendar days to wait on my own unanswered message before the Queue
+ * asks the rep to follow up. 3 on fast motion, 5 on nurture.
+ *
+ * NOT CONFIGURABLE BY A WORKSPACE TODAY — do not describe it as an override.
+ * The value is read from
  * `workspace_profiles.cadence_settings.modes.<fast|nurture>.followup_wait_days`
- * (deep-merged over DEFAULT_CADENCE_SETTINGS — no new column needed).
+ * when present, and every read path honours it (send, sync, and the scheduled
+ * Gmail sweep). But nothing WRITES that shape: the settings UI uses the client
+ * `CadenceSettingsV1` in `src/lib/cadenceSettingsTypes.ts`, which is a different
+ * schema — it has `motions`, not `modes`, and no `followup_wait_days` — and
+ * `upsertWorkspaceProfile` merges over those client defaults, so it would also
+ * drop a hand-set `modes` block on the next settings save.
+ *
+ * The plumbing is kept because it is correct and costs nothing; making the
+ * value settable is a settings-schema change (client schema field + merge +
+ * one editor input), tracked as follow-up work, not part of this Queue unit.
  */
 export function followupWaitDays(
   strategy: string,

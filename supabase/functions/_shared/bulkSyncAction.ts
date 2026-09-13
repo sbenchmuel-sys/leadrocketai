@@ -40,11 +40,12 @@ export function deriveAction(
   stage: string,
   strategy: string = "fast",
   /**
-   * The workspace's merged mode settings for this lead's strategy, so
-   * `cadence_settings.modes.<fast|nurture>.followup_wait_days` is honoured on
-   * the scheduled path too. Omitted → the 3/5 default. A setting that works
-   * when a rep sends and is ignored by the job that actually surfaces leads is
-   * worse than no setting: it looks configured.
+   * The workspace's merged mode settings for this lead's strategy, so that if
+   * `cadence_settings.modes.<fast|nurture>.followup_wait_days` is ever present
+   * the scheduled path honours it like every other path — a value that works on
+   * send and is ignored by the job that actually surfaces leads would be the
+   * worst of both. Omitted, and today always absent in practice → the 3/5
+   * default (see `followupWaitDays`; no UI writes that shape yet).
    */
   modeSettings: { followup_wait_days?: number | null } | null = null
 ): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
