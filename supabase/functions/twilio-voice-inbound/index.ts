@@ -5,7 +5,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { validateTwilioSignature } from "../_shared/twilioSignature.ts";
-import { resolveWorkspaceByAgentNumber } from "../_shared/phoneMapping.ts";
+import {
+  resolveWorkspaceByAgentNumber,
+  resolveWorkspacesClaimingNumber,
+} from "../_shared/phoneMapping.ts";
 import {
   CALL_DEFAULTS,
   CALLEE_NOTICE_PARAM,
@@ -220,12 +223,29 @@ Deno.serve(async (req) => {
       // invariant that a dialled browser call always has a session row.
       // Defence in depth: twilio-voice-token should ALSO refuse a non-member a
       // token — see the report; that function is outside this unit's files.
-      const denial = denyBrowserOutbound({ workspaceId: resolvedWorkspaceId, callerId });
+
+      // Which workspaces (if any) have this caller ID configured as their own
+      // number. rep_profiles.twilio_phone_number is free text the user types
+      // into their own profile with nothing validating it, and every tenant
+      // shares ONE Twilio account — so without this a member of workspace A
+      // could dial out on workspace B's number while the session row said A.
+      // Unclaimed numbers pass (the per-rep DID case); see the ceiling on
+      // denyBrowserOutbound.
+      const callerIdWorkspaceIds = callerId
+        ? await resolveWorkspacesClaimingNumber(supabase, callerId)
+        : [];
+
+      const denial = denyBrowserOutbound({
+        workspaceId: resolvedWorkspaceId,
+        callerId,
+        callerIdWorkspaceIds,
+      });
       if (denial) {
         logger.warn("browser_call_denied", {
           reason: denial,
           userId: callerUserId,
           workspaceId: resolvedWorkspaceId,
+          callerIdWorkspaceIds,
           to: toNormalized,
         });
         return new Response(browserOutboundDenialTwiml(denial), {

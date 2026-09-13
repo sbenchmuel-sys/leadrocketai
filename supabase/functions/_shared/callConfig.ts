@@ -140,6 +140,14 @@ export function buildCalleeNoticeTwiml(): string {
  *     them a Voice token — it authenticates but does not check membership.
  *   • `callerId` — placing a call from the wrong number is worse than not
  *     calling at all.
+ *   • `callerIdWorkspaceIds` — the workspaces that have this caller ID
+ *     configured as their own number. `rep_profiles.twilio_phone_number` is a
+ *     free-text field the user types into their own profile and NOTHING
+ *     validates it, so a member of workspace A could type workspace B's number
+ *     and dial out on it — every tenant is on ONE shared Twilio account, so
+ *     Twilio accepts it — while the call_sessions row said workspace A. An
+ *     EMPTY list means no workspace claims the number, which is the legitimate
+ *     per-rep DID case and is allowed (see the ceiling below).
  *
  * Checking the caller ID alone let a removed user dial out on the workspace's
  * Twilio account, AND — because the `call_sessions` insert is keyed on the
@@ -149,14 +157,29 @@ export function buildCalleeNoticeTwiml(): string {
  * Membership is checked first so a removed user hears the accurate reason
  * rather than "no number configured".
  */
-export type BrowserOutboundDenial = "not_a_member" | "no_caller_id";
+/**
+ * ponytail: "claimed by another workspace" is the strongest ownership test the
+ * schema supports — `call_settings.default_twilio_number` is the ONLY record of
+ * which number belongs to which tenant, and a rep's own DID is recorded
+ * nowhere. Ceiling: a number no workspace has configured is allowed through, so
+ * this catches stealing another tenant's CONFIGURED number (the reachable
+ * attack) but not an unregistered one. Upgrade path is a per-workspace owned-
+ * numbers table (or syncing Twilio's IncomingPhoneNumbers per workspace) and
+ * then requiring membership of that list outright.
+ */
+export type BrowserOutboundDenial = "not_a_member" | "no_caller_id" | "foreign_caller_id";
 
 export function denyBrowserOutbound(args: {
   workspaceId: string | null | undefined;
   callerId: string | null | undefined;
+  callerIdWorkspaceIds?: readonly string[] | null;
 }): BrowserOutboundDenial | null {
   if (!args.workspaceId) return "not_a_member";
   if (!args.callerId) return "no_caller_id";
+  const claims = args.callerIdWorkspaceIds ?? [];
+  // Claimed by somebody, but not by us → refuse. Claimed by us (even if another
+  // tenant shares the same configured number) → allow.
+  if (claims.length > 0 && !claims.includes(args.workspaceId)) return "foreign_caller_id";
   return null;
 }
 
@@ -170,6 +193,8 @@ export function denyBrowserOutbound(args: {
 export function browserOutboundDenialTwiml(reason: BrowserOutboundDenial): string {
   const text = reason === "not_a_member"
     ? "Your account is no longer active in a workspace, so this call cannot be placed. Please contact your administrator."
+    : reason === "foreign_caller_id"
+    ? "The calling number on your profile is registered to a different workspace, so this call cannot be placed. Please contact your administrator."
     : "No calling number is set up for your account. Please set one in settings, then try again.";
   return `<Response><Say voice="Polly.Joanna">${escapeXml(text)}</Say><Hangup/></Response>`;
 }

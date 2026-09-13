@@ -117,7 +117,7 @@ describe("C1 — outbound call safety", () => {
 
     // Both inputs are passed — a guard given only the caller ID is the bug.
     expect(src).toMatch(
-      /denyBrowserOutbound\(\{\s*workspaceId:\s*resolvedWorkspaceId,\s*callerId\s*\}\)/,
+      /denyBrowserOutbound\(\{\s*workspaceId:\s*resolvedWorkspaceId,\s*callerId,/,
     );
 
     // And it returns before dialling, speaking a refusal rather than nothing.
@@ -129,6 +129,40 @@ describe("C1 — outbound call safety", () => {
     // The session row stays keyed on the resolved workspace, which the guard now
     // guarantees — so a dialled browser call always leaves an audit row.
     expect(src).toMatch(/if \(resolvedWorkspaceId && callSid\)/);
+  });
+
+  // P1 #2, same doorway: rep_profiles.twilio_phone_number is free text the user
+  // types into their OWN profile (RepProfileCard → upsertRepProfile), validated
+  // by nothing, on a schema where rep_profiles has no workspace column. All
+  // tenants share one Twilio account, so workspace B's number typed into an
+  // A-member's profile dialled out as B with the session row saying A.
+  //
+  // Source-text guard (the behaviour of denyBrowserOutbound and
+  // workspacesClaimingNumber is executed in the Deno suite).
+  it("foreignCallerIdRefused — the caller ID is checked against the resolved workspace", () => {
+    const src = stripComments(voiceInbound());
+
+    // The claim list is resolved from call_settings and fed to the same guard.
+    expect(src).toMatch(/resolveWorkspacesClaimingNumber\(supabase, callerId\)/);
+    expect(src).toMatch(/denyBrowserOutbound\(\{[\s\S]{0,200}callerIdWorkspaceIds,?\s*\}\)/);
+
+    // Resolved BEFORE the guard, which is before the dial.
+    const claims = src.indexOf("resolveWorkspacesClaimingNumber(");
+    const guard = src.indexOf("denyBrowserOutbound(");
+    const dial = src.indexOf("buildOutboundDialTwiml(");
+    expect(claims).toBeGreaterThan(-1);
+    expect(claims).toBeLessThan(guard);
+    expect(guard).toBeLessThan(dial);
+
+    // The rule itself: claimed by someone else → refuse; claimed by us, or by
+    // nobody, → allow. (Shared-number tenants must not lock each other out.)
+    expect(callConfig()).toMatch(
+      /if \(claims\.length > 0 && !claims\.includes\(args\.workspaceId\)\) return "foreign_caller_id";/,
+    );
+
+    // A third distinct spoken reason, not a reuse of an existing one.
+    expect(callConfig()).toMatch(/reason === "foreign_caller_id"/);
+    expect(callConfig()).toMatch(/registered to a different workspace/);
   });
 
   it("removedUserCannotDial — the inbound PSTN path is NOT gated by it", () => {

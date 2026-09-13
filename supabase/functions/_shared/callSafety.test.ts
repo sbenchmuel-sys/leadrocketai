@@ -18,7 +18,11 @@ import {
   resolveAsrLanguages,
 } from "./callConfig.ts";
 import { callAnalysisDedupeKey, callDedupeKey } from "./timelineProjector.ts";
-import { matchWorkspaceByNumber, normalizeE164 } from "./phoneMapping.ts";
+import {
+  matchWorkspaceByNumber,
+  normalizeE164,
+  workspacesClaimingNumber,
+} from "./phoneMapping.ts";
 
 Deno.test("callAnalysisDedupeKey never collides with callDedupeKey", () => {
   const id = "1f1e0f6a-0000-4000-8000-000000000001";
@@ -212,4 +216,92 @@ Deno.test("a refused call hears a spoken reason and hangs up — never empty Twi
     browserOutboundDenialTwiml("not_a_member") !== browserOutboundDenialTwiml("no_caller_id"),
     "the two refusals must be distinguishable to the rep",
   );
+});
+
+// ── Caller-ID ownership (P1: workspace A dialling on workspace B's number) ───
+
+Deno.test("denyBrowserOutbound: another workspace's configured number is refused", () => {
+  // rep_profiles.twilio_phone_number is free text nobody validates, and all
+  // tenants share one Twilio account — so B's number in A's rep profile would
+  // otherwise dial out as B while the session row said A.
+  assertEquals(
+    denyBrowserOutbound({
+      workspaceId: "ws-A",
+      callerId: "+14155550123",
+      callerIdWorkspaceIds: ["ws-B"],
+    }),
+    "foreign_caller_id",
+  );
+});
+
+Deno.test("denyBrowserOutbound: the workspace's OWN number is allowed", () => {
+  assertEquals(
+    denyBrowserOutbound({
+      workspaceId: "ws-A",
+      callerId: "+14155550123",
+      callerIdWorkspaceIds: ["ws-A"],
+    }),
+    null,
+  );
+});
+
+Deno.test("denyBrowserOutbound: a number two tenants share is allowed to both", () => {
+  // A shared pilot number is configured by both workspaces. Refusing the second
+  // one would break a legitimate rep, so membership of the claim list — not
+  // "who claims it first" — is the test.
+  for (const ws of ["ws-A", "ws-B"]) {
+    assertEquals(
+      denyBrowserOutbound({
+        workspaceId: ws,
+        callerId: "+14155550123",
+        callerIdWorkspaceIds: ["ws-B", "ws-A"],
+      }),
+      null,
+    );
+  }
+});
+
+Deno.test("denyBrowserOutbound: an unclaimed number stays allowed (per-rep DID)", () => {
+  // Documented ceiling: no workspace has this number configured, and a rep's own
+  // DID is recorded nowhere, so it cannot be refused without killing C1/5.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-A", callerId: "+14155550999", callerIdWorkspaceIds: [] }),
+    null,
+  );
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-A", callerId: "+14155550999" }),
+    null,
+  );
+});
+
+Deno.test("denyBrowserOutbound: membership is still checked before ownership", () => {
+  // A removed user holding a foreign number hears the membership reason.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: null, callerId: "+1", callerIdWorkspaceIds: ["ws-B"] }),
+    "not_a_member",
+  );
+});
+
+Deno.test("a foreign caller ID gets its OWN spoken reason", () => {
+  const twiml = browserOutboundDenialTwiml("foreign_caller_id");
+  assert(twiml.includes("<Say"));
+  assert(twiml.includes("<Hangup/>"));
+  assert(!twiml.includes("<Dial"));
+  // Distinct from both other refusals — the rep and the log get the truth.
+  assert(twiml !== browserOutboundDenialTwiml("not_a_member"));
+  assert(twiml !== browserOutboundDenialTwiml("no_caller_id"));
+});
+
+Deno.test("workspacesClaimingNumber: every claimant, across formatting differences", () => {
+  const rows = [
+    { workspace_id: "ws-A", default_twilio_number: "+1 (415) 555-0123" },
+    { workspace_id: "ws-B", default_twilio_number: "+14155550123" },
+    { workspace_id: "ws-C", default_twilio_number: "+14155559999" },
+    { workspace_id: "ws-D", default_twilio_number: null },
+  ];
+  assertEquals(workspacesClaimingNumber(rows, "+14155550123"), ["ws-A", "ws-B"]);
+  assertEquals(workspacesClaimingNumber(rows, "+14155551111"), []);
+  assertEquals(workspacesClaimingNumber(null, "+14155550123"), []);
+  // matchWorkspaceByNumber keeps its first-hit contract on top of the list.
+  assertEquals(matchWorkspaceByNumber(rows, "+1 415 555 0123"), "ws-A");
 });

@@ -34,6 +34,23 @@ export interface WorkspaceNumberRow {
 }
 
 /**
+ * EVERY workspace whose configured Twilio number IS this number, by normalized
+ * comparison. Usually 0 or 1, but two tenants CAN have the same number
+ * configured (a shared pilot number), and the caller-ID ownership check below
+ * must not mistake that for a foreign number — hence a list, not a first hit.
+ */
+export function workspacesClaimingNumber(
+  rows: readonly WorkspaceNumberRow[] | null | undefined,
+  agentNumber: string,
+): string[] {
+  if (!rows || rows.length === 0) return [];
+  const target = normalizeE164(agentNumber);
+  return rows
+    .filter((r) => r.default_twilio_number && normalizeE164(r.default_twilio_number) === target)
+    .map((r) => r.workspace_id);
+}
+
+/**
  * Find the workspace whose configured Twilio number IS this number.
  * Pure and exported so the match rule has exactly one definition and one test.
  * Returns null when nothing matches — there is deliberately NO "if there is
@@ -43,12 +60,7 @@ export function matchWorkspaceByNumber(
   rows: readonly WorkspaceNumberRow[] | null | undefined,
   agentNumber: string,
 ): string | null {
-  if (!rows || rows.length === 0) return null;
-  const target = normalizeE164(agentNumber);
-  const hit = rows.find(
-    (r) => r.default_twilio_number && normalizeE164(r.default_twilio_number) === target,
-  );
-  return hit?.workspace_id ?? null;
+  return workspacesClaimingNumber(rows, agentNumber)[0] ?? null;
 }
 
 /**
@@ -59,11 +71,23 @@ export async function resolveWorkspaceByAgentNumber(
   supabase: ReturnType<typeof createClient>,
   agentNumber: string,
 ): Promise<string | null> {
+  return (await resolveWorkspacesClaimingNumber(supabase, agentNumber))[0] ?? null;
+}
+
+/**
+ * Every workspace that has this number configured as its Twilio number. Used by
+ * the browser-outbound caller-ID ownership check: a caller ID claimed by some
+ * OTHER workspace must never go out on this workspace's call.
+ */
+export async function resolveWorkspacesClaimingNumber(
+  supabase: ReturnType<typeof createClient>,
+  agentNumber: string,
+): Promise<string[]> {
   const { data: settings } = await supabase
     .from("call_settings")
     .select("workspace_id, default_twilio_number")
     .not("default_twilio_number", "is", null);
-  return matchWorkspaceByNumber(settings as WorkspaceNumberRow[] | null, agentNumber);
+  return workspacesClaimingNumber(settings as WorkspaceNumberRow[] | null, agentNumber);
 }
 
 interface PhoneMappingResult {
