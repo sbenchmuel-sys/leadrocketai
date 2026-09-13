@@ -105,6 +105,50 @@ export const CLASSIFY_TOTAL_BACKOFF_MINUTES = CLASSIFY_BACKOFF_MINUTES
  */
 export const CLASSIFY_NEVER_ISO = "9999-12-31T00:00:00.000Z";
 
+// ── Run budget ─────────────────────────────────────────────────────
+//
+// `cron-dispatcher` kills a target at 55 s. While the AI gateway was
+// returning 402 on every call, 25 rows failed fast in 6–9 s, which is
+// the regime BATCH_SIZE = 25 was tuned in. The moment credits were
+// restored, 25 REAL AI calls took 47–55 s and the cron tipped straight
+// into back-to-back timeouts: 17:56–17:59 ok at ~48 s, 18:00 onward
+// killed at 55 s.
+//
+// Batch size alone only moves that cliff — it does not remove it, since
+// AI latency is variable and a single slow call can blow any fixed
+// batch. So the real limiter is wall-clock: stop starting new rows once
+// the budget is spent, bank what is done, let the next tick continue.
+
+/** Hard kill imposed by cron-dispatcher on any target. */
+export const CLASSIFY_DISPATCHER_TIMEOUT_MS = 55_000;
+
+/**
+ * Stop starting new rows after this much elapsed time.
+ *
+ * 20 s of headroom under the dispatcher's kill — enough for one slow
+ * in-flight AI call to finish and commit after the budget is already
+ * spent. Measured tail was ~1.9 s/row; the headroom covers roughly ten
+ * times that for a single unlucky call.
+ */
+export const CLASSIFY_RUN_BUDGET_MS = 35_000;
+
+/**
+ * Observed mean seconds-per-row against a HEALTHY gateway (47–49 s for
+ * 25 rows, production, 2026-09-13 17:56–17:59). BATCH_SIZE is sized off
+ * this. If mean latency rises above ~2.3 s/row the budget starts
+ * truncating batches — harmless (work is banked per row), but it is the
+ * signal to lower BATCH_SIZE rather than let every run stop short.
+ */
+export const CLASSIFY_OBSERVED_MS_PER_ROW = 1_900;
+
+/**
+ * The one decision the per-row loop makes before starting a row.
+ * `>=` not `>`: at exactly the budget we stop, we do not start one more.
+ */
+export function isRunBudgetSpent(elapsedMs: number): boolean {
+  return elapsedMs >= CLASSIFY_RUN_BUDGET_MS;
+}
+
 /** Short, stable reason codes stored in `classify_last_error`. */
 export type ClassifyFailureReason =
   | `ai_http_${number}`

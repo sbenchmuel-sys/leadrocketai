@@ -30,7 +30,11 @@ import {
   CLASSIFY_LAST_ERROR_KEY,
   CLASSIFY_NEVER_ISO,
   CLASSIFY_NEXT_AT_KEY,
+  CLASSIFY_DISPATCHER_TIMEOUT_MS,
+  CLASSIFY_OBSERVED_MS_PER_ROW,
+  CLASSIFY_RUN_BUDGET_MS,
   CLASSIFY_TOTAL_BACKOFF_MINUTES,
+  isRunBudgetSpent,
   classifyEligibilityFilter,
   stripClassifyMarks,
   isClassifyEligible,
@@ -46,7 +50,9 @@ const ROOT = path.resolve(__dirname, "../..");
 const CLASSIFY_INBOUND = "supabase/functions/classify-inbound/index.ts";
 const src = readFileSync(path.join(ROOT, CLASSIFY_INBOUND), "utf8");
 
-const BATCH_SIZE = 25;
+// Read from the function itself so the spec cannot drift from the code
+// it is guarding — BATCH_SIZE is a tuned number and it will move again.
+const BATCH_SIZE = Number(/const BATCH_SIZE = (\d+);/.exec(src)![1]);
 const iso = (ms: number) => new Date(ms).toISOString();
 const T0 = Date.parse("2026-09-13T09:00:00.000Z");
 const MIN = 60_000;
@@ -394,6 +400,114 @@ describe("no terminal branch abandons a row silently", () => {
     expect(src).toContain("failure_reasons: failureReasons");
     // `fetched` can be up to FETCH_LIMIT, so it does not reconcile
     // against classified + failed. `worked` is the number that does.
-    expect(src).toContain("counts.worked = batch.length;");
+    expect(src).toContain("counts.worked++;");
+    expect(src).toContain("counts.unreached = batch.length - counts.worked;");
+  });
+});
+
+// ── 7. The run budget: bank partial work, never get killed ─────────
+//
+// The second production failure mode. With the gateway dead, 25 rows
+// failed fast in 6–9 s — the regime BATCH_SIZE = 25 was tuned in. The
+// minute credits were restored, 25 REAL AI calls took 47–55 s and
+// cron-dispatcher started killing the function at its 55 s limit
+// (17:56–17:59 ok at ~48 s; 18:00 onward timeout), so the backlog
+// stopped draining entirely.
+describe("a run stops on the clock instead of being killed", () => {
+  it("leaves real headroom under the dispatcher's kill", () => {
+    expect(CLASSIFY_RUN_BUDGET_MS).toBeLessThan(CLASSIFY_DISPATCHER_TIMEOUT_MS);
+    // Enough slack for one unlucky in-flight AI call to finish and
+    // commit after the budget is already spent.
+    const headroomMs = CLASSIFY_DISPATCHER_TIMEOUT_MS - CLASSIFY_RUN_BUDGET_MS;
+    expect(headroomMs).toBeGreaterThanOrEqual(15_000);
+    expect(headroomMs / CLASSIFY_OBSERVED_MS_PER_ROW).toBeGreaterThan(5);
+  });
+
+  it("sizes the batch so a typical run finishes inside the budget", () => {
+    // The whole point: at measured latency the batch completes, so the
+    // budget is a backstop rather than the normal exit.
+    const typicalRunMs = BATCH_SIZE * CLASSIFY_OBSERVED_MS_PER_ROW;
+    expect(typicalRunMs).toBeLessThan(CLASSIFY_RUN_BUDGET_MS);
+    expect(typicalRunMs).toBeLessThan(CLASSIFY_DISPATCHER_TIMEOUT_MS / 1.5);
+    // …and the old 25 would NOT have. This is the regression.
+    expect(25 * CLASSIFY_OBSERVED_MS_PER_ROW).toBeGreaterThan(CLASSIFY_RUN_BUDGET_MS);
+  });
+
+  it("stops at the budget rather than starting one more row", () => {
+    expect(isRunBudgetSpent(CLASSIFY_RUN_BUDGET_MS - 1)).toBe(false);
+    expect(isRunBudgetSpent(CLASSIFY_RUN_BUDGET_MS)).toBe(true);
+    expect(isRunBudgetSpent(CLASSIFY_RUN_BUDGET_MS + 1)).toBe(true);
+  });
+
+  it("checks the budget BEFORE working a row, and breaks without marking", () => {
+    const loopAt = src.indexOf("for (const row of batch) {");
+    const guardAt = src.indexOf("isRunBudgetSpent(Date.now() - startedAt)");
+    const firstTryAt = src.indexOf("try {", loopAt);
+    expect(guardAt).toBeGreaterThan(loopAt);
+    expect(guardAt).toBeLessThan(firstTryAt); // before any work on the row
+
+    // The break path must not touch failRow — see the next test.
+    const guardBlock = src.slice(guardAt, firstTryAt);
+    expect(guardBlock).toContain("break;");
+    expect(guardBlock).not.toContain("failRow");
+    expect(guardBlock).not.toContain("markClassifyFailure");
+  });
+
+  // ── The backoff/timeout interaction the coordinator asked about ──
+  it("a row the budget never reached is NOT marked as a failed attempt", () => {
+    // Simulate one run: 25 eligible rows, ~1.9 s each, budget 35 s.
+    // Rows the loop reaches fail (gateway 402) and get marked; rows it
+    // never reaches must be untouched — they were never attempted.
+    const rows = Array.from({ length: 25 }, (_, i) => row(`r${i}`, null));
+
+    let elapsed = 0;
+    const reached: string[] = [];
+    for (const r of rows) {
+      if (isRunBudgetSpent(elapsed)) break;
+      reached.push(r.id);
+      r.metadata_json = markClassifyFailure(r.metadata_json, "ai_http_402", iso(T0));
+      elapsed += CLASSIFY_OBSERVED_MS_PER_ROW;
+    }
+
+    const unreached = rows.filter((r) => !reached.includes(r.id));
+    expect(reached.length).toBeGreaterThan(0);
+    expect(unreached.length).toBeGreaterThan(0);
+
+    // Attempted rows: marked and parked.
+    for (const r of rows.filter((x) => reached.includes(x.id))) {
+      expect(readClassifyAttempts(r.metadata_json)).toBe(1);
+      expect(isClassifyEligible(r.metadata_json, iso(T0 + MIN))).toBe(false);
+    }
+    // Never-reached rows: no marks at all, still first-class candidates
+    // on the very next tick. A timeout must not burn a retry.
+    for (const r of unreached) {
+      expect(r.metadata_json).toBeNull();
+      expect(readClassifyAttempts(r.metadata_json)).toBe(0);
+      expect(isClassifyEligible(r.metadata_json, iso(T0 + MIN))).toBe(true);
+    }
+    expect(tick(unreached, T0 + MIN).selected).toHaveLength(unreached.length);
+  });
+
+  it("banks each row as it completes, so a kill cannot discard work", () => {
+    // Every classification is its own awaited UPDATE inside the loop —
+    // nothing is buffered to a flush at the end — so a kill at 55 s
+    // leaves every completed row durably written. What a kill DOES lose
+    // is the end-of-run summary, which is why progress was invisible.
+    const loop = src.slice(
+      src.indexOf("for (const row of batch) {"),
+      src.indexOf("classify_inbound_batch_done"),
+    );
+    expect(loop).toContain('.from("lead_timeline_items")');
+    expect(loop).toContain(".update({");
+    // No accumulate-then-flush: no array of pending writes, no upsert
+    // of many rows after the loop.
+    expect(loop).not.toMatch(/\.upsert\(/);
+    expect(src).not.toMatch(/pending(Writes|Updates)/i);
+  });
+
+  it("reports the stop in the run summary", () => {
+    expect(src).toContain("counts.budget_stopped = true;");
+    expect(src).toContain("budget_stopped: false,");
+    expect(src).toContain("unreached: 0,");
   });
 });

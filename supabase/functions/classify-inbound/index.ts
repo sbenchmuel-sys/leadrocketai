@@ -64,6 +64,14 @@
 // for purging at 72h instead of the 7-day hard cap, and could hide a
 // real customer question in the Queue.
 //
+// Run budget (Unit Q1c, second pass): the per-row loop stops starting
+// new rows at CLASSIFY_RUN_BUDGET_MS (35 s), 20 s under the 55 s kill
+// cron-dispatcher imposes. With the gateway restored, 25 rows of real
+// AI calls took 47-55 s and every run was being killed, so the backlog
+// stopped draining. Each row is committed by its own UPDATE as it
+// completes, so stopping early banks the work; rows the budget never
+// reached carry NO retry mark and are ordinary candidates next tick.
+//
 // Re-entrancy: the cron schedule is every minute. If a run overruns
 // 60s, a second run can start while the first is in flight. Each
 // UPDATE is guarded by `.is("intent", null)` so the loser of any
@@ -80,7 +88,10 @@ import {
 } from "../_shared/inboundIntentDetectors.ts";
 import {
   type ClassifyFailureReason,
+  CLASSIFY_OBSERVED_MS_PER_ROW,
+  CLASSIFY_RUN_BUDGET_MS,
   classifyEligibilityFilter,
+  isRunBudgetSpent,
   stripClassifyMarks,
   markClassifyFailure,
   selectClassifiable,
@@ -92,19 +103,32 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-internal-secret",
 };
 
-// Small batch — keeps each run under the 60-second Edge Function
-// budget even when ai_task takes a few seconds per call. 322 legacy
-// rows ÷ 25 per minute ≈ 13 minutes to drain after deploy.
-const BATCH_SIZE = 25;
+// Sized off MEASURED latency against a healthy gateway, not a guess.
+//
+// Production, 2026-09-13: with the gateway 402ing, 25 rows failed fast
+// in 6–9 s. The minute credits were restored, the same 25 rows took
+// 47–49 s of real AI calls and then tipped over cron-dispatcher's 55 s
+// kill into back-to-back timeouts. BATCH_SIZE = 25 was tuned in the
+// broken regime and does not survive the working one.
+//
+// 15 × ~1.9 s ≈ 29 s — about 81% of CLASSIFY_RUN_BUDGET_MS (35 s) and
+// barely half the 55 s kill, so a typical run finishes its whole batch
+// with room to spare. THE LATENCY ASSUMPTION THIS ENCODES: mean
+// ai_task.intent_router round-trip ≈ 1.9 s. It holds up to ~2.3 s/row;
+// past that the run budget starts truncating batches (which is safe —
+// every row is committed as it completes — but it means this number
+// should come down). Deterministic rows (bounce / OOO / calendar
+// accept / unsubscribe) cost no AI call at all and barely register.
+const BATCH_SIZE = 15;
 
 // Rows are over-fetched so that a row parked by retry backoff can never
-// consume one of the 25 working slots. `classifyEligibilityFilter` is
+// consume one of the working slots. `classifyEligibilityFilter` is
 // what actually keeps parked rows out, SERVER-SIDE; this headroom plus
 // the in-memory `selectClassifiable` pass is a DETECTOR, not a spare
-// tyre. ponytail: 2x is a guess, not a proof. It absorbs at most 25
-// leaked parked rows — with a backlog in the thousands, a server-side
-// filter that stops matching parks all 50 fetched rows, selects none,
-// and the queue re-freezes. Loudly (see
+// tyre. ponytail: 2x is a guess, not a proof. It absorbs at most
+// BATCH_SIZE leaked parked rows — with a backlog in the thousands, a
+// server-side filter that stops matching parks all FETCH_LIMIT fetched
+// rows, selects none, and the queue re-freezes. Loudly (see
 // `classify_inbound_server_backoff_filter_leaked`), but it freezes.
 // Ceiling: a non-zero `parked` is not "handled", it is an incident —
 // fix the server-side filter, do not raise this number.
@@ -214,6 +238,14 @@ interface BatchCounts {
    * readable without the source open.
    */
   worked: number;
+  /**
+   * Selected but never started, because the run budget ran out first.
+   * These rows carry NO retry mark — they were not attempted — and are
+   * ordinary candidates again on the next tick.
+   */
+  unreached: number;
+  /** True when the run stopped on the clock rather than finishing. */
+  budget_stopped: boolean;
   /** Subset of classified — rows that got the NO_SIGNAL_INTENT fallback. */
   no_signal: number;
   /** Subset of classified — matched a deterministic detector, no AI call. */
@@ -440,6 +472,8 @@ Deno.serve(async (req) => {
     parked: 0,
     exhausted: 0,
     worked: 0,
+    unreached: 0,
+    budget_stopped: false,
     no_signal: 0,
     deterministic: 0,
   };
@@ -550,7 +584,8 @@ Deno.serve(async (req) => {
     counts.fetched = fetched.length;
     counts.parked = parked;
     counts.exhausted = exhausted;
-    counts.worked = batch.length;
+    // counts.worked is set after the loop — the run budget can stop it
+    // short, and `classified + failed` must always reconcile against it.
     if (parked > 0) {
       // The server-side predicate should have made this impossible.
       logger.warn("classify_inbound_server_backoff_filter_leaked", {
@@ -588,6 +623,21 @@ Deno.serve(async (req) => {
     }
 
     for (const row of batch) {
+      // Wall-clock budget, checked BEFORE any work on this row.
+      //
+      // A partial batch that banks its work beats a full batch that
+      // gets killed at 55 s. Breaking here (rather than marking) is
+      // load-bearing: a row we never reached was never ATTEMPTED, so it
+      // must carry no retry mark and must be a first-class candidate on
+      // the next tick. `failRow` is deliberately not called on this
+      // path. Pinned by src/test/classifyInboundResilience.test.ts.
+      if (isRunBudgetSpent(Date.now() - startedAt)) {
+        counts.budget_stopped = true;
+        break;
+      }
+      // Incremented here, not tallied after the loop, so the count is
+      // still truthful if the outer catch fires mid-batch.
+      counts.worked++;
       try {
         const emailText = buildEmailText(row);
 
@@ -817,6 +867,8 @@ Deno.serve(async (req) => {
         await failRow(row, "db_update_failed").catch(() => {});
       }
     }
+
+    counts.unreached = batch.length - counts.worked;
 
     logger.info("classify_inbound_batch_done", {
       duration_ms: Date.now() - startedAt,
