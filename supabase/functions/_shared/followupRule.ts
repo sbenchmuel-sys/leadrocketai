@@ -151,6 +151,51 @@ export function followupWaitDays(
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// ── Specialised rules that deliberately wait LONGER ────────────────
+//
+// THE DEFERRAL SET, in ONE place. The generic `followup_due` fallback is
+// stage-blind by design — that blindness is what closes the six-week hole — so
+// every decision point that can emit a generic verdict has to ask whether a
+// specialised rule is still waiting for its own, longer turn. Otherwise the rep
+// gets "Follow up (no reply in 3 days)" days early under the wrong label, and
+// the specialised key never fires because the generic one already claimed the
+// lead.
+//
+// There are THREE such decision points and TWO copies of the action rule
+// (`syncEngine.deriveAction` and gmail-bulk-sync's simplified
+// `bulkSyncAction.deriveAction`). Four rounds of this unit were spent fixing
+// one copy and missing the other, so the set lives here and all of them call
+// it. Add a new specialised rule → add it here → every site defers to it.
+
+/** Branch B (both rules) waits this long before `closing_followup`. */
+export const CLOSING_FOLLOWUP_DAYS = 3;
+/** Branch D2 (syncEngine) waits this long before `post_meeting_followup`. */
+export const POST_MEETING_FOLLOWUP_DAYS = 7;
+
+/**
+ * Is a specialised rule still waiting for its turn on this lead?
+ *
+ * NOT deferred to, deliberately: re-engagement at 45 days. That one is MEANT to
+ * be overtaken — a warm lead waiting six weeks for `reengage` is exactly the
+ * hole this unit exists to close. Do not add it here.
+ */
+export function specialisedRulePending(input: {
+  stage: string;
+  daysSinceLastOutbound: number;
+  /** An enabled nurture campaign mid-cadence: it will send on its own interval. */
+  nurtureCadenceActive: boolean;
+}): boolean {
+  // The campaign sends the next nurture email itself; a human prompt two days
+  // early duplicates that work.
+  if (input.nurtureCadenceActive) return true;
+  const specialisedWaitDays = input.stage === "post_meeting"
+    ? POST_MEETING_FOLLOWUP_DAYS
+    : input.stage === "closing"
+      ? CLOSING_FOLLOWUP_DAYS
+      : 0;
+  return input.daysSinceLastOutbound < specialisedWaitDays;
+}
+
 /**
  * The rule. Returns a `followup_due` action when MY last message is the last
  * message and it is at least `waitDays` CALENDAR days old (business days were

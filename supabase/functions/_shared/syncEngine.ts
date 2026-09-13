@@ -8,9 +8,12 @@
 import {
   deriveFollowupDue,
   followupWaitDays,
+  CLOSING_FOLLOWUP_DAYS,
   mustClearEligibleAt,
   OUTBOUND_SEND_KEYS,
+  POST_MEETING_FOLLOWUP_DAYS,
   rateLimitedAction,
+  specialisedRulePending,
 } from "./followupRule.ts";
 
 // ============================================
@@ -95,13 +98,10 @@ export interface CadenceSettingsV1 {
   flows: Flows;
 }
 
-/**
- * Thresholds two specialised branches deliberately wait for. Named because the
- * generic `followup_due` fallback has to defer to them — a literal in two
- * places would drift and the fallback would start overtaking them again.
- */
-export const CLOSING_FOLLOWUP_DAYS = 3;
-export const POST_MEETING_FOLLOWUP_DAYS = 7;
+// The deferral set (thresholds + the `specialisedRulePending` predicate) lives
+// in _shared/followupRule.ts so this rule and gmail-bulk-sync's copy share ONE
+// definition. Re-exported for callers that referenced them here.
+export { CLOSING_FOLLOWUP_DAYS, POST_MEETING_FOLLOWUP_DAYS };
 
 export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
   version: 1,
@@ -493,11 +493,22 @@ export function deriveAction(
   //
   // NOT a send trigger: `followup_due` is absent from OUTBOUND_SEND_KEYS and
   // `buildLeadUpdate` blanks its `eligible_at` before persisting.
-  const followupDue = deriveFollowupDue(
-    metrics,
-    followupWaitDays(strategy, modeSettings),
-    now,
-  );
+  //
+  // The deferral is applied HERE, once, so every decision point below inherits
+  // it: the volume-cap branch, and the fallback at the end. (Codex found it
+  // applied at the fallback only, which let a post-meeting lead surface as
+  // `rate_limited` before its own 7-day rule was even due.)
+  const specialisedPending = specialisedRulePending({
+    stage,
+    daysSinceLastOutbound: lastOutTime > 0 ? (now - lastOutTime) / DAY : Number.POSITIVE_INFINITY,
+    nurtureCadenceActive: flows.nurture_campaigns.enabled
+      && metrics.nurture_outbound_count > 0
+      && !!nurtureCadence,
+  });
+
+  const followupDue = specialisedPending
+    ? null
+    : deriveFollowupDue(metrics, followupWaitDays(strategy, modeSettings), now);
 
   // GUARDRAILS
   //
@@ -525,8 +536,13 @@ export function deriveAction(
   const hasUnansweredInbound = metrics.last_inbound_at != null
     && new Date(metrics.last_inbound_at).getTime() > lastOutTime;
   const silent: ActionResult = { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+  // `specialisedPending` silences the cap explanation too: a post-meeting lead
+  // four days in has nothing to be told yet, and `rate_limited` would claim the
+  // card before its own rule is due.
   const capped = (availableAtMs: number): ActionResult =>
-    followupDue ?? (hasUnansweredInbound ? silent : rateLimitedAction(availableAtMs, timezone));
+    followupDue ?? (hasUnansweredInbound || specialisedPending
+      ? silent
+      : rateLimitedAction(availableAtMs, timezone));
 
   // EVERY tripped cap is evaluated and the LATEST expiry wins. Returning on the
   // first one promised availability at last_outbound + 7d for a lead that had
@@ -680,29 +696,10 @@ export function deriveAction(
   // the specialised key — which then never fires, because the generic one
   // already claimed the lead. Same class as the closed-stage exit above.
   //
-  // Deferred to:
-  //   • post_meeting — D2 waits 7 days for `post_meeting_followup`.
-  //   • closing      — B waits 3 days for `closing_followup` (only reachable if
-  //                    a stored wait were shorter than 3; free to state anyway).
-  //   • an active nurture cadence — E fires `send_nurture_N` on the campaign's
-  //     own 7/14/30-day interval, and the campaign will send it automatically;
-  //     a human prompt two days early would duplicate that work.
-  //
-  // NOT deferred to: F) re-engagement at 45 days. That one IS meant to be
-  // overtaken — a warm lead waiting six weeks for `reengage` is precisely the
-  // hole this unit exists to close. Do not "fix" it by adding it here.
-  const daysSinceLastOut = (now - lastOutTime) / DAY;
-  const specialisedWaitDays = stage === "post_meeting"
-    ? POST_MEETING_FOLLOWUP_DAYS
-    : stage === "closing"
-      ? CLOSING_FOLLOWUP_DAYS
-      : 0;
-  const nurtureCadenceOwnsIt = flows.nurture_campaigns.enabled
-    && metrics.nurture_outbound_count > 0
-    && !!nurtureCadence;
-  const specialisedRulePending = nurtureCadenceOwnsIt || daysSinceLastOut < specialisedWaitDays;
-
-  if (followupDue && !specialisedRulePending) return followupDue;
+  // The deferral is already folded into `followupDue` above (one computation,
+  // shared with the volume-cap branch and with gmail-bulk-sync's copy of the
+  // rule via `specialisedRulePending`).
+  if (followupDue) return followupDue;
   return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
 }
 

@@ -405,7 +405,7 @@ describe("rate_limited — honest about what is actually paused", () => {
 describe("deriveAction wiring", () => {
   it("evaluates the follow-up rule after REPLY PENDING and before the guardrails", () => {
     const replyPending = syncEngineSrc.indexOf("// A) REPLY PENDING");
-    const followup = syncEngineSrc.indexOf("const followupDue = deriveFollowupDue(");
+    const followup = syncEngineSrc.indexOf("const followupDue = specialisedPending");
     const guardrails = syncEngineSrc.indexOf("\n  // GUARDRAILS\n");
     expect(replyPending).toBeGreaterThan(-1);
     expect(followup).toBeGreaterThan(replyPending);
@@ -413,7 +413,7 @@ describe("deriveAction wiring", () => {
   });
 
   it("falls back to followup_due instead of dropping the lead entirely", () => {
-    expect(syncEngineSrc).toContain("if (followupDue && !specialisedRulePending) return followupDue;");
+    expect(syncEngineSrc).toContain("if (followupDue) return followupDue;");
   });
 });
 
@@ -1253,11 +1253,32 @@ describe("deriveAction — specialised rules keep their turn", () => {
       .toBe(FOLLOWUP_DUE_KEY);
   });
 
-  it("the deferral reads the same constants the branches do", () => {
+  it("the branches read the same constants the deferral does", () => {
     // A literal in two places would drift and the overtaking would come back.
     expect(syncEngineSrc).toContain("POST_MEETING_FOLLOWUP_DAYS * DAY");
     expect(syncEngineSrc).toContain("CLOSING_FOLLOWUP_DAYS * DAY");
-    expect(syncEngineSrc).toMatch(/stage === "post_meeting"\s*\?\s*POST_MEETING_FOLLOWUP_DAYS/);
+    const rule = readFileSync(path.join(ROOT, "supabase/functions/_shared/followupRule.ts"), "utf8");
+    expect(rule).toMatch(/stage === "post_meeting"\s*\?\s*POST_MEETING_FOLLOWUP_DAYS/);
+  });
+
+  it("BOTH copies of the action rule call the one shared deferral", () => {
+    // The recurring failure of this unit: a fix landing in one of two parallel
+    // rules. `specialisedRulePending` is defined once and both must use it.
+    const rule = readFileSync(path.join(ROOT, "supabase/functions/_shared/followupRule.ts"), "utf8");
+    expect(rule).toContain("export function specialisedRulePending(");
+    for (const rel of [
+      "supabase/functions/_shared/syncEngine.ts",
+      "supabase/functions/_shared/bulkSyncAction.ts",
+    ]) {
+      expect(readFileSync(path.join(ROOT, rel), "utf8")).toContain("specialisedRulePending({");
+    }
+  });
+
+  it("and BOTH decision points in syncEngine inherit it", () => {
+    // Folded into `followupDue` once, so the volume-cap branch and the fallback
+    // can't disagree — the bug was the deferral living at the fallback only.
+    expect(syncEngineSrc).toContain("const followupDue = specialisedPending");
+    expect(syncEngineSrc).toMatch(/hasUnansweredInbound \|\| specialisedPending/);
   });
 });
 
@@ -1403,5 +1424,109 @@ describe("rate_limited promises the LATEST expiry of every tripped cap", () => {
       );
       expect(new Date(r.eligible_at).getTime()).toBeGreaterThanOrEqual(floor);
     }
+  });
+});
+
+
+// ── The deferral reaches the scheduled sweep too ───────────────────
+
+describe("gmail-bulk-sync defers to the same specialised rules", () => {
+  const unansweredSince = (days: number, over: Record<string, unknown> = {}) => ({
+    first_outbound_at: daysAgo(60),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(days),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+    ...over,
+  });
+
+  it("a post-meeting lead is not overtaken on day 4", () => {
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(unansweredSince(4), 0, null, "post_meeting", "fast")).next_action_key)
+      .toBeNull();
+  });
+
+  it("…and is free again once its 7-day window has passed", () => {
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(unansweredSince(8), 0, null, "post_meeting", "fast")).next_action_key)
+      .toBe(FOLLOWUP_DUE_KEY);
+  });
+
+  it("a closing lead is not overtaken before its own 3-day rule", () => {
+    // bulk-sync's own closing branch fires at >3 days, so days 0-3 must stay
+    // quiet rather than showing the generic prompt.
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(unansweredSince(2), 0, null, "closing", "fast")).next_action_key)
+      .toBeNull();
+  });
+
+  it("a mid-cadence nurture lead is left to its campaign", () => {
+    expect(withFrozenClock(() => bulkDeriveAction(
+      unansweredSince(4, { nurture_outbound_count: 1, last_nurture_outbound_at: daysAgo(4) }),
+      0, "weekly", "engaged", "fast",
+    )).next_action_key).toBeNull();
+  });
+
+  it("an ordinary engaged lead still surfaces (guard is not over-broad)", () => {
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(unansweredSince(4), 0, null, "engaged", "fast")).next_action_key)
+      .toBe(FOLLOWUP_DUE_KEY);
+  });
+});
+
+describe("the volume-cap branch defers too", () => {
+  it("a post-meeting lead at day 4 with a blown cap stays quiet, not rate_limited", () => {
+    const r = withFrozenClock(() => derive(
+      metrics({ first_outbound_at: daysAgo(60), last_inbound_at: daysAgo(30), last_outbound_at: daysAgo(4) }),
+      { stage: "post_meeting", out7d: engine.DEFAULT_CADENCE_SETTINGS.guardrails.max_emails_per_lead_per_7d },
+    ));
+    expect(r.next_action_key).toBeNull();
+  });
+
+  it("an engaged lead in the same shape still gets the explanation", () => {
+    const r = withFrozenClock(() => derive(
+      metrics({ first_outbound_at: daysAgo(60), last_inbound_at: daysAgo(30), last_outbound_at: daysAgo(1) }),
+      { stage: "engaged", out7d: engine.DEFAULT_CADENCE_SETTINGS.guardrails.max_emails_per_lead_per_7d },
+    ));
+    expect(r.next_action_key).toBe(RATE_LIMITED_KEY);
+  });
+});
+
+
+// ── The enrollment lookup must not scale with the lead count ───────
+
+describe("live-enrollment lookup is chunked", () => {
+  const src = () => readFileSync(path.join(ROOT, "src/lib/queueQueries.ts"), "utf8");
+
+  it("slices the ids rather than passing the whole list to one .in()", () => {
+    // An unchunked `.in()` goes into the PostgREST query STRING, so it grows
+    // ~37 bytes per UUID and a few thousand campaign leads exceed the URL limit.
+    expect(src()).toContain("ENROLLMENT_LOOKUP_CHUNK");
+    expect(src()).toMatch(/for \(let i = 0; i < leadIds\.length; i \+= ENROLLMENT_LOOKUP_CHUNK\)/);
+    // Scoped to THIS lookup: `fetchLatestInbounds` also takes a lead-id list,
+    // but it is called with one visible page of ids and is capped at 500 rows,
+    // so it does not grow with the workspace. Not this unit's to change.
+    const fn = src().slice(src().indexOf("async function fetchLiveEnrollmentLeadIds"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body).toContain('.in("lead_id", chunk)');
+    expect(body).not.toContain('.in("lead_id", leadIds)');
+  });
+
+  it("keeps each request well inside any URL limit", () => {
+    const m = src().match(/const ENROLLMENT_LOOKUP_CHUNK = (\d+);/);
+    expect(m).toBeTruthy();
+    const chunk = Number(m![1]);
+    const UUID_BYTES_IN_QUERY = 37; // 36 chars + separator
+    expect(chunk * UUID_BYTES_IN_QUERY).toBeLessThan(8_000);
+  });
+
+  it("a failed chunk degrades to visibility without aborting the rest", () => {
+    // `continue`, not `return` — one bad chunk must not silently drop the
+    // enrollment state of every later lead.
+    const fn = src().slice(src().indexOf("async function fetchLiveEnrollmentLeadIds"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body).toContain("continue;");
+    expect(body).toMatch(/enrollment lookup failed for leads/);
   });
 });

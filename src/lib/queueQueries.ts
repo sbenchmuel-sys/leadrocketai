@@ -273,21 +273,42 @@ export function belongsInReactiveTabs(
  */
 const LIVE_ENROLLMENT_STATUSES = ["scheduled", "active", "paused"] as const;
 
+/**
+ * Ids per `.in()` filter. PostgREST puts the whole list in the query STRING, so
+ * an unchunked lookup grows with the workspace's campaign-lead count: ~37 bytes
+ * per UUID means a few thousand leads blows the server's URL limit and the
+ * query 400s. Because this lookup fails toward visibility, that would not crash
+ * the Queue — it would quietly fill it with campaign leads, which is worse than
+ * a crash to diagnose. 100 ids ≈ 3.7 KB of URL, comfortably inside any limit,
+ * and the number of round-trips stays tiny for any realistic workspace.
+ */
+const ENROLLMENT_LOOKUP_CHUNK = 100;
+
 /** Which of these leads still have a live cold enrollment? */
 async function fetchLiveEnrollmentLeadIds(leadIds: string[]): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from("campaign_enrollment")
-    .select("lead_id")
-    .in("lead_id", leadIds)
-    .in("status", LIVE_ENROLLMENT_STATUSES as unknown as string[]);
-  if (error) {
-    // Fail toward VISIBILITY: an owed follow-up the rep can't see is the bug
-    // this unit exists to fix, and the cost of being wrong the other way is a
-    // handful of campaign leads appearing in Follow up early.
-    console.error("[queueQueries] enrollment lookup failed:", error);
-    return new Set<string>();
+  const live = new Set<string>();
+  for (let i = 0; i < leadIds.length; i += ENROLLMENT_LOOKUP_CHUNK) {
+    const chunk = leadIds.slice(i, i + ENROLLMENT_LOOKUP_CHUNK);
+    const { data, error } = await supabase
+      .from("campaign_enrollment")
+      .select("lead_id")
+      .in("lead_id", chunk)
+      .in("status", LIVE_ENROLLMENT_STATUSES as unknown as string[]);
+    if (error) {
+      // Fail toward VISIBILITY, per chunk: an owed follow-up the rep can't see
+      // is the bug this unit exists to fix, and the cost of being wrong the
+      // other way is a handful of campaign leads appearing in Follow up early.
+      // Logged with the chunk bounds so a partial failure is diagnosable rather
+      // than showing up as "the Queue looks odd".
+      console.error(
+        `[queueQueries] enrollment lookup failed for leads ${i}-${i + chunk.length - 1} of ${leadIds.length}:`,
+        error,
+      );
+      continue;
+    }
+    for (const r of (data ?? []) as Array<{ lead_id: string }>) live.add(r.lead_id);
   }
-  return new Set((data ?? []).map((r: { lead_id: string }) => r.lead_id));
+  return live;
 }
 
 /**

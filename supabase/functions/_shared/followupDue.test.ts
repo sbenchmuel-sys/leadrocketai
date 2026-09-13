@@ -417,3 +417,39 @@ Deno.test("only the 7-day cap blown → the 7-day date", () => {
   );
   assertEquals(new Date(r.eligible_at!).getTime(), new Date(lastOut).getTime() + 7 * DAY);
 });
+
+
+// ── The deferral set is shared by BOTH copies of the rule ──────────
+
+Deno.test("gmail-bulk-sync's rule defers to the same specialised waits", () => {
+  const at = (days: number, over: Record<string, unknown> = {}) => ({
+    first_outbound_at: daysAgo(60),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(days),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+    ...over,
+  });
+  // post_meeting waits 7 days for its own key, in the sweep as in the shared rule.
+  assertEquals(bulkDeriveAction(at(4), 0, null, "post_meeting", "fast").next_action_key, null);
+  assertEquals(bulkDeriveAction(at(8), 0, null, "post_meeting", "fast").next_action_key, "followup_due");
+  // closing waits 3.
+  assertEquals(bulkDeriveAction(at(2), 0, null, "closing", "fast").next_action_key, null);
+  // a mid-cadence nurture lead belongs to its campaign.
+  assertEquals(
+    bulkDeriveAction(at(4, { nurture_outbound_count: 1, last_nurture_outbound_at: daysAgo(4) }),
+      0, "weekly", "engaged", "fast").next_action_key,
+    null,
+  );
+  // …and an ordinary engaged lead still surfaces.
+  assertEquals(bulkDeriveAction(at(4), 0, null, "engaged", "fast").next_action_key, "followup_due");
+});
+
+Deno.test("a volume cap does not claim a lead whose specialised wait is pending", () => {
+  const r = derive(
+    metrics({ first_outbound_at: daysAgo(60), last_inbound_at: daysAgo(30), last_outbound_at: daysAgo(4) }),
+    { stage: "post_meeting", out7d: S.guardrails.max_emails_per_lead_per_7d },
+  );
+  assertEquals(r.next_action_key, null);
+});

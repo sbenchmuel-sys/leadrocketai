@@ -22,7 +22,7 @@
 // rather than imported from syncEngine, which is Deno-typed.
 // ============================================================
 
-import { deriveFollowupDue, followupWaitDays } from "./followupRule.ts";
+import { deriveFollowupDue, followupWaitDays, specialisedRulePending } from "./followupRule.ts";
 
 export interface BulkSyncMetrics {
   first_outbound_at: string | null;
@@ -159,7 +159,25 @@ export function deriveAction(
   // No `eligible_at` is written here (this file is forbidden from scheduling
   // sends — see the consent gate in syncLeadEmails), so `followup_due` from the
   // scheduled path can never reach automation-executor.
-  if (stage !== "closed_won" && stage !== "closed_lost") {
+  //
+  // The deferral set is SHARED with syncEngine's rule (`specialisedRulePending`
+  // in _shared/followupRule.ts) — this scheduled sweep must not overtake a
+  // post-meeting, closing-stage or mid-cadence nurture lead any more than the
+  // interactive path may. Two copies of the rule, one definition of what to
+  // defer to; that split is what let four rounds of fixes land in one copy and
+  // miss the other.
+  const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
+  const pending = specialisedRulePending({
+    stage,
+    daysSinceLastOutbound: lastOutTime > 0
+      ? (Date.now() - lastOutTime) / (24 * 60 * 60 * 1000)
+      : Number.POSITIVE_INFINITY,
+    // This rule is always called with `nurtureCadence = null` today, but honour
+    // it if that ever changes rather than hardcoding false.
+    nurtureCadenceActive: metrics.nurture_outbound_count > 0 && !!nurtureCadence,
+  });
+
+  if (stage !== "closed_won" && stage !== "closed_lost" && !pending) {
     const followupDue = deriveFollowupDue(metrics, followupWaitDays(strategy, modeSettings));
     if (followupDue) {
       return {
