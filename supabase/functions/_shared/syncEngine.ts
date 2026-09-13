@@ -790,7 +790,9 @@ export function buildLeadUpdate(
     next_action_key: suppressForAutomation ? null : finalAction.next_action_key,
     next_action_label: suppressForAutomation ? null : finalAction.next_action_label,
     // eligible_at intentionally still follows hasActiveAutomation — the cadence
-    // anchor for outbound timing is unchanged by a reply prompt.
+    // anchor for outbound timing is unchanged by a reply prompt. (When
+    // suppressing, the whole block is dropped from the payload below, so this
+    // value is never actually written.)
     eligible_at: hasActiveAutomation ? currentLeadState!.eligible_at : finalAction.eligible_at,
     action_reason_code: suppressForAutomation ? null : finalAction.action_reason_code,
     first_outbound_at: metrics.first_outbound_at,
@@ -811,6 +813,39 @@ export function buildLeadUpdate(
     .filter((t) => Number.isFinite(t));
   if (activityDates.length > 0) {
     (leadUpdate as LeadUpdate).last_activity_at = new Date(Math.max(...activityDates)).toISOString();
+  }
+
+  // PRESERVE A LIVE SCHEDULE ATOMICALLY (Unit Q1).
+  //
+  // `suppressForAutomation` used to write NULL over `next_action_key` /
+  // `next_action_label` / `action_reason_code` while keeping `needs_action` and
+  // the future `eligible_at`. For a lead that already had a null key that was
+  // harmless. For a lead with a LIVE cadence it is a silent send-killer:
+  // automation-executor's candidate query ends in
+  // `.neq("next_action_key", "ooo_return_followup")`, and SQL three-valued logic
+  // makes `NULL <> 'x'` unknown — so a NULL key is never selected, and a follow-up
+  // that was genuinely queued simply never fires.
+  //
+  // The race that reaches it: gmail-send / outlook-send return as soon as their
+  // background task is registered, the client then writes the next cadence key
+  // and a future `eligible_at` via `updateSequenceState`, and THEN the
+  // post-send recompute runs — reading a schedule that did not exist when it
+  // started and "suppressing" it to null.
+  //
+  // So: touch nothing. Dropping these fields from the payload (the same
+  // technique the nurture/OOO branch below uses) leaves whatever the schedule's
+  // owner wrote, including anything written after our own read — which is the
+  // only way to be correct under a race we cannot order. It cannot go stale:
+  // `hasActiveSequence` requires a FUTURE `eligible_at`, so once the anchor
+  // passes, suppression stops and normal derivation resumes.
+  if (suppressForAutomation) {
+    // deno-lint-ignore no-explicit-any
+    const u = leadUpdate as any;
+    delete u.needs_action;
+    delete u.next_action_key;
+    delete u.next_action_label;
+    delete u.action_reason_code;
+    delete u.eligible_at;
   }
 
   // NO-AUTO-SEND INVARIANT (Unit Q1).

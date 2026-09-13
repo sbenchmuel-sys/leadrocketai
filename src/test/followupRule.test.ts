@@ -247,7 +247,7 @@ describe("buildLeadUpdate — never a send trigger, never a lost cadence anchor"
     expect(update.eligible_at).toBeNull();
   });
 
-  it("leaves a live cadence anchor alone rather than overwriting it with a prompt", () => {
+  it("leaves a live cadence alone rather than overwriting it with a prompt", () => {
     const armed = {
       needs_action: true,
       eligible_at: new Date(NOW + 2 * 86_400_000).toISOString(),
@@ -257,8 +257,11 @@ describe("buildLeadUpdate — never a send trigger, never a lost cadence anchor"
     };
     const update = withFrozenClock(() =>
       engine.buildLeadUpdate("engaged", m, derive(m), null, armed, "reactive"));
-    expect(update.next_action_key).toBeNull();
-    expect(update.eligible_at).toBe(armed.eligible_at);
+    // Not "written as null" — ABSENT from the payload, so the row keeps
+    // whatever the schedule's owner wrote. See the send-race suite below.
+    for (const f of ["next_action_key", "next_action_label", "action_reason_code", "needs_action", "eligible_at"]) {
+      expect(f in update).toBe(false);
+    }
   });
 });
 
@@ -1065,5 +1068,109 @@ describe("gmail-bulk-sync preserves a verdict it cannot compute", () => {
     expect(src).toContain(
       '.select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed, next_action_key")',
     );
+  });
+});
+
+
+// ── The post-send recompute must not kill a live cadence ───────────
+//
+// The race: gmail-send / outlook-send return as soon as their background task
+// is registered → the client writes the next cadence key and a future
+// `eligible_at` via `updateSequenceState` → THEN the recompute runs and sees a
+// schedule that did not exist when it started.
+
+describe("post-send recompute vs a freshly written cadence", () => {
+  const justSentToAnEnrolledLead = metrics({
+    first_outbound_at: daysAgo(30),
+    last_inbound_at: daysAgo(20),
+    last_outbound_at: daysAgo(4),
+  });
+
+  /** Exactly what `updateSequenceState` writes moments after the send. */
+  const freshlyScheduled = {
+    needs_action: true,
+    eligible_at: new Date(NOW + 2 * 86_400_000).toISOString(),
+    motion: "outbound_prospecting",
+    nurture_status: "",
+    ooo_until: null,
+  };
+  const CADENCE_KEY = "send_pre_3";
+
+  /** The row after the recompute has written its payload over the lead. */
+  const rowAfterRecompute = () => {
+    const update = withFrozenClock(() => engine.buildLeadUpdate(
+      "engaged", justSentToAnEnrolledLead, derive(justSentToAnEnrolledLead), null,
+      freshlyScheduled, "reactive",
+    ));
+    // A Postgres UPDATE only touches the columns present in the payload.
+    return {
+      next_action_key: "next_action_key" in update ? update.next_action_key : CADENCE_KEY,
+      next_action_label: "next_action_label" in update ? update.next_action_label : "Step 3 of 4",
+      needs_action: "needs_action" in update ? update.needs_action : true,
+      eligible_at: "eligible_at" in update ? update.eligible_at : freshlyScheduled.eligible_at,
+    };
+  };
+
+  it("leaves the scheduled key and timestamp intact", () => {
+    const row = rowAfterRecompute();
+    expect(row.next_action_key).toBe(CADENCE_KEY);
+    expect(row.eligible_at).toBe(freshlyScheduled.eligible_at);
+    expect(row.needs_action).toBe(true);
+  });
+
+  it("and automation-executor's candidate query would still select it", () => {
+    // The executor filters: needs_action = true AND eligible_at IS NOT NULL AND
+    // eligible_at <= now AND automation_mode IS NOT NULL AND
+    // next_action_key <> 'ooo_return_followup'. That last clause is the trap —
+    // SQL three-valued logic drops NULL keys, so nulling the key silently
+    // removes the lead from the queue forever.
+    const row = rowAfterRecompute();
+    const selectedWhenDue = (r: typeof row) =>
+      r.needs_action === true
+      && r.eligible_at != null
+      // `<>` against NULL is UNKNOWN, never TRUE — this is the clause that bit.
+      && r.next_action_key != null
+      && r.next_action_key !== "ooo_return_followup";
+    expect(selectedWhenDue(row)).toBe(true);
+    // Guard is not vacuous: the pre-fix shape (key nulled, anchor kept) is
+    // exactly what this predicate rejects.
+    expect(selectedWhenDue({ ...row, next_action_key: null })).toBe(false);
+  });
+
+  it("still lets a reply through — reply_now is not suppressed", () => {
+    const withAReply = metrics({
+      first_outbound_at: daysAgo(30),
+      last_outbound_at: daysAgo(4),
+      last_inbound_at: hoursAgo(6),
+    });
+    const update = withFrozenClock(() => engine.buildLeadUpdate(
+      "engaged", withAReply, derive(withAReply), null, freshlyScheduled, "reactive",
+    ));
+    expect(update.next_action_key).toBe("reply_now");
+  });
+
+  it("suppression cannot go stale — it needs a FUTURE anchor", () => {
+    // Once the scheduled time passes, hasActiveSequence is false and normal
+    // derivation resumes, so a preserved key is never permanent.
+    const expired = { ...freshlyScheduled, eligible_at: daysAgo(1) };
+    const update = withFrozenClock(() => engine.buildLeadUpdate(
+      "engaged", justSentToAnEnrolledLead, derive(justSentToAnEnrolledLead), null,
+      expired, "reactive",
+    ));
+    expect(update.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+  });
+
+  it("both send paths still run the recompute in the background", () => {
+    // We fixed this by making the recompute harmless under the race, NOT by
+    // moving it before the response — that would slow every send and still not
+    // order it against the client's own write.
+    for (const rel of [
+      "supabase/functions/gmail-send/index.ts",
+      "supabase/functions/outlook-send/index.ts",
+    ]) {
+      const src = readFileSync(path.join(ROOT, rel), "utf8");
+      expect(src).toMatch(/postSendDeriveAction\(/);
+      expect(src).not.toMatch(/await postSendDeriveAction\(/);
+    }
   });
 });

@@ -193,7 +193,7 @@ Deno.test("buildLeadUpdate persists followup_due / rate_limited without eligible
   assertEquals(update.eligible_at, null);
 });
 
-Deno.test("an armed cadence keeps its anchor — the prompt does not overwrite it", () => {
+Deno.test("an armed cadence is left ENTIRELY alone — no field of it is written", () => {
   // The cadence will send the follow-up itself, so the Queue prompt is
   // redundant here; letting it through would also discard `eligible_at`.
   const m = metrics({
@@ -209,8 +209,31 @@ Deno.test("an armed cadence keeps its anchor — the prompt does not overwrite i
     nurture_status: "",
     ooo_until: null,
   }, "reactive");
-  assertEquals(update.next_action_key, null);
-  assertEquals(update.eligible_at, armedAt);
+  // Absent, not null. Nulling `next_action_key` while keeping needs_action and
+  // a future eligible_at silently kills the send: automation-executor ends its
+  // candidate query with `.neq("next_action_key", "ooo_return_followup")`, and
+  // `NULL <> 'x'` is UNKNOWN, so the row is never selected again. The post-send
+  // recompute races the client's own `updateSequenceState` write, so the only
+  // correct move is to touch none of these columns.
+  for (const field of ["needs_action", "next_action_key", "next_action_label", "action_reason_code", "eligible_at"]) {
+    assertEquals(field in update, false, field);
+  }
+});
+
+Deno.test("suppression needs a FUTURE anchor, so a preserved key can never be permanent", () => {
+  const m = metrics({
+    first_outbound_at: daysAgo(30),
+    last_inbound_at: daysAgo(20),
+    last_outbound_at: daysAgo(4),
+  });
+  const update = buildLeadUpdate("engaged", m, derive(m), null, {
+    needs_action: true,
+    eligible_at: daysAgo(1), // the scheduled moment has passed
+    motion: "outbound_prospecting",
+    nurture_status: "",
+    ooo_until: null,
+  }, "reactive");
+  assertEquals(update.next_action_key, "followup_due");
 });
 
 
