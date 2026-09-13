@@ -92,12 +92,14 @@ import {
   CLASSIFY_OBSERVED_MS_PER_ROW,
   CLASSIFY_RUN_BUDGET_MS,
   classifyBacklogState,
+  CLASSIFY_NEXT_AT_KEY,
   classifyEligibilityFilter,
   isRunBudgetSpent,
   stripClassifyMarks,
   markClassifyFailure,
   recordFailedAttempt,
   selectClassifiable,
+  summarizeBacklog,
 } from "../_shared/classifyRetry.ts";
 
 const corsHeaders = {
@@ -147,6 +149,17 @@ const BATCH_SIZE = 15;
 // Ceiling: a non-zero `parked` is not "handled", it is an incident —
 // fix the server-side filter, do not raise this number.
 const FETCH_LIMIT = BATCH_SIZE * 2;
+
+// Row cap on the idle-run backlog probe. The probe selects ONE short
+// JSON path per outstanding row, so this is a few tens of KB at the
+// pilot's scale — and it is free in the healthy case, where there are
+// no outstanding rows to return. ponytail: a cap, not a count query,
+// because one query has to yield three facts (exhausted vs backed off,
+// and when work resumes). Ceiling: past this many outstanding rows the
+// breakdown is a lower bound and reports `truncated: true`; the STATE
+// stays correct either way, since one exhausted row in the sample is
+// enough to warrant the alarm.
+const BACKLOG_PROBE_LIMIT = 5_000;
 
 // Classifier identifier written to `intent_version`. Bump the suffix
 // when the prompt or model selection changes in a way that should
@@ -249,13 +262,19 @@ interface BatchCounts {
    */
   exhausted: number;
   /**
-   * Unclassified inbound rows still outstanding when a run finds NO
-   * eligible candidates — i.e. every one of them is parked or
-   * exhausted. Only probed on an otherwise-idle run; 0 on a working
-   * run. Non-zero means the backlog is dead and needs the MANUAL
-   * RECOVERY statement in `_shared/classifyRetry.ts`.
+   * Outstanding rows that gave up for good, probed on an otherwise-idle
+   * run only (0 on a working run). Non-zero means the backlog is dead
+   * and needs the MANUAL RECOVERY statement in
+   * `_shared/classifyRetry.ts`. THIS is the number worth waking for.
    */
-  backlog_parked: number;
+  backlog_exhausted: number;
+  /**
+   * Outstanding rows merely inside a retry window, same probe. These
+   * resume by themselves — informational, never an incident, and
+   * explicitly NOT a reason to run the recovery statement (doing so
+   * would delete the backoff that is protecting a failing dependency).
+   */
+  backlog_backed_off: number;
   /**
    * Rows actually worked this run: `min(fetched - parked, BATCH_SIZE)`.
    *
@@ -502,7 +521,8 @@ Deno.serve(async (req) => {
     worked: 0,
     unreached: 0,
     budget_stopped: false,
-    backlog_parked: 0,
+    backlog_exhausted: 0,
+    backlog_backed_off: 0,
     no_signal: 0,
     deterministic: 0,
   };
@@ -641,31 +661,53 @@ Deno.serve(async (req) => {
     }
 
     if (batch.length === 0) {
-      // "Nothing to do" and "everything is parked" produced identical
-      // output until now — which after a long outage are the two states
-      // an operator most needs to tell apart. One HEAD count, on idle
-      // runs ONLY (never on a run that has work), over the same
-      // predicate as the candidate query minus the eligibility clause:
-      // if nothing is eligible yet unclassified rows remain, then by
-      // definition every one of them is parked or exhausted.
-      const { count, error: backlogErr } = await admin
+      // WHY an idle run is idle. Three states, three responses: nothing
+      // to do / wait for the backoff / act. Splitting the middle case
+      // out is the point — the first quiet minute of any ordinary blip
+      // has every row inside its five-minute backoff, and telling an
+      // operator to run the recovery statement then would DELETE that
+      // backoff and hurl the whole batch back at a failing dependency.
+      //
+      // One query on idle runs ONLY (never on a run that has work),
+      // selecting a single JSON path per outstanding row, which is what
+      // lets it answer all three questions at once: how many gave up,
+      // how many are merely waiting, and when the waiting ones resume.
+      // Free in the healthy case — a drained queue returns no rows.
+      const { data: outstanding, error: backlogErr } = await admin
         .from("lead_timeline_items")
-        .select("id", { count: "exact", head: true })
+        .select(`next_at:metadata_json->>${CLASSIFY_NEXT_AT_KEY}`)
         .eq("event_type", "email_inbound")
-        .is("intent", null);
+        .is("intent", null)
+        .limit(BACKLOG_PROBE_LIMIT);
       if (backlogErr) {
+        // Degrade to "drained": the run itself did nothing wrong, and a
+        // failed probe must not manufacture an alarm.
         logger.warn("classify_inbound_backlog_probe_failed", {
           error: backlogErr.message,
         });
       }
-      counts.backlog_parked = count ?? 0;
 
-      const state = classifyBacklogState(batch.length, counts.backlog_parked);
-      if (state === "all_parked") {
-        // The one line that says "this backlog is dead, run the manual
-        // recovery statement in _shared/classifyRetry.ts".
-        logger.warn("classify_inbound_backlog_all_parked", {
-          backlog_parked: counts.backlog_parked,
+      const backlog = summarizeBacklog(
+        ((outstanding ?? []) as { next_at: string | null }[]).map((r) => r.next_at),
+        nowIso,
+        BACKLOG_PROBE_LIMIT,
+      );
+      counts.backlog_exhausted = backlog.exhausted;
+      counts.backlog_backed_off = backlog.backed_off;
+
+      const state = classifyBacklogState(batch.length, backlog);
+      if (state === "exhausted") {
+        // The ONLY line that means "act": rows have burned the whole
+        // retry ladder and will never resume without the MANUAL
+        // RECOVERY statement in _shared/classifyRetry.ts.
+        logger.warn("classify_inbound_backlog_exhausted", {
+          ...backlog,
+          duration_ms: Date.now() - startedAt,
+        });
+      } else if (state === "backed_off") {
+        // Informational on purpose. This is the system working.
+        logger.info("classify_inbound_backlog_backed_off", {
+          ...backlog,
           duration_ms: Date.now() - startedAt,
         });
       } else {
@@ -678,6 +720,7 @@ Deno.serve(async (req) => {
           ok: true,
           ...counts,
           backlog_state: state,
+          backlog_next_retry_at: backlog.next_retry_at,
           duration_ms: Date.now() - startedAt,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },

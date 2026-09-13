@@ -24,6 +24,7 @@ import path from "node:path";
 
 import {
   classifyBacklogState,
+  summarizeBacklog,
   CLASSIFY_ATTEMPTS_KEY,
   CLASSIFY_BACKOFF_MINUTES,
   CLASSIFY_EXHAUSTED_KEY,
@@ -862,40 +863,139 @@ describe("exhaustion is visible in the run that causes it", () => {
   });
 });
 
+// ── 11. WAIT vs ACT — the alarm must not cause the harm ────────────
+//
+// Codex P2. The probe counted UNCLASSIFIED rows, and "no eligible
+// candidates" is true both when everything has exhausted AND when
+// everything is merely inside its retry window. The initial backoff is
+// five minutes, so the very first quiet minute of any ordinary
+// transient blip reported `all_parked` — whose stated action is to run
+// the recovery statement, which STRIPS EVERY RETRY MARK. An operator
+// following that alarm would delete the backoff and send the whole
+// batch straight back at a dependency that is already failing. Wrong in
+// the direction of the harmful action, on the common case.
 describe("an empty run says WHY it is empty", () => {
-  it("tells a drained queue from a fully parked one", () => {
-    // Healthy steady state: nothing selected, nothing outstanding.
-    expect(classifyBacklogState(0, 0)).toBe("drained");
-    // The dead backlog: nothing eligible, but rows still unclassified —
-    // so by definition every one of them is parked or exhausted.
-    expect(classifyBacklogState(0, 1346)).toBe("all_parked");
-    // Any work at all means neither.
-    expect(classifyBacklogState(15, 1346)).toBe("working");
-    expect(classifyBacklogState(1, 0)).toBe("working");
+  const PROBE_LIMIT = 5_000;
+  const NOW = iso(T0);
+  const soon = iso(T0 + 5 * MIN);
+  const later = iso(T0 + 45 * MIN);
+  const sum = (vals: (string | null)[]) => summarizeBacklog(vals, NOW, PROBE_LIMIT);
+
+  it("a backlog inside its first backoff window is NOT dead", () => {
+    // The exact scenario: every row failed once, all are five minutes
+    // out. This must not fire the alarm and must not mention recovery.
+    const b = sum(Array.from({ length: 1346 }, () => soon));
+
+    expect(b.exhausted).toBe(0);
+    expect(b.backed_off).toBe(1346);
+    expect(b.next_retry_at).toBe(soon);
+    expect(classifyBacklogState(0, b)).toBe("backed_off");
+    expect(classifyBacklogState(0, b)).not.toBe("exhausted");
+  });
+
+  it("a genuinely exhausted backlog IS dead", () => {
+    const b = sum(Array.from({ length: 1346 }, () => CLASSIFY_NEVER_ISO));
+
+    expect(b.exhausted).toBe(1346);
+    expect(b.backed_off).toBe(0);
+    expect(b.next_retry_at).toBeNull(); // nothing is coming back on its own
+    expect(classifyBacklogState(0, b)).toBe("exhausted");
+  });
+
+  it("a mixed backlog reports both, and the alarm follows the dead half", () => {
+    const b = sum([
+      ...Array.from({ length: 40 }, () => CLASSIFY_NEVER_ISO),
+      ...Array.from({ length: 200 }, () => later),
+      ...Array.from({ length: 100 }, () => soon),
+    ]);
+
+    expect(b.exhausted).toBe(40);
+    expect(b.backed_off).toBe(300);
+    expect(b.next_retry_at).toBe(soon); // soonest, not just the first seen
+    // Exhaustion wins: that half needs a human, and the backed-off half
+    // is still visible in the breakdown rather than being masked.
+    expect(classifyBacklogState(0, b)).toBe("exhausted");
+  });
+
+  it("the backed-off half alone never fires the alarm", () => {
+    // Same 300 backed-off rows, minus the exhausted ones.
+    const b = sum([
+      ...Array.from({ length: 200 }, () => later),
+      ...Array.from({ length: 100 }, () => soon),
+    ]);
+    expect(classifyBacklogState(0, b)).toBe("backed_off");
+  });
+
+  it("a drained queue is still drained", () => {
+    const b = sum([]);
+    expect(b).toMatchObject({ exhausted: 0, backed_off: 0, eligible: 0 });
+    expect(b.next_retry_at).toBeNull();
+    expect(classifyBacklogState(0, b)).toBe("drained");
+  });
+
+  it("any work at all outranks the backlog state", () => {
+    const b = sum(Array.from({ length: 1346 }, () => CLASSIFY_NEVER_ISO));
+    expect(classifyBacklogState(15, b)).toBe("working");
+    expect(classifyBacklogState(1, b)).toBe("working");
+  });
+
+  it("counts a row whose window has already passed as eligible, not parked", () => {
+    // Defensive: such a row should have been fetched. If it shows up
+    // here it is the server-side-filter leak, not a dead backlog — and
+    // it must not be reported as exhausted.
+    const b = sum([iso(T0 - MIN), null]);
+    expect(b.eligible).toBe(2);
+    expect(b.exhausted).toBe(0);
+    expect(classifyBacklogState(0, b)).toBe("backed_off");
+  });
+
+  it("flags a truncated probe so the counts read as lower bounds", () => {
+    expect(sum(Array.from({ length: 10 }, () => soon)).truncated).toBe(false);
+    expect(
+      summarizeBacklog(Array.from({ length: 4 }, () => soon), NOW, 4).truncated,
+    ).toBe(true);
   });
 
   it("probes the backlog ONLY on an idle run", () => {
-    // It runs every minute forever, so the count must not ride along on
+    // It runs every minute forever, so the probe must not ride along on
     // runs that already have work to do.
     const emptyBranch = src.slice(
       src.indexOf("if (batch.length === 0) {"),
       src.indexOf("// Single bulk lead-context fetch"),
     );
-    expect(emptyBranch).toContain('{ count: "exact", head: true }');
-    expect(emptyBranch).toContain("classify_inbound_backlog_all_parked");
+    expect(emptyBranch).toContain("BACKLOG_PROBE_LIMIT");
+    expect(emptyBranch).toContain("summarizeBacklog(");
     // …and nowhere else in the function.
-    expect(src.match(/count: "exact"/g) ?? []).toHaveLength(1);
+    expect(src.match(/summarizeBacklog\(/g) ?? []).toHaveLength(1);
   });
 
-  it("reports the state on the response so it is visible without logs", () => {
+  it("matches log level to severity: warn to act, info to wait", () => {
+    const emptyBranch = src.slice(
+      src.indexOf("if (batch.length === 0) {"),
+      src.indexOf("// Single bulk lead-context fetch"),
+    );
+    // Exactly one warn in the branch, and it is the dead-backlog one.
+    expect(emptyBranch).toContain('logger.warn("classify_inbound_backlog_exhausted"');
+    expect(emptyBranch).toContain('logger.info("classify_inbound_backlog_backed_off"');
+    // The waiting state must never be raised to warn, or it stops being
+    // believed on the day it means something.
+    expect(emptyBranch).not.toMatch(/logger\.warn\("classify_inbound_backlog_backed_off"/);
+    expect(emptyBranch).not.toContain("all_parked");
+  });
+
+  it("reports the breakdown on the response so it is visible without logs", () => {
     expect(src).toContain("backlog_state: state,");
-    expect(src).toContain("counts.backlog_parked = count ?? 0;");
+    expect(src).toContain("backlog_next_retry_at: backlog.next_retry_at,");
+    expect(src).toContain("counts.backlog_exhausted = backlog.exhausted;");
+    expect(src).toContain("counts.backlog_backed_off = backlog.backed_off;");
   });
 
-  it("survives a failed probe without failing the run", () => {
-    // A backlog probe that errors must degrade to `drained`, not throw
-    // — the run itself did nothing wrong.
+  it("survives a failed probe without manufacturing an alarm", () => {
+    // A probe that errors must degrade to `drained` — the run itself did
+    // nothing wrong, and a broken probe must not tell anyone to act.
     expect(src).toContain("classify_inbound_backlog_probe_failed");
-    expect(src).toContain("count ?? 0");
+    expect(src).toContain("(outstanding ?? [])");
+    expect(sum([])).toMatchObject({ exhausted: 0 });
+    expect(classifyBacklogState(0, sum([]))).toBe("drained");
   });
 });

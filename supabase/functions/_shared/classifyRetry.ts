@@ -368,21 +368,104 @@ export async function recordFailedAttempt(
 }
 
 /**
- * What an otherwise-empty run means.
+ * Why an otherwise-empty run is empty.
  *
- * "No candidates" has two very different causes and, until now, one
- * output. `drained` is the healthy steady state. `all_parked` means
- * every remaining inbound is sitting behind a backoff or has given up
- * — the state that needs the MANUAL RECOVERY statement above, and the
- * one an operator would never think to look for if it reported the
- * same "nothing to do" as a healthy queue.
+ * "No candidates" has THREE causes and they need three different human
+ * responses:
+ *
+ *  • `drained`    — healthy steady state. Nothing to do.
+ *  • `backed_off` — every remaining row is inside a retry window and
+ *                   will resume on its own. WAIT. This is the common
+ *                   case: the very first quiet minute of any ordinary
+ *                   transient blip looks like this, because the initial
+ *                   backoff is five minutes and the candidate set goes
+ *                   empty immediately.
+ *  • `exhausted`  — rows have burned the whole retry ladder and will
+ *                   never resume. ACT: run the MANUAL RECOVERY
+ *                   statement above.
+ *
+ * Collapsing the middle case into the last one is actively dangerous,
+ * not merely noisy: recovery strips every retry mark, so an operator
+ * following an `exhausted` alarm during a normal five-minute backoff
+ * would delete the backoff and send the whole batch straight back at a
+ * dependency that is already failing. An alarm that is wrong in the
+ * direction of "do the harmful thing" is worse than no alarm — and one
+ * that fires on every blip is not believed on the day it is real.
+ *
+ * A MIXED backlog reports `exhausted`, because that is the half that
+ * needs a human; the breakdown carries both numbers so the backed-off
+ * half is still visible.
  */
+export type ClassifyBacklogState = "working" | "drained" | "backed_off" | "exhausted";
+
+export interface BacklogBreakdown {
+  /** Gave up for good — carries the year-9999 sentinel. */
+  exhausted: number;
+  /** Inside a retry window; will resume by itself. */
+  backed_off: number;
+  /**
+   * Eligible right now yet not selected. Should be 0 by construction —
+   * an eligible row would have been fetched. Non-zero is the same
+   * server-side-filter leak the run summary warns about.
+   */
+  eligible: number;
+  /** Soonest `classify_next_at` among backed-off rows — when work resumes. */
+  next_retry_at: string | null;
+  /** True when the probe hit its row cap and the counts are lower bounds. */
+  truncated: boolean;
+}
+
+/**
+ * Bucket the outstanding rows' `classify_next_at` values.
+ *
+ * Takes the raw values rather than rows so the probe can select just
+ * that one JSON path — the whole backlog breakdown in one query, and
+ * near-free in the healthy case where there are no outstanding rows at
+ * all.
+ */
+export function summarizeBacklog(
+  nextAtValues: readonly (string | null | undefined)[],
+  nowIso: string,
+  probeLimit: number,
+): BacklogBreakdown {
+  let exhausted = 0;
+  let backedOff = 0;
+  let eligible = 0;
+  let soonest: string | null = null;
+
+  for (const raw of nextAtValues) {
+    const next = typeof raw === "string" && raw.length > 0 ? raw : null;
+    if (next === null || next <= nowIso) {
+      eligible++;
+      continue;
+    }
+    if (next === CLASSIFY_NEVER_ISO) {
+      exhausted++;
+      continue;
+    }
+    backedOff++;
+    if (soonest === null || next < soonest) soonest = next;
+  }
+
+  return {
+    exhausted,
+    backed_off: backedOff,
+    eligible,
+    next_retry_at: soonest,
+    truncated: nextAtValues.length >= probeLimit,
+  };
+}
+
+/** Which of the three an idle run is in. `selected > 0` means neither. */
 export function classifyBacklogState(
   selected: number,
-  unclassifiedRemaining: number,
-): "working" | "drained" | "all_parked" {
+  breakdown: Pick<BacklogBreakdown, "exhausted" | "backed_off" | "eligible">,
+): ClassifyBacklogState {
   if (selected > 0) return "working";
-  return unclassifiedRemaining > 0 ? "all_parked" : "drained";
+  // Exhaustion wins a mixed backlog: it is the half that needs a human.
+  if (breakdown.exhausted > 0) return "exhausted";
+  if (breakdown.backed_off > 0 || breakdown.eligible > 0) return "backed_off";
+  return "drained";
 }
 
 /**
