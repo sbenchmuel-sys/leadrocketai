@@ -1,6 +1,6 @@
 # DrivePilot master upgrade — checkpoint
 
-Updated: 2026-09-09 00:40 (Israel time) · origin/main `5f818be7` · **6 units merged, 4 PRs open. Two production problems found today that nobody knew about.**
+Updated: 2026-09-13 22:05 (Israel time) · origin/main `5f818be7` · **6 units merged, 5 PRs open. The AI account had run dry — that was breaking more than we knew.**
 
 ## OBSERVE — things only you can see or hear
 
@@ -19,6 +19,8 @@ Updated: 2026-09-09 00:40 (Israel time) · origin/main `5f818be7` · **6 units m
 Nothing to do right now. Batch 2 will follow when Q1 and the units behind it land. Standing rule: **never tell Lovable to apply `20260908000000_codify_cron_jobs_staging.sql`** — it is staging-only.
 
 ## DECIDE — what I need from you
+
+**0. [DONE — thank you] You topped up the AI credits.** I verified it in production: at 17:30 the gateway still answered "Not enough credits"; by 17:50 it was answering normally. That one action mattered more than either of us thought — see the new finding below.
 
 **1. [BLOCKING G-C and E-S1a] The staging AI key is the wrong value.** The rename worked — Supabase staging now shows `LOVABLE_API_KEY`, the exact name the code reads. But the AI service rejects the value with a 401: "I don't recognise this key." Open your **production** project in Lovable → backend → secrets, copy the value of `LOVABLE_API_KEY` there, and paste that exact value into staging, replacing what's there. My read is that the current value is a Lovable *account* API key (for the editor), which is a different service from the AI gateway despite the shared name. Still also needed for the send test: one connected mailbox on staging, and an address you can actually read to replace the test lead's fake `ed@spruce-test.com`.
 
@@ -55,19 +57,22 @@ Rebuilding it properly hinges on one question that is yours, not mine: **when a 
 | C1 calling safety | 1 | PR open · Codex green · QA HOLD→fixed · blocked on a staging Twilio subaccount | [#145](https://github.com/sbenchmuel-sys/leadrocketai/pull/145) @ `2778674e` |
 | **Q1 follow-up rule** | 1 | **new** · QA HOLD → HOLD → SHIP → HOLD → **cleared after splitting one piece out** · Codex's three findings all addressed · **staging gate green, Deno suite green in CI** · waiting only on your three observations | [#146](https://github.com/sbenchmuel-sys/leadrocketai/pull/146) @ `648737b5` |
 | Q1b Outlook second look | 1 | **not started — needs DECIDE 4 first** | — |
+| **Q1c classifier resilience** | 2 | **new** · QA over 3 rounds · Codex: 1 real finding fixed, 1 stale · **staging gate green, Deno suite green in CI** · ready to merge | [#148](https://github.com/sbenchmuel-sys/leadrocketai/pull/148) @ `f1b9c61a` |
 | G-B / Q2 / E-S1b / C2 / L3 / C3 / G-M / E-S2 / E-S3 / retention | | queued — each one needs Q1, G-C, C1 or E-S1a to merge first; they share files with the open PRs, so starting one now would only create conflicts | |
 
 ## Things that were quietly broken in production, found by this program
 
-1. **The 72-hour purge has never run.** 4,896 email bodies and 5,253 snippets past the deadline, oldest from 2012. The code is right; nothing schedules it. (DECIDE 2.)
-2. **Every bounce and out-of-office reply since the spring sat in reps' queues as a "reply needed" card.** The AI's labels and the Queue's hide-list had no words in common. (G-A — fixed, applied to production, verified live. It now costs nothing: a bounce no longer triggers an AI call at all.)
-3. **Gmail bulk sync had been failing for 2.5 months** on a missing database column. (Fixed, applied, and confirmed healthy — every run since 19:40 today has succeeded.)
-4. **One in five inbound messages was never classified, and the classifier times out on a quarter of its runs.** (DECIDE 3.)
-5. **Warm leads vanished from the Queue for six weeks.** If a customer replied once and then went quiet after your next email, there was no follow-up rule for them at all. Outlook reps' sent mail never came back as a follow-up either, because Outlook has no automatic sync. (Q1 — fixed.)
-6. **Meeting transcripts are never analysed.** `transcript-poller` calls the analyser with no auth header, so the gateway rejects it every time. (Will be fixed inside L3.)
-7. **Queued lead re-analysis was failing the same way.** (L1 — fixed and proven on staging.)
-8. **Six AI call sites were pointed at a wrong address** and silently failing: WhatsApp classification, reply suggestions, style extraction, the audio transcription path. (E-S1a — fixed; the WhatsApp one is deliberately left switched off until its consent logic is reviewed, because un-breaking it would have started auto-texting unknown numbers.)
-9. **Staging had 12 cron jobs with the API key written into each command.** Now 17, matching production, all reading from the encrypted vault. (Harness.)
+1. **Your AI account ran out of credits, and inbound classification died with it on ~3 September.** Nothing alerted anyone; the scheduled job reported success 1,440 times a day for eleven days. (Credits restored 13 Sep; Q1c stops it recurring.)
+2. **The classifier's batch size was tuned against a broken service.** Once the service came back, every run overran the 55-second limit and was killed. Nobody would have found this without restoring credits and watching. (Q1c.)
+3. **The 72-hour purge has never run.** 4,896 email bodies and 5,253 snippets past the deadline, oldest from 2012. The code is right; nothing schedules it. (DECIDE 2.)
+4. **Every bounce and out-of-office reply since the spring sat in reps' queues as a "reply needed" card.** The AI's labels and the Queue's hide-list had no words in common. (G-A — fixed, applied to production, verified live. It now costs nothing: a bounce no longer triggers an AI call at all.)
+5. **Gmail bulk sync had been failing for 2.5 months** on a missing database column. (Fixed, applied, and confirmed healthy — every run since 19:40 today has succeeded.)
+6. **Meeting transcripts are never analysed.** `transcript-poller` calls the analyser with no auth header. (Will be fixed inside L3.)
+7. **Warm leads vanished from the Queue for six weeks.** If a customer replied once and then went quiet after your next email, there was no follow-up rule for them at all. Outlook reps' sent mail never came back as a follow-up either, because Outlook has no automatic sync. (Q1 — fixed.)
+8. **Queued lead re-analysis was failing the same way.** (L1 — fixed and proven on staging.)
+9. **Six AI call sites were pointed at a wrong address** and silently failing. (E-S1a — fixed.)
+10. **Staging had 12 cron jobs with the API key written into each command.** Now 17, all reading from the encrypted vault. (Harness.)
+
 
 ## What the review layers are catching
 
@@ -76,6 +81,8 @@ Every unit goes through four gates: the worker builds it → an independent revi
 Q1 is the clearest example yet. The reviewer held it **twice**. First: every email a rep sent would have bounced straight back into the Queue seconds later as a "follow up" card — the Queue would never have emptied. Second, and far worse: pressing "Resume" on a lead would have armed a **real automated email to a real customer**, two days later, from the wrong template, that nobody asked for. When that was fixed, the reviewer found the identical bug surviving in the "Enable Automation" button next to it. All three are closed and pinned by tests that genuinely fail without them — the reviewer proved that by putting the old code back and watching exactly three tests break.
 
 Round four caught the biggest one of the whole program so far: a scheduled job I wrote would have started sending automated emails to customers who had heard nothing for over a year. Its own safety test passed — because the test read the file's text for the word "send" rather than watching what the code actually wrote to the database. I threw the job away rather than patch it. That is what the four gates are for.
+
+Q1c is the other kind of example — where the loop caught the *reviewer*. QA found the retry ceiling was documented as ~69 hours when the code served 45, and prescribed a fix. The builder refused it, proved the numbers, and showed the prescription would have quietly cut the real ceiling to 21 hours — the same bug, in the more dangerous direction, on the number you'd be planning a deploy around. QA then re-tested all three versions and confirmed it was wrong. Then Codex broke a property the builder and QA had both signed off on. Nobody in the chain was right on their own.
 
 Running total of real defects caught before merge: a wrong-customer delete race on the lead page, an automatic WhatsApp reply that would have texted strangers, three ways a genuine customer question could have been buried by the new Queue filters, a misconfigured sender that would have re-spent AI credits every 15 minutes, and Q1's three. **None reached production.**
 
