@@ -68,8 +68,18 @@ export interface ExecutionSettings {
    * ponytail: per-workspace scoping needs a schema change (workspace_id on
    * workspace_profiles, or a cadence row keyed by (user_id, workspace_id)) plus
    * a UI toggle — out of scope for Unit G-C; tracked in CLEANUP.md.
+   *
+   * FAILS CLOSED: if the workspace_profiles read ERRORS we cannot know whether
+   * the owner pressed pause, so this is true. "No row" / "no key" is a
+   * different thing — that is a genuine "not paused" and stays false.
    */
   owner_automation_paused: boolean;
+  /**
+   * True when owner_automation_paused is set because the settings read FAILED,
+   * not because the owner actually paused. Callers use it only to tell the rep
+   * the truth in the skip ledger — both values refuse the send either way.
+   */
+  settings_read_failed: boolean;
 }
 
 // ── Defaults (match DEFAULT_CADENCE_SETTINGS) ──────────────────────
@@ -102,6 +112,7 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
   },
   timezone: null,
   owner_automation_paused: false,
+  settings_read_failed: false,
 };
 
 // ── Loader (cached per owner+workspace within a single executor run) ─
@@ -149,6 +160,21 @@ export async function loadExecutionSettings(
       : Promise.resolve({ data: null }),
   ]);
 
+  // FAIL CLOSED on a profile READ ERROR (Codex P2). maybeSingle() reports "no
+  // such row" as data=null with NO error — that is a real, unpaused owner who
+  // has simply never saved cadence settings. An `error` is different: the flag
+  // may well be true and we just cannot see it. Defaulting to false there let a
+  // transient Postgres/PostgREST blip silently re-arm a paused account, because
+  // the timezone read is independent and could still succeed, carrying the run
+  // on through the send window. A pause switch must fail toward NOT sending.
+  const profileReadFailed = !!(profileRes as any).error;
+  if (profileReadFailed) {
+    console.error(
+      `[executionSettings] workspace_profiles read failed for owner ${ownerUserId} — ` +
+      `treating automation as PAUSED (fail closed): ${JSON.stringify((profileRes as any).error)}`,
+    );
+  }
+
   // `as any`: workspace_profiles isn't in the Deno-side generated types, so the
   // query builder infers `data` as `never`. Same pattern as the wsRes access below.
   const raw = ((profileRes.data as any)?.cadence_settings as Record<string, unknown>) ?? {};
@@ -180,10 +206,14 @@ export async function loadExecutionSettings(
     // only the in-code name says what it really scopes to. Only a literal boolean
     // true pauses — a string "true" or 1 does not, so a malformed value can never
     // silently stop an owner's sends.
-    owner_automation_paused: raw.automation_paused === true,
+    owner_automation_paused: profileReadFailed || raw.automation_paused === true,
+    settings_read_failed: profileReadFailed,
   };
 
-  cache.set(cacheKey, settings);
+  // A failed read is NOT cached: the blip may be over by the next lead, and
+  // caching it would hold a whole run paused on one bad round trip. A real
+  // (successful) read is cached for the run as before.
+  if (!profileReadFailed) cache.set(cacheKey, settings);
   return settings;
 }
 
@@ -413,6 +443,59 @@ export function checkMinGap(
     };
   }
   return { allowed: true };
+}
+
+/**
+ * Email min-gap, measured against the last EMAIL only (Codex P2).
+ *
+ * `leads.last_outbound_at` is CROSS-CHANNEL: sms-send stamps it (see
+ * sms-send/index.ts, the skipStateUpdate branch) and so does the executor's own
+ * post-send update, for every channel. Comparing it to
+ * `min_gap_hours_between_emails` therefore deferred the next EMAIL as though a
+ * text had been an email — which only started happening in the wild once the
+ * automatic SMS path became reachable.
+ *
+ * Cheap by construction: nothing can be more recent than `last_outbound_at`, so
+ * when the cross-channel check already ALLOWS the send we return immediately and
+ * touch the database not at all. Only when it blocks do we spend one read to ask
+ * whether the blocking touch was actually an email.
+ *
+ * FAILS CLOSED: if that read errors we keep the conservative (blocked) answer
+ * and defer, rather than sending on the strength of a query we could not run.
+ *
+ * `anchorAt` is the timestamp the decision was made against, so the caller can
+ * compute the deferral without re-deriving it.
+ */
+export async function checkEmailMinGap(
+  leadId: string,
+  lastOutboundAt: string | null,
+  minGapHours: number,
+  serviceClient: ReturnType<typeof createClient>,
+): Promise<GuardCheckResult & { anchorAt: string | null }> {
+  const crossChannel = checkMinGap(lastOutboundAt, minGapHours);
+  if (crossChannel.allowed) return { ...crossChannel, anchorAt: lastOutboundAt };
+
+  const { data, error } = await serviceClient
+    .from("lead_timeline_items")
+    .select("occurred_at")
+    .eq("lead_id", leadId)
+    .eq("event_type", "email_outbound")
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(
+      `[executionSettings] last-email lookup failed for lead ${leadId} — keeping the ` +
+      `cross-channel min-gap block (fail closed): ${JSON.stringify(error)}`,
+    );
+    return { ...crossChannel, anchorAt: lastOutboundAt };
+  }
+
+  // No email has ever gone out (or none on record) → the blocking touch was not
+  // an email, so the EMAIL gap is not in play.
+  const lastEmailAt = ((data as any)?.occurred_at as string | null | undefined) ?? null;
+  return { ...checkMinGap(lastEmailAt, minGapHours), anchorAt: lastEmailAt };
 }
 
 /**

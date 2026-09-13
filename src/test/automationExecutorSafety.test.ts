@@ -59,14 +59,23 @@ describe("killSwitch", () => {
     // `automation_paused` (production rows already use it).
     expect(settingsSrc).toContain("owner_automation_paused: boolean");
     expect(settingsSrc).toContain("owner_automation_paused: false");
-    expect(settingsSrc).toContain("owner_automation_paused: raw.automation_paused === true");
+    // Was `raw.automation_paused === true`. Now a profile READ ERROR also pauses
+    // (Codex P2): `data === null` from maybeSingle means "no row / no key" and
+    // stays unpaused, but an `error` means the flag may be true and unreadable.
+    expect(settingsSrc).toContain("owner_automation_paused: profileReadFailed || raw.automation_paused === true");
     // Legacy loop: after loading execSettings, before the send-window check.
     const legacy = legacySection();
     const pause = legacy.indexOf("if (execSettings.owner_automation_paused)");
     const window = legacy.indexOf("checkSendWindow(execSettings)");
     expect(pause).toBeGreaterThan(-1);
     expect(pause).toBeLessThan(window);
-    expect(legacy.slice(pause, pause + 700)).toContain('from("automation_log").insert(logEntry)');
+    // Window widened: the branch now also picks the honest reason string and
+    // carries the fallback deferral (Codex P1/P2). Same ledger write as before.
+    const pauseBranch = legacy.slice(pause, pause + 1800);
+    expect(pauseBranch).toContain('from("automation_log").insert(logEntry)');
+    // A read failure is reported as a read failure, never as "you paused it".
+    expect(pauseBranch).toContain("execSettings.settings_read_failed");
+    expect(pauseBranch).toContain("Could not read this account's automation settings");
     // Cold pass: after loading exec, before any claim.
     const cold = coldSection();
     const coldPause = cold.indexOf("if (exec.owner_automation_paused)");
@@ -244,7 +253,10 @@ describe("smsChannelGating", () => {
   });
 
   it("the email min-gap and the per-lead EMAIL caps no longer block an SMS step", () => {
-    expect(legacy).toMatch(/const gapCheck = resolvedChannel === "sms"\s*\n\s*\? \{ allowed: true \} as const\s*\n\s*: checkMinGap\(/);
+    // The email branch now calls checkEmailMinGap, not checkMinGap: the raw
+    // leads.last_outbound_at is cross-channel, so a text was deferring the next
+    // email (Codex P2). SMS is still exempt from the email gap entirely.
+    expect(legacy).toMatch(/const gapCheck = resolvedChannel === "sms"\s*\n\s*\? \{ allowed: true, anchorAt: null \} as const\s*\n\s*: await checkEmailMinGap\(/);
     expect(legacy).toMatch(/const capCheck = resolvedChannel === "sms"\s*\n\s*\? \{ allowed: true \} as const\s*\n\s*: await checkPerLeadCaps\(/);
   });
 
@@ -300,8 +312,16 @@ describe("smsChannelGating", () => {
     const send = body.indexOf("functions/v1/sms-send");
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(send);
-    expect(body.slice(guard, send)).toContain("if (smsOptOut?.unsubscribed)");
-    expect(body.slice(guard, send)).toContain("continue;");
+    // FAIL CLOSED (Codex P2): an error, a missing row, or the flag all refuse.
+    // `smsOptOut?.unsubscribed` alone let a transient read failure text someone
+    // who may have just opted out.
+    const branch = body.slice(guard, send);
+    expect(branch).toContain("const smsOptOutUnreadable = !!smsOptOutErr || !smsOptOut;");
+    expect(branch).toContain("if (smsOptOutUnreadable || smsOptOut.unsubscribed)");
+    expect(branch).toContain("continue;");
+    // Transient → stays eligible and retries; confirmed opt-out → parked.
+    expect(branch).toContain("if (!smsOptOutUnreadable) {");
+    expect(branch).toContain('.update({ needs_action: false, eligible_at: null })');
   });
 });
 
@@ -559,5 +579,84 @@ describe("executionSettingsWorkspaceScope", () => {
       }
     }
     expect(calls.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// ── Codex round 3: safety code must fail CLOSED, and no blocked category may
+// monopolise the 20-row candidate page ──────────────────────────────────────
+describe("failClosedAndStarvation", () => {
+  const legacy = legacySection();
+
+  it("P1: paused owners are dropped from the candidate scan BEFORE the row limit", () => {
+    const lookup = src.indexOf('.from("workspace_profiles")');
+    const filter = src.indexOf('query.not("owner_user_id", "in", `(${pausedOwnerIds.join(",")})`)');
+    const exec = src.indexOf("const { data: eligibleLeads, error: queryErr } = await query;");
+    expect(lookup).toBeGreaterThan(-1);
+    expect(filter).toBeGreaterThan(lookup);
+    // The filter must be attached to the builder before it is awaited — that is
+    // what makes it apply before .limit(20) rather than after the page is cut.
+    expect(filter).toBeLessThan(exec);
+    // Same predicate as the loader: a literal boolean true, never the string.
+    const block = src.slice(lookup - 200, filter);
+    expect(block).toContain("cadence_settings as any)?.automation_paused === true");
+  });
+
+  it("P1: if the exclusion can't be built, the in-loop pause defers so the page still drains", () => {
+    const pause = legacy.indexOf("if (execSettings.owner_automation_paused)");
+    const branch = legacy.slice(pause, pause + 1800);
+    expect(branch).toContain("if (!pausedOwnerFilterApplied)");
+    expect(branch).toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
+    // And when the exclusion IS applied, the lead is untouched so un-pausing
+    // resumes on the next tick (the behaviour the docs promise).
+    expect(branch).toContain("un-pausing resumes instantly");
+  });
+
+  it("P1 defeat-resistance: the other refusals that need a human also defer instead of holding the page", () => {
+    // Each of these clears only when someone changes a setting, so a bare
+    // `continue` recreated the paused-owner starvation with a different cause.
+    const sixHours = "new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()";
+    for (const marker of [
+      "WA auto-send blocked for lead",                       // WhatsApp not enabled / not opted in
+      '"No mail connection (Gmail or Outlook)"',             // owner has no mailbox at all
+      "Sender mismatch: no mail_accounts configured",        // no mail_accounts row
+    ]) {
+      const at = legacy.indexOf(marker);
+      expect(at, `missing branch: ${marker}`).toBeGreaterThan(-1);
+      const after = legacy.slice(at, at + 900);
+      expect(after, `${marker} must defer, not just continue`).toContain(sixHours);
+      expect(after).toContain("continue;");
+    }
+  });
+
+  it("P2: the pause fails CLOSED on a profile read error, and a missing row still means 'not paused'", () => {
+    expect(settingsSrc).toContain("const profileReadFailed = !!(profileRes as any).error;");
+    expect(settingsSrc).toContain("owner_automation_paused: profileReadFailed || raw.automation_paused === true");
+    expect(settingsSrc).toContain("settings_read_failed: profileReadFailed");
+    // A failed read must not be cached, or one blip pauses the whole run.
+    expect(settingsSrc).toContain("if (!profileReadFailed) cache.set(cacheKey, settings);");
+    // maybeSingle() gives data=null with no error for "no row" — that path must
+    // NOT set profileReadFailed, so a brand-new owner is not silently paused.
+    expect(settingsSrc).toMatch(/maybeSingle\(\)/);
+    expect(settingsSrc).not.toContain("!profileRes.data");
+    // Both cold and legacy tell the rep which of the two happened.
+    const reasons = [...src.matchAll(/"Could not read this account's automation settings[^"]*"/g)];
+    expect(reasons.length).toBe(2);
+  });
+
+  it("P2: the email min-gap is anchored on the last EMAIL, not on any outbound", () => {
+    // leads.last_outbound_at is stamped by sms-send too, so an SMS was deferring
+    // the next email under a setting named min_gap_hours_between_emails.
+    expect(settingsSrc).toContain("export async function checkEmailMinGap(");
+    const fn = settingsSrc.slice(settingsSrc.indexOf("export async function checkEmailMinGap("));
+    expect(fn).toContain('.eq("event_type", "email_outbound")');
+    // Cheap path: if the cross-channel check already allows, no query at all.
+    expect(fn).toContain("if (crossChannel.allowed) return { ...crossChannel, anchorAt: lastOutboundAt };");
+    // Fail closed: a failed lookup keeps the conservative (blocked) answer.
+    expect(fn).toMatch(/if \(error\) \{[\s\S]{0,400}return \{ \.\.\.crossChannel, anchorAt: lastOutboundAt \};/);
+    // BOTH senders use it — the cold pass reads the same cross-channel field.
+    expect([...src.matchAll(/checkEmailMinGap\(/g)].length).toBe(2);
+    expect(src).not.toMatch(/[^l]checkMinGap\(/); // no raw cross-channel gap left in the executor
+    // The deferral is anchored on the blocking email, not on last_outbound_at.
+    expect(legacy).toContain("const gapAnchor = gapCheck.anchorAt ?? freshLead.last_outbound_at!;");
   });
 });
