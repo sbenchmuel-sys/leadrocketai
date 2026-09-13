@@ -1,12 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-const LOVABLE_AI_URL = "https://ai.lovable.dev/api/generate";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -122,18 +121,11 @@ Return a JSON object with this exact structure:
 }`;
 
       try {
-        const aiResp = await fetch(LOVABLE_AI_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${Deno.env.get("LOVABLE_API_KEY")}`,
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [{ role: "user", content: prompt }],
-            response_format: { type: "json_object" },
-          }),
-        });
+        const aiResp = await aiGatewayFetch(Deno.env.get("LOVABLE_API_KEY"), {
+          model: "google/gemini-2.5-flash",
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+        }, { label: "generate-reply-suggestions" });
 
         if (!aiResp.ok) {
           console.error(`[generate-reply-suggestions] AI call failed for ${convo.id}:`, await aiResp.text());

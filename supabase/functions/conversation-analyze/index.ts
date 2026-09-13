@@ -4,6 +4,7 @@ import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
 import { assertConversationAccess, isInternalCaller } from "../_shared/authz.ts";
 import { queueRecompute } from "../_shared/timelineProjector.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -236,98 +237,88 @@ Analyze this conversation and extract the structured sales intelligence.`;
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    const aiResponse = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          messages: [
-            { role: "system", content: EXTRACTION_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "extract_sales_intelligence",
-                description:
-                  "Extract structured sales intelligence features from a conversation.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    intent: {
-                      type: "string",
-                      enum: [
-                        "inquiry", "pricing_request", "demo_request", "objection",
-                        "follow_up", "scheduling", "support", "complaint", "ghosting", "not_clear",
-                      ],
-                    },
-                    objections: {
-                      type: "array",
-                      items: { type: "string" },
-                    },
-                    buying_signals: {
-                      type: "array",
-                      items: { type: "string" },
-                    },
-                    deal_stage: {
-                      type: "string",
-                      enum: [
-                        "awareness", "interest", "evaluation", "negotiation",
-                        "decision", "closed_won", "closed_lost", "stalled",
-                      ],
-                    },
-                    sentiment: {
-                      type: "string",
-                      enum: ["very_positive", "positive", "neutral", "negative", "very_negative"],
-                    },
-                    urgency: {
-                      type: "string",
-                      enum: ["critical", "high", "medium", "low", "none"],
-                    },
-                    ghosting_risk: {
-                      type: "string",
-                      enum: ["high", "medium", "low"],
-                    },
-                    ghosting_risk_reason: { type: "string" },
-                    recommended_reply_channel: {
-                      type: "string",
-                      enum: ["whatsapp", "email"],
-                    },
-                    channel_reason: { type: "string" },
-                    summary_short: { type: "string" },
-                    topics: {
-                      type: "array",
-                      items: { type: "string" },
-                    },
-                    key_facts: {
-                      type: "array",
-                      items: { type: "string" },
-                    },
-                  },
-                  required: [
-                    "intent", "objections", "buying_signals", "deal_stage",
-                    "sentiment", "urgency", "ghosting_risk", "ghosting_risk_reason",
-                    "recommended_reply_channel", "channel_reason", "summary_short",
-                    "topics", "key_facts",
+    const aiResponse = await aiGatewayFetch(LOVABLE_API_KEY, {
+      model: "google/gemini-3-flash-preview",
+      messages: [
+        { role: "system", content: EXTRACTION_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "extract_sales_intelligence",
+            description:
+              "Extract structured sales intelligence features from a conversation.",
+            parameters: {
+              type: "object",
+              properties: {
+                intent: {
+                  type: "string",
+                  enum: [
+                    "inquiry", "pricing_request", "demo_request", "objection",
+                    "follow_up", "scheduling", "support", "complaint", "ghosting", "not_clear",
                   ],
-                  additionalProperties: false,
+                },
+                objections: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                buying_signals: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                deal_stage: {
+                  type: "string",
+                  enum: [
+                    "awareness", "interest", "evaluation", "negotiation",
+                    "decision", "closed_won", "closed_lost", "stalled",
+                  ],
+                },
+                sentiment: {
+                  type: "string",
+                  enum: ["very_positive", "positive", "neutral", "negative", "very_negative"],
+                },
+                urgency: {
+                  type: "string",
+                  enum: ["critical", "high", "medium", "low", "none"],
+                },
+                ghosting_risk: {
+                  type: "string",
+                  enum: ["high", "medium", "low"],
+                },
+                ghosting_risk_reason: { type: "string" },
+                recommended_reply_channel: {
+                  type: "string",
+                  enum: ["whatsapp", "email"],
+                },
+                channel_reason: { type: "string" },
+                summary_short: { type: "string" },
+                topics: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                key_facts: {
+                  type: "array",
+                  items: { type: "string" },
                 },
               },
+              required: [
+                "intent", "objections", "buying_signals", "deal_stage",
+                "sentiment", "urgency", "ghosting_risk", "ghosting_risk_reason",
+                "recommended_reply_channel", "channel_reason", "summary_short",
+                "topics", "key_facts",
+              ],
+              additionalProperties: false,
             },
-          ],
-          tool_choice: {
-            type: "function",
-            function: { name: "extract_sales_intelligence" },
           },
-        }),
-      }
-    );
+        },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "extract_sales_intelligence" },
+      },
+    }, { label: "conversation-analyze" });
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text();

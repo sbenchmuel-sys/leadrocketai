@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -126,17 +127,13 @@ Produce a JSON style profile with these fields:
 
 Respond with ONLY the JSON object, no markdown.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You are a writing style analyst. Output only valid JSON." },
-          { role: "user", content: synthesisPrompt },
-        ],
-      }),
-    });
+    const aiResponse = await aiGatewayFetch(LOVABLE_API_KEY, {
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: "You are a writing style analyst. Output only valid JSON." },
+        { role: "user", content: synthesisPrompt },
+      ],
+    }, { label: "synthesize-style-profile" });
 
     if (!aiResponse.ok) {
       console.error(`[synthesize-style] AI error: ${aiResponse.status}`);

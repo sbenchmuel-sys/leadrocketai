@@ -2,6 +2,7 @@
 // ASR Provider Abstraction — Multi-strategy audio transcription
 // ===========================================================
 import { logger } from "./logger.ts";
+import { aiGatewayFetch } from "./aiGateway.ts";
 
 // ---- Interfaces ----
 
@@ -484,24 +485,17 @@ ${options.timestamps ? "Provide accurate timestamps in milliseconds." : ""}
 Return valid JSON only, no markdown fences.`;
 
     // Try input_audio format
-    const resp = await fetch("https://api.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "input_audio", input_audio: { data: audioBase64, format: "wav" } },
-            { type: "text", text: prompt },
-          ],
-        }],
-        temperature: 0.1,
-      }),
-    });
+    const resp = await aiGatewayFetch(this.apiKey, {
+      model: this.model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "input_audio", input_audio: { data: audioBase64, format: "wav" } },
+          { type: "text", text: prompt },
+        ],
+      }],
+      temperature: 0.1,
+    }, { label: "asr:llm_audio" });
 
     if (!resp.ok) {
       const errText = await resp.text();

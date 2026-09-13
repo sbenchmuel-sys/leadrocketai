@@ -17,6 +17,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { aiGatewayFetch } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -81,14 +82,10 @@ Match the source language. Omit greetings, signatures, and quoted history. Hard 
 ${emailText}`;
 
   try {
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    const res = await aiGatewayFetch(apiKey, {
+      model: "google/gemini-2.5-flash-lite",
+      messages: [{ role: "user", content: prompt }],
+    }, { label: "classify-outbound" });
     if (!res.ok) { await res.text(); return null; }
     const data = await res.json() as { choices?: { message?: { content?: string } }[] };
     const content = data?.choices?.[0]?.message?.content?.trim() ?? "";
