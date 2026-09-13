@@ -5,6 +5,17 @@
  * gmail-sync and outlook-sync stay thin provider-specific wrappers.
  */
 
+import {
+  deriveFollowupDue,
+  followupWaitDays,
+  CLOSING_FOLLOWUP_DAYS,
+  mustClearEligibleAt,
+  OUTBOUND_SEND_KEYS,
+  POST_MEETING_FOLLOWUP_DAYS,
+  rateLimitedAction,
+  specialisedRulePending,
+} from "./followupRule.ts";
+
 // ============================================
 // CADENCE SETTINGS TYPES
 // ============================================
@@ -34,6 +45,13 @@ export interface StopPauseRules {
 
 export interface ModeSettings {
   reply_pending_hours: number;
+  /**
+   * Calendar days to wait on MY unanswered message before the Queue asks the
+   * rep to follow up (Unit Q1). Optional because nothing in the product writes
+   * it — the settings UI uses a different schema (see `followupWaitDays`), so
+   * in practice every workspace gets the fast-3 / nurture-5 default.
+   */
+  followup_wait_days?: number;
   outbound_followups_days: number[];
   breakup_trigger: {
     days_since_first_outbound: number;
@@ -80,6 +98,11 @@ export interface CadenceSettingsV1 {
   flows: Flows;
 }
 
+// The deferral set (thresholds + the `specialisedRulePending` predicate) lives
+// in _shared/followupRule.ts so this rule and gmail-bulk-sync's copy share ONE
+// definition. Re-exported for callers that referenced them here.
+export { CLOSING_FOLLOWUP_DAYS, POST_MEETING_FOLLOWUP_DAYS };
+
 export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
   version: 1,
   time_rules: {
@@ -105,12 +128,14 @@ export const DEFAULT_CADENCE_SETTINGS: CadenceSettingsV1 = {
   modes: {
     fast: {
       reply_pending_hours: 4,
+      followup_wait_days: 3,
       outbound_followups_days: [2, 3, 3, 4],
       breakup_trigger: { days_since_first_outbound: 10, days_since_last_outbound: 5 },
       post_meeting: { recap_suggest_after_hours: 4, checkins_days: [3, 7] },
     },
     nurture: {
       reply_pending_hours: 24,
+      followup_wait_days: 5,
       outbound_followups_days: [5, 7, 7, 10],
       breakup_trigger: { days_since_first_outbound: 30, days_since_last_outbound: 14 },
       post_meeting: { recap_suggest_after_hours: 24, checkins_days: [7, 14, 30] },
@@ -159,6 +184,7 @@ export type ActionReasonCode =
   | "CLOSING_FOLLOWUP_DUE"
   | "NURTURE_SWITCH_RECOMMENDED"
   | "NURTURE_CAMPAIGN_START"
+  | "RATE_LIMITED"
   | "OOO_RETURN";
 
 export interface ActionResult {
@@ -435,16 +461,108 @@ export function deriveAction(
     }
   }
 
-  // GUARDRAILS
-  if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
-    return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
-  }
-  if (recentOutbound30d >= guardrails.max_emails_per_lead_per_30d) {
+  // CLOSED DEALS ARE DONE.
+  //
+  // Evaluated AFTER branch A so a customer who writes after the deal closed
+  // still surfaces as `reply_now` — that is a real person waiting. But nothing
+  // below this line should ever chase them: `deriveStage` keeps a closed stage
+  // forever while `deriveAction` had no closed exit at all, so a closed_won or
+  // closed_lost lead whose last word was ours could pick up `followup_due` (or,
+  // before this unit, `send_pre_N` / `reengage`) as soon as the outbound aged,
+  // undoing the `needs_action = false` written when the deal was closed. The
+  // Queue has no stage filter, so the rep gets told to chase a deal they
+  // already won. Nothing erodes trust in the Queue faster.
+  if (stage === "closed_won" || stage === "closed_lost") {
     return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
   }
 
   const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
   const hoursSinceLastOut = (now - lastOutTime) / HOUR;
+
+  // A2) FOLLOW-UP DUE (Unit Q1) — "my unanswered message after N days".
+  //
+  // Computed HERE, after REPLY PENDING and before the guardrails, so a genuine
+  // inbound always wins and a send rate limit can never hide a task the human
+  // owns. It is applied as a FALLBACK: every existing branch below keeps its
+  // key, its label and its ordering (closing 3d, pre-meeting cadence,
+  // post-meeting 7d, nurture, re-engage 45d). `followupDue` only speaks where
+  // the old code produced nothing at all — which, before this unit, included
+  // every lead that had ever replied and then gone quiet (branch C gates on
+  // `!last_inbound_at`, so those leads waited 45 days for `reengage`: the
+  // six-week hole from the Queue audit).
+  //
+  // NOT a send trigger: `followup_due` is absent from OUTBOUND_SEND_KEYS and
+  // `buildLeadUpdate` blanks its `eligible_at` before persisting.
+  //
+  // The deferral is applied HERE, once, so every decision point below inherits
+  // it: the volume-cap branch, and the fallback at the end. (Codex found it
+  // applied at the fallback only, which let a post-meeting lead surface as
+  // `rate_limited` before its own 7-day rule was even due.)
+  const specialisedPending = specialisedRulePending({
+    stage,
+    daysSinceLastOutbound: lastOutTime > 0 ? (now - lastOutTime) / DAY : Number.POSITIVE_INFINITY,
+    nurtureCadenceActive: flows.nurture_campaigns.enabled
+      && metrics.nurture_outbound_count > 0
+      && !!nurtureCadence,
+  });
+
+  const followupDue = specialisedPending
+    ? null
+    : deriveFollowupDue(metrics, followupWaitDays(strategy, modeSettings), now);
+
+  // GUARDRAILS
+  //
+  // All four cap AUTOMATED sends. Only the two VOLUME caps become visible as
+  // `rate_limited`: they hold a lead for days, and returning a null key made it
+  // vanish from the Queue with no reason and no date.
+  //
+  // The 16-hour-gap and same-day rules stay SILENT, exactly as they always
+  // were. They trip on every lead the rep just emailed — and `postSendDeriveAction`
+  // now recomputes seconds after a send — so surfacing them would bounce every
+  // sent email straight back into the Queue as a no-op card ("follow up, sent 0
+  // minutes ago") parked until UTC midnight. The Queue would never empty.
+  // (`followupWaitDays` has a one-day floor, so at the DEFAULT 16-hour gap an
+  // owed follow-up can never fall inside these two windows and be swallowed.
+  // ponytail: a workspace that raises `min_gap_hours_between_emails` past its
+  // `followup_wait_days` — e.g. 96h against a 3-day wait — would silence a lead
+  // that is 80 hours quiet. Unreachable at defaults (72h vs 16h of margin), so
+  // it is documented rather than defended against.)
+  //
+  // A still-unanswered inbound also suppresses `rate_limited`: branch A already
+  // returned `reply_now` once the reply is past `reply_pending_hours`, so
+  // reaching here means the customer wrote very recently and we are inside that
+  // window. A "Follow up" card whose why-now line reads off `last_outbound_at`
+  // would actively hide the fresh reply for up to 4h (fast) / 24h (nurture).
+  const hasUnansweredInbound = metrics.last_inbound_at != null
+    && new Date(metrics.last_inbound_at).getTime() > lastOutTime;
+  const silent: ActionResult = { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+  // `specialisedPending` silences the cap explanation too: a post-meeting lead
+  // four days in has nothing to be told yet, and `rate_limited` would claim the
+  // card before its own rule is due.
+  const capped = (availableAtMs: number): ActionResult =>
+    followupDue ?? (hasUnansweredInbound || specialisedPending
+      ? silent
+      : rateLimitedAction(availableAtMs, timezone));
+
+  // EVERY tripped cap is evaluated and the LATEST expiry wins. Returning on the
+  // first one promised availability at last_outbound + 7d for a lead that had
+  // also blown the 30-day cap — a date at which it is still barred. This unit's
+  // rule for that label is that it may be late, never early.
+  //
+  // ponytail: deriveAction only receives the COUNT of recent outbounds, not
+  // their timestamps, so the true expiry (oldest-in-window + window) is unknown.
+  // last_outbound + window is the conservative upper bound. Upgrade path: pass
+  // the oldest in-window outbound timestamp from the callers.
+  const capExpiries: number[] = [];
+  if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
+    capExpiries.push((lastOutTime || now) + 7 * DAY);
+  }
+  if (recentOutbound30d >= guardrails.max_emails_per_lead_per_30d) {
+    capExpiries.push((lastOutTime || now) + 30 * DAY);
+  }
+  if (capExpiries.length > 0) {
+    return capped(Math.max(...capExpiries));
+  }
 
   if (hoursSinceLastOut < guardrails.min_gap_hours_between_emails && lastOutTime > 0) {
     const eligibleTime = lastOutTime + (guardrails.min_gap_hours_between_emails * HOUR);
@@ -453,7 +571,7 @@ export function deriveAction(
 
   if (!guardrails.same_day_send_allowed && lastOutTime > 0) {
     if (new Date(lastOutTime).toDateString() === new Date(now).toDateString()) {
-      return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+      return silent;
     }
   }
 
@@ -469,9 +587,9 @@ export function deriveAction(
 
   // B) CLOSING STAGE
   if (stage === "closing") {
-    if (now - lastOutTime > 3 * DAY) {
+    if (now - lastOutTime > CLOSING_FOLLOWUP_DAYS * DAY) {
       const jitter = getDeterministicJitter(leadId, "closing_followup", guardrails.jitter_percent);
-      const eligibleAt = new Date(lastOutTime + (3 * DAY) * (1 + jitter));
+      const eligibleAt = new Date(lastOutTime + (CLOSING_FOLLOWUP_DAYS * DAY) * (1 + jitter));
       return { needs_action: true, next_action_key: "closing_followup", next_action_label: "Follow up on proposal/contract", eligible_at: eligibleAt.toISOString(), action_reason_code: "CLOSING_FOLLOWUP_DUE" };
     }
   }
@@ -529,10 +647,10 @@ export function deriveAction(
     const lastInboundTime = metrics.last_inbound_at ? new Date(metrics.last_inbound_at).getTime() : 0;
     if (lastOutboundTime > 0 && lastOutboundTime > lastInboundTime) {
       const daysSinceOutbound = (now - lastOutboundTime) / DAY;
-      if (daysSinceOutbound >= 7) {
+      if (daysSinceOutbound >= POST_MEETING_FOLLOWUP_DAYS) {
         const jitter = getDeterministicJitter(leadId, "post_meeting_followup", guardrails.jitter_percent);
-        const eligibleAt = new Date(lastOutboundTime + (7 * DAY) * (1 + jitter));
-        return { needs_action: true, next_action_key: "post_meeting_followup", next_action_label: "Follow up (no response in 7 days)", eligible_at: eligibleAt.toISOString(), action_reason_code: "POST_MEETING_FOLLOWUP_DUE" };
+        const eligibleAt = new Date(lastOutboundTime + (POST_MEETING_FOLLOWUP_DAYS * DAY) * (1 + jitter));
+        return { needs_action: true, next_action_key: "post_meeting_followup", next_action_label: `Follow up (no response in ${POST_MEETING_FOLLOWUP_DAYS} days)`, eligible_at: eligibleAt.toISOString(), action_reason_code: "POST_MEETING_FOLLOWUP_DUE" };
       }
     }
   }
@@ -567,6 +685,21 @@ export function deriveAction(
     }
   }
 
+  // Nothing more specific applies. Before this unit every lead landing here
+  // dropped out of the Queue; now an unanswered outbound older than N days
+  // surfaces as `followup_due`.
+  //
+  // …EXCEPT where a specialised rule deliberately waits LONGER than the generic
+  // 3/5-day wait. The fallback is stage-blind by design (that blindness is what
+  // closes the six-week hole), so without this it overtakes those rules and the
+  // rep gets a generic "Follow up (no reply in 3 days)" days early instead of
+  // the specialised key — which then never fires, because the generic one
+  // already claimed the lead. Same class as the closed-stage exit above.
+  //
+  // The deferral is already folded into `followupDue` above (one computation,
+  // shared with the volume-cap branch and with gmail-bulk-sync's copy of the
+  // rule via `specialisedRulePending`).
+  if (followupDue) return followupDue;
   return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
 }
 
@@ -658,13 +791,8 @@ export function buildLeadUpdate(
   // CONSENT GATE — strip any scheduled outbound send if the user never opted in.
   // "reply_now" is a UI prompt for the human to reply, not an automated send,
   // so we leave it intact.
-  const OUTBOUND_SEND_KEYS = new Set([
-    "send_pre_1", "send_pre_2", "send_pre_3", "send_pre_4",
-    "send_nurture_1", "send_nurture_2", "send_nurture_3", "send_nurture_4",
-    "send_nurture_5", "send_nurture_6", "send_nurture_7", "send_nurture_8",
-    "reengage", "closing_followup", "post_meeting_followup",
-    "switch_to_nurture", "generate_post_meeting_recap",
-  ]);
+  // OUTBOUND_SEND_KEYS now lives in _shared/followupRule.ts so the Queue tests
+  // can assert `followup_due` / `rate_limited` are absent from it.
   if (
     automationMode == null &&
     finalAction.next_action_key &&
@@ -693,6 +821,10 @@ export function buildLeadUpdate(
   // reply_now overwritten with null on every sync — so the customer's reply never
   // reached the Queue's Replied tab. Mirrors the consent-gate carve-out above,
   // which also leaves reply_now intact.
+  // `followup_due` / `rate_limited` deliberately do NOT get this carve-out: an
+  // armed cadence already schedules the follow-up, so the Queue prompt is
+  // redundant there, and letting it through would overwrite the lead's stored
+  // cadence anchor (`eligible_at`) with nothing.
   const isHumanPromptKey = finalAction.next_action_key === "reply_now";
   const suppressForAutomation = hasActiveAutomation && !isHumanPromptKey;
 
@@ -702,7 +834,9 @@ export function buildLeadUpdate(
     next_action_key: suppressForAutomation ? null : finalAction.next_action_key,
     next_action_label: suppressForAutomation ? null : finalAction.next_action_label,
     // eligible_at intentionally still follows hasActiveAutomation — the cadence
-    // anchor for outbound timing is unchanged by a reply prompt.
+    // anchor for outbound timing is unchanged by a reply prompt. (When
+    // suppressing, the whole block is dropped from the payload below, so this
+    // value is never actually written.)
     eligible_at: hasActiveAutomation ? currentLeadState!.eligible_at : finalAction.eligible_at,
     action_reason_code: suppressForAutomation ? null : finalAction.action_reason_code,
     first_outbound_at: metrics.first_outbound_at,
@@ -723,6 +857,53 @@ export function buildLeadUpdate(
     .filter((t) => Number.isFinite(t));
   if (activityDates.length > 0) {
     (leadUpdate as LeadUpdate).last_activity_at = new Date(Math.max(...activityDates)).toISOString();
+  }
+
+  // PRESERVE A LIVE SCHEDULE ATOMICALLY (Unit Q1).
+  //
+  // `suppressForAutomation` used to write NULL over `next_action_key` /
+  // `next_action_label` / `action_reason_code` while keeping `needs_action` and
+  // the future `eligible_at`. For a lead that already had a null key that was
+  // harmless. For a lead with a LIVE cadence it is a silent send-killer:
+  // automation-executor's candidate query ends in
+  // `.neq("next_action_key", "ooo_return_followup")`, and SQL three-valued logic
+  // makes `NULL <> 'x'` unknown — so a NULL key is never selected, and a follow-up
+  // that was genuinely queued simply never fires.
+  //
+  // The race that reaches it: gmail-send / outlook-send return as soon as their
+  // background task is registered, the client then writes the next cadence key
+  // and a future `eligible_at` via `updateSequenceState`, and THEN the
+  // post-send recompute runs — reading a schedule that did not exist when it
+  // started and "suppressing" it to null.
+  //
+  // So: touch nothing. Dropping these fields from the payload (the same
+  // technique the nurture/OOO branch below uses) leaves whatever the schedule's
+  // owner wrote, including anything written after our own read — which is the
+  // only way to be correct under a race we cannot order. It cannot go stale:
+  // `hasActiveSequence` requires a FUTURE `eligible_at`, so once the anchor
+  // passes, suppression stops and normal derivation resumes.
+  if (suppressForAutomation) {
+    // deno-lint-ignore no-explicit-any
+    const u = leadUpdate as any;
+    delete u.needs_action;
+    delete u.next_action_key;
+    delete u.next_action_label;
+    delete u.action_reason_code;
+    delete u.eligible_at;
+  }
+
+  // NO-AUTO-SEND INVARIANT (Unit Q1).
+  //
+  // `automation-executor`'s candidate query is key-agnostic: needs_action =
+  // true AND eligible_at <= now AND automation_mode IS NOT NULL AND key !=
+  // 'ooo_return_followup'. So ANY key persisted with a due `eligible_at` is a
+  // send trigger. `followup_due` / `rate_limited` are prompts for the human —
+  // deriveAction returns an honest date on them (the label carries it too), and
+  // we drop it here so the executor can never pick these leads up. Leads with a
+  // live cadence keep their anchor instead: `suppressForAutomation` above stops
+  // these keys from ever reaching a lead that has one. `reply_now` unchanged.
+  if (mustClearEligibleAt(leadUpdate.next_action_key)) {
+    leadUpdate.eligible_at = null;
   }
 
   // For active nurture/OOO, remove overwrite fields so they're not clobbered

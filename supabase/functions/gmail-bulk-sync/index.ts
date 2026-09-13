@@ -13,6 +13,31 @@ import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { deriveAction } from "../_shared/bulkSyncAction.ts";
+import { mustClearEligibleAt, RATE_LIMITED_KEY } from "../_shared/followupRule.ts";
+import { deepMergeCadence, DEFAULT_CADENCE_SETTINGS } from "../_shared/syncEngine.ts";
+
+/** Per-strategy mode settings for one owner's workspace profile. */
+type CadenceModes = { fast?: { followup_wait_days?: number }; nurture?: { followup_wait_days?: number } };
+
+/**
+ * Load the owner's merged cadence modes ONCE per connection / request (not per
+ * lead), so the scheduled path honours
+ * `cadence_settings.modes.*.followup_wait_days` like every other path. Cost: one
+ * extra read per Gmail connection per sweep. Null on any failure — the rule then
+ * falls back to its 3/5 defaults rather than skipping leads.
+ */
+// deno-lint-ignore no-explicit-any
+async function loadCadenceModes(serviceSupabase: any, userId: string | null | undefined): Promise<CadenceModes | null> {
+  if (!userId) return null;
+  const { data } = await serviceSupabase
+    .from("workspace_profiles")
+    .select("cadence_settings")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return null;
+  return deepMergeCadence(DEFAULT_CADENCE_SETTINGS, data.cadence_settings ?? {}).modes as CadenceModes;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -299,109 +324,13 @@ function deriveStage(
   return "new";
 }
 
-function deriveAction(
-  metrics: LeadMetrics,
-  pendingDraftCount: number,
-  nurtureCadence: string | null,
-  stage: string
-): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
-  const now = Date.now();
-  const HOUR = 60 * 60 * 1000;
-  const DAY = 24 * HOUR;
-
-  if (metrics.last_inbound_at) {
-    const inboundTime = new Date(metrics.last_inbound_at).getTime();
-    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    
-    if (inboundTime > outboundTime) {
-      const elapsed = now - inboundTime;
-      if (elapsed > 6 * HOUR) {
-        return {
-          needs_action: true,
-          next_action_key: "reply_now",
-          next_action_label: "Reply to customer",
-        };
-      }
-    }
-  }
-
-  // Closing stage - follow up if no outbound in 3 days
-  if (stage === "closing") {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    if (now - lastOutTime > 3 * DAY) {
-      return {
-        needs_action: true,
-        next_action_key: "closing_followup",
-        next_action_label: "Follow up on proposal/contract",
-      };
-    }
-  }
-
-  if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
-    const firstOutTime = new Date(metrics.first_outbound_at).getTime();
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : firstOutTime;
-    const daysSinceFirst = (now - firstOutTime) / DAY;
-    const daysSinceLast = (now - lastOutTime) / DAY;
-
-    if (daysSinceFirst >= 14 && daysSinceLast >= 7) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_4",
-        next_action_label: "Send breakup email",
-      };
-    } else if (daysSinceFirst >= 7 && daysSinceLast >= 4) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_3",
-        next_action_label: "Send follow-up Email 3",
-      };
-    } else if (daysSinceFirst >= 4 && daysSinceLast >= 3) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_2",
-        next_action_label: "Send follow-up Email 2",
-      };
-    }
-  }
-
-  if (metrics.meeting_summary_count > 0) {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    if (now - lastOutTime > 48 * HOUR) {
-      return {
-        needs_action: true,
-        next_action_key: "generate_post_meeting_recap",
-        next_action_label: "Send post-meeting recap",
-      };
-    }
-  }
-
-  if (metrics.nurture_outbound_count > 0 && nurtureCadence) {
-    const lastNurtureTime = metrics.last_nurture_outbound_at 
-      ? new Date(metrics.last_nurture_outbound_at).getTime() 
-      : 0;
-    
-    let intervalDays = 7;
-    if (nurtureCadence === "biweekly") intervalDays = 14;
-    else if (nurtureCadence === "monthly") intervalDays = 30;
-
-    if (now - lastNurtureTime >= intervalDays * DAY) {
-      return {
-        needs_action: true,
-        next_action_key: `send_nurture_${metrics.nurture_outbound_count + 1}`,
-        next_action_label: "Send nurture email",
-      };
-    }
-  }
-
-  return { needs_action: false, next_action_key: null, next_action_label: null };
-}
-
 // deno-lint-ignore no-explicit-any
 async function syncLeadEmails(
   serviceSupabase: any,
   accessToken: string,
   lead: { id: string; email: string; stage: string; strategy: string; workspace_id?: string | null },
-  maxResults: number
+  maxResults: number,
+  cadenceModes: CadenceModes | null = null
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
   const workspaceId = lead.workspace_id ?? null;
@@ -937,7 +866,14 @@ async function syncLeadEmails(
 
   // Derive stage and action
   const newStage = deriveStage(currentStage, metrics, hasClosingKeywords);
-  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null, newStage);
+  const actionResult = deriveAction(
+    metrics,
+    pendingDraftCount || 0,
+    null,
+    newStage,
+    lead.strategy,
+    (lead.strategy === "nurture" ? cadenceModes?.nurture : cadenceModes?.fast) ?? null,
+  );
 
   // Determine last_activity_at
   const activityDates = [
@@ -967,7 +903,7 @@ async function syncLeadEmails(
   // Fetch current lead state to protect nurture, OOO, unsubscribed, and automation-scheduled leads from action overwrites
   const { data: currentState } = await serviceSupabase
     .from("leads")
-    .select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed")
+    .select("motion, nurture_status, ooo_until, eligible_at, needs_action, unsubscribed, next_action_key")
     .eq("id", leadId)
     .single();
 
@@ -1036,6 +972,28 @@ async function syncLeadEmails(
   } else if (hasRecentAutoSend) {
     // CRITICAL: Recently-sent guard -- executor sent an email recently, don't re-arm.
     console.log(`[gmail-bulk-sync] Lead ${leadId}: Recent automation send detected (${recentAutoSendCount} in last 2h) -- suppressing action overwrite`);
+  } else if (
+    currentState?.next_action_key === RATE_LIMITED_KEY
+    && currentState?.needs_action === true
+    && !actionResult.needs_action
+  ) {
+    // Preserve an active `rate_limited` explanation (Unit Q1).
+    //
+    // `rate_limited` is written by the SHARED rule, which knows the workspace's
+    // volume caps and this lead's recent outbound counts. This private rule has
+    // neither input, so it cannot re-derive that verdict — and its `null` would
+    // be written straight over it, silently turning "auto-send paused until the
+    // 18th" into a blank card within one 20-minute cycle. Same defect this unit
+    // exists to fix, wearing a different key.
+    //
+    // Same shape as the three guards above: don't overwrite what this path is
+    // not equipped to evaluate. Deliberately narrow — it only holds when the
+    // sweep has NOTHING of its own to say. The moment it derives anything
+    // (reply_now on a fresh inbound, followup_due once the wait passes,
+    // closing_followup, …) that verdict wins, so a preserved rate_limited can
+    // never go stale for longer than the follow-up wait and a customer's reply
+    // is never hidden behind it.
+    console.log(`[gmail-bulk-sync] Lead ${leadId}: preserving rate_limited — this path has no volume-cap inputs`);
   } else if (!hasActivity && !actionResult.needs_action) {
     // No interactions on record and nothing to flag — leave existing action fields
     // untouched rather than clearing flags set elsewhere (manual / candidate) on
@@ -1046,6 +1004,20 @@ async function syncLeadEmails(
     updatePayload.needs_action = actionResult.needs_action;
     updatePayload.next_action_key = actionResult.next_action_key;
     updatePayload.next_action_label = actionResult.next_action_label;
+
+    // THE INVARIANT (see `mustClearEligibleAt`): a prompt-only key must never be
+    // persisted next to a live `eligible_at`.
+    //
+    // `isAutomationScheduled` above only catches a FUTURE timestamp, so an
+    // enrolled lead whose `eligible_at` has already passed falls through to here
+    // — and because this file never puts `eligible_at` in its payload at all,
+    // the stale past timestamp survives beside the new `followup_due`. That row
+    // matches automation-executor's key-agnostic query exactly, and the resolver
+    // sends a generic follow-up nobody asked for. Not writing the field is the
+    // bug, not the protection: null it explicitly, as buildLeadUpdate does.
+    if (mustClearEligibleAt(actionResult.next_action_key)) {
+      updatePayload.eligible_at = null;
+    }
   }
 
   // CONSENT GATE (defensive): gmail-bulk-sync intentionally does NOT route through
@@ -1056,8 +1028,11 @@ async function syncLeadEmails(
   // with `needs_action: true` and an outbound `next_action_key` — only the
   // automation-executor (which checks automation_mode IS NOT NULL) is allowed to
   // do that. OOO/defer pauses set ooo_until + needs_action:false, which is fine.
+  // An explicit `eligible_at: null` is a DE-arming write — the opposite of
+  // scheduling a send — so it must pass. Only a real timestamp can violate the
+  // contract this gate protects.
   if (
-    "eligible_at" in updatePayload &&
+    updatePayload.eligible_at != null &&
     updatePayload.needs_action === true &&
     typeof updatePayload.next_action_key === "string"
   ) {
@@ -1284,6 +1259,8 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     // it's retried on the next full rotation instead. syncLeadEmails is idempotent.
     let accountAuthFailed = false;
     let processed = 0;
+    // One read per connection per sweep — NOT per lead.
+    const cadenceModes = await loadCadenceModes(serviceSupabase, conn.user_id);
     for (const lead of windowLeads) {
       // Budget reached mid-window: STOP without advancing for this lead. The cursor
       // still points at it (last persisted from the previous iteration), so the next
@@ -1302,7 +1279,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         .eq("user_id", conn.user_id);
 
       try {
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes);
         totalSynced += result.synced;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1491,6 +1468,8 @@ serve(async (req) => {
     }
 
     let anyConnectionResolved = false;
+    // One read per request — NOT per lead.
+    const cadenceModes = await loadCadenceModes(serviceSupabase, user.id);
 
     for (const [workspaceId, groupLeads] of leadsByWorkspace) {
       // Only resolve a workspace-scoped mailbox for workspaces the caller belongs to;
@@ -1514,7 +1493,7 @@ serve(async (req) => {
 
       for (const lead of groupLeads) {
         console.log(`[gmail-bulk-sync] Syncing lead ${lead.id} (${lead.email}) [ws=${workspaceId ?? "legacy"}]`);
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults, cadenceModes);
         results.push({
           leadId: lead.id,
           synced: result.synced,

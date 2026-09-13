@@ -32,6 +32,8 @@ const URGENCY_PRIORITY: Record<string, number> = {
   closing_followup: 3,
   send_pre_2: 4,
   send_pre_3: 5,
+  followup_due: 6,  // Unit Q1 — my message, unanswered N days.
+  rate_limited: 50, // Unit Q1 — visible, but nothing to do until its date.
 };
 
 interface PriorityActionsProps {

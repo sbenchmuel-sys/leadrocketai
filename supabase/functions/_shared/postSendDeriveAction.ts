@@ -15,10 +15,14 @@
 //   • Owns its own try/catch — a failure here MUST NOT fail the send.
 //   • Background-task pattern (EdgeRuntime.waitUntil where available,
 //     fire-and-forget otherwise) so the caller doesn't await.
-//   • gmail-send is INTENTIONALLY not migrated to this helper in this
-//     PR (see PR B brief). Its existing pattern stays untouched; this
-//     helper exists so the three new wirings don't drift. Consolidating
-//     gmail-send is a future cleanup.
+//   • Unit Q1 wired gmail-send AND outlook-send into this same helper
+//     (manual sends only — automation-executor still owns the state of
+//     its own sends). The AI `analyze_outgoing_email` write runs first;
+//     this helper is the last word on next_action_key / needs_action,
+//     so the post-send state is the follow-up rule's answer. It is a
+//     recompute AT SEND TIME only — nothing here revisits the lead when
+//     the wait later expires. Gmail relies on gmail-bulk-sync's cron for
+//     that; Outlook has no equivalent (its own unit).
 //
 // What this does NOT do (deliberate scope):
 //   • Does not WRITE meeting_packs bookkeeping — gmail-sync /
@@ -49,6 +53,16 @@ interface PostSendDeriveActionParams {
   leadId: string;
   /** Optional log prefix for traceability, e.g. "[sms-send]". */
   logPrefix?: string;
+  /**
+   * Leave `leads.stage` alone (Codex P2). The email send paths call
+   * `analyze_outgoing_email` immediately before this, and that can advance a
+   * lead to e.g. `closing`. `deriveStage` preserves only the closed stages and
+   * would otherwise recompute `engaged` / `contacted` over the top, so a rep
+   * would watch the stage they just earned flip back seconds later. The stage
+   * still feeds `deriveAction` (read fresh from the row, so it IS the analysed
+   * value) — we simply don't persist a second opinion about it.
+   */
+  preserveStage?: boolean;
 }
 
 /**
@@ -69,10 +83,10 @@ export function postSendDeriveAction(
   const prefix = params.logPrefix ?? "[postSendDeriveAction]";
   const task = async (): Promise<void> => {
     try {
-      await runRecompute(supabase, params.leadId, prefix);
+      await recomputeLeadAction(supabase, params.leadId, prefix, params.preserveStage === true);
     } catch (err) {
       // This catch is the last line of defence. Anything that escapes
-      // runRecompute lands here. Never throws.
+      // recomputeLeadAction lands here. Never throws.
       console.error(`${prefix} postSendDeriveAction failed:`, err instanceof Error ? err.message : err);
     }
   };
@@ -87,10 +101,24 @@ export function postSendDeriveAction(
   }
 }
 
-async function runRecompute(
+/**
+ * The awaitable core, split out of the fire-and-forget wrapper above.
+ *
+ * Exported because `preserveStage` is safety-relevant behaviour that has to be
+ * testable: `src/test/followupRule.test.ts` drives this directly with a
+ * recording stub client to prove the write omits `stage` (and that the
+ * unguarded call really would downgrade `closing` to `engaged`). The wrapper
+ * can't serve that test — it is deliberately not awaitable. Any future
+ * scheduled re-derive should reuse this rather than copy the sequence, but note
+ * it persists whatever `deriveAction` returns, INCLUDING keys in
+ * OUTBOUND_SEND_KEYS with a past `eligible_at`; a caller that re-derives
+ * dormant leads must constrain that itself.
+ */
+export async function recomputeLeadAction(
   supabase: SupabaseClient,
   leadId: string,
   prefix: string,
+  preserveStage = false,
 ): Promise<void> {
   // 1. Lead snapshot — strategy / motion / dismissal / meeting flag.
   const { data: lead, error: leadErr } = await supabase
@@ -235,7 +263,7 @@ async function runRecompute(
   // 8. buildLeadUpdate needs the current consent / sequence state.
   const { data: currentLeadState } = await supabase
     .from("leads")
-    .select("eligible_at, needs_action, motion, nurture_status, ooo_until, automation_mode")
+    .select("eligible_at, needs_action, next_action_key, motion, nurture_status, ooo_until, automation_mode")
     .eq("id", leadId)
     .maybeSingle();
 
@@ -256,15 +284,76 @@ async function runRecompute(
     (currentLeadState as { automation_mode?: string | null })?.automation_mode ?? null,
   );
 
-  // 9. Persist.
-  const { error: updErr } = await supabase
-    .from("leads")
-    .update(leadUpdate)
-    .eq("id", leadId);
+  // 9. Persist, in TWO statements.
+  //
+  // THE RACE (Codex P1, third pass): this helper runs in a background task that
+  // starts AFTER gmail-send / outlook-send have already returned, and the client
+  // then writes the lead's next cadence step and a future `eligible_at` via
+  // `updateSequenceState`. Ordering can't fix that — the client's write happens
+  // after the response no matter when we run — and `buildLeadUpdate`'s
+  // snapshot-based preservation only narrowed the window: if the client writes
+  // between our `currentLeadState` read (step 8) and this update, the snapshot
+  // said "no schedule", the preservation branch is skipped, and we null the key
+  // of a send the rep genuinely queued. The executor then never selects that row
+  // again (`NULL <> 'x'` is UNKNOWN), so the send is lost.
+  //
+  // Check-then-act cannot be made safe by checking harder, so the action columns
+  // move into a CONDITIONAL write: they are applied only if the row's
+  // schedule-owning columns still hold the values we read. If the client won the
+  // race, the predicate matches no rows, nothing is written, and its schedule
+  // stands — a no-op is exactly the right outcome. The remaining columns (stage,
+  // metrics, dismissal bookkeeping) don't race the client and are written
+  // unconditionally so a lost race can't also lose the just-sent timestamps.
+  const ACTION_COLUMNS = [
+    "needs_action",
+    "next_action_key",
+    "next_action_label",
+    "action_reason_code",
+    "eligible_at",
+  ] as const;
 
-  if (updErr) {
-    console.warn(`${prefix} lead update failed for ${leadId}:`, updErr.message);
-    return;
+  const payload: Record<string, unknown> = { ...leadUpdate };
+  if (preserveStage) delete payload.stage;
+
+  const actionPayload: Record<string, unknown> = {};
+  for (const col of ACTION_COLUMNS) {
+    if (col in payload) {
+      actionPayload[col] = payload[col];
+      delete payload[col];
+    }
+  }
+
+  if (Object.keys(payload).length > 0) {
+    const { error: factErr } = await supabase.from("leads").update(payload).eq("id", leadId);
+    if (factErr) {
+      console.warn(`${prefix} lead update failed for ${leadId}:`, factErr.message);
+      return;
+    }
+  }
+
+  if (Object.keys(actionPayload).length > 0) {
+    const snapEligibleAt = (currentLeadState as { eligible_at?: string | null } | null)?.eligible_at ?? null;
+    const snapKey = (currentLeadState as { next_action_key?: string | null } | null)?.next_action_key ?? null;
+
+    // Optimistic guard: the two columns that define "a schedule exists" must
+    // still be what step 8 saw. `.is(col, null)` / `.eq(col, value)` express
+    // both halves; PostgREST sends them as part of the UPDATE's WHERE clause,
+    // so the check and the write are one statement.
+    let q = supabase.from("leads").update(actionPayload).eq("id", leadId);
+    q = snapEligibleAt === null ? q.is("eligible_at", null) : q.eq("eligible_at", snapEligibleAt);
+    q = snapKey === null ? q.is("next_action_key", null) : q.eq("next_action_key", snapKey);
+
+    const { data: applied, error: actionErr } = await q.select("id");
+    if (actionErr) {
+      console.warn(`${prefix} action update failed for ${leadId}:`, actionErr.message);
+      return;
+    }
+    if ((applied?.length ?? 0) === 0) {
+      console.log(
+        `${prefix} lead ${leadId}: schedule changed under us — action write skipped, the newer schedule stands`,
+      );
+      return;
+    }
   }
 
   console.log(`${prefix} recomputed needs_action=${leadUpdate.needs_action} stage=${stage} for ${leadId}`);

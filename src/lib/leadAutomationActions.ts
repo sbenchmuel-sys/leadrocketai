@@ -10,6 +10,35 @@
 import { addDays } from "date-fns";
 import { getMotionIntervals, getNurtureCadenceDays } from "@/lib/cadenceSettingsTypes";
 import type { LeadDetail } from "@/lib/supabaseQueries";
+import { PROMPT_ONLY_KEYS } from "@shared/followupRule";
+
+/**
+ * Which cadence step an Enable / Resume arms — THE one place that decides it.
+ *
+ * `next_action_key` is not always a cadence position. The Queue also writes
+ * prompts for the rep there (`followup_due`, `rate_limited` — Unit Q1). Carrying
+ * one of those into an armed `eligible_at` produces a row that satisfies every
+ * clause of automation-executor's candidate query (it never inspects the key),
+ * and the resolver falls through to `pre_email_2_followup` — so a rep pressing
+ * "Enable Automation" on a warm lead would send that customer a cold-cadence
+ * email from the wrong template, under a card labelled "Step 1 of 4".
+ *
+ * ponytail: this is a deny-list of the two keys this unit introduced. The
+ * correct shape is an ALLOW-list of real cadence keys — `reply_now`,
+ * `closing_followup`, `wait_reply` and `wait_reply_threshold` are all still
+ * carried through here and the executor will send on them. That predates this
+ * unit; flagged as follow-up rather than widened into this diff.
+ */
+export function nextCadenceStepKey(lead: {
+  next_action_key?: string | null;
+  last_outbound_at?: string | null;
+}): string {
+  if (!lead.last_outbound_at) return "send_pre_1";
+  const carried = lead.next_action_key && !PROMPT_ONLY_KEYS.has(lead.next_action_key)
+    ? lead.next_action_key
+    : null;
+  return carried || "send_pre_2";
+}
 
 // Step labels — generic per the product decision (independent of inbound/outbound branch).
 // The cadence type (warm vs cold) is reflected by the underlying ai_task,
@@ -167,7 +196,7 @@ export function buildAutomationEnableFields(lead: LeadDetail): Record<string, un
   }
 
   const hasOutbound = !!(lead as any).last_outbound_at;
-  const nextKey = hasOutbound ? (lead.next_action_key || "send_pre_2") : "send_pre_1";
+  const nextKey = nextCadenceStepKey(lead as Parameters<typeof nextCadenceStepKey>[0]);
   const nextLabel = stepLabels[nextKey] || "Step 1 of 4";
   const stepIdx = parseInt(nextKey.replace("send_pre_", ""), 10) - 1;
   const gapDays = stepIdx > 0 && stepIdx < intervals.length
