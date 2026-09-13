@@ -391,8 +391,9 @@ describe("rate_limited — honest about what is actually paused", () => {
       syncEngineSrc.indexOf("\n  // STOP RULES\n"),
     );
     expect(guardrailBlock.length).toBeGreaterThan(0);
-    // Exactly two capped() call sites: the 7-day and 30-day caps.
-    expect(guardrailBlock.match(/return capped\(/g)?.length).toBe(2);
+    // One capped() return, fed by every tripped cap (see the latest-expiry test).
+    expect(guardrailBlock.match(/return capped\(/g)?.length).toBe(1);
+    expect(guardrailBlock).toContain("Math.max(...capExpiries)");
     // …and no rate-limit surfacing anywhere near the min-gap / same-day rules.
     expect(guardrailBlock).toContain("min_gap_hours_between_emails");
     expect(guardrailBlock.match(/rateLimitedAction\(/g)?.length).toBe(1);
@@ -656,21 +657,36 @@ describe("campaign-origin leads reach the Follow up tab", () => {
     )).toBe(true);
   });
 
-  it("does NOT admit a never-replied campaign lead just because it is rate_limited", () => {
-    // An ACTIVE campaign earns `rate_limited` from its own outbound volume cap,
-    // with no reply from the prospect. Letting that through would flood the
-    // reactive list with leads that have never engaged.
+  it("holds a never-replied campaign lead back while its cadence is LIVE", () => {
+    // An active campaign earns `rate_limited` from its own volume cap with no
+    // reply from the prospect; Outreach owns it, so it must not flood Follow up.
     expect(belongsInReactiveTabs({
       campaign_id: "camp-1", next_action_key: RATE_LIMITED_KEY,
       last_inbound_at: null, last_outbound_at: daysAgo(1),
-    })).toBe(false);
+    }, { hasLiveEnrollment: true })).toBe(false);
+  });
+
+  it("admits a rate_limited lead once the enrollment is terminal", () => {
+    // The gap this closes: prospect replies → enrollment ends → rep answers →
+    // that answer trips a volume cap → `rate_limited` with the outbound newer
+    // than the inbound. Keyed on the key it was invisible in BOTH the finished
+    // campaign and the Queue.
+    expect(belongsInReactiveTabs({
+      campaign_id: "camp-1", next_action_key: RATE_LIMITED_KEY,
+      last_inbound_at: daysAgo(9), last_outbound_at: daysAgo(1),
+    }, { hasLiveEnrollment: false })).toBe(true);
   });
 
   it("still admits a rate_limited lead that HAS engaged", () => {
     expect(belongsInReactiveTabs({
       campaign_id: "camp-1", next_action_key: RATE_LIMITED_KEY,
       last_inbound_at: daysAgo(1), last_outbound_at: daysAgo(4),
-    })).toBe(true);
+    }, { hasLiveEnrollment: true })).toBe(true);
+  });
+
+  it("the lookup covers both prompt keys, not just followup_due", () => {
+    expect(readFileSync(path.join(ROOT, "src/lib/queueQueries.ts"), "utf8"))
+      .toContain('PROMPT_ONLY_KEYS.has(l.next_action_key ?? "")');
   });
 
   it("still keeps purely cold campaign leads in the Outreach tab", () => {
@@ -707,8 +723,10 @@ describe("recomputeLeadAction — preserveStage", () => {
       const builder: any = new Proxy({}, {
         get(_t, prop) {
           if (prop === "then") {
+            // An UPDATE ... .select("id") returns the affected rows; the helper
+            // reads that length to detect "someone else won the race".
             const result = updating
-              ? { data: null, error: null }
+              ? { data: [{ id: "lead-1" }], error: null }
               : { data: (rows as any)[table] ?? null, error: null };
             return (res: any, rej: any) => Promise.resolve(result).then(res, rej);
           }
@@ -759,12 +777,14 @@ describe("recomputeLeadAction — preserveStage", () => {
       /* @vite-ignore */ path.join(ROOT, "supabase/functions/_shared/postSendDeriveAction.ts")
     );
     await recomputeLeadAction(client, "lead-1", "[test]", true);
-    const write = updates.find((u) => u.table === "leads");
-    expect(write).toBeDefined();
-    expect("stage" in write!.payload).toBe(false);
+    // Two statements now: the facts, then the action columns behind an
+    // optimistic guard. Merge them to assert on what the row ends up with.
+    const written = Object.assign({}, ...updates.filter((u) => u.table === "leads").map((u) => u.payload));
+    expect(updates.filter((u) => u.table === "leads").length).toBe(2);
+    expect("stage" in written).toBe(false);
     // It still does its real job: the follow-up is derived and persisted.
-    expect(write!.payload.next_action_key).toBe(FOLLOWUP_DUE_KEY);
-    expect(write!.payload.eligible_at).toBeNull();
+    expect(written.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+    expect(written.eligible_at).toBeNull();
   });
 
   it("would otherwise downgrade `closing` to `engaged` (the bug)", async () => {
@@ -773,10 +793,10 @@ describe("recomputeLeadAction — preserveStage", () => {
       /* @vite-ignore */ path.join(ROOT, "supabase/functions/_shared/postSendDeriveAction.ts")
     );
     await recomputeLeadAction(client, "lead-1", "[test]");
-    const write = updates.find((u) => u.table === "leads");
+    const written = Object.assign({}, ...updates.filter((u) => u.table === "leads").map((u) => u.payload));
     // deriveStage keeps only the closed stages, so without preserveStage the
     // AI's `closing` is silently overwritten seconds after the send.
-    expect(write!.payload.stage).toBe("engaged");
+    expect(written.stage).toBe("engaged");
   });
 
   it("both email send paths ask for it", () => {
@@ -1238,5 +1258,150 @@ describe("deriveAction — specialised rules keep their turn", () => {
     expect(syncEngineSrc).toContain("POST_MEETING_FOLLOWUP_DAYS * DAY");
     expect(syncEngineSrc).toContain("CLOSING_FOLLOWUP_DAYS * DAY");
     expect(syncEngineSrc).toMatch(/stage === "post_meeting"\s*\?\s*POST_MEETING_FOLLOWUP_DAYS/);
+  });
+});
+
+
+// ── The action write is conditional, not check-then-act ────────────
+
+describe("recomputeLeadAction — the client can win the race safely", () => {
+  /**
+   * Stub that records the filters applied to each update, so we can assert the
+   * guard travels WITH the write, and can simulate "0 rows matched" — what
+   * Postgres returns when the client changed the row after our read.
+   */
+  function racingClient(rows: Record<string, unknown>, opts: { actionMatches: boolean }) {
+    const updates: Array<{ payload: Record<string, unknown>; filters: Array<[string, unknown]> }> = [];
+    const from = (table: string) => {
+      let updating: Record<string, unknown> | null = null;
+      const filters: Array<[string, unknown]> = [];
+      const builder: any = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === "then") {
+            const isActionWrite = updating != null
+              && ("next_action_key" in updating || "eligible_at" in updating);
+            const rowsBack = !updating
+              ? (rows as any)[table] ?? null
+              : isActionWrite && !opts.actionMatches
+                ? []                       // predicate matched nothing
+                : [{ id: "lead-1" }];
+            return (res: any, rej: any) =>
+              Promise.resolve({ data: rowsBack, error: null }).then(res, rej);
+          }
+          return (...args: any[]) => {
+            if (prop === "update") {
+              updating = args[0];
+              updates.push({ payload: args[0], filters });
+            } else if (prop === "eq" || prop === "is") {
+              filters.push([`${String(prop)}:${args[0]}`, args[1]]);
+            }
+            return builder;
+          };
+        },
+      });
+      return builder;
+    };
+    return { client: { from } as never, updates };
+  }
+
+  const armedRows = () => ({
+    leads: {
+      id: "lead-1", stage: "engaged", strategy: "fast", owner_user_id: null,
+      has_future_meeting: false, action_dismissed_at: null,
+      motion: "outbound_prospecting", workspace_id: "ws-1",
+      // The snapshot the recompute reads: NO schedule yet.
+      needs_action: false, eligible_at: null, next_action_key: null,
+      nurture_status: "", ooo_until: null, automation_mode: "reactive",
+    },
+    interactions: [
+      { type: "email", direction: "outbound", occurred_at: daysAgo(70), body_text: "hi" },
+      { type: "email", direction: "inbound", occurred_at: daysAgo(60), body_text: "interested" },
+      { type: "email", direction: "outbound", occurred_at: daysAgo(4), body_text: "circling back" },
+    ],
+    meeting_packs: [], drafts: [], workspace_profiles: null,
+  });
+
+  const load = async () => (await import(
+    /* @vite-ignore */ path.join(ROOT, "supabase/functions/_shared/postSendDeriveAction.ts")
+  )).recomputeLeadAction;
+
+  it("carries the snapshot into the UPDATE's own predicate", async () => {
+    const { client, updates } = racingClient(armedRows(), { actionMatches: true });
+    await (await load())(client, "lead-1", "[test]", true);
+    const action = updates.find((u) => "next_action_key" in u.payload);
+    expect(action).toBeDefined();
+    // The columns that define "a schedule exists" are pinned to what we read —
+    // so the check and the write are ONE statement, not check-then-act.
+    expect(action!.filters).toContainEqual(["is:eligible_at", null]);
+    expect(action!.filters).toContainEqual(["is:next_action_key", null]);
+    expect(action!.filters).toContainEqual(["eq:id", "lead-1"]);
+  });
+
+  it("writes nothing to the action columns when the client won", async () => {
+    // 0 rows matched = the client scheduled a cadence step in the window. The
+    // helper must not retry, not fall back, not null anything.
+    const { client, updates } = racingClient(armedRows(), { actionMatches: false });
+    await (await load())(client, "lead-1", "[test]", true);
+    const action = updates.find((u) => "next_action_key" in u.payload);
+    // The statement was issued, and it simply affected no rows — the newer
+    // schedule stands untouched. Nothing else is written afterwards.
+    expect(action).toBeDefined();
+    expect(updates.length).toBe(2);
+  });
+
+  it("still writes the facts unconditionally, so a lost race keeps the metrics", async () => {
+    const { client, updates } = racingClient(armedRows(), { actionMatches: false });
+    await (await load())(client, "lead-1", "[test]", true);
+    const facts = updates.find((u) => !("next_action_key" in u.payload));
+    expect(facts).toBeDefined();
+    expect(facts!.payload.last_outbound_at).toBeTruthy();
+    // …and the action columns are not smuggled into the unconditional write.
+    for (const col of ["needs_action", "next_action_key", "next_action_label", "action_reason_code", "eligible_at"]) {
+      expect(col in facts!.payload).toBe(false);
+    }
+  });
+});
+
+// ── rate_limited never promises a date the caps don't allow ────────
+
+describe("rate_limited promises the LATEST expiry of every tripped cap", () => {
+  const S = () => engine.DEFAULT_CADENCE_SETTINGS;
+
+  it("uses the 30-day expiry when both caps are blown", () => {
+    // Eight sends in a week trips both. The 7-day branch used to return first
+    // and promise last_outbound + 7d — a date at which the 30-day cap still
+    // bars the lead.
+    const r = withFrozenClock(() => derive(
+      metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: daysAgo(1) }),
+      { out7d: S().guardrails.max_emails_per_lead_per_7d, out30d: S().guardrails.max_emails_per_lead_per_30d },
+    ));
+    expect(r.next_action_key).toBe(RATE_LIMITED_KEY);
+    const promised = new Date(r.eligible_at).getTime();
+    const lastOut = NOW - 86_400_000;
+    expect(promised).toBe(lastOut + 30 * 86_400_000);
+  });
+
+  it("still uses the 7-day expiry when only that cap is blown", () => {
+    const r = withFrozenClock(() => derive(
+      metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: daysAgo(1) }),
+      { out7d: S().guardrails.max_emails_per_lead_per_7d },
+    ));
+    expect(new Date(r.eligible_at).getTime()).toBe((NOW - 86_400_000) + 7 * 86_400_000);
+  });
+
+  it("the promised date is never earlier than any tripped cap allows", () => {
+    for (const [o7, o30] of [[3, 0], [0, 8], [3, 8], [5, 9]]) {
+      const r = withFrozenClock(() => derive(
+        metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: daysAgo(1) }),
+        { out7d: o7, out30d: o30 },
+      ));
+      if (r.next_action_key !== RATE_LIMITED_KEY) continue;
+      const lastOut = NOW - 86_400_000;
+      const floor = Math.max(
+        o7 >= S().guardrails.max_emails_per_lead_per_7d ? lastOut + 7 * 86_400_000 : 0,
+        o30 >= S().guardrails.max_emails_per_lead_per_30d ? lastOut + 30 * 86_400_000 : 0,
+      );
+      expect(new Date(r.eligible_at).getTime()).toBeGreaterThanOrEqual(floor);
+    }
   });
 });

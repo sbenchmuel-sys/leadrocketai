@@ -263,7 +263,7 @@ export async function recomputeLeadAction(
   // 8. buildLeadUpdate needs the current consent / sequence state.
   const { data: currentLeadState } = await supabase
     .from("leads")
-    .select("eligible_at, needs_action, motion, nurture_status, ooo_until, automation_mode")
+    .select("eligible_at, needs_action, next_action_key, motion, nurture_status, ooo_until, automation_mode")
     .eq("id", leadId)
     .maybeSingle();
 
@@ -284,19 +284,76 @@ export async function recomputeLeadAction(
     (currentLeadState as { automation_mode?: string | null })?.automation_mode ?? null,
   );
 
-  // 9. Persist. `preserveStage` drops the stage column from the write — see the
-  // param docs: the AI analysis that ran just before a send owns the stage.
+  // 9. Persist, in TWO statements.
+  //
+  // THE RACE (Codex P1, third pass): this helper runs in a background task that
+  // starts AFTER gmail-send / outlook-send have already returned, and the client
+  // then writes the lead's next cadence step and a future `eligible_at` via
+  // `updateSequenceState`. Ordering can't fix that — the client's write happens
+  // after the response no matter when we run — and `buildLeadUpdate`'s
+  // snapshot-based preservation only narrowed the window: if the client writes
+  // between our `currentLeadState` read (step 8) and this update, the snapshot
+  // said "no schedule", the preservation branch is skipped, and we null the key
+  // of a send the rep genuinely queued. The executor then never selects that row
+  // again (`NULL <> 'x'` is UNKNOWN), so the send is lost.
+  //
+  // Check-then-act cannot be made safe by checking harder, so the action columns
+  // move into a CONDITIONAL write: they are applied only if the row's
+  // schedule-owning columns still hold the values we read. If the client won the
+  // race, the predicate matches no rows, nothing is written, and its schedule
+  // stands — a no-op is exactly the right outcome. The remaining columns (stage,
+  // metrics, dismissal bookkeeping) don't race the client and are written
+  // unconditionally so a lost race can't also lose the just-sent timestamps.
+  const ACTION_COLUMNS = [
+    "needs_action",
+    "next_action_key",
+    "next_action_label",
+    "action_reason_code",
+    "eligible_at",
+  ] as const;
+
   const payload: Record<string, unknown> = { ...leadUpdate };
   if (preserveStage) delete payload.stage;
 
-  const { error: updErr } = await supabase
-    .from("leads")
-    .update(payload)
-    .eq("id", leadId);
+  const actionPayload: Record<string, unknown> = {};
+  for (const col of ACTION_COLUMNS) {
+    if (col in payload) {
+      actionPayload[col] = payload[col];
+      delete payload[col];
+    }
+  }
 
-  if (updErr) {
-    console.warn(`${prefix} lead update failed for ${leadId}:`, updErr.message);
-    return;
+  if (Object.keys(payload).length > 0) {
+    const { error: factErr } = await supabase.from("leads").update(payload).eq("id", leadId);
+    if (factErr) {
+      console.warn(`${prefix} lead update failed for ${leadId}:`, factErr.message);
+      return;
+    }
+  }
+
+  if (Object.keys(actionPayload).length > 0) {
+    const snapEligibleAt = (currentLeadState as { eligible_at?: string | null } | null)?.eligible_at ?? null;
+    const snapKey = (currentLeadState as { next_action_key?: string | null } | null)?.next_action_key ?? null;
+
+    // Optimistic guard: the two columns that define "a schedule exists" must
+    // still be what step 8 saw. `.is(col, null)` / `.eq(col, value)` express
+    // both halves; PostgREST sends them as part of the UPDATE's WHERE clause,
+    // so the check and the write are one statement.
+    let q = supabase.from("leads").update(actionPayload).eq("id", leadId);
+    q = snapEligibleAt === null ? q.is("eligible_at", null) : q.eq("eligible_at", snapEligibleAt);
+    q = snapKey === null ? q.is("next_action_key", null) : q.eq("next_action_key", snapKey);
+
+    const { data: applied, error: actionErr } = await q.select("id");
+    if (actionErr) {
+      console.warn(`${prefix} action update failed for ${leadId}:`, actionErr.message);
+      return;
+    }
+    if ((applied?.length ?? 0) === 0) {
+      console.log(
+        `${prefix} lead ${leadId}: schedule changed under us — action write skipped, the newer schedule stands`,
+      );
+      return;
+    }
   }
 
   console.log(`${prefix} recomputed needs_action=${leadUpdate.needs_action} stage=${stage} for ${leadId}`);

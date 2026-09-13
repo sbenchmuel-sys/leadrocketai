@@ -387,3 +387,33 @@ Deno.test("gmail-bulk-sync's rule has no rate_limited in its vocabulary", () => 
   };
   assertEquals(bulkDeriveAction(withAFreshReply, 0, null, "engaged", "fast").next_action_key, "reply_now");
 });
+
+
+// ── rate_limited promises the latest expiry of every tripped cap ───
+
+Deno.test("both caps blown → the 30-day date, not the 7-day one", () => {
+  // Eight sends in a week trips both. Returning on the first cap promised
+  // availability at last_outbound + 7d, when the lead is still barred.
+  const lastOut = daysAgo(1);
+  const r = derive(
+    metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: lastOut }),
+    {
+      out7d: S.guardrails.max_emails_per_lead_per_7d,
+      out30d: S.guardrails.max_emails_per_lead_per_30d,
+    },
+  );
+  assertEquals(r.next_action_key, "rate_limited");
+  assertEquals(
+    new Date(r.eligible_at!).getTime(),
+    new Date(lastOut).getTime() + 30 * DAY,
+  );
+});
+
+Deno.test("only the 7-day cap blown → the 7-day date", () => {
+  const lastOut = daysAgo(1);
+  const r = derive(
+    metrics({ first_outbound_at: daysAgo(30), last_inbound_at: daysAgo(20), last_outbound_at: lastOut }),
+    { out7d: S.guardrails.max_emails_per_lead_per_7d },
+  );
+  assertEquals(new Date(r.eligible_at!).getTime(), new Date(lastOut).getTime() + 7 * DAY);
+});

@@ -528,16 +528,24 @@ export function deriveAction(
   const capped = (availableAtMs: number): ActionResult =>
     followupDue ?? (hasUnansweredInbound ? silent : rateLimitedAction(availableAtMs, timezone));
 
+  // EVERY tripped cap is evaluated and the LATEST expiry wins. Returning on the
+  // first one promised availability at last_outbound + 7d for a lead that had
+  // also blown the 30-day cap — a date at which it is still barred. This unit's
+  // rule for that label is that it may be late, never early.
+  //
+  // ponytail: deriveAction only receives the COUNT of recent outbounds, not
+  // their timestamps, so the true expiry (oldest-in-window + window) is unknown.
+  // last_outbound + window is the conservative upper bound. Upgrade path: pass
+  // the oldest in-window outbound timestamp from the callers.
+  const capExpiries: number[] = [];
   if (recentOutbound7d >= guardrails.max_emails_per_lead_per_7d) {
-    // ponytail: deriveAction only receives the COUNT of recent outbounds, not
-    // their timestamps, so the true expiry (oldest-in-window + 7d) is unknown.
-    // last_outbound + 7d is the conservative upper bound — never promises the
-    // rep an earlier date than the cap actually allows. Upgrade path: pass the
-    // oldest in-window outbound timestamp from the callers.
-    return capped((lastOutTime || now) + 7 * DAY);
+    capExpiries.push((lastOutTime || now) + 7 * DAY);
   }
   if (recentOutbound30d >= guardrails.max_emails_per_lead_per_30d) {
-    return capped((lastOutTime || now) + 30 * DAY);
+    capExpiries.push((lastOutTime || now) + 30 * DAY);
+  }
+  if (capExpiries.length > 0) {
+    return capped(Math.max(...capExpiries));
   }
 
   if (hoursSinceLastOut < guardrails.min_gap_hours_between_emails && lastOutTime > 0) {

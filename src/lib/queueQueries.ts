@@ -28,7 +28,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { INTENT_HIDE_FROM_QUEUE as BASE_HIDE_SET } from "@/lib/dashboardUtils";
-import { FOLLOWUP_DUE_KEY } from "@shared/followupRule";
+import { FOLLOWUP_DUE_KEY, PROMPT_ONLY_KEYS } from "@shared/followupRule";
 
 // ── Queue-side hide list (extends dashboard hide list) ─────────────
 
@@ -246,20 +246,21 @@ export function belongsInReactiveTabs(
 ): boolean {
   if (!lead.campaign_id) return true;
   if (lead.next_action_key === "reply_now") return true;
-  // Unit Q1: `followup_due` means MY message went unanswered for N days — the
-  // rep's own thread to pick up — but ONLY once the cold enrollment has actually
-  // ended. The scheduled Gmail sweep now emits `followup_due` for never-replied
-  // campaign leads too, once the last campaign email reaches the wait, so an
-  // unconditional exception would show a lead in Follow up while its next
-  // `campaign_touch` is still queued in Outreach (review-mode campaigns
-  // especially). `hasLiveEnrollment` is the caller's answer to "is the cadence
-  // still working this lead?" — scheduled / active / paused enrollment.
+  // Unit Q1: a PROMPT key — `followup_due` or `rate_limited` — is the rep's own
+  // thread to pick up, so it belongs in the reactive tabs ONCE the cold
+  // enrollment is genuinely over. The condition is about enrollment state, not
+  // about which key: keying it on the key is what made this line oscillate
+  // between too broad (campaign volume flooding Follow up while cadences were
+  // still running) and too narrow (a rep who answered a campaign prospect, then
+  // tripped a volume cap on that reply, saw the lead in neither the terminal
+  // campaign nor the Queue).
   //
-  // `rate_limited` is deliberately NOT given this exception at all: an active
-  // campaign earns it purely from its own outbound volume cap, with no reply,
-  // so it would let campaign volume flood the reactive list. A rate-limited
-  // lead that HAS engaged still gets in below on the inbound/outbound rules.
-  if (lead.next_action_key === FOLLOWUP_DUE_KEY && !opts.hasLiveEnrollment) return true;
+  // `hasLiveEnrollment` is the caller's answer to "is the cadence still working
+  // this lead?" — a scheduled / active / paused enrollment. While that is true
+  // the Outreach tab owns the lead and neither key gets in; once it is false the
+  // enrollment is terminal (replied / stopped / completed) and nothing else
+  // would ever show the lead.
+  if (PROMPT_ONLY_KEYS.has(lead.next_action_key ?? "") && !opts.hasLiveEnrollment) return true;
   if (!lead.last_inbound_at) return false;
   if (!lead.last_outbound_at) return true;
   return new Date(lead.last_inbound_at).getTime() > new Date(lead.last_outbound_at).getTime();
@@ -360,10 +361,10 @@ export async function fetchQueueLeads(opts?: {
   // six-week hole, still open for every lead that started life in a campaign.
   // `rate_limited` gets the same treatment for the same reason — it is the rep's
   // own follow-up, merely held, and the Outreach tab has nothing to show for it.
-  // Only campaign leads carrying `followup_due` need the enrollment lookup —
+  // Only campaign leads carrying a prompt key need the enrollment lookup —
   // every other row is decided without it, so the common case costs no query.
   const campaignFollowupIds = (leadRows ?? [])
-    .filter((l: any) => l.campaign_id && l.next_action_key === FOLLOWUP_DUE_KEY)
+    .filter((l: any) => l.campaign_id && PROMPT_ONLY_KEYS.has(l.next_action_key ?? ""))
     .map((l: any) => l.id as string);
 
   const liveEnrollmentLeadIds = campaignFollowupIds.length > 0
