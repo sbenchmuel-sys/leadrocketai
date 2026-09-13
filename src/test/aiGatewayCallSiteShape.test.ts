@@ -96,6 +96,38 @@ describe("AI gateway call-site shape", () => {
     expect(offenders).toEqual([]);
   });
 
+  // SOURCE-TEXT guard. call-analyze's handler is a `Deno.serve` closure that
+  // imports esm.sh, so vitest cannot drive it; the error CLASSIFICATION this
+  // depends on is covered behaviourally in
+  // supabase/functions/call-analyze/statusOnGatewayError.test.ts (Deno, CI).
+  it("call-analyze: a thrown gateway error marks the analysis failed, never leaves it processing", () => {
+    const src = readFileSync(path.join(FUNCTIONS_ROOT, "call-analyze/index.ts"), "utf8");
+    const call = src.indexOf("await aiGatewayFetch(");
+    expect(call).toBeGreaterThan(-1);
+    expect(src.indexOf("await aiGatewayFetch(", call + 1), "more than one gateway call — guard covers only the first").toBe(-1);
+
+    // The call sits inside a try whose catch is the very next block.
+    const tryOpen = src.lastIndexOf("try {", call);
+    expect(tryOpen).toBeGreaterThan(-1);
+    const catchOpen = src.indexOf("} catch", call);
+    expect(catchOpen).toBeGreaterThan(call);
+    const catchBlock = balanced(src, src.indexOf("{", catchOpen + 2));
+
+    // …and that catch lands the row in the same terminal state as every other
+    // failure path here, before returning.
+    expect(catchBlock).toMatch(/from\("call_analyses"\)\s*\.update\(\{\s*status:\s*"failed"\s*\}\)/);
+    expect(catchBlock).toMatch(/\.eq\("id",\s*analysisId\)/);
+    expect(catchBlock).toMatch(/return\s+respond\(/);
+    expect(catchBlock).not.toMatch(/"processing"/);
+    // The reason is classified, so an operator can tell a timeout from a 500.
+    expect(catchBlock).toMatch(/AiGatewayError\s*\?\s*err\.kind\s*:\s*"exception"/);
+  });
+
+  it("call-analyze: a non-JSON 200 body cannot throw out of the retry loop", () => {
+    const src = readFileSync(path.join(FUNCTIONS_ROOT, "call-analyze/index.ts"), "utf8");
+    expect(src).toMatch(/await\s+aiResponse\.json\(\)\.catch\(\(\)\s*=>\s*null\)/);
+  });
+
   it("every parsed gateway response is read via choices[0].message", () => {
     const offenders: string[] = [];
     for (const { rel, src } of files) {

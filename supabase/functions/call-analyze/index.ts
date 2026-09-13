@@ -9,7 +9,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { CALL_DEFAULTS } from "../_shared/callConfig.ts";
 import { projectTimelineItem, callDedupeKey } from "../_shared/timelineProjector.ts";
-import { aiGatewayFetch } from "../_shared/aiGateway.ts";
+import { aiGatewayFetch, AiGatewayError } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -424,11 +424,24 @@ Deno.serve(async (req) => {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       logger.info("analyze_retry_attempt", { callSessionId, attempt });
 
-      const aiResponse = await aiGatewayFetch(lovableApiKey, {
-        model: "google/gemini-2.5-flash",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-      }, { label: "call-analyze" });
+      // The gateway THROWS on timeout / network / missing key (AiGatewayError).
+      // Those throws used to escape to the outer catch, which cannot see
+      // `analysisId` — so the row stayed "processing" for ever: not visible as a
+      // failure and never re-run. Land them in the same terminal "failed" state
+      // every other failure path in this function uses.
+      let aiResponse: Response;
+      try {
+        aiResponse = await aiGatewayFetch(lovableApiKey, {
+          model: "google/gemini-2.5-flash",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+        }, { label: "call-analyze" });
+      } catch (err) {
+        const reason = err instanceof AiGatewayError ? err.kind : "exception";
+        await supabase.from("call_analyses").update({ status: "failed" }).eq("id", analysisId);
+        logger.error("analyze_failed_final", { callSessionId, attempt, reason: `ai_${reason}` });
+        return respond({ ok: false, error: "AI analysis failed" }, 500);
+      }
 
       if (!aiResponse.ok) {
         const errText = await aiResponse.text();
@@ -441,8 +454,8 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const aiResult = await aiResponse.json();
-      const content = aiResult.choices?.[0]?.message?.content ?? "";
+      const aiResult = await aiResponse.json().catch(() => null);
+      const content = aiResult?.choices?.[0]?.message?.content ?? "";
 
       parsed = extractJson(content);
 
