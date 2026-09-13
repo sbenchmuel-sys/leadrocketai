@@ -280,12 +280,24 @@ serve(async (req) => {
     // Safety: skip leads already flagged, OOO leads, unsubscribed.
     // -------------------------------------------------------
     const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    // STARVATION BOUND (Codex P1 sweep — third capped scan). The loop below
+    // skips a lead whose rep already replied (`lastOut >= lastIn`) WITHOUT
+    // touching it, and such a lead keeps matching every filter here forever. A
+    // workspace with 30 already-answered WhatsApp threads therefore filled this
+    // 30-row page permanently and no genuinely unanswered lead was ever flagged
+    // again. Bounding the lookback lets answered rows age out of the page on
+    // their own. It also matches intent: this surfaces "they messaged 6h ago and
+    // nobody replied", and a three-month-old unanswered thread is not something
+    // to nudge about today.
+    const WA_NO_REPLY_LOOKBACK_DAYS = 7;
+    const waLookbackStart = new Date(Date.now() - WA_NO_REPLY_LOOKBACK_DAYS * 86_400_000).toISOString();
 
     let waCheckQuery = supabase
       .from("leads")
       .select("id, name, phone, last_inbound_at, last_outbound_at, needs_action, next_action_key, ooo_until")
       .not("last_inbound_at", "is", null)
       .lte("last_inbound_at", sixHoursAgo)   // inbound was >6h ago
+      .gte("last_inbound_at", waLookbackStart) // ...but still recent enough to matter
       .eq("needs_action", false)              // not already actioned
       .eq("unsubscribed", false)
       .in("status", ["active", "new"])
@@ -565,15 +577,6 @@ serve(async (req) => {
         }
       }
 
-      // Enforce daily send cap per mailbox/owner
-      const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);
-      const dailyCount = await getDailySendCount(lead.owner_user_id);
-      if (dailyCount >= dailyCap) {
-        console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap}`);
-        skipped++;
-        continue;
-      }
-
       const logEntry: Record<string, unknown> = {
         lead_id: lead.id,
         owner_user_id: lead.owner_user_id,
@@ -798,6 +801,40 @@ serve(async (req) => {
         const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
         // The step's channel — applies to cached AND generated drafts.
         const resolvedChannel: string = resolvedInstruction?.channel || "email";
+
+        // ── DAILY SEND CAP PER OWNER ────────────────────────────────
+        // Moved here (Codex P2) so it is evaluated with the channel KNOWN. It
+        // used to run before resolvedChannel existed, which made it impossible
+        // to reason about per channel.
+        //
+        // It stays applied to BOTH channels on purpose, and that is the whole
+        // finding: the stored value is named max_sends_per_day_per_mailbox, but
+        // getDailySendCount counts EVERY automation_log 'sent' row for the
+        // owner, SMS included — so it is a per-OWNER daily ceiling, not a
+        // mailbox-existence check like the three gates that did become
+        // email-only. Exempting SMS would leave texts with no daily ceiling at
+        // all (5 per run x 96 ticks = up to 480/day/owner instead of 40).
+        //
+        // It now also DEFERS instead of leaving the lead in place: an over-cap
+        // owner with 20 due leads refilled the 20-row candidate page on every
+        // tick until midnight UTC — the same starvation shape as the paused
+        // owner — and wrote no ledger row at all, so a rep got no answer to
+        // "why didn't this send?".
+        const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);
+        const dailyCount = await getDailySendCount(lead.owner_user_id);
+        if (dailyCount >= dailyCap) {
+          console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap} (${resolvedChannel})`);
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          tomorrow.setHours(9, 30, 0, 0);
+          await supabase.from("leads").update({ eligible_at: tomorrow.toISOString() }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = `Daily send cap reached for this account: ${dailyCount}/${dailyCap} — retries tomorrow`;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
 
         // ── MIN GAP CHECK (email steps only — Codex P1/P2) ──────────
         // Two-sided fix. (1) min_gap_hours_between_emails must not gate an SMS
@@ -2002,7 +2039,16 @@ serve(async (req) => {
       // sends regardless of how many rows were scanned. (Read cost grows only when many
       // rows are blocked — exactly the starvation case this is meant to drain.)
       const COLD_DUE_SCAN_LIMIT = 200;
-      const coldDue = sendableCampIds.length === 0 ? [] : (await supabase
+      // PAUSED-OWNER EXCLUSION for the cold scan (Codex P1, second instance).
+      // The legacy candidate query drops paused owners before its limit; this is
+      // a SEPARATE query with its own 200-row cap, and the same shape survived
+      // here: the in-loop pause check leaves every touch 'scheduled' with its
+      // original eligible_at, so one paused owner with 200 due touches refilled
+      // this oldest-due page on every tick and cold outreach stopped for
+      // everyone else — silently, with the run still reporting success.
+      // Filtering on the embedded `leads!inner` resource is the same technique
+      // the volume tripwire below uses (`leads.workspace_id`).
+      let coldDueQuery = sendableCampIds.length === 0 ? null : supabase
         .from("campaign_touch")
         // leads!inner(owner_user_id): the skip ledger below needs the owner (NOT NULL
         // on automation_log) even for branches that bail before the lead is loaded.
@@ -2011,8 +2057,12 @@ serve(async (req) => {
         .eq("status", "scheduled")
         .in("campaign_id", sendableCampIds)
         .lte("eligible_at", new Date().toISOString())
-        .order("eligible_at", { ascending: true })
-        .limit(COLD_DUE_SCAN_LIMIT)).data;
+        .order("eligible_at", { ascending: true });
+      if (coldDueQuery && pausedOwnerFilterApplied && pausedOwnerIds.length > 0) {
+        coldDueQuery = coldDueQuery.not("leads.owner_user_id", "in", `(${pausedOwnerIds.join(",")})`);
+      }
+      // Limit applied LAST, after the exclusion — that is the whole point.
+      const coldDue = coldDueQuery === null ? [] : (await coldDueQuery.limit(COLD_DUE_SCAN_LIMIT)).data;
 
       // ── Skip ledger for the cold pass (Unit G-C) ─────────────────────────
       // Every branch below that decides NOT to send calls logColdSkip once, with
@@ -2218,6 +2268,16 @@ serve(async (req) => {
             logColdSkip(touch, exec.settings_read_failed
               ? "Could not read this account's automation settings — paused for safety, will retry next tick"
               : "Automation paused for this account — applies to all of this owner's workspaces (cadence_settings.automation_paused)");
+            // Normally the touch is left alone so un-pausing resumes on the next
+            // tick — paused owners were already excluded from the scan above. If
+            // that exclusion could not be built, this branch is all that stands
+            // between a paused owner and a permanently monopolised page, so defer
+            // by one cron interval to let it drain.
+            if (!pausedOwnerFilterApplied) {
+              await supabase.from("campaign_touch")
+                .update({ eligible_at: new Date(Date.now() + EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000).toISOString() })
+                .eq("id", touch.id);
+            }
             continue;
           }
           // Recipient-timezone sending (Unit C, PR 4): when the workspace opts into

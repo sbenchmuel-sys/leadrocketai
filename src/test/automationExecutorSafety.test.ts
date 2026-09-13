@@ -266,7 +266,12 @@ describe("smsChannelGating", () => {
     // check, so removing it for SMS would leave texts with no daily ceiling.
     const cap = legacy.indexOf("const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);");
     expect(cap).toBeGreaterThan(-1);
-    expect(legacy.slice(cap - 400, cap + 400)).not.toContain('resolvedChannel === "sms"');
+    // Scope the check to the cap's OWN branch, not a byte window that can drift
+    // into the neighbouring (legitimately channel-conditional) min-gap check.
+    const capBranch = legacy.slice(cap, legacy.indexOf("// ── MIN GAP CHECK", cap));
+    expect(capBranch).toContain("if (dailyCount >= dailyCap)");
+    expect(capBranch).not.toContain('resolvedChannel === "sms"');
+    expect(capBranch).not.toContain('resolvedChannel !== "sms"');
   });
 
   it("every PERSON-level guardrail still runs for SMS, unconditionally", () => {
@@ -352,7 +357,13 @@ describe("skipLogging", () => {
     for (let i = loopStart; i < lines.length; i++) {
       if (!/\bcontinue;/.test(lines[i])) continue;
       branches++;
-      const window = lines.slice(Math.max(loopStart, i - 8), i + 1).join("\n");
+      // Lookback widened 8 -> 20 lines: the pause branch now also carries the
+      // fallback deferral between its logColdSkip call and its `continue`, so a
+      // short window reported a false negative on a branch that DOES log. The
+      // guard's job is unchanged — a genuinely silent `continue` has no ledger
+      // call anywhere near it — and the branches/logged equality below is what
+      // actually pins "no cold skip path is silent".
+      const window = lines.slice(Math.max(loopStart, i - 20), i + 1).join("\n");
       const ok = window.includes("logColdSkip(") || window.includes('from("automation_log").update(');
       if (!ok) throw new Error(`Cold skip branch without a ledger write at cold-section line ${i + 1}:\n${lines[i]}`);
       logged++;
@@ -658,5 +669,70 @@ describe("failClosedAndStarvation", () => {
     expect(src).not.toMatch(/[^l]checkMinGap\(/); // no raw cross-channel gap left in the executor
     // The deferral is anchored on the blocking email, not on last_outbound_at.
     expect(legacy).toContain("const gapAnchor = gapCheck.anchorAt ?? freshLead.last_outbound_at!;");
+  });
+});
+
+// ── Codex round 4: the starvation shape, swept ──────────────────────────────
+// Three capped scans in this function have a skip path that can leave rows in
+// place. Each must be unable to monopolise its own page. (The other two capped
+// scans — stale-claim recovery and OOO-return surfacing — mutate every row they
+// fetch, so they always drain; nothing to pin there.)
+describe("cappedScanStarvationSweep", () => {
+  const legacy = legacySection();
+  const cold = coldSection();
+
+  it("cold scan: paused owners are excluded BEFORE the 200-row limit", () => {
+    const filter = cold.indexOf('coldDueQuery.not("leads.owner_user_id", "in", `(${pausedOwnerIds.join(",")})`)');
+    const limit = cold.indexOf("await coldDueQuery.limit(COLD_DUE_SCAN_LIMIT)");
+    expect(filter).toBeGreaterThan(-1);
+    expect(limit).toBeGreaterThan(filter);
+    // Same exclusion list the legacy query uses — one source of truth, built
+    // once near the top of the run and reused by both scans.
+    const lookupAt = src.indexOf('.from("workspace_profiles")');
+    const coldFilterAt = src.indexOf('coldDueQuery.not("leads.owner_user_id"');
+    expect(lookupAt).toBeGreaterThan(-1);
+    expect(lookupAt).toBeLessThan(coldFilterAt);
+    expect([...src.matchAll(/pausedOwnerIds\.push\(/g)].length).toBe(1);
+  });
+
+  it("cold scan: if the exclusion can't be built, the paused branch defers the touch", () => {
+    const pause = cold.indexOf("if (exec.owner_automation_paused)");
+    const branch = cold.slice(pause, pause + 1400);
+    expect(branch).toContain("if (!pausedOwnerFilterApplied)");
+    expect(branch).toContain('from("campaign_touch")');
+    expect(branch).toContain("EXECUTOR_CRON_INTERVAL_MIN * 60 * 1000");
+  });
+
+  it("WhatsApp no-reply scan: the lookback is bounded so answered threads age out", () => {
+    // The loop skips `lastOut >= lastIn` without touching the row, and such a
+    // row matches every other filter forever.
+    expect(src).toContain("const WA_NO_REPLY_LOOKBACK_DAYS = 7;");
+    expect(src).toContain('.gte("last_inbound_at", waLookbackStart)');
+    const q = src.indexOf("let waCheckQuery = supabase");
+    const bound = src.indexOf('.gte("last_inbound_at", waLookbackStart)', q);
+    const limit = src.indexOf(".limit(30)", q);
+    expect(bound).toBeGreaterThan(q);
+    expect(bound).toBeLessThan(limit);
+    // The un-modified skip is still there — this test is about the bound, not
+    // about removing the skip.
+    expect(src).toContain("if (lastOut >= lastIn) continue;");
+  });
+
+  it("legacy scan: the daily cap defers and explains itself instead of holding the page", () => {
+    const cap = legacy.indexOf("if (dailyCount >= dailyCap)");
+    expect(cap).toBeGreaterThan(-1);
+    const branch = legacy.slice(cap, cap + 900);
+    expect(branch).toContain('from("leads").update({ eligible_at: tomorrow.toISOString() })');
+    expect(branch).toContain('from("automation_log").insert(logEntry)');
+    expect(branch).toContain("Daily send cap reached for this account");
+  });
+
+  it("the daily cap is evaluated with the channel known (Codex P2)", () => {
+    const channel = legacy.indexOf('const resolvedChannel: string = resolvedInstruction?.channel || "email";');
+    const cap = legacy.indexOf("const dailyCap = await getDailyCapForOwner(");
+    expect(channel).toBeGreaterThan(-1);
+    expect(cap).toBeGreaterThan(channel);
+    // ...and there is only ONE such check in the legacy loop.
+    expect([...legacy.matchAll(/const dailyCap = await getDailyCapForOwner\(/g)].length).toBe(1);
   });
 });
