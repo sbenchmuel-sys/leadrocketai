@@ -222,6 +222,8 @@ interface TimelineRow {
   subject: string | null;
   snippet_text: string | null;
   metadata_json: Record<string, unknown> | null;
+  /** Read so a write can refuse to land on a row that moved under it. */
+  updated_at: string | null;
 }
 
 interface LeadRow {
@@ -552,17 +554,35 @@ Deno.serve(async (req) => {
       reason,
       new Date().toISOString(),
     );
-    const markError = await recordFailedAttempt(
+    const { error: markError, applied } = await recordFailedAttempt(
       counts,
       failureReasons,
       reason,
       mark,
-      () =>
-        admin
+      () => {
+        // Read-modify-write hazard: `mark` was merged onto the copy of
+        // metadata_json read at the top of the run, up to 35 s ago.
+        // Putting the whole object back would silently revert anything
+        // written to this row in between — `_shared/timelineProjector.ts`
+        // merges sync metadata into existing rows on every re-sync and
+        // does not touch `intent`, so it is a live counterparty.
+        //
+        // `updated_at` is the precondition: every writer that can reach
+        // one of our rows sets it, so a mismatch means the row moved and
+        // this write must not land. It then lands NOWHERE, which is the
+        // already-modelled "unmarkable row" outcome — counted once,
+        // unmarked, retried next tick against fresh data. Losing a
+        // backoff is recoverable; reverting someone else's write is not.
+        let q = admin
           .from("lead_timeline_items")
-          .update({ metadata_json: mark })
+          .update({ metadata_json: mark }, { count: "exact" })
           .eq("id", row.id)
-          .is("intent", null),
+          .is("intent", null);
+        q = row.updated_at === null
+          ? q.is("updated_at", null)
+          : q.eq("updated_at", row.updated_at);
+        return q;
+      },
     );
     if (markError) {
       // The row is counted, but unmarked — so it comes back next minute
@@ -571,6 +591,14 @@ Deno.serve(async (req) => {
         row_id: row.id,
         reason,
         error: markError,
+      });
+    } else if (!applied) {
+      // Not an error: the row moved under us and we declined to revert
+      // whoever moved it. Same outcome as above (unmarked, retried next
+      // tick), but a different cause, so it gets its own event.
+      logger.info("classify_inbound_attempt_mark_skipped_stale_row", {
+        row_id: row.id,
+        reason,
       });
     }
   };
@@ -593,7 +621,7 @@ Deno.serve(async (req) => {
     const candidates = (withBackoffFilter: boolean) => {
       const q = admin
         .from("lead_timeline_items")
-        .select("id, lead_id, subject, snippet_text, metadata_json")
+        .select("id, lead_id, subject, snippet_text, metadata_json, updated_at")
         .eq("event_type", "email_inbound")
         .is("intent", null);
       if (withBackoffFilter) q.or(classifyEligibilityFilter(nowIso));

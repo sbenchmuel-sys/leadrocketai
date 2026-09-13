@@ -331,7 +331,13 @@ export function markClassifyFailure(
  * `write` is passed as a thunk so this module stays runtime-pure — it
  * never sees a Supabase client, only a promise of `{ error }`.
  *
- * Returns null when the mark landed, otherwise the error message. A row
+ * Returns `{ error, applied }`. `applied` is false when the write
+ * matched no row — the caller guards on `intent IS NULL` and on an
+ * `updated_at` freshness precondition, so a miss means the row was
+ * classified or rewritten by someone else while this run held a stale
+ * copy. That is NOT an error: nothing was written, on purpose, rather
+ * than reverting the other writer. It is treated exactly like a mark
+ * that could not be written. A row
  * whose mark could NOT be written is still counted exactly once (it was
  * worked, it did fail) but carries no mark, so it comes back as an
  * ordinary unmarked candidate on the very next tick — no backoff, which
@@ -351,19 +357,28 @@ export async function recordFailedAttempt(
   reasons: Record<string, number>,
   reason: ClassifyFailureReason,
   mark: Record<string, unknown>,
-  write: () => PromiseLike<{ error: { message: string } | null }>,
-): Promise<string | null> {
+  write: () => PromiseLike<{
+    error: { message: string } | null;
+    count?: number | null;
+  }>,
+): Promise<{ error: string | null; applied: boolean }> {
   counts.failed++;
   reasons[reason] = (reasons[reason] ?? 0) + 1;
   try {
-    const { error } = await write();
-    if (error) return error.message;
-    // Only once it is durably on the row. An unwritten mark means the
-    // row is not actually exhausted in the database.
-    if (isClassifyExhausted(mark)) counts.exhausted++;
-    return null;
+    const { error, count } = await write();
+    if (error) return { error: error.message, applied: false };
+    // `count` is only present when the caller asked for it; absent
+    // means "no row-count available", which we read as applied.
+    const applied = count === undefined || count === null || count > 0;
+    // Only once it is durably on the row. A mark that was not written —
+    // failed OR refused by a precondition — is not an exhausted row.
+    if (applied && isClassifyExhausted(mark)) counts.exhausted++;
+    return { error: null, applied };
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      applied: false,
+    };
   }
 }
 

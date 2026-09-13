@@ -606,25 +606,27 @@ describe("a failing failure-write cannot double-count the row", () => {
       recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
         Promise.reject(new Error("network down")),
       ),
-    ).resolves.toBe("network down");
+    ).resolves.toEqual({ error: "network down", applied: false });
   });
 
   it("books the row exactly once when the write rejects", async () => {
     const { counts, reasons } = freshTally();
-    const err = await recordFailedAttempt(counts, reasons, "ai_http_402", liveMark(), () =>
-      Promise.reject(new Error("network down")),
+    const { error } = await recordFailedAttempt(
+      counts, reasons, "ai_http_402", liveMark(), () =>
+        Promise.reject(new Error("network down")),
     );
-    expect(err).toBe("network down");
+    expect(error).toBe("network down");
     expect(counts.failed).toBe(1);
     expect(reasons).toEqual({ ai_http_402: 1 });
   });
 
   it("books it once when the write returns an error object too", async () => {
     const { counts, reasons } = freshTally();
-    const err = await recordFailedAttempt(counts, reasons, "ai_timeout", liveMark(), () =>
-      Promise.resolve({ error: { message: "row locked" } }),
+    const { error } = await recordFailedAttempt(
+      counts, reasons, "ai_timeout", liveMark(), () =>
+        Promise.resolve({ error: { message: "row locked" } }),
     );
-    expect(err).toBe("row locked");
+    expect(error).toBe("row locked");
     expect(counts.failed).toBe(1);
     expect(reasons).toEqual({ ai_timeout: 1 });
   });
@@ -1014,5 +1016,106 @@ describe("an empty run says WHY it is empty", () => {
 
   it("pins what `exhausted` means to the sentinel the writer uses", () => {
     expect(BACKLOG_EXHAUSTED_AT).toBe(CLASSIFY_NEVER_ISO);
+  });
+});
+
+// ── 12. A stale write must not revert whoever moved the row ────────
+//
+// Codex P2, third independent reader. `failRow` merges its marks onto
+// the metadata_json copy read at the TOP of a run and puts the whole
+// object back — a read-modify-write whose window is the length of the
+// run (up to 35 s), during which anything written to that row is
+// silently reverted.
+//
+// The unrecoverable value, `ai_summary`, turns out NOT to be reachable
+// this way: its only writer on an intent-NULL inbound row is
+// backfill-inbound-summaries, which sets `intent = 'unknown'` in the
+// SAME statement — so every one of our writes, all guarded by
+// `.is("intent", null)`, already refuses to land after it. The live
+// counterparty is _shared/timelineProjector.ts, which merges sync
+// metadata into existing rows and does NOT touch intent. That is what
+// the freshness precondition closes.
+describe("a write refuses to land on a row that moved", () => {
+  const tally = () => ({
+    counts: { failed: 0, exhausted: 0 },
+    reasons: {} as Record<string, number>,
+  });
+
+  it("treats a zero-row result as not-applied, not as success", async () => {
+    const { counts, reasons } = tally();
+    const { error, applied } = await recordFailedAttempt(
+      counts, reasons, "ai_http_402", markClassifyFailure(null, "ai_http_402", iso(T0)),
+      () => Promise.resolve({ error: null, count: 0 }),
+    );
+    expect(error).toBeNull();   // not an error — we declined on purpose
+    expect(applied).toBe(false);
+    expect(counts.failed).toBe(1); // still booked exactly once
+  });
+
+  it("does not count exhaustion for a write the precondition refused", async () => {
+    // The row looks exhausted in memory, but nothing was written, so
+    // the database does not agree — and the alarm must not fire on it.
+    const { counts, reasons } = tally();
+    let meta: Record<string, unknown> | null = null;
+    for (let n = 0; n < MAX_CLASSIFY_ATTEMPTS; n++) {
+      meta = markClassifyFailure(meta, "ai_http_402", iso(T0));
+    }
+    expect(isClassifyExhausted(meta)).toBe(true);
+
+    await recordFailedAttempt(counts, reasons, "ai_http_402", meta!, () =>
+      Promise.resolve({ error: null, count: 0 }),
+    );
+    expect(counts.failed).toBe(1);
+    expect(counts.exhausted).toBe(0);
+  });
+
+  it("still counts exhaustion when the write did land", async () => {
+    const { counts, reasons } = tally();
+    let meta: Record<string, unknown> | null = null;
+    for (let n = 0; n < MAX_CLASSIFY_ATTEMPTS; n++) {
+      meta = markClassifyFailure(meta, "ai_http_402", iso(T0));
+    }
+    await recordFailedAttempt(counts, reasons, "ai_http_402", meta!, () =>
+      Promise.resolve({ error: null, count: 1 }),
+    );
+    expect(counts.exhausted).toBe(1);
+  });
+
+  it("treats an absent count as applied (callers that do not ask for one)", async () => {
+    const { counts, reasons } = tally();
+    const { applied } = await recordFailedAttempt(
+      counts, reasons, "ai_http_402", markClassifyFailure(null, "ai_http_402", iso(T0)),
+      () => Promise.resolve({ error: null }),
+    );
+    expect(applied).toBe(true);
+  });
+
+  it("a refused mark leaves the row retryable next tick", async () => {
+    // Same outcome as an unwritable mark: counted once, unmarked, and
+    // an ordinary candidate again immediately. Losing a backoff is
+    // recoverable; reverting another writer is not.
+    const { counts, reasons } = tally();
+    const r = row("moved", null);
+    await recordFailedAttempt(counts, reasons, "ai_http_402",
+      markClassifyFailure(null, "ai_http_402", iso(T0)),
+      () => Promise.resolve({ error: null, count: 0 }),
+    );
+    expect(r.metadata_json).toBeNull();
+    expect(tick([r], T0 + MIN).selected.map((x) => x.id)).toEqual(["moved"]);
+  });
+
+  it("the failure write carries the freshness precondition", () => {
+    const block = failRowBlock();
+    // Reads updated_at from the batch row and requires it to be
+    // unchanged, handling the NULL case (where .eq would never match).
+    expect(block).toContain('q.eq("updated_at", row.updated_at)');
+    expect(block).toContain('q.is("updated_at", null)');
+    expect(block).toContain('{ count: "exact" }');
+    // …and the candidate fetch must actually select it.
+    expect(src).toContain(
+      '.select("id, lead_id, subject, snippet_text, metadata_json, updated_at")',
+    );
+    // A refused write is reported as its own, non-error event.
+    expect(src).toContain("classify_inbound_attempt_mark_skipped_stale_row");
   });
 });
