@@ -210,6 +210,101 @@ describe("smsPhoneSelected", () => {
   });
 });
 
+// ── Codex P1: a due SMS step must be able to send ───────────────────────────
+// The channel is now resolved BEFORE the email-only gates. Two rules, and the
+// second matters more than the first: every EMAIL-SPECIFIC gate must be
+// channel-conditional, and every PERSON-level guardrail must NOT be.
+describe("smsChannelGating", () => {
+  const legacy = legacySection();
+  const channelIdx = legacy.indexOf('const resolvedChannel: string = resolvedInstruction?.channel || "email";');
+
+  it("the channel is resolved before the mailbox lookup and before the email gates", () => {
+    expect(channelIdx).toBeGreaterThan(-1);
+    expect(channelIdx).toBeLessThan(legacy.indexOf("// ── MIN GAP CHECK"));
+    expect(channelIdx).toBeLessThan(legacy.indexOf("// ── PER-LEAD CAPS CHECK"));
+    expect(channelIdx).toBeLessThan(legacy.indexOf("// Get connected mail account (Gmail or Outlook)"));
+    // Exactly one resolution — two would be two sources of truth for the channel.
+    expect([...legacy.matchAll(/const resolvedChannel: string/g)].length).toBe(1);
+    expect([...legacy.matchAll(/resolveCampaignInstruction\(campaignInput\)/g)].length).toBe(1);
+  });
+
+  it("the whole mailbox-existence / sender-identity block is email-only", () => {
+    const open = legacy.indexOf('if (resolvedChannel !== "sms") {', legacy.indexOf("// Get connected mail account"));
+    const close = legacy.indexOf("} // end email-only mailbox block");
+    expect(open).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(open);
+    const block = legacy.slice(open, close);
+    // The three email-only refusals that used to strand an SMS step all live inside.
+    expect(block).toContain('"No mail connection (Gmail or Outlook)"');
+    expect(block).toContain("SENDER MISMATCH");
+    expect(block).toContain('from("mail_accounts")');
+    // ...and nothing about the person leaked in with them.
+    expect(block).not.toContain("isHumanUnsubscribeRequest");
+    expect(block).not.toContain("checkStopConditions");
+  });
+
+  it("the email min-gap and the per-lead EMAIL caps no longer block an SMS step", () => {
+    expect(legacy).toMatch(/const gapCheck = resolvedChannel === "sms"\s*\n\s*\? \{ allowed: true \} as const\s*\n\s*: checkMinGap\(/);
+    expect(legacy).toMatch(/const capCheck = resolvedChannel === "sms"\s*\n\s*\? \{ allowed: true \} as const\s*\n\s*: await checkPerLeadCaps\(/);
+  });
+
+  it("the per-OWNER daily volume cap still applies to BOTH channels (not weakened)", () => {
+    // max_sends_per_day_per_mailbox counts every automation_log 'sent' row for
+    // the owner, SMS included — it is a volume ceiling, not a mailbox-existence
+    // check, so removing it for SMS would leave texts with no daily ceiling.
+    const cap = legacy.indexOf("const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);");
+    expect(cap).toBeGreaterThan(-1);
+    expect(legacy.slice(cap - 400, cap + 400)).not.toContain('resolvedChannel === "sms"');
+  });
+
+  it("every PERSON-level guardrail still runs for SMS, unconditionally", () => {
+    // These are about who may be contacted, not how. None may be behind a
+    // channel check, and all must precede the provider call.
+    const personGuards = [
+      "checkStopConditions(execSettings.stop_pause_rules",   // reply / meeting / unsubscribed
+      "isHumanUnsubscribeRequest(bodyLower)",                 // opt-out keyword in last inbound
+      "Duplicate send guard: email sent/pending within last hour", // GUARD 0 dedup
+      "Daily send limit reached (1 per lead per day)",        // GUARD 1
+      "Action already sent within 7 days",                    // GUARD 2
+      "Consent withdrawn mid-flight",                         // consent race
+      "Multi-participant thread",                             // manual-mode handover
+    ];
+    const send = legacy.indexOf("functions/v1/sms-send");
+    expect(send).toBeGreaterThan(-1);
+    for (const guard of personGuards) {
+      const at = legacy.indexOf(guard);
+      expect(at, `missing person-level guard: ${guard}`).toBeGreaterThan(-1);
+      expect(at, `${guard} must precede the send`).toBeLessThan(send);
+      // No `resolvedChannel === "sms"` opt-out introduced around it.
+      expect(legacy.slice(Math.max(0, at - 600), at), `${guard} became channel-conditional`)
+        .not.toMatch(/resolvedChannel === "sms"\s*\n?\s*\? \{ allowed: true \}/);
+    }
+    // The lead-level opt-out filter on the candidate query is untouched.
+    expect(src).toContain('.eq("unsubscribed", false)');
+  });
+
+  it("the SMS send path is actually reachable: no mailbox needed, phone required", () => {
+    const smsBranch = legacy.slice(legacy.indexOf('if (resolvedChannel === "sms") {'));
+    const body = smsBranch.slice(0, smsBranch.indexOf("} else if (mailProvider"));
+    expect(body).toContain("if (!lead.phone)");
+    expect(body).toContain("functions/v1/sms-send");
+    expect(body).not.toContain("mailAccountId");
+  });
+
+  it("SMS re-reads the opt-out flag one hop before the send, like the email late floor", () => {
+    // Now that SMS is reachable, the unsubscribe race the email path closes with
+    // coldSendFloor applies to it too. Opt-out is about the person, not the channel.
+    const smsBranch = legacy.slice(legacy.indexOf('if (resolvedChannel === "sms") {'));
+    const body = smsBranch.slice(0, smsBranch.indexOf("} else if (mailProvider"));
+    const guard = body.indexOf('.from("leads").select("unsubscribed").eq("id", lead.id)');
+    const send = body.indexOf("functions/v1/sms-send");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(send);
+    expect(body.slice(guard, send)).toContain("if (smsOptOut?.unsubscribed)");
+    expect(body.slice(guard, send)).toContain("continue;");
+  });
+});
+
 describe("coldOooSkip", () => {
   it("the cold lead select includes ooo_until and a future ooo_until defers the touch (logged)", () => {
     const cold = coldSection();
@@ -270,11 +365,52 @@ describe("skipLogging", () => {
     expect(cold).toContain("leads!inner(owner_user_id)");
   });
 
-  it("the volume tripwire default can actually fire (below the 40/day mailbox cap)", () => {
-    const m = src.match(/const VOLUME_ALERT_DEFAULT_THRESHOLD = (\d+);/);
-    expect(m).not.toBeNull();
-    expect(Number(m![1])).toBeLessThan(40);
-    expect(src).toContain("parsedThreshold > 0 ? parsedThreshold : VOLUME_ALERT_DEFAULT_THRESHOLD");
+  it("the volume tripwire default is REACHABLE given the run cap and the cron schedule (Codex P2)", () => {
+    // The alarm fires on `count > threshold`. The most one mailbox can receive
+    // in a trailing window is MAX_SENDS_PER_RUN x (batches the window straddles).
+    // A threshold at or above that ceiling can never sound — which is what the
+    // old hardcoded 15 was (ceiling 2 x 5 = 10).
+    const interval = Number(src.match(/const EXECUTOR_CRON_INTERVAL_MIN = (\d+);/)![1]);
+    const windowMin = Number(src.match(/const VOLUME_ALERT_WINDOW_MIN = (\d+);/)![1]);
+    const cap = Number(src.match(/const maxSendsPerRun = maxSendsEnv \? parseInt\(maxSendsEnv, 10\) : (\d+);/)![1]);
+    const batches = Math.floor(windowMin / interval) + 1;
+    const ceiling = cap * batches;
+
+    // Mirror of volumeAlertDefaultThreshold in the executor.
+    const threshold = Math.max(1, Math.min(Math.max(1, cap), ceiling - 1));
+    expect(threshold).toBeLessThan(ceiling);     // the alarm can sound
+    expect(ceiling - threshold).toBeGreaterThan(0);
+    // Defaults today: interval 15, window 15, cap 5 -> ceiling 10, threshold 5,
+    // so 6 sends to one mailbox in 15 minutes trips it.
+    expect({ interval, windowMin, cap, batches, ceiling, threshold })
+      .toEqual({ interval: 15, windowMin: 15, cap: 5, batches: 2, ceiling: 10, threshold: 5 });
+
+    // Still reachable for any cap the operator might set.
+    for (const c of [1, 2, 3, 5, 10, 25, 40]) {
+      const ceil = c * batches;
+      const t = Math.max(1, Math.min(Math.max(1, c), ceil - 1));
+      expect(t, `cap ${c}`).toBeLessThan(ceil);
+    }
+
+    // The derivation is wired in — no hardcoded default survives.
+    expect(src).toContain("parsedThreshold > 0 ? parsedThreshold : volumeAlertDefaultThreshold(maxSendsPerRun)");
+    expect(src).not.toContain("VOLUME_ALERT_DEFAULT_THRESHOLD");
+    // Window is a single constant, not three copies of 15.
+    expect(src).toContain("Date.now() - VOLUME_ALERT_WINDOW_MIN * 60 * 1000");
+    expect(src).not.toContain("window_minutes: 15");
+  });
+
+  it("EXECUTOR_CRON_INTERVAL_MIN matches the codified production cron schedule", () => {
+    const interval = Number(src.match(/const EXECUTOR_CRON_INTERVAL_MIN = (\d+);/)![1]);
+    // CLAUDE.md: the most recent non-staging *_codify_cron_jobs.sql mirrors prod.
+    const codified = readdirSync(path.join(ROOT, "supabase/migrations"))
+      .filter((f) => f.endsWith("_codify_cron_jobs.sql")).sort().pop();
+    expect(codified, "no codified cron migration found").toBeDefined();
+    const cronSql = readFileSync(path.join(ROOT, "supabase/migrations", codified!), "utf8");
+    const job = cronSql.slice(cronSql.indexOf("'dispatch-automation-executor',", cronSql.indexOf("SELECT cron.schedule(")));
+    const sched = job.match(/'(\*\/(\d+) [^']*)'/);
+    expect(sched, "dispatch-automation-executor schedule not found").not.toBeNull();
+    expect(Number(sched![2])).toBe(interval);
   });
 });
 

@@ -43,10 +43,35 @@ import { buildColdEmailFooter } from "../_shared/coldEmailFooter.ts";
 // pass that runs after the legacy loop. The 15-minute cron already spaces
 // sends; this is only a small anti-burst gap.
 const INTER_SEND_STAGGER_MS = 8_000;
-// Volume tripwire default (sends per mailbox/workspace per trailing 15 min).
-// Must sit BELOW the 40/day mailbox cap or it can never fire; 15 in one tick is
-// already 3× MAX_SENDS_PER_RUN. Override with VOLUME_ALERT_THRESHOLD.
-const VOLUME_ALERT_DEFAULT_THRESHOLD = 15;
+// ── Volume tripwire (Unit 0) — the default must be REACHABLE (Codex P2) ──────
+// The tripwire alerts when one mailbox (or workspace) exceeds the threshold in a
+// trailing VOLUME_ALERT_WINDOW_MIN minutes. The old fixed default of 15 sat
+// ABOVE the maximum the cron path can physically produce, so it was decorative:
+// the executor runs every EXECUTOR_CRON_INTERVAL_MIN minutes and sends at most
+// MAX_SENDS_PER_RUN per run, so a trailing 15-minute window holds at most
+// VOLUME_ALERT_MAX_BATCHES_IN_WINDOW batches — 2 × 5 = 10 sends today, never 16.
+//
+// The default is therefore DERIVED from the run cap instead of hardcoded, so
+// raising MAX_SENDS_PER_RUN or changing the cron interval can't silently put the
+// alarm out of reach again. One full batch landing on a single mailbox inside one
+// window is already twice that mailbox's per-tick share — worth a look during the
+// pilot. Override with the VOLUME_ALERT_THRESHOLD secret.
+const EXECUTOR_CRON_INTERVAL_MIN = 15; // `*/15` in cron.job — keep in sync
+const VOLUME_ALERT_WINDOW_MIN = 15;
+// A trailing window of W minutes can straddle floor(W / interval) + 1 batches.
+const VOLUME_ALERT_MAX_BATCHES_IN_WINDOW =
+  Math.floor(VOLUME_ALERT_WINDOW_MIN / EXECUTOR_CRON_INTERVAL_MIN) + 1;
+
+/**
+ * Default alert threshold for a given per-run send cap. The tripwire fires on
+ * `count > threshold`, so the threshold MUST be strictly below the reachable
+ * ceiling (cap × batches) or the alarm can never sound.
+ */
+function volumeAlertDefaultThreshold(maxSendsPerRun: number): number {
+  const cap = Math.max(1, maxSendsPerRun);
+  const reachableCeiling = cap * VOLUME_ALERT_MAX_BATCHES_IN_WINDOW;
+  return Math.max(1, Math.min(cap, reachableCeiling - 1));
+}
 // Global kill switch: set the AUTOMATION_PAUSED secret to "1" or "true" to stop
 // every AUTOMATIC send (legacy + cold) before any claim is written. Manual /
 // review sends (outreach-touch-action) are a different function and unaffected.
@@ -647,11 +672,73 @@ serve(async (req) => {
           }
         }
 
-        // ── MIN GAP CHECK ───────────────────────────────────────────
-        const gapCheck = checkMinGap(
-          freshLead.last_outbound_at,
-          execSettings.guardrails.min_gap_hours_between_emails,
-        );
+        // ── CHANNEL RESOLUTION (moved up — Codex P1) ────────────────
+        // The step's channel MUST be known before any email-specific gate runs.
+        // It used to be resolved ~340 lines lower, after the mailbox lookup and
+        // after the email min-gap / per-lead-email-cap checks — so a due SMS step
+        // for an owner with Twilio but no connected mailbox exited at "No mail
+        // connection" and sms-send was never called, and an owner who had merely
+        // EMAILED a lead recently had that lead's SMS step throttled by a rule
+        // about a different channel.
+        //
+        // Cost of moving it: getRepContext (cached per owner) plus one
+        // loadCampaignForLead read now also run for leads that go on to be
+        // blocked by min-gap / caps / hard-status. The legacy loop is capped at
+        // 20 leads per run, so that is at most ~20 extra reads — cheap next to
+        // the dispatcher's 55s budget, and it buys a single source of truth for
+        // the channel (resolving it twice would be the real hazard).
+        //
+        // NOTHING about WHO may be contacted moved. Opt-out, the unsubscribe
+        // keyword scan, OOO, dedup, stop-on-reply / instant-pause-on-inbound,
+        // consent and the per-lead daily cap are all about the PERSON and still
+        // run for BOTH channels, in their original order.
+        const isInboundLead = lead.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(lead.source_type || "");
+        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
+
+        // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
+        // Uses the canonical resolver instead of ad-hoc text parsing.
+        // Prefers structured campaign steps from DB when available,
+        // falls back to legacy text parsing from action_instructions.
+        // Resolved HERE (before the draft lookup) so the step's CHANNEL is known
+        // before the email-only preconditions / floor below run.
+        let structuredCampaign = null;
+        try {
+          structuredCampaign = await loadCampaignForLead(lead.id, supabase);
+          if (structuredCampaign) {
+            console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
+          }
+        } catch (err) {
+          console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
+        }
+        const campaignInput: CampaignResolverInput = {
+          lead_id: lead.id,
+          action_key: lead.next_action_key,
+          motion: isInboundLead ? "inbound_response" : lead.motion,
+          outbound_tone: (lead as any).outbound_tone || "direct",
+          action_instructions: lead.action_instructions,
+          structured_campaign: structuredCampaign,
+          prior_steps_sent: undefined,
+          has_reply: !!freshLead.last_inbound_at,
+          meeting_booked: freshLead.has_future_meeting,
+          include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
+          calendar_link: repProfile?.calendar_link || null,
+          playbook_id: undefined,
+        };
+        const resolvedInstruction = resolveCampaignInstruction(campaignInput);
+        const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
+        // The step's channel — applies to cached AND generated drafts.
+        const resolvedChannel: string = resolvedInstruction?.channel || "email";
+
+        // ── MIN GAP CHECK (email steps only — Codex P1) ─────────────
+        // min_gap_hours_between_emails is measured against leads.last_outbound_at,
+        // which tracks EMAIL. Applying it to an SMS step let "I emailed them this
+        // morning" suppress a due text. Email steps are unchanged.
+        const gapCheck = resolvedChannel === "sms"
+          ? { allowed: true } as const
+          : checkMinGap(
+              freshLead.last_outbound_at,
+              execSettings.guardrails.min_gap_hours_between_emails,
+            );
         if (!gapCheck.allowed) {
           console.log(`[automation-executor] Lead ${lead.id}: ${gapCheck.reason} — deferring`);
           const deferMs = execSettings.guardrails.min_gap_hours_between_emails * 3_600_000;
@@ -665,8 +752,20 @@ serve(async (req) => {
           continue;
         }
 
-        // ── PER-LEAD CAPS CHECK (7d / 30d) ──────────────────────────
-        const capCheck = await checkPerLeadCaps(lead.id, execSettings.guardrails, supabase);
+        // ── PER-LEAD CAPS CHECK (7d / 30d — email steps only, Codex P1) ──
+        // These are max_emails_per_lead_per_7d / _30d: an EMAIL budget. Spending
+        // it on an SMS step meant a lead who had received their allowed emails
+        // could never be texted. SMS is still bounded per lead by the guards that
+        // apply to BOTH channels below: GUARD 0 (nothing sent/pending in the last
+        // hour), GUARD 1 (at most one automated message per lead per day) and
+        // GUARD 2 (the same step never repeats within 7 days).
+        // ponytail: known asymmetry left alone — checkPerLeadCaps counts ALL
+        // automation_log sends, so an SMS send still consumes email budget. That
+        // direction is over-restrictive (fail-safe); fixing it needs a channel
+        // column on automation_log.
+        const capCheck = resolvedChannel === "sms"
+          ? { allowed: true } as const
+          : await checkPerLeadCaps(lead.id, execSettings.guardrails, supabase);
         if (!capCheck.allowed) {
           console.log(`[automation-executor] Lead ${lead.id}: ${capCheck.reason} — pausing automation`);
           await supabase.from("leads").update({
@@ -779,95 +878,107 @@ serve(async (req) => {
         let mailProvider: "gmail" | "outlook" = "gmail";
         let mailAccountId: string | null = null;
 
-        // Check mail_accounts table first (unified multi-mailbox)
-        const { data: wsMember } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", lead.owner_user_id)
-          .limit(1)
-          .maybeSingle();
-
-        if (wsMember?.workspace_id) {
-          const { data: mailAcct } = await supabase
-            .from("mail_accounts")
-            .select("id, provider, email_address")
-            .eq("workspace_id", wsMember.workspace_id)
-            .eq("status", "connected")
-            .order("is_default", { ascending: false })
+        // MAILBOX EXISTENCE / SENDER IDENTITY — EMAIL STEPS ONLY (Codex P1).
+        // Everything in this block is about which mailbox an EMAIL leaves from.
+        // It used to run unconditionally, so a due SMS step for an owner with a
+        // working Twilio setup but no connected Gmail/Outlook exited at "No mail
+        // connection (Gmail or Outlook)" and sms-send was never reached. An SMS
+        // step needs no mailbox; it keeps mailAccountId null and is routed by the
+        // `resolvedChannel === "sms"` branch at the provider call, which enforces
+        // its own precondition (a phone number on the lead).
+        if (resolvedChannel !== "sms") {
+          // Check mail_accounts table first (unified multi-mailbox)
+          const { data: wsMember } = await supabase
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", lead.owner_user_id)
             .limit(1)
             .maybeSingle();
 
-          if (mailAcct) {
-            mailProvider = mailAcct.provider as "gmail" | "outlook";
-            mailAccountId = mailAcct.id;
+          if (wsMember?.workspace_id) {
+            const { data: mailAcct } = await supabase
+              .from("mail_accounts")
+              .select("id, provider, email_address")
+              .eq("workspace_id", wsMember.workspace_id)
+              .eq("status", "connected")
+              .order("is_default", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (mailAcct) {
+              mailProvider = mailAcct.provider as "gmail" | "outlook";
+              mailAccountId = mailAcct.id;
+            }
           }
-        }
 
-        // Fall back to legacy gmail_connections if no mail_account found
-        let resolvedSenderEmail: string | null = null;
+          // Fall back to legacy gmail_connections if no mail_account found
+          let resolvedSenderEmail: string | null = null;
 
-        if (!mailAccountId) {
-          const { data: gmailConn } = await supabase
-            .from("gmail_connections")
-            .select("user_id, gmail_email")
-            .eq("user_id", lead.owner_user_id)
-            .maybeSingle();
+          if (!mailAccountId) {
+            const { data: gmailConn } = await supabase
+              .from("gmail_connections")
+              .select("user_id, gmail_email")
+              .eq("user_id", lead.owner_user_id)
+              .maybeSingle();
 
-          if (!gmailConn) {
+            if (!gmailConn) {
+              logEntry.status = "skipped";
+              logEntry.error_message = "No mail connection (Gmail or Outlook)";
+              logEntry.completed_at = new Date().toISOString();
+              await supabase.from("automation_log").insert(logEntry);
+              skipped++;
+              continue;
+            }
+            mailProvider = "gmail";
+            resolvedSenderEmail = gmailConn.gmail_email;
+
+            // ── SENDER MISMATCH GUARD ──────────────────────────────────
+            // No mail_accounts entry found — sending would use the legacy
+            // gmail_connections fallback. This is the exact scenario that
+            // caused emails from the wrong address. Block the send.
+            console.warn(
+              `[automation-executor] SENDER MISMATCH: lead ${lead.id} — ` +
+              `no mail_accounts entry, fallback would send from ${resolvedSenderEmail}. ` +
+              `Blocking send. Configure a mail_accounts row for this workspace.`
+            );
             logEntry.status = "skipped";
-            logEntry.error_message = "No mail connection (Gmail or Outlook)";
+            logEntry.error_message = `Sender mismatch: no mail_accounts configured, would fallback to ${resolvedSenderEmail}`;
             logEntry.completed_at = new Date().toISOString();
             await supabase.from("automation_log").insert(logEntry);
             skipped++;
             continue;
+          } else {
+            // Verify the resolved mail_account email matches expectations
+            const { data: resolvedAcct } = await supabase
+              .from("mail_accounts")
+              .select("email_address")
+              .eq("id", mailAccountId)
+              .single();
+
+            resolvedSenderEmail = resolvedAcct?.email_address ?? null;
+
+            // Cross-check: if the workspace has a gmail_connection with a
+            // different email than the mail_account, warn but allow the
+            // mail_account (authoritative) to proceed.
+            const { data: gmailCheck } = await supabase
+              .from("gmail_connections")
+              .select("gmail_email")
+              .eq("user_id", lead.owner_user_id)
+              .maybeSingle();
+
+            if (gmailCheck?.gmail_email && resolvedSenderEmail
+                && gmailCheck.gmail_email !== resolvedSenderEmail) {
+              console.warn(
+                `[automation-executor] SENDER INFO: lead ${lead.id} — ` +
+                `gmail_connections has ${gmailCheck.gmail_email} but mail_accounts ` +
+                `will send from ${resolvedSenderEmail} (authoritative). OK to proceed.`
+              );
+            }
           }
-          mailProvider = "gmail";
-          resolvedSenderEmail = gmailConn.gmail_email;
+        } // end email-only mailbox block
 
-          // ── SENDER MISMATCH GUARD ──────────────────────────────────
-          // No mail_accounts entry found — sending would use the legacy
-          // gmail_connections fallback. This is the exact scenario that
-          // caused emails from the wrong address. Block the send.
-          console.warn(
-            `[automation-executor] SENDER MISMATCH: lead ${lead.id} — ` +
-            `no mail_accounts entry, fallback would send from ${resolvedSenderEmail}. ` +
-            `Blocking send. Configure a mail_accounts row for this workspace.`
-          );
-          logEntry.status = "skipped";
-          logEntry.error_message = `Sender mismatch: no mail_accounts configured, would fallback to ${resolvedSenderEmail}`;
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          skipped++;
-          continue;
-        } else {
-          // Verify the resolved mail_account email matches expectations
-          const { data: resolvedAcct } = await supabase
-            .from("mail_accounts")
-            .select("email_address")
-            .eq("id", mailAccountId)
-            .single();
-
-          resolvedSenderEmail = resolvedAcct?.email_address ?? null;
-
-          // Cross-check: if the workspace has a gmail_connection with a
-          // different email than the mail_account, warn but allow the
-          // mail_account (authoritative) to proceed.
-          const { data: gmailCheck } = await supabase
-            .from("gmail_connections")
-            .select("gmail_email")
-            .eq("user_id", lead.owner_user_id)
-            .maybeSingle();
-
-          if (gmailCheck?.gmail_email && resolvedSenderEmail
-              && gmailCheck.gmail_email !== resolvedSenderEmail) {
-            console.warn(
-              `[automation-executor] SENDER INFO: lead ${lead.id} — ` +
-              `gmail_connections has ${gmailCheck.gmail_email} but mail_accounts ` +
-              `will send from ${resolvedSenderEmail} (authoritative). OK to proceed.`
-            );
-          }
-        }
-
+        // Null for an SMS step — automation_log.mail_account_id is nullable and
+        // "no mailbox" is the truthful record for a text message.
         logEntry.mail_account_id = mailAccountId;
 
         const actionKey = lead.next_action_key;
@@ -886,8 +997,7 @@ serve(async (req) => {
         }
 
         let aiTask: string;
-        // Re-engagement leads always use re_engagement_intro task
-        const isInboundLead = lead.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(lead.source_type || "");
+        // isInboundLead is resolved with the channel, further up.
 
         if (lead.motion === "re_engagement") {
           aiTask = "re_engagement_intro";
@@ -982,41 +1092,6 @@ serve(async (req) => {
           continue;
         }
 
-        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
-
-        // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
-        // Uses the canonical resolver instead of ad-hoc text parsing.
-        // Prefers structured campaign steps from DB when available,
-        // falls back to legacy text parsing from action_instructions.
-        // Resolved HERE (before the draft lookup) so the step's CHANNEL is known
-        // before the email-only preconditions / floor below run.
-        let structuredCampaign = null;
-        try {
-          structuredCampaign = await loadCampaignForLead(lead.id, supabase);
-          if (structuredCampaign) {
-            console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
-          }
-        } catch (err) {
-          console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
-        }
-        const campaignInput: CampaignResolverInput = {
-          lead_id: lead.id,
-          action_key: lead.next_action_key,
-          motion: isInboundLead ? "inbound_response" : lead.motion,
-          outbound_tone: (lead as any).outbound_tone || "direct",
-          action_instructions: lead.action_instructions,
-          structured_campaign: structuredCampaign,
-          prior_steps_sent: undefined,
-          has_reply: !!freshLead.last_inbound_at,
-          meeting_booked: freshLead.has_future_meeting,
-          include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
-          calendar_link: repProfile?.calendar_link || null,
-          playbook_id: undefined,
-        };
-        const resolvedInstruction = resolveCampaignInstruction(campaignInput);
-        const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
-        // The step's channel — applies to cached AND generated drafts.
-        const resolvedChannel: string = resolvedInstruction?.channel || "email";
 
         // ── CAN-SPAM PRECONDITIONS (email only; fail closed, BEFORE spending anything) ──
         // Checked here — ahead of the approved-draft consumption and the ai_task
@@ -1465,6 +1540,25 @@ serve(async (req) => {
             await supabase.from("automation_log")
               .update({ status: "skipped", error_message: "No phone number for SMS", completed_at: new Date().toISOString() })
               .eq("id", claimId);
+            skipped++;
+            continue;
+          }
+          // LATE OPT-OUT GUARD for SMS — the counterpart of the email late floor
+          // above. Opt-out is about the PERSON, not the channel: a recipient can
+          // unsubscribe (form, keyword, bounce, admin) during the claim/draft/AI
+          // awaits between the earlier checks and this call. The email path closes
+          // that race with coldSendFloor; SMS skipped it because it was never
+          // reachable. It is now, so re-read the flag one hop before the send.
+          // (coldSendFloor itself is email-shaped — email validity plus the
+          // email/domain do-not-contact list — so only the flag applies here.)
+          const { data: smsOptOut } = await supabase
+            .from("leads").select("unsubscribed").eq("id", lead.id).maybeSingle();
+          if (smsOptOut?.unsubscribed) {
+            console.warn(`[automation-executor] Lead ${lead.id}: opted out before the SMS left — refusing`);
+            await supabase.from("automation_log")
+              .update({ status: "skipped", error_message: "Lead opted out before send (late SMS opt-out guard)", completed_at: new Date().toISOString() })
+              .eq("id", claimId);
+            await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
             skipped++;
             continue;
           }
@@ -2229,20 +2323,22 @@ serve(async (req) => {
     // Non-blocking signal: if a mailbox OR its workspace exceeds the
     // threshold of sends in a trailing 15-minute window, log a
     // volume_alert row to cron_run_log. It NEVER blocks a send and is
-    // fully wrapped so it can never throw and abort the run.
+    // fully wrapped so it can never throw and abort the run. The default
+    // threshold is derived from MAX_SENDS_PER_RUN so it stays reachable — see
+    // volumeAlertDefaultThreshold.
     //
     // BOTH scopes are emitted on purpose: a per-mailbox check alone would
     // miss a blast spread across several mailboxes in one workspace, so we
     // also aggregate per workspace. Threshold is env-configurable
-    // (VOLUME_ALERT_THRESHOLD, default VOLUME_ALERT_DEFAULT_THRESHOLD).
+    // (VOLUME_ALERT_THRESHOLD, default volumeAlertDefaultThreshold(cap)).
     try {
       if (sentOwnerIds.size > 0) {
         // Fall back to the default if the env var is missing OR malformed:
         // a non-numeric value would parse to NaN, making every `c > threshold`
         // false and silently disabling this safety tripwire.
         const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
-        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : VOLUME_ALERT_DEFAULT_THRESHOLD;
-        const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : volumeAlertDefaultThreshold(maxSendsPerRun);
+        const windowStart = new Date(Date.now() - VOLUME_ALERT_WINDOW_MIN * 60 * 1000).toISOString();
         const alerts: Record<string, unknown>[] = [];
 
         // Counts are computed DB-SIDE (count: 'exact', head: true) so they are
@@ -2279,7 +2375,7 @@ serve(async (req) => {
                 workspace_id: wsSet && wsSet.size === 1 ? [...wsSet][0] : null,
                 sends_in_window: c,
                 threshold,
-                window_minutes: 15,
+                window_minutes: VOLUME_ALERT_WINDOW_MIN,
               },
             });
           }
@@ -2310,7 +2406,7 @@ serve(async (req) => {
                 workspace_id: ws,
                 sends_in_window: c,
                 threshold,
-                window_minutes: 15,
+                window_minutes: VOLUME_ALERT_WINDOW_MIN,
               },
             });
           }
@@ -2318,7 +2414,7 @@ serve(async (req) => {
 
         if (alerts.length > 0) {
           await supabase.from("cron_run_log").insert(alerts);
-          console.warn(`[automation-executor] Volume tripwire: ${alerts.length} volume_alert row(s) logged (threshold ${threshold}/15min).`);
+          console.warn(`[automation-executor] Volume tripwire: ${alerts.length} volume_alert row(s) logged (threshold ${threshold}/${VOLUME_ALERT_WINDOW_MIN}min).`);
         }
       }
     } catch (tripErr) {
