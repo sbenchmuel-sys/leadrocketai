@@ -30,6 +30,7 @@ import {
   CLASSIFY_LAST_ERROR_KEY,
   CLASSIFY_NEVER_ISO,
   CLASSIFY_NEXT_AT_KEY,
+  CLASSIFY_TOTAL_BACKOFF_MINUTES,
   classifyEligibilityFilter,
   stripClassifyMarks,
   isClassifyEligible,
@@ -101,6 +102,48 @@ describe("a 402 leaves a mark and parks the row", () => {
     // Monotonically non-decreasing — never shrinks back toward 1/minute.
     expect(waits).toEqual([...waits].sort((a, b) => a - b));
     expect(waits[0]).toBe(CLASSIFY_BACKOFF_MINUTES[0]);
+  });
+
+  // The founder sizes the credit-restore deadline off this number. A
+  // docblock that says one thing while the table says another is an
+  // operational hazard, so pin the ceiling as a NUMBER OF HOURS — and
+  // walk the real clock to get there, so a trailing entry that
+  // `nextAttemptIso` never reads cannot inflate it again.
+  it("exhausts after exactly 45.1 hours of continuous failure", () => {
+    let meta: Record<string, unknown> | null = null;
+    let atMs = T0;
+
+    // Fail, wait out the backoff, fail again — until the row gives up.
+    for (let n = 0; n < MAX_CLASSIFY_ATTEMPTS; n++) {
+      expect(isClassifyExhausted(meta)).toBe(false);
+      meta = markClassifyFailure(meta, "ai_http_402", iso(atMs));
+      const next = meta[CLASSIFY_NEXT_AT_KEY] as string;
+      if (next !== CLASSIFY_NEVER_ISO) atMs = Date.parse(next);
+    }
+
+    expect(isClassifyExhausted(meta)).toBe(true);
+    const hours = (atMs - T0) / (60 * MIN);
+    expect(hours).toBeCloseTo(45.08, 2);
+
+    // The derived constant and the walked clock must agree, and every
+    // entry in the table must be a wait that is actually served.
+    expect(CLASSIFY_TOTAL_BACKOFF_MINUTES).toBe(2705);
+    expect((atMs - T0) / MIN).toBe(CLASSIFY_TOTAL_BACKOFF_MINUTES);
+    // N attempts, N-1 gaps: every entry in the table is served exactly
+    // once, and there is no unread trailing entry to inflate the sum.
+    expect(CLASSIFY_BACKOFF_MINUTES).toHaveLength(MAX_CLASSIFY_ATTEMPTS - 1);
+  });
+
+  it("states the same ceiling in prose that the table actually serves", () => {
+    // Cheap, but this is exactly the drift QA caught: the docblock said
+    // ~69 hours while the code served 45.
+    const mod = readFileSync(
+      path.join(ROOT, "supabase/functions/_shared/classifyRetry.ts"),
+      "utf8",
+    );
+    expect(mod).toContain("2,705 minutes");
+    expect(mod).toContain("45 hours");
+    expect(mod).not.toMatch(/69 hours|2\.9 days|~3 days/);
   });
 });
 
@@ -211,6 +254,24 @@ describe("a row past its backoff window is picked up again", () => {
     // And it is immediately eligible again (belt: a re-failed row that
     // later succeeds must not stay parked by a stale mark).
     expect(isClassifyEligible(cleared, iso(T0))).toBe(true);
+  });
+
+  it("mutates in place, so every call site must hand it a fresh copy", () => {
+    // stripClassifyMarks is a mutator (it has to be, so the call sites
+    // keep the literal spread that queueInboundClassification.test.ts
+    // pins). Nothing else pins that contract, so pin it here: passing a
+    // row's own metadata_json would delete keys the loop still reads.
+    const owned = { from_email: "a@b.com", classify_attempts: 3 };
+    expect(stripClassifyMarks(owned)).toBe(owned); // same object, mutated
+    expect(owned).not.toHaveProperty("classify_attempts");
+
+    // Every call site in the edge function opens a fresh object literal
+    // on the same expression — `stripClassifyMarks({ ...` — never
+    // `stripClassifyMarks(row.metadata_json)`.
+    const calls = src.match(/stripClassifyMarks\(/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(src).not.toMatch(/stripClassifyMarks\(\s*row\.metadata_json/);
+    expect(src.match(/stripClassifyMarks\(\{/g) ?? []).toHaveLength(calls.length);
   });
 
   it("the success paths in the edge function clear the marks", () => {
@@ -331,5 +392,8 @@ describe("no terminal branch abandons a row silently", () => {
     expect(src).not.toMatch(/counts\.skipped/);
     expect(src).toContain("counts.parked = parked;");
     expect(src).toContain("failure_reasons: failureReasons");
+    // `fetched` can be up to FETCH_LIMIT, so it does not reconcile
+    // against classified + failed. `worked` is the number that does.
+    expect(src).toContain("counts.worked = batch.length;");
   });
 });

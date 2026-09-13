@@ -98,15 +98,16 @@ const corsHeaders = {
 const BATCH_SIZE = 25;
 
 // Rows are over-fetched so that a row parked by retry backoff can never
-// consume one of the 25 working slots. The `classifyEligibilityFilter`
-// predicate should already have excluded parked rows SERVER-SIDE, which
-// makes this headroom pure insurance: if that PostgREST JSON predicate
-// ever silently stops matching, the in-memory `selectClassifiable` pass
-// still finds live rows instead of the queue re-freezing at the head.
-// A non-zero `parked` count in the run summary is the alarm for exactly
-// that. ponytail: 2x is a guess, not a proof — it survives up to 25
-// leaked parked rows at the head. Ceiling: if `parked` is ever 25, raise
-// this or fix the server-side filter.
+// consume one of the 25 working slots. `classifyEligibilityFilter` is
+// what actually keeps parked rows out, SERVER-SIDE; this headroom plus
+// the in-memory `selectClassifiable` pass is a DETECTOR, not a spare
+// tyre. ponytail: 2x is a guess, not a proof. It absorbs at most 25
+// leaked parked rows — with a backlog in the thousands, a server-side
+// filter that stops matching parks all 50 fetched rows, selects none,
+// and the queue re-freezes. Loudly (see
+// `classify_inbound_server_backoff_filter_leaked`), but it freezes.
+// Ceiling: a non-zero `parked` is not "handled", it is an incident —
+// fix the server-side filter, do not raise this number.
 const FETCH_LIMIT = BATCH_SIZE * 2;
 
 // Classifier identifier written to `intent_version`. Bump the suffix
@@ -203,8 +204,16 @@ interface BatchCounts {
   parked: number;
   /** Subset of `parked` — rows that hit the retry ceiling for good. */
   exhausted: number;
-  // NB: `fetched` counts rows the query RETURNED; `fetched - parked` is
-  // how many were actually worked this run.
+  /**
+   * Rows actually worked this run: `min(fetched - parked, BATCH_SIZE)`.
+   *
+   * `fetched` counts what the query RETURNED (up to FETCH_LIMIT = 50),
+   * which is deliberately more than one batch — so `fetched` alone does
+   * NOT add up against `classified + failed`. `worked` does. This log
+   * line is the only observability this function has; it has to be
+   * readable without the source open.
+   */
+  worked: number;
   /** Subset of classified — rows that got the NO_SIGNAL_INTENT fallback. */
   no_signal: number;
   /** Subset of classified — matched a deterministic detector, no AI call. */
@@ -430,6 +439,7 @@ Deno.serve(async (req) => {
     failed: 0,
     parked: 0,
     exhausted: 0,
+    worked: 0,
     no_signal: 0,
     deterministic: 0,
   };
@@ -540,6 +550,7 @@ Deno.serve(async (req) => {
     counts.fetched = fetched.length;
     counts.parked = parked;
     counts.exhausted = exhausted;
+    counts.worked = batch.length;
     if (parked > 0) {
       // The server-side predicate should have made this impossible.
       logger.warn("classify_inbound_server_backoff_filter_leaked", {

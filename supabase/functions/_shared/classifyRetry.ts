@@ -59,24 +59,44 @@ const ALL_KEYS = [
 ] as const;
 
 /**
- * Backoff after the Nth consecutive failure, in minutes. Index 0 is
- * "after the 1st failure". The length of this array IS the retry
- * ceiling: once `classify_attempts` reaches it, the row is exhausted.
+ * The wait BETWEEN attempts, in minutes. Index 0 is the wait after the
+ * 1st failure. N attempts have N-1 gaps between them, so this table has
+ * one entry FEWER than `MAX_CLASSIFY_ATTEMPTS` — there is no wait after
+ * the last failure, because there is no attempt after it to wait for
+ * (`nextAttemptIso` short-circuits to the never-sentinel instead).
+ *
+ * Keep it that way. An entry per attempt would leave the final one
+ * permanently unread — dead code that silently overstates the ceiling
+ * to anyone who adds the column up. That is a real hazard, not a typo:
+ * the credit-restore deadline is sized off this number.
  *
  * Total wall-clock before exhaustion: 5m + 15m + 45m + 2h + 6h + 12h +
- * 24h + 24h ≈ 69 hours ≈ 2.9 days of continuous gateway failure.
+ * 24h = 2,705 minutes ≈ 45 hours ≈ 1.9 days of continuous gateway
+ * failure. `CLASSIFY_TOTAL_BACKOFF_MINUTES` below is that number,
+ * derived rather than restated, and pinned by a test that walks the
+ * real clock rather than re-summing the table.
  *
  * ponytail: a fixed table beats a formula here — the numbers are the
  * product decision ("how long do we keep paying for a doomed retry"),
  * and reading them off one line is worth more than deriving them.
- * Ceiling: an outage longer than ~3 days parks the backlog permanently
- * and it needs an operator to clear `classify_exhausted_at`.
+ * Ceiling: an outage longer than ~45 hours parks the backlog
+ * permanently and it needs an operator to clear `classify_exhausted_at`.
  */
 export const CLASSIFY_BACKOFF_MINUTES: readonly number[] = [
-  5, 15, 45, 120, 360, 720, 1440, 1440,
+  5, 15, 45, 120, 360, 720, 1440,
 ];
 
-export const MAX_CLASSIFY_ATTEMPTS = CLASSIFY_BACKOFF_MINUTES.length;
+/** Attempts before a row is given up on: one more than the gaps above. */
+export const MAX_CLASSIFY_ATTEMPTS = CLASSIFY_BACKOFF_MINUTES.length + 1;
+
+/**
+ * Wall-clock minutes from a row's first failure to its exhaustion.
+ * Derived, never hand-written — the deploy plan is sized off this
+ * number, so a comment claiming one thing while the table says another
+ * is a real operational hazard, not a typo.
+ */
+export const CLASSIFY_TOTAL_BACKOFF_MINUTES = CLASSIFY_BACKOFF_MINUTES
+  .reduce((a, b) => a + b, 0);
 
 /**
  * Sentinel written to `classify_next_at` once a row is exhausted. Being
@@ -182,6 +202,11 @@ export function markClassifyFailure(
  * fresh copy) so call sites keep the literal
  * `...(row.metadata_json ?? {})` spread that
  * `src/test/queueInboundClassification.test.ts` reads as source text.
+ *
+ * CONTRACT: callers MUST pass a fresh object literal, never the row's
+ * own `metadata_json` — mutating that would delete keys from the object
+ * the rest of the loop still reads. Pinned by
+ * `src/test/classifyInboundResilience.test.ts`.
  */
 export function stripClassifyMarks(
   meta: Record<string, unknown>,
