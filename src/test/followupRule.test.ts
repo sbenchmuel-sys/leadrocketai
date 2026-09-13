@@ -22,6 +22,7 @@ import path from "node:path";
 
 import {
   DEFAULT_FOLLOWUP_WAIT_DAYS,
+  mustClearEligibleAt,
   deriveFollowupDue,
   followupWaitDays,
   FOLLOWUP_DUE_KEY,
@@ -347,9 +348,9 @@ describe("followup_due / rate_limited are human prompts, not send triggers", () 
     expect([...PROMPT_ONLY_KEYS].sort()).toEqual([FOLLOWUP_DUE_KEY, RATE_LIMITED_KEY].sort());
   });
 
-  it("blanks eligible_at before persisting them", () => {
+  it("blanks eligible_at before persisting them (see the invariant suite below)", () => {
     expect(syncEngineSrc).toMatch(
-      /PROMPT_ONLY_KEYS\.has\(leadUpdate\.next_action_key\)[\s\S]{0,80}leadUpdate\.eligible_at = null;/,
+      /mustClearEligibleAt\(leadUpdate\.next_action_key\)[\s\S]{0,60}leadUpdate\.eligible_at = null;/,
     );
   });
 });
@@ -627,9 +628,28 @@ describe("campaign-origin leads reach the Follow up tab", () => {
     last_outbound_at: daysAgo(4),
   };
 
-  it("keeps a followup_due lead visible", () => {
-    expect(belongsInReactiveTabs({ ...afterTheRepAnswered, next_action_key: FOLLOWUP_DUE_KEY }))
-      .toBe(true);
+  it("keeps a followup_due lead visible once the enrollment has ended", () => {
+    expect(belongsInReactiveTabs(
+      { ...afterTheRepAnswered, next_action_key: FOLLOWUP_DUE_KEY },
+      { hasLiveEnrollment: false },
+    )).toBe(true);
+  });
+
+  it("leaves a followup_due lead in Outreach while its enrollment is still live", () => {
+    // The scheduled sweep emits followup_due for never-replied campaign leads
+    // too. With a touch still queued, Outreach owns the lead — showing it in
+    // Follow up would double-count the same cadence.
+    expect(belongsInReactiveTabs(
+      { campaign_id: "camp-1", next_action_key: FOLLOWUP_DUE_KEY,
+        last_inbound_at: null, last_outbound_at: daysAgo(4) },
+      { hasLiveEnrollment: true },
+    )).toBe(false);
+    // …and a never-replied lead whose enrollment ended does come through.
+    expect(belongsInReactiveTabs(
+      { campaign_id: "camp-1", next_action_key: FOLLOWUP_DUE_KEY,
+        last_inbound_at: null, last_outbound_at: daysAgo(4) },
+      { hasLiveEnrollment: false },
+    )).toBe(true);
   });
 
   it("does NOT admit a never-replied campaign lead just because it is rate_limited", () => {
@@ -882,5 +902,88 @@ describe("send paths guard the recompute on the interaction insert", () => {
     expect(src).toMatch(/if \(interactionRow\) \{[\s\S]{0,600}postSendDeriveAction\(/);
     // The send itself is never skipped — only the recompute.
     expect(src).toMatch(/skipping follow-up recompute/);
+  });
+});
+
+
+// ── THE INVARIANT: a prompt key never sits next to a live eligible_at ──
+
+describe("every writer of a prompt-only key nulls eligible_at", () => {
+  it("names the rule in one place", () => {
+    expect(mustClearEligibleAt(FOLLOWUP_DUE_KEY)).toBe(true);
+    expect(mustClearEligibleAt(RATE_LIMITED_KEY)).toBe(true);
+    expect(mustClearEligibleAt("send_pre_2")).toBe(false);
+    expect(mustClearEligibleAt(null)).toBe(false);
+  });
+
+  it("gmail-bulk-sync's update payload can never leave a stale timestamp", () => {
+    // THE BUG: `isAutomationScheduled` only catches a FUTURE eligible_at, so an
+    // enrolled lead whose timestamp has already PASSED falls through to the
+    // action-overwrite branch — which wrote needs_action + followup_due and left
+    // the past timestamp untouched, because this file never put `eligible_at` in
+    // its payload at all. That row is exactly automation-executor's candidate
+    // shape. Replayed here against the real source of the branch.
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    const branch = src.slice(
+      src.indexOf("// Apply derived action for non-nurture"),
+      src.indexOf("// CONSENT GATE (defensive)"),
+    );
+    expect(branch.length).toBeGreaterThan(0);
+    // The key/label/needs_action write and the de-arming write are in the SAME
+    // branch, so no row can carry one without the other.
+    expect(branch).toContain("updatePayload.next_action_key = actionResult.next_action_key;");
+    expect(branch).toMatch(
+      /mustClearEligibleAt\(actionResult\.next_action_key\)[\s\S]{0,80}updatePayload\.eligible_at = null;/,
+    );
+    // And the guard above it is the one that misses past timestamps — pinned so
+    // nobody "fixes" this by trusting it.
+    expect(src).toMatch(/isAutomationScheduled[\s\S]{0,200}getTime\(\) > Date\.now\(\)/);
+  });
+
+  it("the consent gate lets a de-arming null through", () => {
+    // If the gate still fired on any `"eligible_at" in payload`, the fix above
+    // would be stripped straight back out and logged as a violation.
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    expect(src).toContain("updatePayload.eligible_at != null &&");
+    expect(src).not.toContain('"eligible_at" in updatePayload &&');
+  });
+
+  it("buildLeadUpdate uses the same named rule", () => {
+    expect(syncEngineSrc).toMatch(
+      /mustClearEligibleAt\(leadUpdate\.next_action_key\)[\s\S]{0,60}leadUpdate\.eligible_at = null;/,
+    );
+  });
+});
+
+describe("the workspace wait override reaches the scheduled path", () => {
+  const warmAndQuiet = {
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(60),
+    last_outbound_at: daysAgo(4),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+  };
+
+  it("waits longer when the workspace says so", () => {
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "fast", { followup_wait_days: 10 })
+    ).next_action_key).toBeNull();
+  });
+
+  it("surfaces sooner when the workspace says so", () => {
+    expect(withFrozenClock(() =>
+      bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "nurture", { followup_wait_days: 2 })
+    ).next_action_key).toBe(FOLLOWUP_DUE_KEY);
+  });
+
+  it("bulk-sync loads the profile once per connection, not once per lead", () => {
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    // Threaded through as a parameter; the loader is never called inside
+    // syncLeadEmails (which runs per lead).
+    expect(src).toContain("cadenceModes: CadenceModes | null = null");
+    const perLead = src.slice(src.indexOf("async function syncLeadEmails("), src.indexOf("async function resolveWorkspaceIds("));
+    expect(perLead).not.toContain("loadCadenceModes(");
+    expect((src.match(/await loadCadenceModes\(/g) ?? []).length).toBe(2);
   });
 });

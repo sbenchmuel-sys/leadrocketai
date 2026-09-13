@@ -65,6 +65,22 @@ export const PROMPT_ONLY_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * THE INVARIANT, in one place because it has now been broken three different
+ * ways: **any writer that persists a prompt-only key MUST null `eligible_at` in
+ * the same statement.**
+ *
+ * `automation-executor`'s candidate query is key-agnostic — needs_action = true
+ * AND eligible_at <= now AND automation_mode IS NOT NULL — so a prompt key
+ * sitting next to ANY past timestamp is a send, whatever the key means. The
+ * danger has never been in the field a writer sets; it is in the field a writer
+ * leaves alone. Not writing `eligible_at` is not neutral, it is the bug:
+ * `buildLeadUpdate` writes an explicit null, and so must every other path.
+ */
+export function mustClearEligibleAt(key: string | null | undefined): boolean {
+  return key != null && PROMPT_ONLY_KEYS.has(key);
+}
+
+/**
  * Every `next_action_key` `syncEngine.deriveAction` can emit, plus
  * `ooo_return_followup` (written by `_shared/oooPauseActions.ts`).
  * `send_nurture_N` is variable-length, so the canonical prefix stands in.

@@ -8,8 +8,8 @@
 import {
   deriveFollowupDue,
   followupWaitDays,
+  mustClearEligibleAt,
   OUTBOUND_SEND_KEYS,
-  PROMPT_ONLY_KEYS,
   rateLimitedAction,
 } from "./followupRule.ts";
 
@@ -823,7 +823,7 @@ export function buildLeadUpdate(
   // we drop it here so the executor can never pick these leads up. Leads with a
   // live cadence keep their anchor instead: `suppressForAutomation` above stops
   // these keys from ever reaching a lead that has one. `reply_now` unchanged.
-  if (leadUpdate.next_action_key != null && PROMPT_ONLY_KEYS.has(leadUpdate.next_action_key)) {
+  if (mustClearEligibleAt(leadUpdate.next_action_key)) {
     leadUpdate.eligible_at = null;
   }
 

@@ -14,6 +14,30 @@ import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { deriveAction } from "../_shared/bulkSyncAction.ts";
+import { mustClearEligibleAt } from "../_shared/followupRule.ts";
+import { deepMergeCadence, DEFAULT_CADENCE_SETTINGS } from "../_shared/syncEngine.ts";
+
+/** Per-strategy mode settings for one owner's workspace profile. */
+type CadenceModes = { fast?: { followup_wait_days?: number }; nurture?: { followup_wait_days?: number } };
+
+/**
+ * Load the owner's merged cadence modes ONCE per connection / request (not per
+ * lead), so the scheduled path honours
+ * `cadence_settings.modes.*.followup_wait_days` like every other path. Cost: one
+ * extra read per Gmail connection per sweep. Null on any failure — the rule then
+ * falls back to its 3/5 defaults rather than skipping leads.
+ */
+// deno-lint-ignore no-explicit-any
+async function loadCadenceModes(serviceSupabase: any, userId: string | null | undefined): Promise<CadenceModes | null> {
+  if (!userId) return null;
+  const { data } = await serviceSupabase
+    .from("workspace_profiles")
+    .select("cadence_settings")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return null;
+  return deepMergeCadence(DEFAULT_CADENCE_SETTINGS, data.cadence_settings ?? {}).modes as CadenceModes;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -305,7 +329,8 @@ async function syncLeadEmails(
   serviceSupabase: any,
   accessToken: string,
   lead: { id: string; email: string; stage: string; strategy: string; workspace_id?: string | null },
-  maxResults: number
+  maxResults: number,
+  cadenceModes: CadenceModes | null = null
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
   const workspaceId = lead.workspace_id ?? null;
@@ -841,7 +866,14 @@ async function syncLeadEmails(
 
   // Derive stage and action
   const newStage = deriveStage(currentStage, metrics, hasClosingKeywords);
-  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null, newStage, lead.strategy);
+  const actionResult = deriveAction(
+    metrics,
+    pendingDraftCount || 0,
+    null,
+    newStage,
+    lead.strategy,
+    (lead.strategy === "nurture" ? cadenceModes?.nurture : cadenceModes?.fast) ?? null,
+  );
 
   // Determine last_activity_at
   const activityDates = [
@@ -950,6 +982,20 @@ async function syncLeadEmails(
     updatePayload.needs_action = actionResult.needs_action;
     updatePayload.next_action_key = actionResult.next_action_key;
     updatePayload.next_action_label = actionResult.next_action_label;
+
+    // THE INVARIANT (see `mustClearEligibleAt`): a prompt-only key must never be
+    // persisted next to a live `eligible_at`.
+    //
+    // `isAutomationScheduled` above only catches a FUTURE timestamp, so an
+    // enrolled lead whose `eligible_at` has already passed falls through to here
+    // — and because this file never puts `eligible_at` in its payload at all,
+    // the stale past timestamp survives beside the new `followup_due`. That row
+    // matches automation-executor's key-agnostic query exactly, and the resolver
+    // sends a generic follow-up nobody asked for. Not writing the field is the
+    // bug, not the protection: null it explicitly, as buildLeadUpdate does.
+    if (mustClearEligibleAt(actionResult.next_action_key)) {
+      updatePayload.eligible_at = null;
+    }
   }
 
   // CONSENT GATE (defensive): gmail-bulk-sync intentionally does NOT route through
@@ -960,8 +1006,11 @@ async function syncLeadEmails(
   // with `needs_action: true` and an outbound `next_action_key` — only the
   // automation-executor (which checks automation_mode IS NOT NULL) is allowed to
   // do that. OOO/defer pauses set ooo_until + needs_action:false, which is fine.
+  // An explicit `eligible_at: null` is a DE-arming write — the opposite of
+  // scheduling a send — so it must pass. Only a real timestamp can violate the
+  // contract this gate protects.
   if (
-    "eligible_at" in updatePayload &&
+    updatePayload.eligible_at != null &&
     updatePayload.needs_action === true &&
     typeof updatePayload.next_action_key === "string"
   ) {
@@ -1188,6 +1237,8 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     // it's retried on the next full rotation instead. syncLeadEmails is idempotent.
     let accountAuthFailed = false;
     let processed = 0;
+    // One read per connection per sweep — NOT per lead.
+    const cadenceModes = await loadCadenceModes(serviceSupabase, conn.user_id);
     for (const lead of windowLeads) {
       // Budget reached mid-window: STOP without advancing for this lead. The cursor
       // still points at it (last persisted from the previous iteration), so the next
@@ -1206,7 +1257,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         .eq("user_id", conn.user_id);
 
       try {
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes);
         totalSynced += result.synced;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1395,6 +1446,8 @@ serve(async (req) => {
     }
 
     let anyConnectionResolved = false;
+    // One read per request — NOT per lead.
+    const cadenceModes = await loadCadenceModes(serviceSupabase, user.id);
 
     for (const [workspaceId, groupLeads] of leadsByWorkspace) {
       // Only resolve a workspace-scoped mailbox for workspaces the caller belongs to;
@@ -1418,7 +1471,7 @@ serve(async (req) => {
 
       for (const lead of groupLeads) {
         console.log(`[gmail-bulk-sync] Syncing lead ${lead.id} (${lead.email}) [ws=${workspaceId ?? "legacy"}]`);
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults, cadenceModes);
         results.push({
           leadId: lead.id,
           synced: result.synced,

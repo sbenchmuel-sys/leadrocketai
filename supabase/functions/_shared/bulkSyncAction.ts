@@ -38,7 +38,15 @@ export function deriveAction(
   pendingDraftCount: number,
   nurtureCadence: string | null,
   stage: string,
-  strategy: string = "fast"
+  strategy: string = "fast",
+  /**
+   * The workspace's merged mode settings for this lead's strategy, so
+   * `cadence_settings.modes.<fast|nurture>.followup_wait_days` is honoured on
+   * the scheduled path too. Omitted → the 3/5 default. A setting that works
+   * when a rep sends and is ignored by the job that actually surfaces leads is
+   * worse than no setting: it looks configured.
+   */
+  modeSettings: { followup_wait_days?: number | null } | null = null
 ): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
@@ -151,7 +159,7 @@ export function deriveAction(
   // sends — see the consent gate in syncLeadEmails), so `followup_due` from the
   // scheduled path can never reach automation-executor.
   if (stage !== "closed_won" && stage !== "closed_lost") {
-    const followupDue = deriveFollowupDue(metrics, followupWaitDays(strategy));
+    const followupDue = deriveFollowupDue(metrics, followupWaitDays(strategy, modeSettings));
     if (followupDue) {
       return {
         needs_action: true,

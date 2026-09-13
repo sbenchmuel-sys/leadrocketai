@@ -9,6 +9,7 @@
 
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { deriveAction as bulkDeriveAction } from "./bulkSyncAction.ts";
+import { mustClearEligibleAt } from "./followupRule.ts";
 import {
   buildLeadUpdate,
   DEFAULT_CADENCE_SETTINGS,
@@ -272,4 +273,53 @@ Deno.test("gmail-bulk-sync surfaces a Gmail lead emailed 4 days ago and quiet si
     "reply_now",
   );
   assertEquals(bulkDeriveAction(warmAndQuiet, 0, null, "closing", "fast").next_action_key, "closing_followup");
+});
+
+
+// ── THE INVARIANT ──────────────────────────────────────────────────
+
+Deno.test("a prompt-only key always requires eligible_at to be nulled", () => {
+  assertEquals(mustClearEligibleAt("followup_due"), true);
+  assertEquals(mustClearEligibleAt("rate_limited"), true);
+  assertEquals(mustClearEligibleAt("send_pre_2"), false);
+  assertEquals(mustClearEligibleAt(null), false);
+});
+
+Deno.test("buildLeadUpdate nulls eligible_at even when the stored one has PASSED", () => {
+  // The shape gmail-bulk-sync got wrong: a past eligible_at is not caught by
+  // any "is automation scheduled" guard, so it survives beside the new key
+  // unless the writer nulls it explicitly.
+  const m = metrics({
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(60),
+    last_outbound_at: daysAgo(4),
+  });
+  const update = buildLeadUpdate("engaged", m, derive(m), null, {
+    needs_action: false,
+    eligible_at: daysAgo(2), // already passed → executor would fire on it
+    motion: "outbound_prospecting",
+    nurture_status: "",
+    ooo_until: null,
+  }, "reactive");
+  assertEquals(update.next_action_key, "followup_due");
+  assertEquals(update.eligible_at, null);
+});
+
+Deno.test("the workspace wait override reaches gmail-bulk-sync's rule", () => {
+  const warmAndQuiet = {
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(60),
+    last_outbound_at: daysAgo(4),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+  };
+  assertEquals(
+    bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "fast", { followup_wait_days: 10 }).next_action_key,
+    null,
+  );
+  assertEquals(
+    bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "nurture", { followup_wait_days: 2 }).next_action_key,
+    "followup_due",
+  );
 });

@@ -235,27 +235,58 @@ const QUEUE_LEAD_COLUMNS = `
  * up) rather than the Outreach tab? Extracted so it is testable — the rules are
  * spelled out at the call site in `fetchQueueLeads`.
  */
-export function belongsInReactiveTabs(lead: {
-  campaign_id?: string | null;
-  next_action_key?: string | null;
-  last_inbound_at?: string | null;
-  last_outbound_at?: string | null;
-}): boolean {
+export function belongsInReactiveTabs(
+  lead: {
+    campaign_id?: string | null;
+    next_action_key?: string | null;
+    last_inbound_at?: string | null;
+    last_outbound_at?: string | null;
+  },
+  opts: { hasLiveEnrollment?: boolean } = {},
+): boolean {
   if (!lead.campaign_id) return true;
   if (lead.next_action_key === "reply_now") return true;
-  // Unit Q1: `followup_due` is never cold campaign work — it means MY message
-  // went unanswered for N days, which is the rep's own thread to pick up.
+  // Unit Q1: `followup_due` means MY message went unanswered for N days — the
+  // rep's own thread to pick up — but ONLY once the cold enrollment has actually
+  // ended. The scheduled Gmail sweep now emits `followup_due` for never-replied
+  // campaign leads too, once the last campaign email reaches the wait, so an
+  // unconditional exception would show a lead in Follow up while its next
+  // `campaign_touch` is still queued in Outreach (review-mode campaigns
+  // especially). `hasLiveEnrollment` is the caller's answer to "is the cadence
+  // still working this lead?" — scheduled / active / paused enrollment.
   //
-  // `rate_limited` is deliberately NOT here (Codex P2): an ACTIVE campaign lead
-  // earns it purely from the campaign's own outbound volume cap, without ever
-  // having replied, so admitting it would let campaign volume flood the
-  // reactive list with leads that have never engaged. Those stay in Outreach,
-  // where the cadence that produced them lives. A rate-limited lead that HAS
-  // engaged still gets in below on the inbound/outbound rules.
-  if (lead.next_action_key === FOLLOWUP_DUE_KEY) return true;
+  // `rate_limited` is deliberately NOT given this exception at all: an active
+  // campaign earns it purely from its own outbound volume cap, with no reply,
+  // so it would let campaign volume flood the reactive list. A rate-limited
+  // lead that HAS engaged still gets in below on the inbound/outbound rules.
+  if (lead.next_action_key === FOLLOWUP_DUE_KEY && !opts.hasLiveEnrollment) return true;
   if (!lead.last_inbound_at) return false;
   if (!lead.last_outbound_at) return true;
   return new Date(lead.last_inbound_at).getTime() > new Date(lead.last_outbound_at).getTime();
+}
+
+/**
+ * Enrollment states that mean the cold cadence is STILL working this lead, so
+ * the Outreach tab — not the Queue — owns it. `endColdEnrollment` moves a row to
+ * replied / stopped / completed, which is what "the enrollment has ended" means.
+ */
+const LIVE_ENROLLMENT_STATUSES = ["scheduled", "active", "paused"] as const;
+
+/** Which of these leads still have a live cold enrollment? */
+async function fetchLiveEnrollmentLeadIds(leadIds: string[]): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from("campaign_enrollment")
+    .select("lead_id")
+    .in("lead_id", leadIds)
+    .in("status", LIVE_ENROLLMENT_STATUSES as unknown as string[]);
+  if (error) {
+    // Fail toward VISIBILITY: an owed follow-up the rep can't see is the bug
+    // this unit exists to fix, and the cost of being wrong the other way is a
+    // handful of campaign leads appearing in Follow up early.
+    console.error("[queueQueries] enrollment lookup failed:", error);
+    return new Set<string>();
+  }
+  return new Set((data ?? []).map((r: { lead_id: string }) => r.lead_id));
 }
 
 /**
@@ -329,7 +360,19 @@ export async function fetchQueueLeads(opts?: {
   // six-week hole, still open for every lead that started life in a campaign.
   // `rate_limited` gets the same treatment for the same reason — it is the rep's
   // own follow-up, merely held, and the Outreach tab has nothing to show for it.
-  const filteredForOutreach = (leadRows ?? []).filter((l: any) => belongsInReactiveTabs(l));
+  // Only campaign leads carrying `followup_due` need the enrollment lookup —
+  // every other row is decided without it, so the common case costs no query.
+  const campaignFollowupIds = (leadRows ?? [])
+    .filter((l: any) => l.campaign_id && l.next_action_key === FOLLOWUP_DUE_KEY)
+    .map((l: any) => l.id as string);
+
+  const liveEnrollmentLeadIds = campaignFollowupIds.length > 0
+    ? await fetchLiveEnrollmentLeadIds(campaignFollowupIds)
+    : new Set<string>();
+
+  const filteredForOutreach = (leadRows ?? []).filter((l: any) =>
+    belongsInReactiveTabs(l, { hasLiveEnrollment: liveEnrollmentLeadIds.has(l.id) })
+  );
 
 
   const leads = filteredForOutreach as unknown as QueueLeadRow[];
