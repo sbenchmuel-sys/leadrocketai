@@ -28,6 +28,7 @@ import {
   CLASSIFY_EXHAUSTED_KEY,
   CLASSIFY_LAST_ATTEMPT_KEY,
   CLASSIFY_LAST_ERROR_KEY,
+  CLASSIFY_MARK_KEYS,
   CLASSIFY_NEVER_ISO,
   CLASSIFY_NEXT_AT_KEY,
   CLASSIFY_AI_TIMEOUT_MS,
@@ -671,5 +672,102 @@ describe("a failing failure-write cannot double-count the row", () => {
     // The old `.catch(() => {})` papered over the double-count path.
     expect(src).not.toContain("failRow(row, timedOut ? \"ai_timeout\" : \"unexpected_error\")\n          .catch");
     expect(src).not.toMatch(/failRow\([^)]*\)\s*\n?\s*\.catch\(/);
+  });
+});
+
+// ── 9. The documented escape hatch actually works ──────────────────
+//
+// Codex P2. The module used to tell an operator to "clear
+// classify_exhausted_at" to recover a backlog parked by a long outage.
+// That does nothing: parking is enforced by the classify_next_at
+// sentinel and the budget by classify_attempts, so the row stays
+// invisible to both the server-side filter and isClassifyEligible. An
+// operator would have run it mid-incident, seen no change, and had no
+// way to tell why. This is the documented recovery, driven for real.
+describe("manual recovery unparks an exhausted row", () => {
+  const MODULE = "supabase/functions/_shared/classifyRetry.ts";
+  const mod = readFileSync(path.join(ROOT, MODULE), "utf8");
+
+  /** A row that burned the whole retry budget during an outage. */
+  const exhaustedMeta = () => {
+    let meta: Record<string, unknown> | null = null;
+    for (let n = 0; n < MAX_CLASSIFY_ATTEMPTS; n++) {
+      meta = markClassifyFailure(meta, "ai_http_402", iso(T0));
+    }
+    return meta!;
+  };
+
+  /** Exactly what the documented SQL does: drop every classify_* key. */
+  const applyDocumentedRecovery = (meta: Record<string, unknown>) => {
+    for (const key of CLASSIFY_MARK_KEYS) delete meta[key];
+    return meta;
+  };
+
+  it("confirms the old one-field instruction really was inert", () => {
+    // The regression itself, pinned: clearing only the flag leaves the
+    // row parked by BOTH gates.
+    const meta = exhaustedMeta();
+    delete meta[CLASSIFY_EXHAUSTED_KEY];
+
+    // Not even in the year 2100 — the sentinel is 9999.
+    const farFuture = Date.parse("2100-01-01T00:00:00.000Z");
+    expect(isClassifyEligible(meta, iso(farFuture))).toBe(false);
+    expect(readClassifyAttempts(meta)).toBeGreaterThanOrEqual(MAX_CLASSIFY_ATTEMPTS);
+    expect(isClassifyExhausted(meta)).toBe(true); // still, despite the flag
+    expect(tick([row("stuck", meta)], farFuture).selected).toHaveLength(0);
+  });
+
+  it("the documented statement removes every mark key", () => {
+    // Drift guard. If a new classify_* key is added and the recovery
+    // statement is not updated, recovery would silently leave residue.
+    const sql = /UPDATE lead_timeline_items[\s\S]*?classify_exhausted_at';/.exec(mod);
+    expect(sql).not.toBeNull();
+    for (const key of CLASSIFY_MARK_KEYS) {
+      expect(sql![0]).toContain(`- '${key}'`);
+    }
+    // …and it is scoped to rows that actually gave up, so re-running it
+    // cannot disturb a row that is merely mid-backoff.
+    expect(sql![0]).toContain("metadata_json ? 'classify_exhausted_at'");
+    expect(sql![0]).toContain("intent IS NULL");
+  });
+
+  it("applying the real recovery makes the row selectable again", () => {
+    const r = row("recovered", exhaustedMeta());
+    expect(tick([r], T0 + MIN).selected).toHaveLength(0); // parked
+
+    applyDocumentedRecovery(r.metadata_json!);
+
+    expect(isClassifyExhausted(r.metadata_json)).toBe(false);
+    expect(readClassifyAttempts(r.metadata_json)).toBe(0);
+    expect(isClassifyEligible(r.metadata_json, iso(T0 + MIN))).toBe(true);
+    expect(tick([r], T0 + MIN).selected.map((x) => x.id)).toEqual(["recovered"]);
+  });
+
+  it("the recovered row then classifies clean, with no classify_* residue", () => {
+    const meta = applyDocumentedRecovery(exhaustedMeta());
+    const classified = stripClassifyMarks({ ...meta, intent_source: "ai" });
+
+    for (const key of CLASSIFY_MARK_KEYS) {
+      expect(classified).not.toHaveProperty(key);
+    }
+    expect(Object.keys(classified).filter((k) => k.startsWith("classify_"))).toEqual([]);
+    expect(classified.intent_source).toBe("ai");
+  });
+
+  it("gives a FRESH budget, not one last attempt", () => {
+    // The trap in the "clear one field" alternative: attempts would
+    // still sit at the ceiling, so the row would re-exhaust on its very
+    // next failure instead of getting the full backoff ladder again.
+    const meta = applyDocumentedRecovery(exhaustedMeta());
+
+    const afterOneFailure = markClassifyFailure(meta, "ai_http_402", iso(T0));
+    expect(readClassifyAttempts(afterOneFailure)).toBe(1);
+    expect(isClassifyExhausted(afterOneFailure)).toBe(false);
+    expect(afterOneFailure[CLASSIFY_NEXT_AT_KEY]).not.toBe(CLASSIFY_NEVER_ISO);
+  });
+
+  it("no longer tells the operator that clearing one field is enough", () => {
+    expect(mod).not.toMatch(/operator to clear `classify_exhausted_at`/);
+    expect(mod).toContain("Clearing `classify_exhausted_at` on its own does nothing.");
   });
 });

@@ -50,13 +50,63 @@ export const CLASSIFY_LAST_ERROR_KEY = "classify_last_error";
 export const CLASSIFY_NEXT_AT_KEY = "classify_next_at";
 export const CLASSIFY_EXHAUSTED_KEY = "classify_exhausted_at";
 
-const ALL_KEYS = [
+/**
+ * Every key this module writes. The manual recovery below removes all
+ * of them, and `stripClassifyMarks` removes all of them — one list, so
+ * the escape hatch and the success path cannot drift apart.
+ */
+export const CLASSIFY_MARK_KEYS = [
   CLASSIFY_ATTEMPTS_KEY,
   CLASSIFY_LAST_ATTEMPT_KEY,
   CLASSIFY_LAST_ERROR_KEY,
   CLASSIFY_NEXT_AT_KEY,
   CLASSIFY_EXHAUSTED_KEY,
 ] as const;
+
+// ── MANUAL RECOVERY (the escape hatch for a long outage) ───────────
+//
+// Clearing `classify_exhausted_at` alone does NOT unpark a row, and an
+// earlier revision of this file said it did. Parking is enforced by
+// `classify_next_at` (the year-9999 sentinel), and the attempt budget
+// by `classify_attempts` — so a row with only the flag cleared stays
+// invisible to both the server-side filter and `isClassifyEligible`,
+// and an operator following that instruction during an incident would
+// see nothing happen and have no way to tell why.
+//
+// Recovery is therefore ONE statement that removes the whole
+// `classify_*` namespace — the same thing `stripClassifyMarks` does on
+// the success path. It gives the row a fresh attempt budget and leaves
+// no residue. Paste it whole; do not clear fields individually.
+//
+//   UPDATE lead_timeline_items
+//      SET metadata_json = metadata_json
+//            - 'classify_attempts'
+//            - 'classify_last_attempt_at'
+//            - 'classify_last_error'
+//            - 'classify_next_at'
+//            - 'classify_exhausted_at'
+//    WHERE event_type = 'email_inbound'
+//      AND intent IS NULL
+//      AND metadata_json ? 'classify_exhausted_at';
+//
+// (`metadata_json ? 'classify_exhausted_at'` scopes it to rows that
+// actually gave up, so re-running it is safe and touches nothing that
+// is merely mid-backoff.)
+//
+// WHY NOT make clearing one field sufficient? Because exhaustion and
+// backoff deliberately share ONE marker. The server-side candidate
+// filter is a single two-clause predicate on `classify_next_at`, and
+// the far-future sentinel is what lets that one predicate exclude
+// parked AND exhausted rows alike. Keying exhaustion off its own field
+// would need a second JSON predicate in that query — the one mechanism
+// in this unit that was hardest to validate and that staging only just
+// proved in its current shape. Worse, clearing only the parking marker
+// would leave `classify_attempts` at the ceiling, so the row would get
+// exactly one more attempt rather than a fresh budget: a subtler trap
+// than the one being fixed. One paste answers "operator at 3am" as
+// well as one field does, and `sqlRemovesEveryMarkKey` in
+// src/test/classifyInboundResilience.test.ts pins the statement above
+// against CLASSIFY_MARK_KEYS so it cannot fall out of date.
 
 /**
  * The wait BETWEEN attempts, in minutes. Index 0 is the wait after the
@@ -80,7 +130,9 @@ const ALL_KEYS = [
  * product decision ("how long do we keep paying for a doomed retry"),
  * and reading them off one line is worth more than deriving them.
  * Ceiling: an outage longer than ~45 hours parks the backlog
- * permanently and it needs an operator to clear `classify_exhausted_at`.
+ * permanently; recovering it needs the operator to run the MANUAL
+ * RECOVERY statement above, which removes every `classify_*` key.
+ * Clearing `classify_exhausted_at` on its own does nothing.
  */
 export const CLASSIFY_BACKOFF_MINUTES: readonly number[] = [
   5, 15, 45, 120, 360, 720, 1440,
@@ -318,7 +370,7 @@ export async function recordFailedAttempt(
 export function stripClassifyMarks(
   meta: Record<string, unknown>,
 ): Record<string, unknown> {
-  for (const k of ALL_KEYS) delete meta[k];
+  for (const k of CLASSIFY_MARK_KEYS) delete meta[k];
   return meta;
 }
 
