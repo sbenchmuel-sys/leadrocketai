@@ -5,6 +5,108 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "./logger.ts";
 
+/**
+ * Normalize a phone number for comparison: keep the digits, drop everything
+ * else, force a single leading `+`. Both sides of every number comparison in
+ * this file go through it — a stored "+1 (415) 555-0123" and a Twilio
+ * "+14155550123" are the same number and must match.
+ *
+ * It strips EVERY non-digit, not a hand-picked set of separators. The old list
+ * (`\s`, `-`, `(`, `)`) let dots, slashes, unicode dashes (– — ‑, what you get
+ * when a number is pasted out of Word, a PDF or an email signature) and exotic
+ * spaces survive, so the normalized form no longer equalled Twilio's. That is
+ * not cosmetic: the contact and consent lookups downstream compare through this
+ * function, a miss resolves to "no contact found" rather than an error, and
+ * someone who opted out with a dot-separated number would not be recognised as
+ * having opted out — the exact failure this unit exists to prevent.
+ *
+ * JUNK IN → EMPTY OUT. An input with no digits at all ("", "n/a", "unknown")
+ * returns "", never a bare "+" that looks like a number. Callers must treat ""
+ * as "not a number" and never match on it — a blank must not equal another
+ * blank, or two unparseable records would resolve to each other. The comparison
+ * helpers below enforce that.
+ */
+export function normalizeE164(n: string): string {
+  const digits = (n ?? "").replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
+}
+
+// ponytail: same `never`-row collapse as authz.ts — `ReturnType<typeof
+// createClient>` has no Database generic, so selected rows lose their type and
+// property access stops being checked. Narrow local row types + a cast at the
+// query restore it. Ceiling: asserted, not schema-derived.
+interface ContactIdRow {
+  contact_id: string;
+}
+interface IdRow {
+  id: string;
+}
+
+/** One `call_settings` row, as far as number matching is concerned. */
+export interface WorkspaceNumberRow {
+  workspace_id: string;
+  default_twilio_number: string | null;
+}
+
+/**
+ * EVERY workspace whose configured Twilio number IS this number, by normalized
+ * comparison. Usually 0 or 1, but two tenants CAN have the same number
+ * configured (a shared pilot number), and the caller-ID ownership check below
+ * must not mistake that for a foreign number — hence a list, not a first hit.
+ */
+export function workspacesClaimingNumber(
+  rows: readonly WorkspaceNumberRow[] | null | undefined,
+  agentNumber: string,
+): string[] {
+  if (!rows || rows.length === 0) return [];
+  const target = normalizeE164(agentNumber);
+  // Fail closed on junk: "" must never match a row that is also unparseable.
+  if (!target) return [];
+  return rows
+    .filter((r) => r.default_twilio_number && normalizeE164(r.default_twilio_number) === target)
+    .map((r) => r.workspace_id);
+}
+
+/**
+ * Find the workspace whose configured Twilio number IS this number.
+ * Pure and exported so the match rule has exactly one definition and one test.
+ * Returns null when nothing matches — there is deliberately NO "if there is
+ * only one row, use it" fallback (C1/9).
+ */
+export function matchWorkspaceByNumber(
+  rows: readonly WorkspaceNumberRow[] | null | undefined,
+  agentNumber: string,
+): string | null {
+  return workspacesClaimingNumber(rows, agentNumber)[0] ?? null;
+}
+
+/**
+ * Resolve the workspace that owns a Twilio number, by normalized comparison.
+ * Returns null when the number is not a configured workspace number.
+ */
+export async function resolveWorkspaceByAgentNumber(
+  supabase: ReturnType<typeof createClient>,
+  agentNumber: string,
+): Promise<string | null> {
+  return (await resolveWorkspacesClaimingNumber(supabase, agentNumber))[0] ?? null;
+}
+
+/**
+ * Every workspace that has this number configured as its Twilio number. Used by
+ * the browser-outbound caller-ID ownership check: a caller ID claimed by some
+ * OTHER workspace must never go out on this workspace's call.
+ */
+export async function resolveWorkspacesClaimingNumber(
+  supabase: ReturnType<typeof createClient>,
+  agentNumber: string,
+): Promise<string[]> {
+  const { data: settings } = await supabase
+    .from("call_settings")
+    .select("workspace_id, default_twilio_number")
+    .not("default_twilio_number", "is", null);
+  return workspacesClaimingNumber(settings as WorkspaceNumberRow[] | null, agentNumber);
+}
+
 interface PhoneMappingResult {
   workspaceId: string | null;
   agentUserId: string | null;
@@ -35,12 +137,6 @@ export async function resolvePhoneMapping(
     leadId: null,
   };
 
-  // Normalize numbers: strip whitespace, ensure + prefix for E.164
-  const normalizeE164 = (n: string): string => {
-    const stripped = n.trim().replace(/[\s\-()]/g, "");
-    return stripped.startsWith("+") ? stripped : "+" + stripped;
-  };
-
   const from = normalizeE164(fromNumber);
   const to = normalizeE164(toNumber);
 
@@ -52,24 +148,12 @@ export async function resolvePhoneMapping(
     //    NEVER fall back to "first workspace" — that is a multi-tenant leak.
     const agentNumber = direction === "inbound" ? to : from;
 
-    // Strategy A: Match via call_settings with a configured Twilio number
-    const { data: settings } = await supabase
-      .from("call_settings")
-      .select("workspace_id, default_twilio_number")
-      .not("default_twilio_number", "is", null);
-
-    if (settings && settings.length > 0) {
-      // Normalize stored numbers before comparison
-      const exactMatch = settings.find(
-        (s: any) => normalizeE164(s.default_twilio_number) === agentNumber,
-      );
-      if (exactMatch) {
-        result.workspaceId = exactMatch.workspace_id;
-      } else if (settings.length === 1) {
-        // Single workspace with call_settings — safe to use
-        result.workspaceId = settings[0].workspace_id;
-      }
-    }
+    // Strategy A: Match via call_settings with a configured Twilio number.
+    // NO "only one workspace configured, so use it" fallback. That was correct
+    // at one tenant and a cross-tenant data leak at two (C1/9): a call on an
+    // unrecognised number would be filed into someone else's workspace. Fail
+    // closed — an unmapped number produces no session rather than a wrong one.
+    result.workspaceId = await resolveWorkspaceByAgentNumber(supabase, agentNumber);
 
     if (!result.workspaceId) {
       logger.warn("phone_mapping_no_workspace", { from, to });
@@ -77,6 +161,12 @@ export async function resolvePhoneMapping(
     }
 
     // 2. Find contact by phone number in contact_identities
+    // An unparseable customer number is not a search key — `.in()` on "" could
+    // match a blank stored value and attach the call to the wrong contact.
+    if (!customerNumber) {
+      logger.warn("phone_mapping_unparseable_customer_number", { from, to, direction });
+      return result;
+    }
     const normalizedNumbers = [customerNumber];
     // Also try without leading + or with it
     if (customerNumber.startsWith("+")) {
@@ -85,41 +175,31 @@ export async function resolvePhoneMapping(
       normalizedNumbers.push("+" + customerNumber);
     }
 
-    const { data: identities } = await supabase
+    const { data: identityRows } = await supabase
       .from("contact_identities")
       .select("contact_id")
       .eq("workspace_id", result.workspaceId)
       .eq("type", "phone")
       .in("value", normalizedNumbers)
       .limit(1);
+    const identities = identityRows as ContactIdRow[] | null;
 
     if (identities && identities.length > 0) {
       result.customerContactId = identities[0].contact_id;
     }
 
-    // 3. Find lead by phone number — workspace-scoped when possible
-    if (result.workspaceId) {
-      const { data: leads } = await supabase
-        .from("leads")
-        .select("id")
-        .eq("workspace_id", result.workspaceId)
-        .in("phone", normalizedNumbers)
-        .limit(1);
+    // 3. Find lead by phone number — always workspace-scoped. (The former
+    //    unscoped `else` branch was unreachable and a second leak vector.)
+    const { data: leadRows } = await supabase
+      .from("leads")
+      .select("id")
+      .eq("workspace_id", result.workspaceId)
+      .in("phone", normalizedNumbers)
+      .limit(1);
+    const leads = leadRows as IdRow[] | null;
 
-      if (leads && leads.length > 0) {
-        result.leadId = leads[0].id;
-      }
-    } else {
-      // Fallback: unscoped (should rarely reach here since we return early if no workspace)
-      const { data: leads } = await supabase
-        .from("leads")
-        .select("id")
-        .in("phone", normalizedNumbers)
-        .limit(1);
-
-      if (leads && leads.length > 0) {
-        result.leadId = leads[0].id;
-      }
+    if (leads && leads.length > 0) {
+      result.leadId = leads[0].id;
     }
 
     logger.info("phone_mapping_resolved", {

@@ -5,7 +5,12 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-import { CALL_DEFAULTS, enqueueCallJob } from "../_shared/callConfig.ts";
+import {
+  CALL_DEFAULTS,
+  authorizeCallJobCaller,
+  enqueueCallJob,
+  resolveAsrLanguages,
+} from "../_shared/callConfig.ts";
 import {
   GoogleSpeechAsrProvider,
   normalizeSpeakerRoles,
@@ -58,6 +63,10 @@ Deno.serve(async (req) => {
       return respond({ ok: false, error: "Missing callSessionId" }, 400);
     }
 
+    // ---- Auth gate (C1/6) — paid function, must never be open to the world ----
+    const denied = await authorizeCallJobCaller(req, supabase, corsHeaders, callSessionId);
+    if (denied) return denied;
+
     // ---- Fetch session ----
     const { data: session } = await supabase
       .from("call_sessions")
@@ -78,8 +87,11 @@ Deno.serve(async (req) => {
 
     const minDuration = settings?.transcribe_min_duration_sec ?? CALL_DEFAULTS.TRANSCRIBE_MIN_DURATION_SEC;
     const analyzeMin = settings?.analyze_min_duration_sec ?? CALL_DEFAULTS.ANALYZE_MIN_DURATION_SEC;
-    const workspaceLang = settings?.default_language ?? CALL_DEFAULTS.DEFAULT_LANGUAGE;
-    const supportedLangs = settings?.supported_languages ?? CALL_DEFAULTS.SUPPORTED_LANGUAGES;
+    // Primary language + the alternatives Google should also try (C1/7).
+    const { primary: workspaceLang, alternatives: alternativeLangs } = resolveAsrLanguages(
+      settings?.default_language,
+      settings?.supported_languages as string[] | null | undefined,
+    );
 
     // ---- Duration gate for transcription ----
     if (session.duration_sec != null && session.duration_sec < minDuration) {
@@ -196,7 +208,7 @@ Deno.serve(async (req) => {
       asrResult = await asr.transcribeBuffer(audioBuffer, {
         language: resolvedLanguage,
         autoDetect: true, // Always on — bias toward workspace lang but detect actual
-        allowedLanguages: supportedLangs as string[],
+        allowedLanguages: alternativeLangs,
         diarization: true,
         timestamps: true,
         channelCount: recording.channels ?? 1,

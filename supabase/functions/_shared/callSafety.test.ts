@@ -1,0 +1,354 @@
+// ============================================================================
+// Unit C1 — behavioural checks for the pure calling helpers.
+// Deno suite: `npm run test:edge`.
+//
+// These execute the logic (the vitest file `src/test/callingSafety.test.ts`
+// scans source text, because `src/` may not import Deno-flavoured modules).
+// ============================================================================
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  browserOutboundDenialTwiml,
+  buildCalleeNoticeTwiml,
+  buildOutboundDialTwiml,
+  CALLEE_NOTICE_PARAM,
+  CALLEE_NOTICE_VALUE,
+  calleeNoticeUrl,
+  denyBrowserOutbound,
+  RECORDING_NOTICE_TEXT,
+  resolveAsrLanguages,
+} from "./callConfig.ts";
+import { callAnalysisDedupeKey, callDedupeKey } from "./timelineProjector.ts";
+import {
+  matchWorkspaceByNumber,
+  normalizeE164,
+  workspacesClaimingNumber,
+} from "./phoneMapping.ts";
+
+Deno.test("callAnalysisDedupeKey never collides with callDedupeKey", () => {
+  const id = "1f1e0f6a-0000-4000-8000-000000000001";
+  assert(callAnalysisDedupeKey(id) !== callDedupeKey(id));
+  // Stable across calls — it is a dedupe key, re-runs must land on the same row.
+  assertEquals(callAnalysisDedupeKey(id), callAnalysisDedupeKey(id));
+});
+
+Deno.test("resolveAsrLanguages: a Hebrew workspace gets English as the alternative", () => {
+  const { primary, alternatives } = resolveAsrLanguages("he-IL", ["en-US", "es-US", "fr-CA"]);
+  assertEquals(primary, "he-IL");
+  assertEquals(alternatives, ["en-US"]);
+});
+
+Deno.test("resolveAsrLanguages: an English workspace on the SHIPPED default gets NO alternatives", () => {
+  // QA HOLD #3. call_settings.supported_languages defaults to
+  // ['en-US','es-US','fr-CA'], so "non-empty" cannot mean "configured". A
+  // dealership that never touched the setting must get exactly the
+  // single-language request it got before this unit — otherwise its English
+  // calls can come back partly transcribed as Spanish or French.
+  const { primary, alternatives } = resolveAsrLanguages("en-US", ["en-US", "es-US", "fr-CA"]);
+  assertEquals(primary, "en-US");
+  assertEquals(alternatives, []);
+});
+
+Deno.test("resolveAsrLanguages: an EXPLICITLY configured list is honoured", () => {
+  const { primary, alternatives } = resolveAsrLanguages("en-US", ["en-US", "es-US"]);
+  assertEquals(primary, "en-US");
+  // The primary is never repeated in the alternatives (Google rejects that).
+  assertEquals(alternatives, ["es-US"]);
+});
+
+Deno.test("resolveAsrLanguages: unset settings produce no alternatives at all", () => {
+  const { primary, alternatives } = resolveAsrLanguages(null, null);
+  assertEquals(primary, "en-US");
+  assertEquals(alternatives, []);
+});
+
+Deno.test("resolveAsrLanguages: he-IL wins even when the list is the shipped default", () => {
+  // The Hebrew rule is keyed on the PRIMARY language, so an Israeli workspace
+  // that never edited supported_languages still gets English as its fallback.
+  const { alternatives } = resolveAsrLanguages("he-IL", ["en-US", "es-US", "fr-CA"]);
+  assertEquals(alternatives, ["en-US"]);
+});
+
+Deno.test("resolveAsrLanguages: alternatives are capped at Google's limit of 3", () => {
+  const { alternatives } = resolveAsrLanguages("en-US", ["de-DE", "it-IT", "pt-BR", "nl-NL", "pl-PL"]);
+  assertEquals(alternatives.length, 3);
+  assert(!alternatives.includes("en-US"));
+});
+
+Deno.test("matchWorkspaceByNumber matches across formatting differences", () => {
+  // QA HOLD #2. A stored "+1 (415) 555-0123" and Twilio's "+14155550123" are
+  // the same number; if they fail to match, the workspace's press-1 DTMF
+  // consent gate silently reverts to OFF.
+  const rows = [
+    { workspace_id: "ws-a", default_twilio_number: "+1 (415) 555-0123" },
+    { workspace_id: "ws-b", default_twilio_number: "+972-50-000-0000" },
+  ];
+  assertEquals(matchWorkspaceByNumber(rows, "+14155550123"), "ws-a");
+  assertEquals(matchWorkspaceByNumber(rows, "+972500000000"), "ws-b");
+  // Missing leading + on the incoming side still matches.
+  assertEquals(matchWorkspaceByNumber(rows, "14155550123"), "ws-a");
+});
+
+Deno.test("matchWorkspaceByNumber fails closed — no single-workspace guess", () => {
+  // The C1/9 leak: one configured workspace must NOT swallow an unknown number.
+  const rows = [{ workspace_id: "ws-a", default_twilio_number: "+14155550123" }];
+  assertEquals(matchWorkspaceByNumber(rows, "+14155559999"), null);
+  assertEquals(matchWorkspaceByNumber([], "+14155550123"), null);
+  assertEquals(matchWorkspaceByNumber(null, "+14155550123"), null);
+  // A null stored number is not a wildcard.
+  assertEquals(matchWorkspaceByNumber([{ workspace_id: "ws-x", default_twilio_number: null }], "+1"), null);
+});
+
+Deno.test("normalizeE164 strips formatting and forces a leading +", () => {
+  assertEquals(normalizeE164("+1 (415) 555-0123"), "+14155550123");
+  assertEquals(normalizeE164("14155550123"), "+14155550123");
+  assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000");
+});
+
+Deno.test("normalizeE164 strips EVERY non-digit separator a human might type", () => {
+  const CANON = "+14155550123";
+  // The formats that used to survive the old [\s\-()] list and therefore
+  // failed to match Twilio's "+14155550123" — including the consent lookup,
+  // where a miss reads as "this person never opted out".
+  assertEquals(normalizeE164("+1.415.555.0123"), CANON, "dots");
+  assertEquals(normalizeE164("+1\u2013415\u2013555\u20130123"), CANON, "en dash");
+  assertEquals(normalizeE164("+1\u2014415\u2014555\u20140123"), CANON, "em dash");
+  assertEquals(normalizeE164("+1\u2011415\u2011555\u20110123"), CANON, "non-breaking hyphen");
+  assertEquals(normalizeE164("+1\u00a0415\u00a0555\u00a00123"), CANON, "non-breaking space");
+  assertEquals(normalizeE164("+1\u202f415\u202f555\u202f0123"), CANON, "narrow no-break space");
+  assertEquals(normalizeE164("+1/415/555/0123"), CANON, "slashes");
+  assertEquals(normalizeE164("+1 (415) 555\u2013" + "0123"), CANON, "mixed separators");
+  assertEquals(normalizeE164("tel:+1-415-555-0123"), CANON, "a tel: prefix");
+});
+
+Deno.test("normalizeE164: already-clean and +-less inputs are unchanged in meaning", () => {
+  assertEquals(normalizeE164("+14155550123"), "+14155550123", "already canonical");
+  assertEquals(normalizeE164("14155550123"), "+14155550123", "no plus");
+  assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000", "trimmed");
+  // Idempotent — normalizing twice must not add a second +.
+  assertEquals(normalizeE164(normalizeE164("+1 (415) 555-0123")), "+14155550123");
+});
+
+Deno.test("normalizeE164: junk in, EMPTY out — never a bare + that looks valid", () => {
+  for (const junk of ["", "   ", "n/a", "unknown", "+", "()- .", "\u2014"]) {
+    assertEquals(normalizeE164(junk), "", JSON.stringify(junk));
+  }
+  // deno-lint-ignore no-explicit-any
+  assertEquals(normalizeE164(null as any), "");
+  // deno-lint-ignore no-explicit-any
+  assertEquals(normalizeE164(undefined as any), "");
+});
+
+Deno.test("junk never matches junk — two unparseable numbers are not the same number", () => {
+  // The trap in "strip everything": "" === "" would make every unparseable
+  // record match every other one, filing a call into an arbitrary workspace.
+  const rows = [
+    { workspace_id: "ws-A", default_twilio_number: "n/a" },
+    { workspace_id: "ws-B", default_twilio_number: "+1.415.555.0123" },
+  ];
+  assertEquals(workspacesClaimingNumber(rows, "unknown"), []);
+  assertEquals(matchWorkspaceByNumber(rows, ""), null);
+  // …while the dot-separated row DOES now match the Twilio form.
+  assertEquals(workspacesClaimingNumber(rows, "+14155550123"), ["ws-B"]);
+});
+
+const DIAL_ARGS = {
+  to: "+972500000000",
+  callerId: "+14155550123",
+  statusCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
+  recordingCallbackUrl: "https://example.test/functions/v1/twilio-voice-webhook",
+  recordingNotice: true,
+  calleeNoticeUrl: calleeNoticeUrl("https://example.test/functions/v1/twilio-voice-inbound"),
+};
+
+Deno.test("the rep's <Dial> document contains NO <Say> — it would play to the rep", () => {
+  // The rejected first version put the notice here. This TwiML runs on the
+  // rep's Twilio Client leg, BEFORE Twilio dials the <Number>, so the prospect
+  // never heard it and was recorded without notice.
+  const twiml = buildOutboundDialTwiml(DIAL_ARGS);
+  assert(!twiml.includes("<Say"), "a <Say> here plays to the REP, not the callee");
+});
+
+Deno.test("the notice rides the callee leg via the url attribute on <Number>", () => {
+  const twiml = buildOutboundDialTwiml(DIAL_ARGS);
+  const numberTag = /<Number[^>]*>/.exec(twiml)?.[0] ?? "";
+  assert(numberTag.length > 0, "expected a <Number> tag");
+  assert(
+    numberTag.includes(`${CALLEE_NOTICE_PARAM}=${CALLEE_NOTICE_VALUE}`),
+    "the notice url must be an attribute of <Number>, so Twilio plays it on the CALLED leg",
+  );
+  assert(numberTag.includes('method="POST"'));
+  // The recording really is on, so the notice is load-bearing.
+  assert(twiml.includes('record="record-from-answer-dual"'));
+  assert(twiml.includes('callerId="+14155550123"'));
+});
+
+Deno.test("what the callee-notice endpoint returns is the actual spoken notice", () => {
+  const twiml = buildCalleeNoticeTwiml();
+  assert(twiml.includes("<Say"));
+  assert(twiml.includes(RECORDING_NOTICE_TEXT));
+  // Nothing else — it is played mid-dial and must not hang up or redirect.
+  assert(!twiml.includes("<Hangup"));
+  assert(!twiml.includes("<Dial"));
+});
+
+Deno.test("calleeNoticeUrl appends the marker the inbound branch keys on", () => {
+  const url = calleeNoticeUrl("https://example.test/functions/v1/twilio-voice-inbound");
+  assertEquals(
+    url,
+    `https://example.test/functions/v1/twilio-voice-inbound?${CALLEE_NOTICE_PARAM}=${CALLEE_NOTICE_VALUE}`,
+  );
+  // Round-trips through URL parsing the way the edge function reads it.
+  assertEquals(new URL(url).searchParams.get(CALLEE_NOTICE_PARAM), CALLEE_NOTICE_VALUE);
+});
+
+Deno.test("outbound TwiML honours a workspace that turned the notice off", () => {
+  const twiml = buildOutboundDialTwiml({ ...DIAL_ARGS, recordingNotice: false });
+  assert(!twiml.includes("<Say"));
+  // No url attribute at all → straight bridge, no whisper.
+  assert(!twiml.includes(CALLEE_NOTICE_VALUE));
+  assert(twiml.includes("<Dial"));
+});
+
+Deno.test("outbound TwiML escapes callback URLs so a query string cannot break the XML", () => {
+  // The callee-notice url itself carries a query string, so this is not theoretical.
+  const twiml = buildOutboundDialTwiml({
+    ...DIAL_ARGS,
+    statusCallbackUrl: "https://example.test/cb?a=1&b=2",
+    recordingCallbackUrl: "https://example.test/cb?a=1&b=2",
+  });
+  assert(twiml.includes("a=1&amp;b=2"));
+  assert(!twiml.includes("a=1&b=2"));
+});
+
+// ── Browser outbound authorization (P1: a removed user could still dial) ─────
+
+Deno.test("denyBrowserOutbound: a caller ID alone is NOT enough to dial", () => {
+  // The exact hole: a user removed from the workspace keeps rep_profiles
+  // (and its twilio_phone_number), so callerId resolves while the membership
+  // lookup returns nothing. Before the fix this dialled — and left no
+  // call_sessions row, because that insert is keyed on the workspace.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: null, callerId: "+14155550123" }),
+    "not_a_member",
+  );
+});
+
+Deno.test("denyBrowserOutbound: a member with no number still cannot dial", () => {
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-1", callerId: null }),
+    "no_caller_id",
+  );
+});
+
+Deno.test("denyBrowserOutbound: neither → the membership reason wins", () => {
+  // A removed user hears why they were refused, not "set up a number".
+  assertEquals(denyBrowserOutbound({ workspaceId: null, callerId: null }), "not_a_member");
+});
+
+Deno.test("denyBrowserOutbound: both present → the legitimate rep dials", () => {
+  assertEquals(denyBrowserOutbound({ workspaceId: "ws-1", callerId: "+14155550123" }), null);
+  // undefined (a lookup that returned nothing) is refused exactly like null.
+  assertEquals(denyBrowserOutbound({ workspaceId: undefined, callerId: "+1" }), "not_a_member");
+});
+
+Deno.test("a refused call hears a spoken reason and hangs up — never empty TwiML", () => {
+  for (const reason of ["not_a_member", "no_caller_id"] as const) {
+    const twiml = browserOutboundDenialTwiml(reason);
+    assert(twiml.includes("<Say"), `${reason} must speak`);
+    assert(twiml.includes("<Hangup/>"), `${reason} must hang up`);
+    // Never a dial: a refusal that still contains <Dial> would place the call.
+    assert(!twiml.includes("<Dial"), `${reason} must not dial`);
+  }
+  assert(
+    browserOutboundDenialTwiml("not_a_member") !== browserOutboundDenialTwiml("no_caller_id"),
+    "the two refusals must be distinguishable to the rep",
+  );
+});
+
+// ── Caller-ID ownership (P1: workspace A dialling on workspace B's number) ───
+
+Deno.test("denyBrowserOutbound: another workspace's configured number is refused", () => {
+  // rep_profiles.twilio_phone_number is free text nobody validates, and all
+  // tenants share one Twilio account — so B's number in A's rep profile would
+  // otherwise dial out as B while the session row said A.
+  assertEquals(
+    denyBrowserOutbound({
+      workspaceId: "ws-A",
+      callerId: "+14155550123",
+      callerIdWorkspaceIds: ["ws-B"],
+    }),
+    "foreign_caller_id",
+  );
+});
+
+Deno.test("denyBrowserOutbound: the workspace's OWN number is allowed", () => {
+  assertEquals(
+    denyBrowserOutbound({
+      workspaceId: "ws-A",
+      callerId: "+14155550123",
+      callerIdWorkspaceIds: ["ws-A"],
+    }),
+    null,
+  );
+});
+
+Deno.test("denyBrowserOutbound: a number two tenants share is allowed to both", () => {
+  // A shared pilot number is configured by both workspaces. Refusing the second
+  // one would break a legitimate rep, so membership of the claim list — not
+  // "who claims it first" — is the test.
+  for (const ws of ["ws-A", "ws-B"]) {
+    assertEquals(
+      denyBrowserOutbound({
+        workspaceId: ws,
+        callerId: "+14155550123",
+        callerIdWorkspaceIds: ["ws-B", "ws-A"],
+      }),
+      null,
+    );
+  }
+});
+
+Deno.test("denyBrowserOutbound: an unclaimed number stays allowed (per-rep DID)", () => {
+  // Documented ceiling: no workspace has this number configured, and a rep's own
+  // DID is recorded nowhere, so it cannot be refused without killing C1/5.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-A", callerId: "+14155550999", callerIdWorkspaceIds: [] }),
+    null,
+  );
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: "ws-A", callerId: "+14155550999" }),
+    null,
+  );
+});
+
+Deno.test("denyBrowserOutbound: membership is still checked before ownership", () => {
+  // A removed user holding a foreign number hears the membership reason.
+  assertEquals(
+    denyBrowserOutbound({ workspaceId: null, callerId: "+1", callerIdWorkspaceIds: ["ws-B"] }),
+    "not_a_member",
+  );
+});
+
+Deno.test("a foreign caller ID gets its OWN spoken reason", () => {
+  const twiml = browserOutboundDenialTwiml("foreign_caller_id");
+  assert(twiml.includes("<Say"));
+  assert(twiml.includes("<Hangup/>"));
+  assert(!twiml.includes("<Dial"));
+  // Distinct from both other refusals — the rep and the log get the truth.
+  assert(twiml !== browserOutboundDenialTwiml("not_a_member"));
+  assert(twiml !== browserOutboundDenialTwiml("no_caller_id"));
+});
+
+Deno.test("workspacesClaimingNumber: every claimant, across formatting differences", () => {
+  const rows = [
+    { workspace_id: "ws-A", default_twilio_number: "+1 (415) 555-0123" },
+    { workspace_id: "ws-B", default_twilio_number: "+14155550123" },
+    { workspace_id: "ws-C", default_twilio_number: "+14155559999" },
+    { workspace_id: "ws-D", default_twilio_number: null },
+  ];
+  assertEquals(workspacesClaimingNumber(rows, "+14155550123"), ["ws-A", "ws-B"]);
+  assertEquals(workspacesClaimingNumber(rows, "+14155551111"), []);
+  assertEquals(workspacesClaimingNumber(null, "+14155550123"), []);
+  // matchWorkspaceByNumber keeps its first-hit contract on top of the list.
+  assertEquals(matchWorkspaceByNumber(rows, "+1 415 555 0123"), "ws-A");
+});
