@@ -265,6 +265,43 @@ export function markClassifyFailure(
 }
 
 /**
+ * Book ONE failed attempt and write its mark, without ever throwing.
+ *
+ * Non-throwing is the whole point, not a nicety. The caller runs inside
+ * a per-row try/catch whose catch ALSO books a failure — so if this
+ * function could reject after incrementing, the catch would book the
+ * same row a second time: `failed` counted twice, the reason tallied
+ * twice, and the `worked === classified + failed` reconciliation broken
+ * on exactly the path (a flaky DB write) where an operator is most
+ * likely to be reading the numbers. Incrementing FIRST is what makes
+ * that possible, so the write is fenced instead of the counter moved.
+ *
+ * `write` is passed as a thunk so this module stays runtime-pure — it
+ * never sees a Supabase client, only a promise of `{ error }`.
+ *
+ * Returns null when the mark landed, otherwise the error message. A row
+ * whose mark could NOT be written is still counted exactly once (it was
+ * worked, it did fail) but carries no mark, so it comes back as an
+ * ordinary unmarked candidate on the very next tick — no backoff, which
+ * is the original freeze condition and why the caller logs it loudly.
+ */
+export async function recordFailedAttempt(
+  counts: { failed: number },
+  reasons: Record<string, number>,
+  reason: ClassifyFailureReason,
+  write: () => PromiseLike<{ error: { message: string } | null }>,
+): Promise<string | null> {
+  counts.failed++;
+  reasons[reason] = (reasons[reason] ?? 0) + 1;
+  try {
+    const { error } = await write();
+    return error ? error.message : null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
  * Strip every failure mark, IN PLACE, and return the same object.
  *
  * Called on the success paths so a row that eventually classifies

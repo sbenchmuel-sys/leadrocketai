@@ -43,6 +43,7 @@ import {
   markClassifyFailure,
   MAX_CLASSIFY_ATTEMPTS,
   readClassifyAttempts,
+  recordFailedAttempt,
   selectClassifiable,
 } from "@shared/classifyRetry";
 import { shouldHideFromQueue } from "@/lib/queueQueries";
@@ -372,13 +373,18 @@ describe("the deterministic path never depends on the AI gateway", () => {
 
 // ── 6. Every terminal branch leaves a mark; `skipped` is gone ──────
 describe("no terminal branch abandons a row silently", () => {
-  it("has no bare `counts.failed++` left outside failRow", () => {
-    // failRow is the single place allowed to increment `failed`, and it
-    // always writes the attempt record. A bare increment anywhere else
-    // is a branch that abandons the row — the original bug.
-    const occurrences = src.match(/counts\.failed\+\+/g) ?? [];
-    expect(occurrences).toHaveLength(1);
-    expect(failRowBlock()).toContain("counts.failed++");
+  it("never increments `failed` outside the one sanctioned path", () => {
+    // `failed` is now incremented only inside recordFailedAttempt,
+    // which also writes the attempt record. A bare increment in the
+    // edge function would be a branch that abandons the row — the
+    // original bug — or a second count for a row already booked.
+    expect(src).not.toContain("counts.failed++");
+    expect(src.match(/failureReasons\[/g) ?? []).toHaveLength(0);
+    // failRow is the only caller of the helper, and every give-up path
+    // goes through failRow.
+    expect(failRowBlock()).toContain("recordFailedAttempt(");
+    // Exactly one call site: failRow. Nothing else may book a failure.
+    expect(src.match(/recordFailedAttempt\(/g) ?? []).toHaveLength(1);
   });
 
   it("covers all four previously-silent branches", () => {
@@ -571,5 +577,99 @@ describe("a run stops on the clock instead of being killed", () => {
     expect(src).toContain("counts.budget_stopped = true;");
     expect(src).toContain("budget_stopped: false,");
     expect(src).toContain("unreached: 0,");
+  });
+});
+
+// ── 8. One worked row books exactly one failure ────────────────────
+//
+// Codex P2. `recordFailedAttempt` increments FIRST and then writes, and
+// the caller sits inside a per-row try/catch that also books a failure.
+// If the write could reject, the same row would be counted twice — and
+// `worked === classified + failed` is asserted by the staging gate, so
+// a real outage with flaky DB writes would have produced a confusing
+// red. Two reviewers signed off on that invariant; it took a third
+// reader to break it in a paragraph.
+describe("a failing failure-write cannot double-count the row", () => {
+  const freshTally = () => ({ counts: { failed: 0 }, reasons: {} as Record<string, number> });
+
+  it("does not throw when the write rejects", async () => {
+    const { counts, reasons } = freshTally();
+    await expect(
+      recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+        Promise.reject(new Error("network down")),
+      ),
+    ).resolves.toBe("network down");
+  });
+
+  it("books the row exactly once when the write rejects", async () => {
+    const { counts, reasons } = freshTally();
+    const err = await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+      Promise.reject(new Error("network down")),
+    );
+    expect(err).toBe("network down");
+    expect(counts.failed).toBe(1);
+    expect(reasons).toEqual({ ai_http_402: 1 });
+  });
+
+  it("books it once when the write returns an error object too", async () => {
+    const { counts, reasons } = freshTally();
+    const err = await recordFailedAttempt(counts, reasons, "ai_timeout", () =>
+      Promise.resolve({ error: { message: "row locked" } }),
+    );
+    expect(err).toBe("row locked");
+    expect(counts.failed).toBe(1);
+    expect(reasons).toEqual({ ai_timeout: 1 });
+  });
+
+  it("reconciles worked === classified + failed when a mark write rejects", async () => {
+    // Drive the real loop shape: worked++, give up on the row, and —
+    // because failRow can no longer reject — the per-row catch never
+    // fires, so the row is not booked a second time.
+    const counts = { worked: 0, classified: 0, failed: 0 };
+    const reasons: Record<string, number> = {};
+
+    for (let i = 0; i < 3; i++) {
+      counts.worked++;
+      try {
+        // Every one of these rows fails, and every mark write rejects.
+        await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+          Promise.reject(new Error("network down")),
+        );
+      } catch {
+        // The per-row catch. Must never be reached from the give-up
+        // path — if it is, it books the row again and the sum breaks.
+        await recordFailedAttempt(counts, reasons, "unexpected_error", () =>
+          Promise.resolve({ error: null }),
+        );
+      }
+    }
+
+    expect(counts.worked).toBe(3);
+    expect(counts.classified + counts.failed).toBe(counts.worked);
+    expect(reasons).toEqual({ ai_http_402: 3 });
+    expect(reasons.unexpected_error).toBeUndefined();
+  });
+
+  it("an unmarkable row is retried next tick as an unmarked candidate", async () => {
+    // It was worked and it did fail, so it is counted — but nothing
+    // reached the database, so it carries no backoff and comes straight
+    // back. That is deliberate (and why the caller logs it loudly).
+    const { counts, reasons } = freshTally();
+    const r = row("unmarkable", null);
+    await recordFailedAttempt(counts, reasons, "ai_http_402", () =>
+      Promise.reject(new Error("network down")),
+    );
+
+    expect(counts.failed).toBe(1);
+    expect(r.metadata_json).toBeNull();
+    expect(readClassifyAttempts(r.metadata_json)).toBe(0);
+    expect(tick([r], T0 + MIN).selected.map((x) => x.id)).toEqual(["unmarkable"]);
+  });
+
+  it("failRow is non-throwing, so the catch drops its defensive guard", () => {
+    expect(failRowBlock()).not.toContain("counts.failed++");
+    // The old `.catch(() => {})` papered over the double-count path.
+    expect(src).not.toContain("failRow(row, timedOut ? \"ai_timeout\" : \"unexpected_error\")\n          .catch");
+    expect(src).not.toMatch(/failRow\([^)]*\)\s*\n?\s*\.catch\(/);
   });
 });

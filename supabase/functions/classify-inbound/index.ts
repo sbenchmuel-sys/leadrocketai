@@ -95,6 +95,7 @@ import {
   isRunBudgetSpent,
   stripClassifyMarks,
   markClassifyFailure,
+  recordFailedAttempt,
   selectClassifiable,
 } from "../_shared/classifyRetry.ts";
 
@@ -510,28 +511,40 @@ Deno.serve(async (req) => {
     row: TimelineRow,
     reason: ClassifyFailureReason,
   ): Promise<void> => {
-    counts.failed++;
-    failureReasons[reason] = (failureReasons[reason] ?? 0) + 1;
+    // recordFailedAttempt owns BOTH the bookkeeping and the write, and
+    // never throws — so a transient failure of this UPDATE cannot
+    // re-enter through the per-row catch and book the same row twice.
+    // (Codex P2: the failure counter moves before the write, so a throw
+    // here used to double-count and break the
+    // `worked === classified + failed` reconciliation on the one path
+    // where the numbers matter most.)
+    //
     // `updated_at` is deliberately NOT touched: a failed read of an
     // email is not activity on the lead.
-    const { error } = await admin
-      .from("lead_timeline_items")
-      .update({
-        metadata_json: markClassifyFailure(
-          row.metadata_json,
-          reason,
-          new Date().toISOString(),
-        ),
-      })
-      .eq("id", row.id)
-      .is("intent", null);
-    if (error) {
-      // If we cannot even record the attempt the row WILL be retried
-      // next minute. Loud, because this is the old freeze condition.
+    const markError = await recordFailedAttempt(
+      counts,
+      failureReasons,
+      reason,
+      () =>
+        admin
+          .from("lead_timeline_items")
+          .update({
+            metadata_json: markClassifyFailure(
+              row.metadata_json,
+              reason,
+              new Date().toISOString(),
+            ),
+          })
+          .eq("id", row.id)
+          .is("intent", null),
+    );
+    if (markError) {
+      // The row is counted, but unmarked — so it comes back next minute
+      // with no backoff. Loud, because this is the old freeze condition.
       logger.error("classify_inbound_attempt_mark_failed", {
         row_id: row.id,
         reason,
-        error: error.message,
+        error: markError,
       });
     }
   };
@@ -895,8 +908,10 @@ Deno.serve(async (req) => {
           timed_out: timedOut,
         });
         // Best-effort mark; if this throws too the outer loop continues.
-        await failRow(row, timedOut ? "ai_timeout" : "unexpected_error")
-          .catch(() => {});
+        // No .catch needed: failRow cannot reject (recordFailedAttempt
+        // fences its own write), which is what keeps this row counted
+        // exactly once.
+        await failRow(row, timedOut ? "ai_timeout" : "unexpected_error");
       }
     }
 
