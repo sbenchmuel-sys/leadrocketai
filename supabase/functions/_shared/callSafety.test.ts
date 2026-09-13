@@ -104,6 +104,53 @@ Deno.test("normalizeE164 strips formatting and forces a leading +", () => {
   assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000");
 });
 
+Deno.test("normalizeE164 strips EVERY non-digit separator a human might type", () => {
+  const CANON = "+14155550123";
+  // The formats that used to survive the old [\s\-()] list and therefore
+  // failed to match Twilio's "+14155550123" — including the consent lookup,
+  // where a miss reads as "this person never opted out".
+  assertEquals(normalizeE164("+1.415.555.0123"), CANON, "dots");
+  assertEquals(normalizeE164("+1\u2013415\u2013555\u20130123"), CANON, "en dash");
+  assertEquals(normalizeE164("+1\u2014415\u2014555\u20140123"), CANON, "em dash");
+  assertEquals(normalizeE164("+1\u2011415\u2011555\u20110123"), CANON, "non-breaking hyphen");
+  assertEquals(normalizeE164("+1\u00a0415\u00a0555\u00a00123"), CANON, "non-breaking space");
+  assertEquals(normalizeE164("+1\u202f415\u202f555\u202f0123"), CANON, "narrow no-break space");
+  assertEquals(normalizeE164("+1/415/555/0123"), CANON, "slashes");
+  assertEquals(normalizeE164("+1 (415) 555\u2013" + "0123"), CANON, "mixed separators");
+  assertEquals(normalizeE164("tel:+1-415-555-0123"), CANON, "a tel: prefix");
+});
+
+Deno.test("normalizeE164: already-clean and +-less inputs are unchanged in meaning", () => {
+  assertEquals(normalizeE164("+14155550123"), "+14155550123", "already canonical");
+  assertEquals(normalizeE164("14155550123"), "+14155550123", "no plus");
+  assertEquals(normalizeE164("  +972-50-000-0000 "), "+972500000000", "trimmed");
+  // Idempotent — normalizing twice must not add a second +.
+  assertEquals(normalizeE164(normalizeE164("+1 (415) 555-0123")), "+14155550123");
+});
+
+Deno.test("normalizeE164: junk in, EMPTY out — never a bare + that looks valid", () => {
+  for (const junk of ["", "   ", "n/a", "unknown", "+", "()- .", "\u2014"]) {
+    assertEquals(normalizeE164(junk), "", JSON.stringify(junk));
+  }
+  // deno-lint-ignore no-explicit-any
+  assertEquals(normalizeE164(null as any), "");
+  // deno-lint-ignore no-explicit-any
+  assertEquals(normalizeE164(undefined as any), "");
+});
+
+Deno.test("junk never matches junk — two unparseable numbers are not the same number", () => {
+  // The trap in "strip everything": "" === "" would make every unparseable
+  // record match every other one, filing a call into an arbitrary workspace.
+  const rows = [
+    { workspace_id: "ws-A", default_twilio_number: "n/a" },
+    { workspace_id: "ws-B", default_twilio_number: "+1.415.555.0123" },
+  ];
+  assertEquals(workspacesClaimingNumber(rows, "unknown"), []);
+  assertEquals(matchWorkspaceByNumber(rows, ""), null);
+  // …while the dot-separated row DOES now match the Twilio form.
+  assertEquals(workspacesClaimingNumber(rows, "+14155550123"), ["ws-B"]);
+});
+
 const DIAL_ARGS = {
   to: "+972500000000",
   callerId: "+14155550123",

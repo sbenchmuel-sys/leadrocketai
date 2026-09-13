@@ -6,14 +6,29 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "./logger.ts";
 
 /**
- * Normalize a phone number for comparison: strip whitespace/dashes/parens and
- * force a leading `+`. Both sides of every number comparison in this file go
- * through it — a stored "+1 (415) 555-0123" and a Twilio "+14155550123" are the
- * same number and must match.
+ * Normalize a phone number for comparison: keep the digits, drop everything
+ * else, force a single leading `+`. Both sides of every number comparison in
+ * this file go through it — a stored "+1 (415) 555-0123" and a Twilio
+ * "+14155550123" are the same number and must match.
+ *
+ * It strips EVERY non-digit, not a hand-picked set of separators. The old list
+ * (`\s`, `-`, `(`, `)`) let dots, slashes, unicode dashes (– — ‑, what you get
+ * when a number is pasted out of Word, a PDF or an email signature) and exotic
+ * spaces survive, so the normalized form no longer equalled Twilio's. That is
+ * not cosmetic: the contact and consent lookups downstream compare through this
+ * function, a miss resolves to "no contact found" rather than an error, and
+ * someone who opted out with a dot-separated number would not be recognised as
+ * having opted out — the exact failure this unit exists to prevent.
+ *
+ * JUNK IN → EMPTY OUT. An input with no digits at all ("", "n/a", "unknown")
+ * returns "", never a bare "+" that looks like a number. Callers must treat ""
+ * as "not a number" and never match on it — a blank must not equal another
+ * blank, or two unparseable records would resolve to each other. The comparison
+ * helpers below enforce that.
  */
 export function normalizeE164(n: string): string {
-  const stripped = (n ?? "").trim().replace(/[\s\-()]/g, "");
-  return stripped.startsWith("+") ? stripped : "+" + stripped;
+  const digits = (n ?? "").replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
 }
 
 // ponytail: same `never`-row collapse as authz.ts — `ReturnType<typeof
@@ -45,6 +60,8 @@ export function workspacesClaimingNumber(
 ): string[] {
   if (!rows || rows.length === 0) return [];
   const target = normalizeE164(agentNumber);
+  // Fail closed on junk: "" must never match a row that is also unparseable.
+  if (!target) return [];
   return rows
     .filter((r) => r.default_twilio_number && normalizeE164(r.default_twilio_number) === target)
     .map((r) => r.workspace_id);
@@ -144,6 +161,12 @@ export async function resolvePhoneMapping(
     }
 
     // 2. Find contact by phone number in contact_identities
+    // An unparseable customer number is not a search key — `.in()` on "" could
+    // match a blank stored value and attach the call to the wrong contact.
+    if (!customerNumber) {
+      logger.warn("phone_mapping_unparseable_customer_number", { from, to, direction });
+      return result;
+    }
     const normalizedNumbers = [customerNumber];
     // Also try without leading + or with it
     if (customerNumber.startsWith("+")) {
