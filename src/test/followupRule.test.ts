@@ -38,6 +38,7 @@ import {
   automationCardState,
   buildResumeUpdateFields,
 } from "@/components/lead/AutomationPreviewCard";
+import { deriveAction as bulkDeriveAction } from "@shared/bulkSyncAction";
 import { getMotionIntervals } from "@/lib/cadenceSettingsTypes";
 import {
   buildAutomationEnableFields,
@@ -626,8 +627,26 @@ describe("campaign-origin leads reach the Follow up tab", () => {
     last_outbound_at: daysAgo(4),
   };
 
-  it.each([FOLLOWUP_DUE_KEY, RATE_LIMITED_KEY])("keeps a %s lead visible", (key) => {
-    expect(belongsInReactiveTabs({ ...afterTheRepAnswered, next_action_key: key })).toBe(true);
+  it("keeps a followup_due lead visible", () => {
+    expect(belongsInReactiveTabs({ ...afterTheRepAnswered, next_action_key: FOLLOWUP_DUE_KEY }))
+      .toBe(true);
+  });
+
+  it("does NOT admit a never-replied campaign lead just because it is rate_limited", () => {
+    // An ACTIVE campaign earns `rate_limited` from its own outbound volume cap,
+    // with no reply from the prospect. Letting that through would flood the
+    // reactive list with leads that have never engaged.
+    expect(belongsInReactiveTabs({
+      campaign_id: "camp-1", next_action_key: RATE_LIMITED_KEY,
+      last_inbound_at: null, last_outbound_at: daysAgo(1),
+    })).toBe(false);
+  });
+
+  it("still admits a rate_limited lead that HAS engaged", () => {
+    expect(belongsInReactiveTabs({
+      campaign_id: "camp-1", next_action_key: RATE_LIMITED_KEY,
+      last_inbound_at: daysAgo(1), last_outbound_at: daysAgo(4),
+    })).toBe(true);
   });
 
   it("still keeps purely cold campaign leads in the Outreach tab", () => {
@@ -745,5 +764,123 @@ describe("recomputeLeadAction — preserveStage", () => {
         /postSendDeriveAction\([\s\S]{0,400}preserveStage: true/,
       );
     }
+  });
+});
+
+
+// ── Closed deals are done ──────────────────────────────────────────
+
+describe("deriveAction — a closed deal is never chased", () => {
+  const quietSinceOurLastWord = metrics({
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(10),
+  });
+
+  it.each(["closed_won", "closed_lost"])("stays silent for %s", (stage) => {
+    const r = withFrozenClock(() => derive(quietSinceOurLastWord, { stage }));
+    expect(r.needs_action).toBe(false);
+    expect(r.next_action_key).toBeNull();
+  });
+
+  it("still surfaces a customer who writes after the deal closed", () => {
+    // A real person waiting on a reply outranks the closed stage.
+    const r = withFrozenClock(() => derive(
+      metrics({ first_outbound_at: daysAgo(70), last_outbound_at: daysAgo(10), last_inbound_at: hoursAgo(6) }),
+      { stage: "closed_won" },
+    ));
+    expect(r.next_action_key).toBe("reply_now");
+  });
+
+  it("an open deal in the same shape still gets followup_due (guard is not vacuous)", () => {
+    expect(withFrozenClock(() => derive(quietSinceOurLastWord, { stage: "engaged" })).next_action_key)
+      .toBe(FOLLOWUP_DUE_KEY);
+  });
+});
+
+// ── The scheduled Gmail path ───────────────────────────────────────
+//
+// `gmail-bulk-sync` has its OWN private deriveAction (a simplified copy) and it
+// is the only Gmail path that runs on a cron. Before this change it returned
+// null for the warm-quiet lead and the sweep WROTE that null over the
+// followup_due the shared rule had produced — so the six-week hole was closed
+// for nobody on a schedule.
+
+describe("gmail-bulk-sync — the scheduled sweep surfaces the follow-up", () => {
+  const warmAndQuiet = {
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(60),   // they replied once, long ago
+    last_outbound_at: daysAgo(4),   // we wrote last, four days back
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+  };
+
+  it("surfaces a Gmail lead emailed four days ago and quiet since", () => {
+    // THE regression: returns {needs_action: false, key: null} on origin/main.
+    const r = withFrozenClock(() => bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "fast"));
+    expect(r.next_action_key).toBe(FOLLOWUP_DUE_KEY);
+    expect(r.needs_action).toBe(true);
+  });
+
+  it("honours the nurture wait like the shared rule", () => {
+    expect(withFrozenClock(() => bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "nurture"))
+      .next_action_key).toBeNull();
+  });
+
+  it("never chases a closed deal", () => {
+    for (const stage of ["closed_won", "closed_lost"]) {
+      expect(withFrozenClock(() => bulkDeriveAction(warmAndQuiet, 0, null, stage, "fast"))
+        .next_action_key).toBeNull();
+    }
+  });
+
+  it("leaves every existing verdict alone", () => {
+    const at = (o: Record<string, unknown>) => ({ ...warmAndQuiet, ...o });
+    withFrozenClock(() => {
+      // Unanswered reply → reply_now (its own 6h window, untouched).
+      expect(bulkDeriveAction(at({ last_inbound_at: hoursAgo(8) }), 0, null, "engaged", "fast")
+        .next_action_key).toBe("reply_now");
+      // Closing stage → closing_followup, not the generic prompt.
+      expect(bulkDeriveAction(warmAndQuiet, 0, null, "closing", "fast").next_action_key)
+        .toBe("closing_followup");
+      // Cold cadence → send_pre_N, on bulk-sync's own hardcoded day numbers.
+      expect(bulkDeriveAction(
+        at({ last_inbound_at: null, first_outbound_at: daysAgo(8), last_outbound_at: daysAgo(4) }),
+        0, null, "contacted", "fast",
+      ).next_action_key).toBe("send_pre_3");
+      // Post-meeting recap.
+      expect(bulkDeriveAction(at({ meeting_summary_count: 1 }), 0, null, "post_meeting", "fast")
+        .next_action_key).toBe("generate_post_meeting_recap");
+      // Nurture cadence.
+      expect(bulkDeriveAction(
+        at({ nurture_outbound_count: 1, last_nurture_outbound_at: daysAgo(20) }),
+        0, "weekly", "engaged", "fast",
+      ).next_action_key).toBe("send_nurture_2");
+    });
+  });
+
+  it("still writes no eligible_at from the scheduled path", () => {
+    const src = readFileSync(path.join(ROOT, "supabase/functions/gmail-bulk-sync/index.ts"), "utf8");
+    // The consent gate forbidding scheduled sends must still be in place.
+    expect(src).toContain("CONSENT GATE (defensive)");
+    // And the four action-overwrite guards are untouched.
+    for (const guard of ["isActiveNurture", "isActiveOOO", "isAutomationScheduled", "hasRecentAutoSend"]) {
+      expect(src).toContain(guard);
+    }
+  });
+});
+
+// ── A failed interaction insert must not trigger a stale recompute ──
+
+describe("send paths guard the recompute on the interaction insert", () => {
+  it.each([
+    "supabase/functions/gmail-send/index.ts",
+    "supabase/functions/outlook-send/index.ts",
+  ])("%s only recomputes when the outbound row landed", (rel) => {
+    const src = readFileSync(path.join(ROOT, rel), "utf8");
+    expect(src).toMatch(/if \(interactionRow\) \{[\s\S]{0,600}postSendDeriveAction\(/);
+    // The send itself is never skipped — only the recompute.
+    expect(src).toMatch(/skipping follow-up recompute/);
   });
 });

@@ -622,13 +622,25 @@ serve(async (req) => {
               // fire-and-forget, never fails the send. Runs AFTER the AI state
               // write so it is the last word on next_action_key. Automation
               // sends (skipStateUpdate) stay untouched.
-              postSendDeriveAction(serviceClient, {
-                leadId,
-                logPrefix: "[outlook-send]",
-                // The AI analysis above owns `stage`; deriveStage must not
-                // recompute a lower one over the top seconds later.
-                preserveStage: true,
-              });
+              // Unit Q1 / Codex P2: only recompute when the outbound interaction
+              // actually landed. The helper derives metrics by re-reading
+              // `interactions`; if the insert failed, that read misses the email
+              // we just sent, so `buildLeadUpdate` would write a STALE
+              // `last_outbound_at` back over the fresh one and could restore an
+              // old `followup_due` on a lead that was in fact just contacted.
+              // The send itself succeeded either way — we skip the recompute,
+              // not the send, and the next sync reconciles.
+              if (interactionRow) {
+                postSendDeriveAction(serviceClient, {
+                  leadId,
+                  logPrefix: "[outlook-send]",
+                  // The AI analysis above owns `stage`; deriveStage must not
+                  // recompute a lower one over the top seconds later.
+                  preserveStage: true,
+                });
+              } else {
+                console.warn(`[outlook-send] outbound interaction insert failed for lead ${leadId} — skipping follow-up recompute to avoid writing stale metrics`);
+              }
             }
           }
         }

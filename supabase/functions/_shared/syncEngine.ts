@@ -453,6 +453,21 @@ export function deriveAction(
     }
   }
 
+  // CLOSED DEALS ARE DONE.
+  //
+  // Evaluated AFTER branch A so a customer who writes after the deal closed
+  // still surfaces as `reply_now` — that is a real person waiting. But nothing
+  // below this line should ever chase them: `deriveStage` keeps a closed stage
+  // forever while `deriveAction` had no closed exit at all, so a closed_won or
+  // closed_lost lead whose last word was ours could pick up `followup_due` (or,
+  // before this unit, `send_pre_N` / `reengage`) as soon as the outbound aged,
+  // undoing the `needs_action = false` written when the deal was closed. The
+  // Queue has no stage filter, so the rep gets told to chase a deal they
+  // already won. Nothing erodes trust in the Queue faster.
+  if (stage === "closed_won" || stage === "closed_lost") {
+    return { needs_action: false, next_action_key: null, next_action_label: null, eligible_at: null, action_reason_code: null };
+  }
+
   const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
   const hoursSinceLastOut = (now - lastOutTime) / HOUR;
 

@@ -8,6 +8,7 @@
 // build sandbox — deno.land / esm.sh are blocked by network policy.
 
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { deriveAction as bulkDeriveAction } from "./bulkSyncAction.ts";
 import {
   buildLeadUpdate,
   DEFAULT_CADENCE_SETTINGS,
@@ -212,3 +213,63 @@ Deno.test("an armed cadence keeps its anchor — the prompt does not overwrite i
 });
 
 
+
+
+// ── Closed deals are done ──────────────────────────────────────────
+
+Deno.test("a closed deal is never chased for a follow-up", () => {
+  const m = metrics({
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(30),
+    last_outbound_at: daysAgo(10),
+  });
+  for (const stage of ["closed_won", "closed_lost"]) {
+    const r = derive(m, { stage });
+    assertEquals(r.next_action_key, null, stage);
+    assertEquals(r.needs_action, false, stage);
+  }
+  // Guard is not vacuous: the same lead still surfaces while the deal is open.
+  assertEquals(derive(m, { stage: "engaged" }).next_action_key, "followup_due");
+});
+
+Deno.test("a customer writing after the close still surfaces", () => {
+  const r = derive(
+    metrics({
+      first_outbound_at: daysAgo(70),
+      last_outbound_at: daysAgo(10),
+      last_inbound_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+    }),
+    { stage: "closed_won" },
+  );
+  assertEquals(r.next_action_key, "reply_now");
+});
+
+// ── The scheduled Gmail path (gmail-bulk-sync's own rule) ──────────
+
+Deno.test("gmail-bulk-sync surfaces a Gmail lead emailed 4 days ago and quiet since", () => {
+  // This is the ONLY Gmail path on a cron, and its private rule returned null
+  // here — then wrote that null over the shared rule's followup_due.
+  const warmAndQuiet = {
+    first_outbound_at: daysAgo(70),
+    last_inbound_at: daysAgo(60),
+    last_outbound_at: daysAgo(4),
+    meeting_summary_count: 0,
+    nurture_outbound_count: 0,
+    last_nurture_outbound_at: null,
+  };
+  const r = bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "fast");
+  assertEquals(r.next_action_key, "followup_due");
+  assertEquals(r.needs_action, true);
+
+  // Nurture waits longer, and a closed deal is never chased.
+  assertEquals(bulkDeriveAction(warmAndQuiet, 0, null, "engaged", "nurture").next_action_key, null);
+  assertEquals(bulkDeriveAction(warmAndQuiet, 0, null, "closed_won", "fast").next_action_key, null);
+
+  // Existing verdicts unchanged.
+  assertEquals(
+    bulkDeriveAction({ ...warmAndQuiet, last_inbound_at: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString() },
+      0, null, "engaged", "fast").next_action_key,
+    "reply_now",
+  );
+  assertEquals(bulkDeriveAction(warmAndQuiet, 0, null, "closing", "fast").next_action_key, "closing_followup");
+});

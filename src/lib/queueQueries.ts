@@ -28,7 +28,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { INTENT_HIDE_FROM_QUEUE as BASE_HIDE_SET } from "@/lib/dashboardUtils";
-import { PROMPT_ONLY_KEYS } from "@shared/followupRule";
+import { FOLLOWUP_DUE_KEY } from "@shared/followupRule";
 
 // ── Queue-side hide list (extends dashboard hide list) ─────────────
 
@@ -243,8 +243,16 @@ export function belongsInReactiveTabs(lead: {
 }): boolean {
   if (!lead.campaign_id) return true;
   if (lead.next_action_key === "reply_now") return true;
-  // Unit Q1: a human-prompt key is never cold campaign work.
-  if (PROMPT_ONLY_KEYS.has(lead.next_action_key ?? "")) return true;
+  // Unit Q1: `followup_due` is never cold campaign work — it means MY message
+  // went unanswered for N days, which is the rep's own thread to pick up.
+  //
+  // `rate_limited` is deliberately NOT here (Codex P2): an ACTIVE campaign lead
+  // earns it purely from the campaign's own outbound volume cap, without ever
+  // having replied, so admitting it would let campaign volume flood the
+  // reactive list with leads that have never engaged. Those stay in Outreach,
+  // where the cadence that produced them lives. A rate-limited lead that HAS
+  // engaged still gets in below on the inbound/outbound rules.
+  if (lead.next_action_key === FOLLOWUP_DUE_KEY) return true;
   if (!lead.last_inbound_at) return false;
   if (!lead.last_outbound_at) return true;
   return new Date(lead.last_inbound_at).getTime() > new Date(lead.last_outbound_at).getTime();

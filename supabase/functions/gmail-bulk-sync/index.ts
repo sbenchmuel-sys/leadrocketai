@@ -13,6 +13,7 @@ import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
+import { deriveAction } from "../_shared/bulkSyncAction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -297,103 +298,6 @@ function deriveStage(
   }
 
   return "new";
-}
-
-function deriveAction(
-  metrics: LeadMetrics,
-  pendingDraftCount: number,
-  nurtureCadence: string | null,
-  stage: string
-): { needs_action: boolean; next_action_key: string | null; next_action_label: string | null } {
-  const now = Date.now();
-  const HOUR = 60 * 60 * 1000;
-  const DAY = 24 * HOUR;
-
-  if (metrics.last_inbound_at) {
-    const inboundTime = new Date(metrics.last_inbound_at).getTime();
-    const outboundTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    
-    if (inboundTime > outboundTime) {
-      const elapsed = now - inboundTime;
-      if (elapsed > 6 * HOUR) {
-        return {
-          needs_action: true,
-          next_action_key: "reply_now",
-          next_action_label: "Reply to customer",
-        };
-      }
-    }
-  }
-
-  // Closing stage - follow up if no outbound in 3 days
-  if (stage === "closing") {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    if (now - lastOutTime > 3 * DAY) {
-      return {
-        needs_action: true,
-        next_action_key: "closing_followup",
-        next_action_label: "Follow up on proposal/contract",
-      };
-    }
-  }
-
-  if (metrics.first_outbound_at && !metrics.last_inbound_at && metrics.meeting_summary_count === 0) {
-    const firstOutTime = new Date(metrics.first_outbound_at).getTime();
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : firstOutTime;
-    const daysSinceFirst = (now - firstOutTime) / DAY;
-    const daysSinceLast = (now - lastOutTime) / DAY;
-
-    if (daysSinceFirst >= 14 && daysSinceLast >= 7) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_4",
-        next_action_label: "Send breakup email",
-      };
-    } else if (daysSinceFirst >= 7 && daysSinceLast >= 4) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_3",
-        next_action_label: "Send follow-up Email 3",
-      };
-    } else if (daysSinceFirst >= 4 && daysSinceLast >= 3) {
-      return {
-        needs_action: true,
-        next_action_key: "send_pre_2",
-        next_action_label: "Send follow-up Email 2",
-      };
-    }
-  }
-
-  if (metrics.meeting_summary_count > 0) {
-    const lastOutTime = metrics.last_outbound_at ? new Date(metrics.last_outbound_at).getTime() : 0;
-    if (now - lastOutTime > 48 * HOUR) {
-      return {
-        needs_action: true,
-        next_action_key: "generate_post_meeting_recap",
-        next_action_label: "Send post-meeting recap",
-      };
-    }
-  }
-
-  if (metrics.nurture_outbound_count > 0 && nurtureCadence) {
-    const lastNurtureTime = metrics.last_nurture_outbound_at 
-      ? new Date(metrics.last_nurture_outbound_at).getTime() 
-      : 0;
-    
-    let intervalDays = 7;
-    if (nurtureCadence === "biweekly") intervalDays = 14;
-    else if (nurtureCadence === "monthly") intervalDays = 30;
-
-    if (now - lastNurtureTime >= intervalDays * DAY) {
-      return {
-        needs_action: true,
-        next_action_key: `send_nurture_${metrics.nurture_outbound_count + 1}`,
-        next_action_label: "Send nurture email",
-      };
-    }
-  }
-
-  return { needs_action: false, next_action_key: null, next_action_label: null };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -937,7 +841,7 @@ async function syncLeadEmails(
 
   // Derive stage and action
   const newStage = deriveStage(currentStage, metrics, hasClosingKeywords);
-  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null, newStage);
+  const actionResult = deriveAction(metrics, pendingDraftCount || 0, null, newStage, lead.strategy);
 
   // Determine last_activity_at
   const activityDates = [
