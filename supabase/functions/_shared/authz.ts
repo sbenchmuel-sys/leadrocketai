@@ -17,6 +17,25 @@ import { logger } from "./logger.ts";
 
 type SupabaseClient = ReturnType<typeof createClient>;
 
+// ponytail: `ReturnType<typeof createClient>` carries no Database generic, so
+// supabase-js resolves every selected row to `never` and property access on a
+// query result silently stops being type-checked. (Latent since this file was
+// written; `deno test` only surfaced it once a _shared test pulled this module
+// into its type-check graph.) These narrow local row types, applied with a cast
+// at each query, restore the checking. Ceiling: they are asserted, not derived
+// from the schema — upgrade when `_shared` gains a generated Database type and
+// the client can be typed `SupabaseClient<Database>`.
+interface WorkspaceIdRow {
+  workspace_id: string;
+}
+interface LeadOwnerRow {
+  owner_user_id: string | null;
+}
+interface ConversationAccessRow {
+  workspace_id: string;
+  owner_user_id: string | null;
+}
+
 export interface AuthzResult {
   ok: boolean;
   error?: string;
@@ -138,11 +157,12 @@ export async function assertCallSessionAccess(
   sessionId: string,
   userId: string,
 ): Promise<AuthzResult> {
-  const { data: session, error } = await admin
+  const { data: sessionRow, error } = await admin
     .from("call_sessions")
     .select("workspace_id")
     .eq("id", sessionId)
     .maybeSingle();
+  const session = sessionRow as WorkspaceIdRow | null;
 
   if (error || !session) {
     return { ok: false, error: "Call session not found", status: 404 };
@@ -170,11 +190,12 @@ export async function assertLeadAccess(
   userId: string,
 ): Promise<AuthzResult> {
   // Step 1: Fetch lead
-  const { data: lead, error } = await admin
+  const { data: leadRow, error } = await admin
     .from("leads")
     .select("owner_user_id")
     .eq("id", leadId)
     .maybeSingle();
+  const lead = leadRow as LeadOwnerRow | null;
 
   if (error || !lead) {
     logger.warn("authz_lead_not_found", { leadId, userId });
@@ -195,12 +216,13 @@ export async function assertLeadAccess(
 
   if (linkedContacts && linkedContacts.length > 0) {
     const wsIds = [...new Set(linkedContacts.map((c: any) => c.workspace_id))];
-    const { data: membership } = await admin
+    const { data: membershipRows } = await admin
       .from("workspace_members")
       .select("workspace_id")
       .eq("user_id", userId)
       .in("workspace_id", wsIds)
       .limit(1);
+    const membership = membershipRows as WorkspaceIdRow[] | null;
 
     if (membership && membership.length > 0) {
       return { ok: true, workspaceId: membership[0].workspace_id };
@@ -251,11 +273,12 @@ export async function assertConversationAccess(
   conversationId: string,
   userId: string,
 ): Promise<AuthzResult> {
-  const { data: convo, error } = await admin
+  const { data: convoRow, error } = await admin
     .from("conversations")
     .select("workspace_id, owner_user_id")
     .eq("id", conversationId)
     .maybeSingle();
+  const convo = convoRow as ConversationAccessRow | null;
 
   if (error || !convo) {
     logger.warn("authz_conversation_not_found", { conversationId, userId });

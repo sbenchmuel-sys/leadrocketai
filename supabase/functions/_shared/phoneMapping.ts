@@ -16,6 +16,17 @@ export function normalizeE164(n: string): string {
   return stripped.startsWith("+") ? stripped : "+" + stripped;
 }
 
+// ponytail: same `never`-row collapse as authz.ts — `ReturnType<typeof
+// createClient>` has no Database generic, so selected rows lose their type and
+// property access stops being checked. Narrow local row types + a cast at the
+// query restore it. Ceiling: asserted, not schema-derived.
+interface ContactIdRow {
+  contact_id: string;
+}
+interface IdRow {
+  id: string;
+}
+
 /** One `call_settings` row, as far as number matching is concerned. */
 export interface WorkspaceNumberRow {
   workspace_id: string;
@@ -117,13 +128,14 @@ export async function resolvePhoneMapping(
       normalizedNumbers.push("+" + customerNumber);
     }
 
-    const { data: identities } = await supabase
+    const { data: identityRows } = await supabase
       .from("contact_identities")
       .select("contact_id")
       .eq("workspace_id", result.workspaceId)
       .eq("type", "phone")
       .in("value", normalizedNumbers)
       .limit(1);
+    const identities = identityRows as ContactIdRow[] | null;
 
     if (identities && identities.length > 0) {
       result.customerContactId = identities[0].contact_id;
@@ -131,12 +143,13 @@ export async function resolvePhoneMapping(
 
     // 3. Find lead by phone number — always workspace-scoped. (The former
     //    unscoped `else` branch was unreachable and a second leak vector.)
-    const { data: leads } = await supabase
+    const { data: leadRows } = await supabase
       .from("leads")
       .select("id")
       .eq("workspace_id", result.workspaceId)
       .in("phone", normalizedNumbers)
       .limit(1);
+    const leads = leadRows as IdRow[] | null;
 
     if (leads && leads.length > 0) {
       result.leadId = leads[0].id;
