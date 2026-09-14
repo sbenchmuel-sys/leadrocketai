@@ -32,6 +32,8 @@ interface OutreachDigestProps {
 export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDigestProps) {
   const { workspaceTimezone } = useWorkspace();
   const [digest, setDigest] = useState<Digest | null>(null);
+  /** A read failed. We say so rather than rendering zeros or a permanent "…". */
+  const [unavailable, setUnavailable] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; }
   });
@@ -39,8 +41,10 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
   useEffect(() => {
     let cancelled = false;
     fetchOutreachDigest(workspaceTimezone)
-      .then((d) => { if (!cancelled) setDigest(d); })
-      .catch(() => { /* non-fatal — the list below still renders */ });
+      .then((d) => { if (!cancelled) { setDigest(d); setUnavailable(false); } })
+      // Non-fatal — the queue below still renders. Any numbers already on
+      // screen stay; we never overwrite them with zeros from a failed read.
+      .catch(() => { if (!cancelled) setUnavailable(true); });
     return () => { cancelled = true; };
   }, [workspaceTimezone, refreshKey]);
 
@@ -92,7 +96,7 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
             <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${overdueTotal > 0 ? "text-amber-600" : ""}`} />
             <div>
               <span className="text-foreground">Overdue:</span>{" "}
-              {digest == null ? "…" : overdueTotal === 0 ? "nothing — you're caught up." : (
+              {digest == null ? (unavailable ? "couldn't load just now." : "…") : overdueTotal === 0 ? "nothing — you're caught up." : (
                 <>
                   {channelSummary(digest.overdue)} still waiting from before today.
                   {firstOverdueChannel && (
@@ -112,7 +116,7 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
             <SkipForward className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <div>
               <span className="text-foreground">Auto-skipped yesterday:</span>{" "}
-              {digest == null ? "…" : skippedTotal === 0 ? "nothing." : (
+              {digest == null ? (unavailable ? "couldn't load just now." : "…") : skippedTotal === 0 ? "nothing." : (
                 <ul className="mt-0.5 space-y-0.5">
                   {digest.skippedYesterdayTruncated && <li>More than 500 — showing the most recent 500.</li>}
                   {digest.skippedYesterday.map((g) => (

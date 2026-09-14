@@ -1,11 +1,14 @@
 // ============================================================
 // linkedinLookup — pick a lead's LinkedIn profile out of web-search results.
 //
-// Fail-closed by design: we only ever save a URL when exactly ONE profile in
-// the results carries the lead's full name (and, when more than one does, the
-// company breaks the tie). Anything ambiguous returns null and the lead simply
-// keeps skipping its LinkedIn touches the way it did before — a wrong profile
-// on a lead is worse than none (the rep would message a stranger).
+// Fail-closed by design: we only ever save a URL for a lead whose COMPANY we
+// know (the search is company-scoped, so a returned profile matched it on-page)
+// and where exactly ONE profile in the results carries the lead's full name —
+// when more than one does, the company breaks the tie. A lead with no company
+// never gets a URL: a sole name match inside a bounded result page is not proof
+// of uniqueness. Anything ambiguous returns null and the lead simply keeps
+// skipping its LinkedIn touches the way it did before — a wrong profile on a
+// lead is worse than none (the rep would message a stranger).
 // Pure; tested in linkedinLookup.test.ts.
 // ============================================================
 import type { SearchResult } from "./webSearch.ts";
@@ -65,10 +68,19 @@ export function pickLinkedinProfile(
     byUrl.set(url, [...(byUrl.get(url) ?? []), r]);
   }
   if (byUrl.size === 0) return null;
-  if (byUrl.size === 1) return [...byUrl.keys()][0];
 
   const c = (company || "").trim();
+  // No company on the lead = nothing to corroborate the name with. A LONE name
+  // match inside the provider's bounded result page is NOT proof of uniqueness —
+  // a namesake can simply sit on page two. So we leave the URL unset: the rep
+  // can paste it in, and LinkedIn steps keep auto-skipping meanwhile. Unset is
+  // recoverable; a wrong profile means the rep messages a stranger.
   if (!c) return null;
+  // Company known: the search itself was company-scoped (linkedinSearchQuery
+  // quotes it), so a returned profile already matched the company on-page —
+  // that is the corroboration, and a single name match stands.
+  if (byUrl.size === 1) return [...byUrl.keys()][0];
+
   const withCompany = [...byUrl.entries()].filter(([, rs]) =>
     rs.some((r) => containsAllTokens(`${r.title} ${r.snippet}`, c)),
   );

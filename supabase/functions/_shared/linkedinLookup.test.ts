@@ -1,9 +1,10 @@
 // Run: deno test supabase/functions/_shared/linkedinLookup.test.ts
 //
-// Pins the fail-closed matcher behind enrich-lead-linkedin: a URL is saved to a
-// lead only when exactly one profile carries the lead's name (company breaks a
-// tie). Anything ambiguous must return null — a wrong profile means the rep
-// messages a stranger.
+// Pins the fail-closed matcher behind enrich-lead-linkedin: a URL is saved only
+// for a lead whose company is known AND where exactly one profile carries the
+// lead's name (company breaks a tie when several do). No company, or anything
+// ambiguous, must return null — a wrong profile means the rep messages a
+// stranger, and an unset URL is recoverable.
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import { linkedinSearchQuery, normalizeProfileUrl, pickLinkedinProfile } from "./linkedinLookup.ts";
 
@@ -35,7 +36,7 @@ Deno.test("duplicate hits for the same profile still count as one", () => {
   const url = pickLinkedinProfile([
     r("Dana Cohen | LinkedIn", "https://www.linkedin.com/in/dana-cohen"),
     r("Dana Cohen - Acme | LinkedIn", "https://il.linkedin.com/in/Dana-Cohen?trk=public"),
-  ], "Dana Cohen", null);
+  ], "Dana Cohen", "Acme");
   assertEquals(url, "https://www.linkedin.com/in/dana-cohen");
 });
 
@@ -52,15 +53,30 @@ Deno.test("two different people with the same name → company breaks the tie, e
 Deno.test("a partial name match is not a match", () => {
   assertEquals(pickLinkedinProfile([
     r("Dana Cohen-Levi - CEO | LinkedIn", "https://www.linkedin.com/in/dcl"),
-  ], "Dana Cohen", null), "https://www.linkedin.com/in/dcl"); // hyphenated surname still carries both tokens
+  ], "Dana Cohen", "Acme"), "https://www.linkedin.com/in/dcl"); // hyphenated surname still carries both tokens
   assertEquals(pickLinkedinProfile([
     r("Dana Levi - CEO | LinkedIn", "https://www.linkedin.com/in/dl"),
-  ], "Dana Cohen", null), null);
+  ], "Dana Cohen", "Acme"), null);
   assertEquals(pickLinkedinProfile([], "Dana Cohen", "Acme"), null);
 });
 
 Deno.test("name matching is accent- and case-insensitive", () => {
   assertEquals(pickLinkedinProfile([
     r("JOSÉ GARCÍA – Director | LinkedIn", "https://es.linkedin.com/in/jose-garcia"),
-  ], "Jose Garcia", null), "https://www.linkedin.com/in/jose-garcia");
+  ], "Jose Garcia", "Acme"), "https://www.linkedin.com/in/jose-garcia");
+});
+
+// Codex P1 on PR #136: a sole name match inside the provider's bounded top-N
+// page is not evidence of uniqueness. With no company there is nothing to
+// corroborate it, so the URL must stay unset rather than point at a namesake.
+Deno.test("a lone name match with NO company on the lead is not enough — stays unset", () => {
+  const results = [
+    r("Dana Cohen - Sales Director | LinkedIn", "https://www.linkedin.com/in/dana-cohen-1", "Tel Aviv"),
+    r("Dana Levi - Engineer | LinkedIn", "https://www.linkedin.com/in/dana-levi"),
+  ];
+  assertEquals(pickLinkedinProfile(results, "Dana Cohen", null), null);
+  assertEquals(pickLinkedinProfile(results, "Dana Cohen", "   "), null);
+  // Same page, same lone match, but the company is known → the company-scoped
+  // search corroborates it, so it is saved.
+  assertEquals(pickLinkedinProfile(results, "Dana Cohen", "Acme Motors"), "https://www.linkedin.com/in/dana-cohen-1");
 });

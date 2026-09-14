@@ -108,13 +108,19 @@ export async function fetchOutreachDigest(
   const startYesterday = startOfDayInTz(now, workspaceTz, -1).toISOString();
   const nowIso = now.toISOString();
 
-  const { data: activeCamps } = await supabase.from("campaigns").select("id").eq("status", "active");
+  const { data: activeCamps, error: campsError } = await supabase.from("campaigns").select("id").eq("status", "active");
+  // A failed read must never fold into a zero. supabase-js resolves
+  // `{ data: null, error }` rather than throwing, so an unchecked error here
+  // would render "nothing overdue — you're caught up" over real overdue work.
+  // Throwing keeps the previously shown numbers up and marks the strip
+  // unavailable instead of quietly lying.
+  if (campsError) throw new Error(`digest campaigns read failed: ${campsError.message}`);
   const activeIds = ((activeCamps || []) as { id: string }[]).map((c) => c.id);
 
   // Yesterday's skip notes are history — they still count with no campaign active
   // today (the rep may have paused their last one since). Only the forward-looking
   // reads need an active campaign.
-  const none = Promise.resolve({ data: null, count: null });
+  const none = Promise.resolve({ data: null, count: 0, error: null });
   const [scheduledRes, notesRes, ...overdueRes] = await Promise.all([
     activeIds.length === 0 ? none : supabase
       .from("campaign_touch" as any)
@@ -145,6 +151,13 @@ export async function fetchOutreachDigest(
         .lt("eligible_at", startToday),
     ),
   ]);
+  // Same rule as above, for every read: a discarded error would become "0 due,
+  // 0 overdue, nothing skipped" — a confident, wrong all-clear.
+  const failed = [scheduledRes, notesRes, ...overdueRes].find((r) => (r as { error?: unknown }).error);
+  if (failed) {
+    throw new Error(`digest read failed: ${(failed as { error: { message?: string } }).error.message ?? "unknown error"}`);
+  }
+
   const overdueByChannel = emptyCounts();
   OUTREACH_CHANNELS.forEach((ch, i) => { overdueByChannel[ch] = (overdueRes[i] as { count: number | null }).count ?? 0; });
   const one = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? v[0] ?? null : v ?? null);

@@ -80,3 +80,36 @@ describe("campaign cadence status never truncates a lead mid-cadence (#13 paging
     expect(stepOrderIdx).toBeGreaterThan(leadOrderIdx);
   });
 });
+
+// ── Codex review round on PR #136 ──
+
+describe("recording 'they accepted my invite' is never single-homed (P1)", () => {
+  // The signal conditional LinkedIn steps branch on (leads.linkedin_connected_at)
+  // is rep-entered. It used to live ONLY on the LinkedIn Outreach card, which
+  // vanishes the moment that step is completed — acceptance almost always lands
+  // after that, so the next LinkedIn touch auto-skipped forever with no way back.
+  // It must stay reachable from a surface that outlives the card.
+  it("a persistent surface besides the Outreach card can write it", () => {
+    const callers = [
+      "src/components/queue/OutreachCard.tsx",
+      "src/components/queue/UpcomingTouchesStrip.tsx",
+    ].filter((rel) => /setLinkedinAccepted\s*\(/.test(read(rel)));
+    expect(callers).toContain("src/components/queue/UpcomingTouchesStrip.tsx");
+    expect(callers.length).toBeGreaterThan(1);
+  });
+
+  it("the strip carries the lead's current accepted state, so the toggle isn't blind", () => {
+    expect(read("src/lib/upcomingTouchesQueries.ts")).toMatch(/linkedin_connected_at/);
+  });
+});
+
+describe("a conditional step reads as conditional outside edit mode (P2)", () => {
+  // CampaignScript renders the branch badge from step.condition. The read-only
+  // projection on the campaign page used to drop the field, so "only if they
+  // accepted the invite" silently rendered as an unconditional touch.
+  it("CampaignDetail's read-only projection passes condition through", () => {
+    const src = read("src/pages/CampaignDetail.tsx");
+    const readOnly = src.slice(src.lastIndexOf("<CampaignScript"));
+    expect(readOnly).toMatch(/condition:\s*s\.condition/);
+  });
+});

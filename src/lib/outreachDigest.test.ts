@@ -1,5 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { buildDigest, ROW_CAP } from "./outreachDigest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDigest, fetchOutreachDigest, ROW_CAP } from "./outreachDigest";
+
+// A fake PostgREST client: every builder method chains, and awaiting the chain
+// resolves whatever `resultFor` says that table should return. Lets us assert
+// what fetchOutreachDigest does with `{ data: null, error }` — the shape
+// supabase-js resolves with (it does NOT throw) when a read fails.
+const resultFor: Record<string, { data: unknown; count?: number | null; error: unknown }> = {};
+function builder(table: string): unknown {
+  const target = () => undefined;
+  return new Proxy(target, {
+    get(_t, prop) {
+      if (prop === "then") {
+        const res = resultFor[table] ?? { data: [], count: 0, error: null };
+        return (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) =>
+          Promise.resolve(res).then(ok, bad);
+      }
+      return () => builder(table);
+    },
+  });
+}
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { from: (table: string) => builder(table) },
+}));
 
 describe("buildDigest — the Outreach tab's daily digest", () => {
   it("counts only NEXT-IN-LINE touches of live enrollments as 'later today'", () => {
@@ -59,5 +81,41 @@ describe("buildDigest — the Outreach tab's daily digest", () => {
       [missing, 5], [expired, 1], ["the step's window passed", 1],
     ]);
     expect(d.skippedYesterday[0].leadNames).toEqual(["Bob", "Cy", "Dee"]);
+  });
+});
+
+describe("fetchOutreachDigest — a failed read never folds into a confident zero", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(resultFor)) delete resultFor[k];
+  });
+
+  it("throws when the campaigns read errors, instead of reporting an empty day", async () => {
+    resultFor.campaigns = { data: null, error: { message: "connection reset" } };
+    await expect(fetchOutreachDigest("UTC")).rejects.toThrow(/connection reset/);
+  });
+
+  it("throws when a touch/notes read errors, instead of '0 overdue — you're caught up'", async () => {
+    resultFor.campaigns = { data: [{ id: "c1" }], error: null };
+    resultFor.campaign_touch = { data: null, count: null, error: { message: "statement timeout" } };
+    await expect(fetchOutreachDigest("UTC")).rejects.toThrow(/statement timeout/);
+  });
+
+  it("throws when the skip-notes read errors", async () => {
+    resultFor.campaigns = { data: [{ id: "c1" }], error: null };
+    resultFor.campaign_touch = { data: [], count: 0, error: null };
+    resultFor.lead_timeline_items = { data: null, error: { message: "notes boom" } };
+    await expect(fetchOutreachDigest("UTC")).rejects.toThrow(/notes boom/);
+  });
+
+  it("still reads yesterday's skip notes when NO campaign is active today", async () => {
+    resultFor.campaigns = { data: [], error: null };
+    resultFor.lead_timeline_items = {
+      data: [{ metadata_json: { auto_skip_reason: "they hadn't accepted the invite" }, leads: { name: "Ann" } }],
+      error: null,
+    };
+    const d = await fetchOutreachDigest("UTC");
+    expect(d.skippedYesterdayTotal).toBe(1);
+    expect(d.skippedYesterday[0].leadNames).toEqual(["Ann"]);
+    expect(d.overdueTotal).toBe(0);
   });
 });
