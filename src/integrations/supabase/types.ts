@@ -4514,6 +4514,14 @@ export type Database = {
           title: string
         }[]
       }
+      purge_call_media: {
+        Args: never
+        Returns: {
+          analyses_purged: number
+          recordings_purged: number
+          transcripts_purged: number
+        }[]
+      }
       replace_campaign_steps_reconciled: {
         Args: { _campaign_id: string; _steps: Json }
         Returns: undefined
@@ -4536,6 +4544,7 @@ export type Database = {
         Args: { p_lead_id: string }
         Returns: boolean
       }
+      strip_call_evidence: { Args: { p_items: Json }; Returns: Json }
     }
     Enums: {
       app_role: "admin" | "sales"
