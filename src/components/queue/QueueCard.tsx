@@ -55,6 +55,8 @@ export interface QueueCardProps {
   latestInbound: QueueLatestInbound | undefined;
   /** The rep's own latest message — what a follow-up card is about. */
   latestOutbound: QueueLatestMessage | undefined;
+  /** The meeting a recap card is about. Undefined → the card shows no preview. */
+  latestMeeting?: QueueLatestMessage | undefined;
   onMarkHandled: (lead: QueueLeadRow) => void;
   onSnooze: (lead: QueueLeadRow, days: 3 | 5 | 7) => void;
 }
@@ -130,7 +132,9 @@ export function buildWhyNowLine(
   return clauses.join(" · ") + intentSuffix;
 }
 
-export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, onSnooze }: QueueCardProps) {
+export function QueueCard({
+  lead, latestInbound, latestOutbound, latestMeeting, onMarkHandled, onSnooze,
+}: QueueCardProps) {
   // Computed BEFORE the situation because the situation depends on it: a
   // follow-up triggered by a call is a different sentence from one triggered by
   // an email, and the card must not describe a call as a message.
@@ -139,9 +143,15 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
     { next_action_key: lead.next_action_key, next_action_label: lead.next_action_label },
     { latestOutboundIsCall },
   );
-  // The message this card is ACTUALLY about: their reply, or my unanswered one.
+  // The thing this card is ACTUALLY about: their reply, my unanswered message,
+  // or — for a recap — the meeting itself.
   const showingMine = situation.bodySource === "outbound";
-  const message = showingMine ? latestOutbound : latestInbound;
+  const showingMeeting = situation.bodySource === "meeting";
+  const message = showingMeeting
+    ? latestMeeting
+    : showingMine
+      ? latestOutbound
+      : latestInbound;
   const whyNow = buildWhyNowLine(lead, situation, message);
   // A call has no text to quote. Rather than reaching past it for an older
   // email — which is what this card used to do, under a caption claiming the
@@ -209,7 +219,9 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
     }
     setLoadingBody(true);
     try {
-      const body = await fetchLatestMessageBody(lead.id, situation.bodySource);
+      // Inbound only — the button is rendered only on inbound cards (outbound
+      // bodies purge at 72h), so the default direction is the right one.
+      const body = await fetchLatestMessageBody(lead.id);
       if (!body) {
         toast.info("The full text of this email is no longer stored — showing the summary.");
       } else {
@@ -242,9 +254,15 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
 
         {/* Whose words are quoted below. Without this the rep has no way to
             tell the customer's reply from their own unanswered email. */}
-        {!!message && (
+        {!!message && !(showingMeeting && !hasContent) && (
           <p className="mt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-            {showingCall ? "Your call" : showingMine ? "Your message" : "Their message"}
+            {showingCall
+              ? "Your call"
+              : showingMeeting
+                ? "The meeting"
+                : showingMine
+                  ? "Your message"
+                  : "Their message"}
           </p>
         )}
 
@@ -256,6 +274,11 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
               textClassName="text-sm text-foreground/85 leading-relaxed"
             />
           </div>
+        ) : showingMeeting && !hasContent ? (
+          // No Zoom-matched meeting row (or its summary has purged). Showing
+          // nothing beats reaching past the meeting for an unrelated email —
+          // which is exactly what this card used to do.
+          null
         ) : (
           <p
             className={cn(
@@ -278,7 +301,7 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
           definition about a message older than the 3/5-day wait. The button
           would toast "no longer stored" every single time. The subject/snippet
           fallback in the body above is what survives, and it stays. */}
-      {!showingMine && !!message && (
+      {situation.bodySource === "inbound" && !!message && (
         <div className="px-4 pb-2">
           {fullBody && (
             <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">

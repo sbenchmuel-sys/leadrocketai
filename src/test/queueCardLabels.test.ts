@@ -15,7 +15,11 @@
 // ============================================================
 import { describe, expect, it } from "vitest";
 
-import { describeQueueSituation, type QueueLeadRow } from "@/lib/queueQueries";
+import {
+  describeQueueSituation,
+  needsOrphanBackfill,
+  type QueueLeadRow,
+} from "@/lib/queueQueries";
 import { buildWhyNowLine } from "@/components/queue/QueueCard";
 import { QUEUE_ACTION_KEYS } from "@shared/followupRule";
 
@@ -50,8 +54,8 @@ function lead(over: Partial<QueueLeadRow> = {}): QueueLeadRow {
   };
 }
 
-// situation key → [expected label, whose message the body shows]
-const TABLE: [string, string, "inbound" | "outbound"][] = [
+// situation key → [expected label, what the body shows]
+const TABLE: [string, string, "inbound" | "outbound" | "meeting"][] = [
   ["reply_now", "They replied", "inbound"],
   ["ooo_return_followup", "They were away — they're back now", "outbound"],
   ["followup_due", "No reply to your last message", "outbound"],
@@ -61,7 +65,7 @@ const TABLE: [string, string, "inbound" | "outbound"][] = [
     "outbound",
   ],
   ["closing_followup", "Your proposal needs chasing", "outbound"],
-  ["generate_post_meeting_recap", "Send them the recap from your meeting", "outbound"],
+  ["generate_post_meeting_recap", "Send them the recap from your meeting", "meeting"],
   ["post_meeting_followup", "No word since your meeting", "outbound"],
   ["send_pre_2", "Intro sequence — second email is due", "outbound"],
   ["send_pre_3", "Intro sequence — third email is due", "outbound"],
@@ -141,6 +145,28 @@ describe("describeQueueSituation — one label per situation, in plain English",
     expect(s.detail).toBe("auto-send paused until Sep 12");
     // And it does NOT pass the generic head of that label off as the headline.
     expect(s.label).not.toContain("Follow up anytime");
+  });
+
+  it("points a recap card at the MEETING, never at the pre-meeting email", () => {
+    // gmail-sync only sets hasMeetingWithoutFollowup when NO outbound exists
+    // after the meeting date, so `last_outbound_at` is necessarily a message
+    // from before it — a three-week-old scheduling email is not what a recap
+    // card is about.
+    const recap = describeQueueSituation({
+      next_action_key: "generate_post_meeting_recap",
+      next_action_label: null,
+    });
+    expect(recap.bodySource).toBe("meeting");
+    expect(recap.showTime).toBe(false);
+    // Its neighbour is NOT the same case: post_meeting_followup only fires when
+    // hasMeetingWithoutFollowup is false, i.e. an outbound after the meeting
+    // genuinely exists — so quoting the rep's own message there is correct.
+    const after = describeQueueSituation({
+      next_action_key: "post_meeting_followup",
+      next_action_label: null,
+    });
+    expect(after.bodySource).toBe("outbound");
+    expect(after.showTime).toBe(true);
   });
 
   it("scopes the volume cap to THIS lead and to the automatic send", () => {
@@ -246,5 +272,30 @@ describe("buildWhyNowLine — the line the rep reads", () => {
   it("does not date a back-from-away card off a message that predates the absence", () => {
     const s = line("ooo_return_followup", { last_outbound_at: daysAgo(21) });
     expect(s).toBe("They were away — they're back now");
+  });
+});
+
+describe("needsOrphanBackfill — a send whose timeline projection failed", () => {
+  const sentAt = "2026-09-10T12:00:00.000Z";
+
+  it("flags a preview older than the send the card is dated from", () => {
+    // gmail-send catches a failed projection and still writes last_outbound_at,
+    // so the card is dated from the new send and quotes the previous message.
+    expect(needsOrphanBackfill({ last_outbound_at: sentAt }, "2026-09-01T12:00:00.000Z")).toBe(true);
+  });
+
+  it("flags a lead dated from a send with no preview row at all", () => {
+    expect(needsOrphanBackfill({ last_outbound_at: sentAt }, undefined)).toBe(true);
+  });
+
+  it("tolerates the normal skew between the two writes in one send", () => {
+    // The timestamp and the projection are different statements; a second apart
+    // is ordinary, and re-querying every card would be an N+1 for nothing.
+    expect(needsOrphanBackfill({ last_outbound_at: sentAt }, "2026-09-10T11:59:59.000Z")).toBe(false);
+    expect(needsOrphanBackfill({ last_outbound_at: sentAt }, "2026-09-10T12:00:00.000Z")).toBe(false);
+  });
+
+  it("never fires for a lead that has never had an outbound", () => {
+    expect(needsOrphanBackfill({ last_outbound_at: null }, undefined)).toBe(false);
   });
 });

@@ -27,6 +27,7 @@
 // ============================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import { getLeadEmailThread } from "@/lib/supabaseQueries";
 import { INTENT_HIDE_FROM_QUEUE as BASE_HIDE_SET } from "@/lib/dashboardUtils";
 import { FOLLOWUP_DUE_KEY, PROMPT_ONLY_KEYS } from "@shared/followupRule";
 
@@ -105,6 +106,25 @@ export const OUTBOUND_EVENT_TYPES: readonly string[] = [
  * last outbound".
  */
 export const OUTBOUND_CALL_EVENT_TYPE = "call_completed";
+
+/**
+ * The meeting row `process-zoom-summary` projects: `subject` is the meeting
+ * title, `snippet_text` the first 500 chars of the summary. It is what a recap
+ * card is actually about.
+ *
+ * Present only for meetings a Zoom summary matched — `hasMeetingWithoutFollowup`
+ * is derived from `meeting_packs`, which can exist without one. So the recap
+ * card shows meeting context WHEN THE LEDGER HAS IT and shows nothing when it
+ * does not; it never falls back to a written message, because by construction
+ * there is no outbound after the meeting (gmail-sync only sets the flag when no
+ * outbound interaction exists after the meeting date) and the newest outbound is
+ * therefore a pre-meeting email.
+ *
+ * `snippet_text` on this row purges at 72h like every non-inbound row, leaving
+ * the title — which is why the body goes through `cleanBodyText`'s subject
+ * fallback rather than quoting `snippet_text` directly.
+ */
+export const MEETING_EVENT_TYPE = "meeting";
 
 /** What `fetchLatestOutbounds` asks the ledger for. */
 export const OUTBOUND_PREVIEW_EVENT_TYPES: readonly string[] = [
@@ -714,6 +734,156 @@ export async function fetchLatestOutbounds(
 }
 
 /**
+ * Latest meeting row per lead — the context a recap card is about.
+ *
+ * Same bounded shape as the two message fetches. A lead with no Zoom-matched
+ * meeting simply has no entry and the card renders no preview, which is the
+ * floor: showing nothing beats showing an unrelated email.
+ */
+export async function fetchLatestMeetings(
+  leadIds: string[],
+): Promise<Map<string, QueueLatestMessage>> {
+  if (leadIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent")
+    .in("lead_id", leadIds)
+    .eq("event_type", MEETING_EVENT_TYPE)
+    .order("occurred_at", { ascending: false })
+    .limit(500);
+
+  if (error) {
+    console.warn("[queueQueries] latest meeting fetch failed:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, QueueLatestMessage>();
+  for (const row of (data ?? []) as Array<{
+    lead_id: string;
+    occurred_at: string;
+    event_type: string;
+    snippet_text: string | null;
+    subject: string | null;
+    metadata_json: Record<string, unknown> | null;
+    intent: string | null;
+  }>) {
+    if (map.has(row.lead_id)) continue;
+    map.set(row.lead_id, {
+      lead_id: row.lead_id,
+      occurred_at: row.occurred_at,
+      event_type: row.event_type,
+      snippet_text: row.snippet_text,
+      subject: row.subject,
+      intent: row.intent,
+      ...readInboundMetadata(row.metadata_json),
+    });
+  }
+  return map;
+}
+
+// ── Orphaned outbound sends (timeline projection failed) ──────────
+
+/**
+ * How far behind `leads.last_outbound_at` a preview row may sit before we treat
+ * it as the WRONG message. The two timestamps are written by different
+ * statements in the same send, so a second of skew is normal; minutes are not.
+ */
+const OUTBOUND_PREVIEW_SKEW_MS = 60_000;
+
+/**
+ * Is this lead's newest preview row older than the send the card is dated from?
+ *
+ * The senders treat a failed `lead_timeline_items` projection as non-fatal and
+ * carry on: `gmail-send` logs the projection error and still writes
+ * `last_outbound_at`, and the `interactions` row is written either way. A
+ * timeline-only preview therefore quotes the PREVIOUS message while the why-now
+ * line is dated from the new one — every word confident and the pairing wrong,
+ * which is the exact failure this unit exists to remove.
+ *
+ * Pure, so the rule can be checked without a database.
+ */
+export function needsOrphanBackfill(
+  lead: { last_outbound_at: string | null },
+  previewOccurredAt: string | null | undefined,
+): boolean {
+  if (!lead.last_outbound_at) return false;
+  const sent = new Date(lead.last_outbound_at).getTime();
+  if (!Number.isFinite(sent)) return false;
+  if (!previewOccurredAt) return true; // dated from a send with nothing to show
+  const preview = new Date(previewOccurredAt).getTime();
+  if (!Number.isFinite(preview)) return true;
+  return sent - preview > OUTBOUND_PREVIEW_SKEW_MS;
+}
+
+/**
+ * `fetchLatestOutbounds` plus a repair pass for leads whose newest send never
+ * made it into the timeline.
+ *
+ * The repair REUSES `getLeadEmailThread` (src/lib/supabaseQueries.ts), which
+ * already reads the timeline and merges orphaned `interactions` rows with a
+ * dedupe strategy shared with `getLeadActivityFeed`. Writing a bulk merge here
+ * would be a second implementation of that strategy, free to drift from it; a
+ * per-lead call to the existing one cannot. It runs ONLY for the leads the pure
+ * check above flags, which is the rare projection-failure case, so the common
+ * page costs exactly the one bulk query it did before.
+ *
+ * ponytail: one extra round-trip per affected lead. Ceiling: a workspace where
+ * projection is failing wholesale would make this N+1 across a 25-row page.
+ * Upgrade path: a bulk `get_latest_outbound_for_leads` RPC that does the merge
+ * server-side — the same shape as `get_latest_intents_for_leads`.
+ */
+export async function fetchLatestOutboundsWithOrphans(
+  leads: Array<{ id: string; last_outbound_at: string | null }>,
+): Promise<Map<string, QueueLatestMessage>> {
+  const map = await fetchLatestOutbounds(leads.map((l) => l.id));
+
+  const stale = leads.filter((l) => needsOrphanBackfill(l, map.get(l.id)?.occurred_at));
+  if (stale.length === 0) return map;
+
+  await Promise.all(
+    stale.map(async (l) => {
+      try {
+        const { emails } = await getLeadEmailThread(l.id, 10);
+        const newest = emails
+          .filter((e) => e.direction === "outbound")
+          .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0];
+        if (!newest) return;
+        // Only replace when the recovered row really is newer than what the
+        // timeline gave us — never downgrade a good preview.
+        const have = map.get(l.id);
+        if (have && new Date(newest.occurred_at).getTime() <= new Date(have.occurred_at).getTime()) return;
+        map.set(l.id, {
+          lead_id: l.id,
+          occurred_at: newest.occurred_at,
+          event_type: "email_outbound",
+          // `interactions.body_text` purges unconditionally at 72h for outbound
+          // rows, so this is often empty — `cleanBodyText` then falls through to
+          // the subject, exactly as it does for a purged timeline row. An empty
+          // quote under a confident caption is the thing to avoid, and both
+          // fields being empty leaves the card's existing no-preview path.
+          snippet_text: newest.body_text?.trim() ? newest.body_text : null,
+          subject: newest.subject,
+          intent: null,
+          ai_summary: newest.ai_summary ?? null,
+          reply_worthy: null,
+          urgency: null,
+          tone: null,
+          questions_extracted: [],
+          language: null,
+          sender_is_lead: null,
+          duration_sec: null,
+        });
+      } catch (err) {
+        // Best-effort repair: the card still renders from the timeline row.
+        console.warn(`[queueQueries] orphan outbound backfill failed for ${l.id}:`, err);
+      }
+    }),
+  );
+  return map;
+}
+
+/**
  * Read the fields `classify-inbound` persists into `metadata_json`.
  *
  * This function used to ignore `metadata_json` entirely apart from
@@ -864,7 +1034,7 @@ export function queueButtonLabel(input: {
 // instead of being read out of JSX. QueueCard renders what this returns and
 // decides nothing itself.
 
-export type QueueBodySource = "inbound" | "outbound";
+export type QueueBodySource = "inbound" | "outbound" | "meeting";
 
 export interface QueueSituation {
   /** Plain English, what a rep would say out loud. No enum names, no jargon. */
@@ -927,14 +1097,17 @@ const SITUATIONS: Record<string, QueueSituation> = {
     showTime: false,
   },
   closing_followup: MINE("Your proposal needs chasing"),
-  // No time phrase, for the same reason back-from-away has none: this fires on
+  // No time phrase, and no OUTBOUND body: this fires on
   // `hasMeetingWithoutFollowup`, so there IS no outbound after the meeting and
-  // `last_outbound_at` is some pre-meeting email. "sent 8 days ago" next to
-  // "from your meeting" reads as the meeting's age, which it is not.
+  // `last_outbound_at` is some pre-meeting email. Dating the card off it read as
+  // the meeting's age (fixed earlier); quoting it put a three-week-old
+  // scheduling email under "Your message" beneath "Send them the recap from your
+  // meeting" — the same defect, one field over. The card shows the MEETING, or
+  // nothing at all.
   generate_post_meeting_recap: {
     label: "Send them the recap from your meeting",
     detail: null,
-    bodySource: "outbound",
+    bodySource: "meeting",
     showTime: false,
   },
   post_meeting_followup: MINE("No word since your meeting"),

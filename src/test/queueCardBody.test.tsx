@@ -6,7 +6,8 @@
 // exists because the table being right is worth nothing if the card
 // still passes the customer's inbound row to the body.
 // ============================================================
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanBodyText } from "@/lib/cleanBodyText";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { QueueLeadRow, QueueLatestMessage } from "@/lib/queueQueries";
@@ -32,8 +33,20 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: () => builder([]), auth: { getUser: async () => ({ data: { user: null } }) } },
 }));
 
+// The orphan repair reuses the real merge in supabaseQueries; here we only need
+// to know that it is CALLED and that its result reaches the preview.
+let threadEmails: unknown[] = [];
+const emailThreadCalls: string[] = [];
+vi.mock("@/lib/supabaseQueries", () => ({
+  getLeadEmailThread: async (leadId: string) => {
+    emailThreadCalls.push(leadId);
+    return { emails: threadEmails, threadSummary: "" };
+  },
+}));
+
 const { QueueCard } = await import("@/components/queue/QueueCard");
-const { fetchLatestOutbounds, isOutboundCall } = await import("@/lib/queueQueries");
+const { fetchLatestOutbounds, fetchLatestOutboundsWithOrphans, isOutboundCall } =
+  await import("@/lib/queueQueries");
 
 const THEIRS = "Sounds good, what does pricing look like for 40 seats?";
 const MINE = "Following up on the proposal I sent over last week.";
@@ -68,13 +81,18 @@ function lead(next_action_key: string): QueueLeadRow {
   };
 }
 
-const renderCard = (key: string, outbound: QueueLatestMessage = msg(MINE, "email_outbound")) =>
+const renderCard = (
+  key: string,
+  outbound: QueueLatestMessage = msg(MINE, "email_outbound"),
+  meeting?: QueueLatestMessage,
+) =>
   render(
     <MemoryRouter>
       <QueueCard
         lead={lead(key)}
         latestInbound={msg(THEIRS, "email_inbound") as never}
         latestOutbound={outbound}
+        latestMeeting={meeting}
         onMarkHandled={() => {}}
         onSnooze={() => {}}
       />
@@ -178,5 +196,109 @@ describe("fetchLatestOutbounds", () => {
     const row = (await fetchLatestOutbounds(["lead-1"])).get("lead-1")!;
     expect(isOutboundCall(row)).toBe(true);
     expect(row.duration_sec).toBe(154);
+  });
+});
+
+describe("a post-meeting recap card", () => {
+  const meeting = (): QueueLatestMessage => ({
+    ...msg("We walked through the security questionnaire and agreed on a pilot scope.", "meeting"),
+    subject: "Acme <> us — pilot scoping",
+  });
+
+  it("shows the meeting, not the pre-meeting email", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), meeting());
+    expect(screen.getByText("The meeting")).toBeTruthy();
+    expect(screen.getByText(/security questionnaire/)).toBeTruthy();
+    // The bug: a scheduling email from before the meeting, captioned "Your
+    // message", under "Send them the recap from your meeting".
+    expect(screen.queryByText("Your message")).toBeNull();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+  });
+
+  it("shows NOTHING rather than an unrelated email when there is no meeting row", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), undefined);
+    expect(screen.getByText(/Send them the recap from your meeting/)).toBeTruthy();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+    expect(screen.queryByText("Your message")).toBeNull();
+    expect(screen.queryByText("The meeting")).toBeNull();
+    expect(screen.queryByText(/No preview available/)).toBeNull();
+  });
+
+  it("falls back to the meeting title once the summary has purged", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), {
+      ...meeting(),
+      snippet_text: null,
+    });
+    expect(screen.getByText(/Acme <> us — pilot scoping/)).toBeTruthy();
+  });
+});
+
+describe("fetchLatestOutboundsWithOrphans", () => {
+  beforeEach(() => {
+    emailThreadCalls.length = 0;
+    threadEmails = [];
+  });
+
+  it("does not touch the merge path when the timeline preview is current", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
+    ];
+    await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    expect(emailThreadCalls).toEqual([]);
+  });
+
+  it("recovers the newest send from interactions when its projection failed", async () => {
+    // The timeline still holds last week's email; last_outbound_at is today's.
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-03T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Old thread", metadata_json: {}, intent: null },
+    ];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-10T12:00:00Z", body_text: "Revised pricing attached.", subject: "Revised pricing" },
+      { direction: "inbound", occurred_at: "2026-09-09T12:00:00Z", body_text: "theirs", subject: "Re: pricing" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    const row = map.get("lead-1")!;
+    expect(row.occurred_at).toBe("2026-09-10T12:00:00Z");
+    expect(row.snippet_text).toBe("Revised pricing attached.");
+    expect(row.snippet_text).not.toBe(MINE); // the message the card is NOT about
+  });
+
+  it("degrades to the subject when the recovered body has already purged", async () => {
+    // Outbound interactions.body_text purges unconditionally at 72h.
+    timelineRows = [];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-10T12:00:00Z", body_text: "", subject: "Revised pricing" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    const row = map.get("lead-1")!;
+    expect(row.snippet_text).toBeNull();
+    expect(row.subject).toBe("Revised pricing");
+    // cleanBodyText's subject fallback is what renders — not an empty quote.
+    expect(cleanBodyText({ ai_summary: row.ai_summary ?? null, snippet_text: row.snippet_text, subject: row.subject }))
+      .toContain("Revised pricing");
+  });
+
+  it("never downgrades a good preview to an older recovered row", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
+    ];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-08-01T12:00:00Z", body_text: "ancient", subject: "Ancient" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-20T12:00:00Z" }, // stale → repair runs
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe(MINE);
   });
 });

@@ -36,7 +36,8 @@ import {
   applyChipFilter,
   countChipBuckets,
   fetchLatestInbounds,
-  fetchLatestOutbounds,
+  fetchLatestMeetings,
+  fetchLatestOutboundsWithOrphans,
   type QueueChipBucket,
   type QueueLatestInbound,
   type QueueLatestMessage,
@@ -239,6 +240,8 @@ export default function Queue() {
   // …and the rep's own latest message. A follow-up card is about MY unanswered
   // email, so the card needs both sides to be able to quote the right one.
   const [latestOutbounds, setLatestOutbounds] = useState<Map<string, QueueLatestMessage>>(new Map());
+  // Meeting context for recap cards. Fetched only when the page actually has one.
+  const [latestMeetings, setLatestMeetings] = useState<Map<string, QueueLatestMessage>>(new Map());
 
   // ── Derived list ───────────────────────────────────────────────
   // The snapshot itself never reorders (brief §8). The view layer is
@@ -298,15 +301,31 @@ export default function Queue() {
     if (pageLeads.length === 0) {
       setLatestInbounds(new Map());
       setLatestOutbounds(new Map());
+      setLatestMeetings(new Map());
       return;
     }
     const ids = pageLeads.map((l) => l.id);
     void fetchLatestInbounds(ids).then((map) => {
       if (!cancelled) setLatestInbounds(map);
     });
-    void fetchLatestOutbounds(ids).then((map) => {
+    // Passes the rows, not just the ids: the fetch compares each preview against
+    // the lead's own `last_outbound_at` so a send whose timeline projection
+    // failed is recovered from `interactions` instead of the card quoting the
+    // previous message under the new send's date.
+    void fetchLatestOutboundsWithOrphans(
+      pageLeads.map((l) => ({ id: l.id, last_outbound_at: l.last_outbound_at })),
+    ).then((map) => {
       if (!cancelled) setLatestOutbounds(map);
     });
+    const recapIds = pageLeads
+      .filter((l) => l.next_action_key === "generate_post_meeting_recap")
+      .map((l) => l.id);
+    if (recapIds.length === 0) setLatestMeetings(new Map());
+    else {
+      void fetchLatestMeetings(recapIds).then((map) => {
+        if (!cancelled) setLatestMeetings(map);
+      });
+    }
     return () => {
       cancelled = true;
     };
@@ -497,6 +516,7 @@ export default function Queue() {
               lead={lead}
               latestInbound={latestInbounds.get(lead.id)}
               latestOutbound={latestOutbounds.get(lead.id)}
+              latestMeeting={latestMeetings.get(lead.id)}
               onMarkHandled={handleMarkHandled}
               onSnooze={handleSnooze}
             />
