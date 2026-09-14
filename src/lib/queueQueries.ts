@@ -70,6 +70,20 @@ export const INBOUND_EVENT_TYPES: readonly string[] = [
   "sms_inbound",
 ];
 
+/**
+ * Canonical OUTBOUND `lead_timeline_items.event_type` values — the mirror of
+ * `INBOUND_EVENT_TYPES`. A follow-up card is about MY unanswered message, so the
+ * card body has to be able to read my side of the ledger too; before Unit Q2 the
+ * Queue only ever fetched inbound rows, so every follow-up card showed the
+ * customer's last message under a "Follow up" heading — the wrong message
+ * entirely.
+ */
+export const OUTBOUND_EVENT_TYPES: readonly string[] = [
+  "email_outbound",
+  "whatsapp_outbound",
+  "sms_outbound",
+];
+
 // ── Sort priority ──────────────────────────────────────────────────
 
 /**
@@ -217,6 +231,13 @@ export interface QueueLatestInbound {
   /** `metadata_json.sender_is_lead`. NULL = couldn't tell. */
   sender_is_lead: boolean | null;
 }
+
+/**
+ * Same row shape, either direction. A follow-up card quotes an OUTBOUND row, so
+ * the "Inbound" in the original name is only true half the time; the alias keeps
+ * the existing exported name (TodoView, tests) working.
+ */
+export type QueueLatestMessage = QueueLatestInbound;
 
 const QUEUE_LEAD_COLUMNS = `
   id, name, company, email,
@@ -578,6 +599,60 @@ export async function fetchLatestInbounds(
 }
 
 /**
+ * The same bulk fetch for the rep's OWN latest message per lead — what a
+ * follow-up card is actually about.
+ *
+ * Deliberately a near-copy of `fetchLatestInbounds` rather than one
+ * parameterised query: `src/test/queueInboundClassification.test.ts` (Unit G-A)
+ * pins the literal `.in("event_type", INBOUND_EVENT_TYPES as string[])` line as
+ * its guard that the inbound read stays cross-channel, and folding the two into
+ * a helper would delete the string that guard reads. Same 500-row cap and same
+ * first-per-lead reduction; the AI-signal fields come back null because
+ * classify-inbound only annotates inbound rows.
+ */
+export async function fetchLatestOutbounds(
+  leadIds: string[],
+): Promise<Map<string, QueueLatestMessage>> {
+  if (leadIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent")
+    .in("lead_id", leadIds)
+    .in("event_type", OUTBOUND_EVENT_TYPES as string[])
+    .order("occurred_at", { ascending: false })
+    .limit(500);
+
+  if (error) {
+    console.warn("[queueQueries] latest outbound fetch failed:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, QueueLatestMessage>();
+  for (const row of (data ?? []) as Array<{
+    lead_id: string;
+    occurred_at: string;
+    event_type: string;
+    snippet_text: string | null;
+    subject: string | null;
+    metadata_json: Record<string, unknown> | null;
+    intent: string | null;
+  }>) {
+    if (map.has(row.lead_id)) continue;
+    map.set(row.lead_id, {
+      lead_id: row.lead_id,
+      occurred_at: row.occurred_at,
+      event_type: row.event_type,
+      snippet_text: row.snippet_text,
+      subject: row.subject,
+      intent: row.intent,
+      ...readInboundMetadata(row.metadata_json),
+    });
+  }
+  return map;
+}
+
+/**
  * Read the fields `classify-inbound` persists into `metadata_json`.
  *
  * This function used to ignore `metadata_json` entirely apart from
@@ -715,20 +790,135 @@ export function queueButtonLabel(input: {
   return "Follow up";
 }
 
-// ── Full inbound email body (reply bridge) ────────────────────────
+// ── What is this card actually about? (labels + which message) ────
+//
+// The Follow-up tab covers a dozen different `next_action_key`s and, before
+// Unit Q2, every one of them rendered the identical word "Follow up" over the
+// customer's latest INBOUND message. Two separate lies in one card: the rep
+// couldn't tell "they went quiet after your third email" from "your proposal
+// needs chasing" from "we couldn't send this — you're over your sending limit",
+// and the message quoted underneath was never the one the card was about.
+//
+// One pure table, so the labels can be checked against a table of inputs
+// instead of being read out of JSX. QueueCard renders what this returns and
+// decides nothing itself.
+
+export type QueueBodySource = "inbound" | "outbound";
+
+export interface QueueSituation {
+  /** Plain English, what a rep would say out loud. No enum names, no jargon. */
+  label: string;
+  /** Optional second clause (a date, a cap) — null when the label says it all. */
+  detail: string | null;
+  /** Whose message the card body must quote: theirs, or my unanswered one. */
+  bodySource: QueueBodySource;
+  /**
+   * Whether a "sent 6 days ago" / "2 hours ago" phrase belongs on the why-now
+   * line. False for back-from-away: the timestamp there predates the absence
+   * and reads as though the rep has been ignoring the lead for a fortnight.
+   */
+  showTime: boolean;
+}
+
+/** Everything on the rep's own side of the conversation shares this shape. */
+const MINE = (label: string, detail: string | null = null): QueueSituation => ({
+  label,
+  detail,
+  bodySource: "outbound",
+  showTime: true,
+});
+
+/**
+ * Fixed situations, keyed by `next_action_key`. `send_nurture_N` is handled
+ * below because N is open-ended. Every key in `QUEUE_ACTION_KEYS`
+ * (`@shared/followupRule`) has an entry — `src/test/queueCardLabels.test.ts`
+ * fails if a new key is added upstream without a label here.
+ */
+const SITUATIONS: Record<string, QueueSituation> = {
+  reply_now: { label: "They replied", detail: null, bodySource: "inbound", showTime: true },
+  ooo_return_followup: {
+    label: "They were away — they're back now",
+    detail: null,
+    bodySource: "outbound",
+    showTime: false,
+  },
+  followup_due: MINE("No reply to your last email"),
+  // The card that used to say "Follow up" while nothing had in fact been sent.
+  // The rep MUST be able to tell this apart at a glance: the wording says what
+  // did not happen first, and the date the cap lifts rides along as `detail`.
+  rate_limited: MINE("Not sent — you're over your sending limit"),
+  closing_followup: MINE("Your proposal needs chasing"),
+  generate_post_meeting_recap: MINE("Send them the recap from your meeting"),
+  post_meeting_followup: MINE("No word since your meeting"),
+  send_pre_2: MINE("Intro sequence — second email is due"),
+  send_pre_3: MINE("Intro sequence — third email is due"),
+  send_pre_4: MINE("Intro sequence — fourth email is due"),
+  reengage: MINE("Gone quiet — worth re-opening"),
+  switch_to_nurture: MINE("Moving them to the slower nurture track"),
+};
+
+/**
+ * Pull the useful tail off a server-written `next_action_label`.
+ *
+ * `rateLimitedAction` writes "Follow up anytime — auto-send paused until Sep 12".
+ * The head is the generic instruction our own label already replaces; the tail
+ * is the one fact the rep can't get anywhere else (when the cap lifts), and it
+ * is rendered in the WORKSPACE's timezone by the writer, so we pass it through
+ * verbatim rather than re-deriving a date here.
+ */
+function labelTail(next_action_label: string | null | undefined): string | null {
+  const parts = (next_action_label ?? "").split(" — ");
+  const tail = (parts.length > 1 ? parts[parts.length - 1] : "").trim();
+  return tail.length > 0 ? tail : null;
+}
+
+/**
+ * What is this card about, in words a salesperson would use, and whose message
+ * belongs under it. Pure — no DB, no clock, no React.
+ */
+export function describeQueueSituation(lead: {
+  next_action_key: string | null;
+  next_action_label: string | null;
+}): QueueSituation {
+  const key = lead.next_action_key ?? "";
+
+  if (key === "rate_limited") {
+    return { ...SITUATIONS.rate_limited, detail: labelTail(lead.next_action_label) };
+  }
+
+  const fixed = SITUATIONS[key];
+  if (fixed) return fixed;
+
+  // send_nurture_1 … send_nurture_8 — one line, not eight table rows.
+  const nurture = /^send_nurture_(\d+)$/.exec(key);
+  if (nurture) return MINE(`Nurture sequence — email ${nurture[1]} is due`);
+
+  // Unknown key (a new one upstream, or a null). Prefer whatever the server
+  // wrote over inventing a label; "Needs a look" beats a raw enum name.
+  return MINE(lead.next_action_label?.trim() || "Needs a look");
+}
+
+// ── Full message body (reply bridge) ──────────────────────────────
 //
 // Queue cards render a 500-char snippet (or the AI summary). Reps often need
 // the whole email before replying, so this fetches the full stored body of the
-// lead's most recent inbound email on demand. `interactions.body_text` keeps
-// the full text for 30 days (message-cleanup purges it after that, gated on the
-// classifier having written a durable ai_summary) — past that we return null
-// and the card keeps showing the summary.
-export async function fetchLatestInboundBody(leadId: string): Promise<string | null> {
+// lead's most recent message in the given direction. `interactions.body_text`
+// keeps the full text for 30 days (message-cleanup purges it after that, gated
+// on the classifier having written a durable ai_summary) — past that we return
+// null and the card keeps showing the summary.
+//
+// The direction argument is Unit Q2: a follow-up card quotes the rep's own
+// unanswered email, so "Show full email" there has to open THAT message, not
+// the customer's last inbound.
+export async function fetchLatestMessageBody(
+  leadId: string,
+  direction: "inbound" | "outbound" = "inbound",
+): Promise<string | null> {
   const { data, error } = await supabase
     .from("interactions")
     .select("body_text, occurred_at")
     .eq("lead_id", leadId)
-    .eq("direction", "inbound")
+    .eq("direction", direction)
     .not("body_text", "is", null)
     .order("occurred_at", { ascending: false })
     .limit(1);

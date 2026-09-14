@@ -36,8 +36,10 @@ import {
   applyChipFilter,
   countChipBuckets,
   fetchLatestInbounds,
+  fetchLatestOutbounds,
   type QueueChipBucket,
   type QueueLatestInbound,
+  type QueueLatestMessage,
   type QueueLeadRow,
 } from "@/lib/queueQueries";
 import {
@@ -189,6 +191,9 @@ export default function Queue() {
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
   const [latestInbounds, setLatestInbounds] = useState<Map<string, QueueLatestInbound>>(new Map());
+  // …and the rep's own latest message. A follow-up card is about MY unanswered
+  // email, so the card needs both sides to be able to quote the right one.
+  const [latestOutbounds, setLatestOutbounds] = useState<Map<string, QueueLatestMessage>>(new Map());
 
   // ── Derived list ───────────────────────────────────────────────
   // The snapshot itself never reorders (brief §8). The view layer is
@@ -243,11 +248,15 @@ export default function Queue() {
     let cancelled = false;
     if (pageLeads.length === 0) {
       setLatestInbounds(new Map());
+      setLatestOutbounds(new Map());
       return;
     }
     const ids = pageLeads.map((l) => l.id);
     void fetchLatestInbounds(ids).then((map) => {
       if (!cancelled) setLatestInbounds(map);
+    });
+    void fetchLatestOutbounds(ids).then((map) => {
+      if (!cancelled) setLatestOutbounds(map);
     });
     return () => {
       cancelled = true;
@@ -436,6 +445,7 @@ export default function Queue() {
               key={lead.id}
               lead={lead}
               latestInbound={latestInbounds.get(lead.id)}
+              latestOutbound={latestOutbounds.get(lead.id)}
               onMarkHandled={handleMarkHandled}
               onSnooze={handleSnooze}
             />

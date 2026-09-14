@@ -22,7 +22,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { fetchLatestInboundBody } from "@/lib/queueQueries";
+import { fetchLatestMessageBody } from "@/lib/queueQueries";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -37,11 +37,12 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
 import {
-  chipForLead,
-  leadWasAway,
+  describeQueueSituation,
   queueButtonLabel,
   type QueueLeadRow,
   type QueueLatestInbound,
+  type QueueLatestMessage,
+  type QueueSituation,
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import ReEngagementCard from "@/components/lead/ReEngagementCard";
@@ -50,17 +51,11 @@ import { isReEngagementCandidate } from "@/lib/reEngagement";
 export interface QueueCardProps {
   lead: QueueLeadRow;
   latestInbound: QueueLatestInbound | undefined;
+  /** The rep's own latest message — what a follow-up card is about. */
+  latestOutbound: QueueLatestMessage | undefined;
   onMarkHandled: (lead: QueueLeadRow) => void;
   onSnooze: (lead: QueueLeadRow, days: 3 | 5 | 7) => void;
 }
-
-// Friendly category labels keyed off the chip bucket. Why-now line
-// derives from these so chip-vs-card stays in lockstep (brief
-// "chip-bucket mapping" note).
-const CATEGORY_LABEL: Record<"replied" | "followup_due", string> = {
-  replied: "Replied",
-  followup_due: "Follow up",
-};
 
 // Intents we DISPLAY as why-now context. Deterministic-detector
 // intents (calendar_accept, ooo_reply, bounce, zoom_recap,
@@ -82,63 +77,63 @@ const INTENT_DISPLAY: Record<string, string> = {
   unknown: "",
 };
 
-function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound | undefined): string {
-  const bucket = chipForLead({
-    next_action_key: lead.next_action_key,
-    action_resurfaced_at: lead.action_resurfaced_at,
-  });
-  const category = bucket ? CATEGORY_LABEL[bucket] : (lead.next_action_label ?? "Action needed");
-
-  // Back-from-away: the trigger is the return, not the last-outbound
-  // age (which predates the absence and would read oddly). Show just
-  // the category — the "was away — back now" note below carries the
-  // context.
-  if (leadWasAway({ next_action_key: lead.next_action_key })) {
-    return category; // "Follow up"
-  }
-
-  // Pick the timestamp that matches the action type. Customer-waiting
-  // → relative to last inbound. Rep-waiting → relative to last outbound.
-  const ts = bucket === "replied" ? lead.last_inbound_at : lead.last_outbound_at;
+/**
+ * The why-now line: what happened, when, and (when it's their message) what it
+ * was about. The "what happened" half comes from `describeQueueSituation` —
+ * a pure table in queueQueries — so a dozen different follow-up keys no longer
+ * collapse into the single word "Follow up".
+ *
+ * Exported for the label test: it composes the clauses, the table supplies them.
+ */
+export function buildWhyNowLine(
+  lead: QueueLeadRow,
+  situation: QueueSituation,
+  latestInbound: QueueLatestInbound | undefined,
+): string {
+  // The timestamp matches the message the card is about: their reply for an
+  // inbound card, my unanswered message for a follow-up.
+  const ts = situation.bodySource === "inbound" ? lead.last_inbound_at : lead.last_outbound_at;
 
   let timePhrase = "";
-  if (ts) {
+  if (situation.showTime && ts) {
     try {
       const dt = new Date(ts);
       if (Number.isFinite(dt.getTime())) {
         const rel = formatDistanceToNow(dt, { addSuffix: false });
-        // Outbound side uses "sent X ago" framing per the brief examples.
-        timePhrase = bucket === "followup_due" ? `sent ${rel} ago` : `${rel} ago`;
+        timePhrase = situation.bodySource === "outbound" ? `sent ${rel} ago` : `${rel} ago`;
       }
     } catch {
       timePhrase = "";
     }
   }
 
-  // Intent annotation, only when meaningful AND when the row isn't a
-  // deterministic-detector class (defensive — those should already be
-  // hidden but a show-all rep could see them).
-  let intentSuffix = "";
-  const rawIntent = latestInbound?.intent ?? null;
-  if (rawIntent && INTENT_DISPLAY[rawIntent]) {
-    intentSuffix = ` — ${INTENT_DISPLAY[rawIntent]}`;
-  }
+  // Intent annotation belongs to THEIR message, so it only rides along on an
+  // inbound card. Deterministic-detector classes (bounce, OOO, calendar accept)
+  // carry no display string — those rows are normally intent-hidden anyway, and
+  // annotating one would dress noise up as a signal.
+  const rawIntent = situation.bodySource === "inbound" ? latestInbound?.intent ?? null : null;
+  const intentSuffix = rawIntent && INTENT_DISPLAY[rawIntent] ? ` — ${INTENT_DISPLAY[rawIntent]}` : "";
 
-  // Compose. Examples from the brief:
-  //   "Replied 2h ago — pricing question"
-  //   "Follow up — sent 6d ago"
-  if (bucket === "followup_due") {
-    return `${category}${timePhrase ? " — " + timePhrase : ""}${intentSuffix}`;
-  }
-  return `${category}${timePhrase ? " " + timePhrase : ""}${intentSuffix}`;
+  // Examples:
+  //   "They replied 2 hours ago — pricing question"
+  //   "No reply to your last email · sent 6 days ago"
+  //   "Not sent — you're over your sending limit · auto-send paused until Sep 12"
+  const clauses = [situation.label, situation.detail, timePhrase].filter(
+    (c): c is string => !!c && c.length > 0,
+  );
+  return clauses.join(" · ") + intentSuffix;
 }
 
-export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: QueueCardProps) {
-  const whyNow = buildWhyNowLine(lead, latestInbound);
-  // Only genuine out-of-office returns get the note — never plain
-  // follow-ups (gated on the ooo_return_followup key via leadWasAway).
-  const wasAway = leadWasAway({ next_action_key: lead.next_action_key });
-  const aiSummary = (latestInbound?.ai_summary ?? "").trim();
+export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, onSnooze }: QueueCardProps) {
+  const situation = describeQueueSituation({
+    next_action_key: lead.next_action_key,
+    next_action_label: lead.next_action_label,
+  });
+  const whyNow = buildWhyNowLine(lead, situation, latestInbound);
+  // The message this card is ACTUALLY about: their reply, or my unanswered one.
+  const showingMine = situation.bodySource === "outbound";
+  const message = showingMine ? latestOutbound : latestInbound;
+  const aiSummary = (message?.ai_summary ?? "").trim();
   // When ai_summary contains bullets, render with SummaryBody (keeps bullet
   // structure). Otherwise fall back to cleanBodyText prose flow.
   const aiSummaryIsBulleted = aiSummary
@@ -147,9 +142,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
   const proseBody = aiSummaryIsBulleted
     ? ""
     : cleanBodyText({
-        ai_summary: latestInbound?.ai_summary ?? null,
-        snippet_text: latestInbound?.snippet_text ?? null,
-        subject: latestInbound?.subject ?? null,
+        ai_summary: message?.ai_summary ?? null,
+        snippet_text: message?.snippet_text ?? null,
+        subject: message?.subject ?? null,
       });
   const hasContent = aiSummaryIsBulleted || !!proseBody;
 
@@ -185,7 +180,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     void enqueue(lead.id);
   };
 
-  // Full inbound email, fetched on demand (see fetchLatestInboundBody).
+  // Full message, fetched on demand (see fetchLatestMessageBody) — the same
+  // direction the card body quotes, so "Show full email" opens the email the
+  // card is about rather than the other side of the thread.
   const [fullBody, setFullBody] = useState<string | null>(null);
   const [loadingBody, setLoadingBody] = useState(false);
 
@@ -196,7 +193,7 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     }
     setLoadingBody(true);
     try {
-      const body = await fetchLatestInboundBody(lead.id);
+      const body = await fetchLatestMessageBody(lead.id, situation.bodySource);
       if (!body) {
         toast.info("The full text of this email is no longer stored — showing the summary.");
       } else {
@@ -227,8 +224,12 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
 
         <p className="mt-0.5 text-xs text-muted-foreground">{whyNow}</p>
 
-        {wasAway && (
-          <p className="mt-0.5 text-xs text-muted-foreground/80">was away — back now</p>
+        {/* Whose words are quoted below. Without this the rep has no way to
+            tell the customer's reply from their own unanswered email. */}
+        {!!message && (
+          <p className="mt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            {showingMine ? "Your message" : "Their message"}
+          </p>
         )}
 
         {aiSummaryIsBulleted ? (
@@ -242,7 +243,7 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
         ) : (
           <p
             className={cn(
-              "mt-1.5 text-sm",
+              "mt-0.5 text-sm",
               hasContent ? "text-foreground/85" : "text-muted-foreground/60 italic",
             )}
           >
@@ -251,9 +252,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
         )}
       </Link>
 
-      {/* Full inbound email — the card body is a summary/500-char snippet, so
-          reps can pull the whole message in place before replying. */}
-      {!!latestInbound && (
+      {/* Full message — the card body is a summary/500-char snippet, so reps can
+          pull the whole thing in place before replying or following up. */}
+      {!!message && (
         <div className="px-4 pb-2">
           {fullBody && (
             <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">
@@ -270,7 +271,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
               ? "Loading…"
               : fullBody
                 ? "Hide full email"
-                : "Show full email"}
+                : showingMine
+                  ? "Show the email you sent"
+                  : "Show full email"}
           </button>
         </div>
       )}
