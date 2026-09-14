@@ -142,7 +142,19 @@ Deno.test("buildLeadUpdate preserves reply_now when a cadence touch is armed", (
   assertEquals(update.needs_action, true);
 });
 
-Deno.test("buildLeadUpdate still suppresses send_* keys when a cadence touch is armed", () => {
+Deno.test("buildLeadUpdate leaves an armed cadence untouched rather than blanking a send_* key", () => {
+  // Unit Q1 changed the MECHANISM of this suppression, not its intent. It used
+  // to write NULL over the action columns; a NULL `next_action_key` is invisible
+  // to automation-executor's candidate query (`NULL <> 'x'` is UNKNOWN in SQL),
+  // so a follow-up the rep had genuinely queued was silently killed whenever the
+  // client's `updateSequenceState` write landed after our own read. The fields
+  // are now DROPPED from the payload instead, so the schedule's owner keeps what
+  // it wrote. See the long "PRESERVE A LIVE SCHEDULE ATOMICALLY" comment in
+  // syncEngine.buildLeadUpdate.
+  //
+  // The intent still holds: the engine's `send_pre_3` never reaches the database
+  // by any route (both call sites pass this object straight to `.update()`, and
+  // postSendDeriveAction copies action columns only when `col in payload`).
   const metrics = metricsWithUnansweredReply();
   const action = {
     needs_action: true,
@@ -159,5 +171,24 @@ Deno.test("buildLeadUpdate still suppresses send_* keys when a cadence touch is 
     ooo_until: null,
   }, "auto");
 
-  assertEquals(update.next_action_key, null);
+  // ABSENT, not null — `"k" in update === false` is what makes PostgREST leave
+  // the column alone. Asserting `=== undefined` would also pass on a typo.
+  for (
+    const field of [
+      "needs_action",
+      "next_action_key",
+      "next_action_label",
+      "action_reason_code",
+      "eligible_at",
+    ]
+  ) {
+    assertEquals(field in update, false, `${field} must not be written`);
+  }
+
+  // Not vacuous: the rest of the payload still has to be written, so a
+  // buildLeadUpdate that simply returned {} would fail here.
+  assertEquals(update.stage, "contacted");
+  assertEquals(update.last_outbound_at, metrics.last_outbound_at);
+  assertEquals(update.last_inbound_at, metrics.last_inbound_at);
+  assert("last_activity_at" in update);
 });
