@@ -669,12 +669,21 @@ serve(async (req) => {
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
           // Normally the lead is left untouched so un-pausing resumes instantly —
-          // paused owners were already dropped from the scan above. But if that
-          // exclusion could not be built this tick, this branch is the only thing
-          // between a paused owner and a permanently monopolised page, so defer.
+          // paused owners were already dropped from the scan above. Two cases
+          // break that and must defer instead:
+          //   a) the exclusion could not be built this tick, so nothing else
+          //      stands between a paused owner and a monopolised page;
+          //   b) settings_read_failed (Codex P2). This owner was NOT in
+          //      pausedOwnerIds — the bulk prefilter read their stored flag as
+          //      absent or could not see them — and the pause was discovered
+          //      per-lead when loadExecutionSettings failed. So the prefilter
+          //      SUCCEEDING is exactly what used to stop these rows being
+          //      deferred, and a persistently failing per-owner read refilled the
+          //      capped scan every tick. The condition must key on why THIS row
+          //      is paused, not on whether the bulk query worked.
           // BLOCKED_ROW_DEFER_MIN, not one cron interval: one interval puts
           // the row back in the very next scan, which is a rotation, not a fix.
-          if (!pausedOwnerFilterApplied) {
+          if (!pausedOwnerFilterApplied || execSettings.settings_read_failed) {
             await supabase.from("leads")
               .update({ eligible_at: new Date(Date.now() + BLOCKED_ROW_DEFER_MIN * 60 * 1000).toISOString() })
               .eq("id", lead.id);
@@ -1414,10 +1423,25 @@ serve(async (req) => {
           console.log(`[automation-executor] ♻️ Reusing ${draftType} draft for lead ${lead.id}, step ${actionKey}`);
           draftBody = cachedDraft.body_text;
           subject = cachedDraft.subject || `Following up - ${lead.name.split(" ")[0]}`;
-          // Mark the draft as sent
-          if (cachedDraft.id) {
-            await supabase.from("drafts").update({ status: "sent" }).eq("id", cachedDraft.id);
-          }
+          // CONSUME-AFTER-SUCCESS (Codex P2). This used to flip the draft to
+          // "sent" right here, BEFORE the provider call — so every path that
+          // refused or failed between here and the send destroyed the copy, and
+          // each such path needed its own restore. Three paths needed one, one of
+          // them (an ordinary retryable Twilio failure — the likeliest of the
+          // three) never got it, and a rep's approved text was silently replaced
+          // by machine copy on a retry they never saw.
+          //
+          // The draft is now marked sent in exactly ONE place, after the provider
+          // confirms (search: CONSUME THE CACHED DRAFT). That makes a missed
+          // restore impossible rather than rare: there is nothing to restore,
+          // because nothing was consumed. A fourth refusal path added later
+          // inherits the correct behaviour for free.
+          //
+          // Safe against double-send: the per-(lead, action_key, claim_date) claim
+          // is taken BEFORE the provider call, so a concurrent run that read the
+          // same draft loses the claim and never sends. If the post-send flip
+          // itself fails, GUARD 0/1/2 (1h dedup, one per lead per day, same step
+          // not repeated within 7d) still block a resend.
         } else {
           // --- Fetch last outbound body for follow-up context ---
           let lastOutboundBody = "";
@@ -1760,11 +1784,9 @@ serve(async (req) => {
               .eq("id", claimId);
             if (!transient) {
               await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
-            } else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {
-              // Retry path: give the rep-approved draft back so the next tick
-              // reuses it instead of regenerating copy via ai_task.
-              await supabase.from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id);
             }
+            // No draft restore needed: the draft is not consumed until the
+            // provider confirms (CONSUME-AFTER-SUCCESS), so it is still approved.
             skipped++;
             continue;
           }
@@ -1806,14 +1828,8 @@ serve(async (req) => {
             // email floor's terminal branch.
             if (!smsOptOutUnreadable) {
               await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
-            } else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {
-              // Retry path — EXACT mirror of the email late floor above. The
-              // approved draft was already flipped to "sent" when it was
-              // consumed, so without this the next tick finds no approved copy
-              // and regenerates the text via ai_task: the rep's own words,
-              // silently replaced by machine copy on a retry they never saw.
-              await supabase.from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id);
             }
+            // No draft restore needed — see CONSUME-AFTER-SUCCESS at the reuse site.
             skipped++;
             continue;
           }
@@ -1905,6 +1921,21 @@ serve(async (req) => {
         const gmailMessageId = sendResult.messageId || sendResult.messageSid || null;
         const sendChannelLabel = resolvedChannel === "sms" ? "SMS" : "Email";
         console.log(`[automation-executor] ${sendChannelLabel} sent for lead ${lead.id}: ${gmailMessageId}`);
+
+        // ── CONSUME THE CACHED DRAFT ────────────────────────────
+        // The ONLY place a reused draft is marked sent, and it is past the point
+        // of no return: the provider has accepted the message. Every refusal or
+        // retryable failure above therefore leaves a rep-approved draft exactly
+        // as the rep left it. See the reuse site for why this is here.
+        if (cachedDraft?.id) {
+          const { error: consumeErr } = await supabase.from("drafts")
+            .update({ status: "sent" }).eq("id", cachedDraft.id);
+          if (consumeErr) {
+            // Non-fatal: the message is already out. GUARD 0/1/2 prevent a
+            // resend, so the worst case is a stale draft the rep can delete.
+            console.warn(`[automation-executor] draft ${cachedDraft.id} sent but not marked consumed:`, consumeErr);
+          }
+        }
 
         // ── UPGRADE CLAIM TO SENT ───────────────────────────────
         // The interaction + timeline records are created by gmail-send / outlook-send
@@ -2401,14 +2432,15 @@ serve(async (req) => {
               ? "Could not read this account's automation settings — paused for safety, will retry next tick"
               : "Automation paused for this account — applies to all of this owner's workspaces (cadence_settings.automation_paused)");
             // Normally the touch is left alone so un-pausing resumes on the next
-            // tick — paused owners were already excluded from the scan above. If
-            // that exclusion could not be built, this branch is all that stands
-            // between a paused owner and a permanently monopolised page, so defer
-            // by BLOCKED_ROW_DEFER_MIN (see the constant for the arithmetic;
-            // one cron interval just rotates the same rows back in). The cold
-            // scan is ordered eligible_at ASC, so a deferred touch also sorts
-            // behind every currently-due one.
-            if (!pausedOwnerFilterApplied) {
+            // tick — paused owners were already excluded from the scan above.
+            // Defer when that is not true: either the exclusion could not be
+            // built, or this owner is paused only because their per-owner
+            // settings read FAILED (Codex P2) — in which case they were never in
+            // pausedOwnerIds, so a successful prefilter is precisely what left
+            // these touches at the front of the oldest-due page every tick.
+            // BLOCKED_ROW_DEFER_MIN, not one cron interval (see the constant for
+            // the arithmetic; one interval just rotates the same rows back in).
+            if (!pausedOwnerFilterApplied || exec.settings_read_failed) {
               await supabase.from("campaign_touch")
                 .update({ eligible_at: new Date(Date.now() + BLOCKED_ROW_DEFER_MIN * 60 * 1000).toISOString() })
                 .eq("id", touch.id);

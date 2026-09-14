@@ -174,15 +174,16 @@ describe("legacyPathFloorAndFooter", () => {
     const secretCheck = legacy.indexOf('if (resolvedChannel !== "sms" && !unsubSecret) {');
     const postalCheck = legacy.indexOf('if (resolvedChannel !== "sms" && !postalAddress && requirePostalAddress()) {');
     const draftLookup = legacy.indexOf('from("drafts")');
-    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
     const aiCall = legacy.indexOf("functions/v1/ai_task");
     expect(channelResolved).toBeGreaterThan(-1);
     expect(secretCheck).toBeGreaterThan(channelResolved); // channel known before the checks
     expect(postalCheck).toBeGreaterThan(channelResolved);
     expect(secretCheck).toBeLessThan(draftLookup);
     expect(postalCheck).toBeLessThan(draftLookup);
-    expect(postalCheck).toBeLessThan(approvedConsumed);
     expect(postalCheck).toBeLessThan(aiCall);
+    // The old "...before the approved draft is consumed" clause is gone: the
+    // draft is no longer consumed before the send at all (Codex P2). That
+    // ordering is now asserted globally by draftConsumedOnlyAfterProviderSuccess.
     // Each refusal writes the skip row and continues (no send, no claim).
     // Window widened 800 -> 1400: both branches now also defer the lead (Codex
     // P1), which sits between the ledger insert and the `continue`.
@@ -197,18 +198,20 @@ describe("legacyPathFloorAndFooter", () => {
     expect(legacy.indexOf("loadCampaignForLead(lead.id, supabase)")).toBeLessThan(draftLookup);
   });
 
-  it("the EARLY floor runs before the cached approved draft is consumed; the LATE floor restores it on a transient failure", () => {
+  it("the EARLY floor still runs before the draft lookup and the AI call", () => {
+    // This used to also assert the LATE floor RESTORED a consumed approved draft.
+    // That restore is deliberately gone — the draft is not consumed before the
+    // send, so there is nothing to restore (Codex P2).
     const legacy = legacySection();
     const earlyFloor = legacy.indexOf("const earlyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id)");
-    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
+    const draftLookup = legacy.indexOf('from("drafts")');
     const aiCall = legacy.indexOf("functions/v1/ai_task");
     expect(earlyFloor).toBeGreaterThan(-1);
-    expect(earlyFloor).toBeLessThan(approvedConsumed);
+    expect(earlyFloor).toBeLessThan(draftLookup);
     expect(earlyFloor).toBeLessThan(aiCall);
     expect(earlyFloor).toBeGreaterThan(legacy.indexOf("const resolvedChannel: string")); // email-only gate is meaningful
     const lateFloor = legacy.indexOf("const legacyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id)");
-    expect(lateFloor).toBeGreaterThan(approvedConsumed);
-    expect(legacy.slice(lateFloor, lateFloor + 1400)).toContain('from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)');
+    expect(lateFloor).toBeGreaterThan(-1);
   });
 });
 
@@ -623,8 +626,12 @@ describe("failClosedAndStarvation", () => {
 
   it("P1: if the exclusion can't be built, the in-loop pause defers so the page still drains", () => {
     const pause = legacy.indexOf("if (execSettings.owner_automation_paused)");
-    const branch = legacy.slice(pause, pause + 1800);
-    expect(branch).toContain("if (!pausedOwnerFilterApplied)");
+    // Window widened to cover the documented two-case deferral condition.
+    const branch = legacy.slice(pause, pause + 2600);
+    // Was `if (!pausedOwnerFilterApplied)` alone. An owner paused because their
+    // per-owner settings read FAILED was never in pausedOwnerIds, so a SUCCESSFUL
+    // prefilter was exactly what stopped those rows being deferred (Codex P2).
+    expect(branch).toContain("if (!pausedOwnerFilterApplied || execSettings.settings_read_failed)");
     // Was EXECUTOR_CRON_INTERVAL_MIN — deferring by exactly one tick put the row
     // straight back in the next scan, so the paused set rotated through the page
     // forever (Codex P1). The deferral must be materially longer than one tick.
@@ -713,7 +720,7 @@ describe("cappedScanStarvationSweep", () => {
   it("cold scan: if the exclusion can't be built, the paused branch defers the touch", () => {
     const pause = cold.indexOf("if (exec.owner_automation_paused)");
     const branch = cold.slice(pause, pause + 1400);
-    expect(branch).toContain("if (!pausedOwnerFilterApplied)");
+    expect(branch).toContain("if (!pausedOwnerFilterApplied || exec.settings_read_failed)");
     expect(branch).toContain('from("campaign_touch")');
     expect(branch).toContain("BLOCKED_ROW_DEFER_MIN * 60 * 1000");
   });
@@ -797,31 +804,55 @@ describe("degradedPathCannotRotate", () => {
   });
 });
 
-describe("smsApprovedDraftSurvivesRetry", () => {
+describe("draftConsumedOnlyAfterProviderSuccess", () => {
   const legacy = legacySection();
 
-  it("a transient SMS opt-out failure restores the rep-approved draft, like the email floor", () => {
-    const smsBranch = legacy.slice(legacy.indexOf('if (resolvedChannel === "sms") {'));
-    const body = smsBranch.slice(0, smsBranch.indexOf("} else if (mailProvider"));
-    const guard = body.indexOf("if (smsOptOutUnreadable || smsOptOut.unsubscribed)");
-    expect(guard).toBeGreaterThan(-1);
-    const branch = body.slice(guard, body.indexOf("functions/v1/sms-send"));
-    // Permanent opt-out parks the lead; transient restores the draft and retries.
-    expect(branch).toContain("if (!smsOptOutUnreadable) {");
-    expect(branch).toContain("} else if (approvedDraft?.id && cachedDraft?.id === approvedDraft.id) {");
-    expect(branch).toContain('from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)');
+  it("a reused draft is marked sent in exactly ONE place, after the provider confirms", () => {
+    // Replaces smsApprovedDraftSurvivesRetry (Codex P2, structural). The draft
+    // used to be consumed at the reuse site BEFORE the send, so every refusal or
+    // retryable failure in between destroyed rep-approved copy, and each path
+    // needed its own restore. Three paths needed one; the likeliest — an ordinary
+    // retryable Twilio error — never got it.
+    const consumes = [...legacy.matchAll(/\.update\(\{ status: "sent" \}\)\.eq\("id", cachedDraft\.id\)/g)];
+    expect(consumes.length, "exactly one consumption site").toBe(1);
+    const consumeAt = consumes[0].index!;
+    for (const call of ["functions/v1/sms-send", "functions/v1/outlook-send", "functions/v1/gmail-send"]) {
+      const at = legacy.indexOf(call);
+      expect(at, `${call} not found`).toBeGreaterThan(-1);
+      expect(consumeAt, `consumption must follow ${call}`).toBeGreaterThan(at);
+    }
+    // Past the point of no return: after the response is parsed AND after the
+    // !sendResult.ok bail-out.
+    expect(consumeAt).toBeGreaterThan(legacy.indexOf("const sendResult = await sendResponse.json()"));
+    expect(consumeAt).toBeGreaterThan(legacy.indexOf("if (!sendResult.ok)"));
   });
 
-  it("the SMS restore is an exact mirror of the email late-floor restore", () => {
-    const restore = 'from("drafts").update({ status: "approved" }).eq("id", approvedDraft.id)';
-    // Exactly two: the email late floor and the SMS late opt-out guard.
-    expect([...legacy.matchAll(new RegExp(restore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))].length).toBe(2);
-    // Both sit on the TRANSIENT arm — a permanent block must not hand the draft
-    // back, or an opted-out lead keeps a live approved draft forever.
-    for (const m of legacy.matchAll(/} else if \(approvedDraft\?\.id && cachedDraft\?\.id === approvedDraft\.id\) \{/g)) {
-      const before = legacy.slice(Math.max(0, m.index! - 400), m.index!);
-      expect(before).toMatch(/if \(!transient\) \{|if \(!smsOptOutUnreadable\) \{/);
-    }
+  it("nothing consumes a draft before the send, so no refusal path can destroy copy", () => {
+    const firstProvider = Math.min(
+      ...["functions/v1/sms-send", "functions/v1/outlook-send", "functions/v1/gmail-send"]
+        .map((c) => legacy.indexOf(c)).filter((i) => i > -1));
+    // The audit-trail drafts.insert is fine — it creates a row, consumes nothing.
+    expect(legacy.slice(0, firstProvider)).not.toMatch(/\.update\(\{ status: "sent" \}\)/);
+  });
+
+  it("the restore calls are gone — there is nothing left to restore", () => {
+    // This is what makes a missed restore impossible rather than rare: a fourth
+    // refusal path added later inherits the correct behaviour for free.
+    expect(legacy).not.toMatch(/\.update\(\{ status: "approved" \}\)/);
+    expect(legacy).toContain("No draft restore needed");
+  });
+
+  it("consume-after-success cannot double-send: the claim precedes the provider call", () => {
+    const claim = legacy.indexOf('logEntry.status = "claiming"');
+    const firstProvider = Math.min(
+      ...["functions/v1/sms-send", "functions/v1/outlook-send", "functions/v1/gmail-send"]
+        .map((c) => legacy.indexOf(c)).filter((i) => i > -1));
+    expect(claim).toBeGreaterThan(-1);
+    expect(claim).toBeLessThan(firstProvider);
+    // And the per-lead dedup guards still stand behind it.
+    expect(legacy).toContain("Duplicate send guard: email sent/pending within last hour");
+    expect(legacy).toContain("Daily send limit reached (1 per lead per day)");
+    expect(legacy).toContain("Action already sent within 7 days");
   });
 });
 
@@ -954,11 +985,10 @@ describe("smsPreconditionRunsBeforeAnySpending", () => {
     const check = legacy.indexOf('if (resolvedChannel === "sms" && !lead.phone)');
     expect(check).toBeGreaterThan(-1);
     // Everything it used to run AFTER, destroying or spending something each tick.
-    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
     const auditDraftRow = legacy.indexOf('from("drafts").insert(');
     const aiCall = legacy.indexOf("functions/v1/ai_task");
     const claim = legacy.indexOf('logEntry.status = "claiming"');
-    for (const [name, at] of Object.entries({ approvedConsumed, auditDraftRow, aiCall, claim })) {
+    for (const [name, at] of Object.entries({ auditDraftRow, aiCall, claim })) {
       expect(at, `${name} not found`).toBeGreaterThan(-1);
       expect(check, `phone check must precede ${name}`).toBeLessThan(at);
     }
