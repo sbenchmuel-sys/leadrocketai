@@ -253,8 +253,16 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
       </Link>
 
       {/* Full message — the card body is a summary/500-char snippet, so reps can
-          pull the whole thing in place before replying or following up. */}
-      {!!message && (
+          pull the whole thing in place before replying.
+
+          INBOUND ONLY, deliberately. `interactions.body_text` purges
+          unconditionally at occurred_at + 72h for outbound rows (the inbound
+          classifier gate does not apply — migration
+          20260523000000_purge_gate_classified.sql), and a follow-up card is by
+          definition about a message older than the 3/5-day wait. The button
+          would toast "no longer stored" every single time. The subject/snippet
+          fallback in the body above is what survives, and it stays. */}
+      {!showingMine && !!message && (
         <div className="px-4 pb-2">
           {fullBody && (
             <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">
@@ -271,9 +279,7 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
               ? "Loading…"
               : fullBody
                 ? "Hide full email"
-                : showingMine
-                  ? "Show the email you sent"
-                  : "Show full email"}
+                : "Show full email"}
           </button>
         </div>
       )}

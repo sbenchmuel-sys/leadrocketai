@@ -69,19 +69,31 @@ describe("QueueCard body", () => {
     expect(screen.getByText(new RegExp(MINE.slice(0, 30)))).toBeTruthy();
     expect(screen.queryByText(new RegExp(THEIRS.slice(0, 30)))).toBeNull();
     expect(screen.getByText("Your message")).toBeTruthy();
-    expect(screen.getByText(/No reply to your last email/)).toBeTruthy();
+    expect(screen.getByText(/No reply to your last message/)).toBeTruthy();
   });
 
-  it("a reply card shows the customer's message", () => {
+  it("does not offer 'Show full email' on a card about the rep's own message", () => {
+    // Outbound interactions.body_text purges unconditionally at 72h and a
+    // follow-up card is by definition older than that, so the button could only
+    // ever toast "no longer stored".
+    renderCard("followup_due");
+    expect(screen.queryByRole("button", { name: /Show full email|Show the email you sent/ })).toBeNull();
+  });
+
+  it("a reply card shows the customer's message, and keeps Show full email", () => {
     renderCard("reply_now");
     expect(screen.getByText(new RegExp(THEIRS.slice(0, 30)))).toBeTruthy();
     expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
     expect(screen.getByText("Their message")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Show full email/ })).toBeTruthy();
   });
 
   it("a rate-limited card does not tell the rep to 'Follow up' as though it sent", () => {
     renderCard("rate_limited");
-    expect(screen.getByText(/Not sent — you're over your sending limit/)).toBeTruthy();
+    expect(screen.getByText(/nothing was sent/)).toBeTruthy();
+    // The action button may well still say "Follow up" — the rep CAN write to
+    // this lead. What must not happen is the why-now line claiming a send.
+    expect(screen.getByText(/nothing was sent/).textContent).toMatch(/this lead/);
   });
 
   it("keeps Mark as handled, Snooze and the lead link reachable on the card", () => {

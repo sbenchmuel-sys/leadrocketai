@@ -842,19 +842,54 @@ const SITUATIONS: Record<string, QueueSituation> = {
     bodySource: "outbound",
     showTime: false,
   },
-  followup_due: MINE("No reply to your last email"),
+  // "email" would be a lie on a cross-channel trigger: `leads.last_outbound_at`
+  // is stamped by sms-send and the WhatsApp path too (executionSettings.ts), and
+  // fetchLatestOutbounds duly returns the sms_outbound row. "message" is always
+  // true and costs nothing.
+  followup_due: MINE("No reply to your last message"),
   // The card that used to say "Follow up" while nothing had in fact been sent.
-  // The rep MUST be able to tell this apart at a glance: the wording says what
-  // did not happen first, and the date the cap lifts rides along as `detail`.
-  rate_limited: MINE("Not sent — you're over your sending limit"),
+  //
+  // Three things this wording has to get right, all of them previously wrong:
+  //   • the cap is PER LEAD (`max_emails_per_lead_per_7d` / `_30d` are the only
+  //     paths into `rateLimitedAction`, syncEngine.ts). "Your sending limit"
+  //     told the rep their whole account was throttled and would stop them
+  //     emailing everyone else too.
+  //   • `followupRule.ts` states the contract: the cap pauses the AUTOMATIC
+  //     send, the rep can still write to this lead right now — and the label
+  //     must not read as "you may not act until <date>". So it says so.
+  //   • no time phrase (`showTime: false`): the composed line otherwise read
+  //     "Not sent … · sent 3 hours ago", contradicting itself mid-sentence.
+  rate_limited: {
+    label: "Too many emails to this lead recently — nothing was sent; you can still write to them",
+    detail: null,
+    bodySource: "outbound",
+    showTime: false,
+  },
   closing_followup: MINE("Your proposal needs chasing"),
-  generate_post_meeting_recap: MINE("Send them the recap from your meeting"),
+  // No time phrase, for the same reason back-from-away has none: this fires on
+  // `hasMeetingWithoutFollowup`, so there IS no outbound after the meeting and
+  // `last_outbound_at` is some pre-meeting email. "sent 8 days ago" next to
+  // "from your meeting" reads as the meeting's age, which it is not.
+  generate_post_meeting_recap: {
+    label: "Send them the recap from your meeting",
+    detail: null,
+    bodySource: "outbound",
+    showTime: false,
+  },
   post_meeting_followup: MINE("No word since your meeting"),
   send_pre_2: MINE("Intro sequence — second email is due"),
   send_pre_3: MINE("Intro sequence — third email is due"),
-  send_pre_4: MINE("Intro sequence — fourth email is due"),
+  // syncEngine labels this "Send breakup email" in both places it can emit it.
+  // Which email it is changes what the rep writes, so the label says it.
+  send_pre_4: MINE("Breakup email is due — the last one before you let this go"),
   reengage: MINE("Gone quiet — worth re-opening"),
-  switch_to_nurture: MINE("Moving them to the slower nurture track"),
+  // NOT a status update. syncEngine writes `auto_nurture_eligible: true` and
+  // that flag is read-only — dashboardUtils / dashboardMetricsService display
+  // it, motionUpdater only CLEARS it when a rep changes motion by hand. Nothing
+  // switches the motion. A present-progressive label ("Moving them to…") reads
+  // as something already happening, so the one card that needs a human decision
+  // is the one the rep scrolls past. It asks.
+  switch_to_nurture: MINE("Three emails, no reply — switch them to the slow track?"),
 };
 
 /**
@@ -883,6 +918,9 @@ export function describeQueueSituation(lead: {
   const key = lead.next_action_key ?? "";
 
   if (key === "rate_limited") {
+    // The tail is the server's own "auto-send paused until <date>", rendered in
+    // the WORKSPACE's timezone by `formatAvailableDate`. Passed through verbatim
+    // — never re-derived here, where the browser's zone would be wrong.
     return { ...SITUATIONS.rate_limited, detail: labelTail(lead.next_action_label) };
   }
 

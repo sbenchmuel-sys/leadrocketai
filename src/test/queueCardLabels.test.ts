@@ -54,18 +54,22 @@ function lead(over: Partial<QueueLeadRow> = {}): QueueLeadRow {
 const TABLE: [string, string, "inbound" | "outbound"][] = [
   ["reply_now", "They replied", "inbound"],
   ["ooo_return_followup", "They were away — they're back now", "outbound"],
-  ["followup_due", "No reply to your last email", "outbound"],
-  ["rate_limited", "Not sent — you're over your sending limit", "outbound"],
+  ["followup_due", "No reply to your last message", "outbound"],
+  [
+    "rate_limited",
+    "Too many emails to this lead recently — nothing was sent; you can still write to them",
+    "outbound",
+  ],
   ["closing_followup", "Your proposal needs chasing", "outbound"],
   ["generate_post_meeting_recap", "Send them the recap from your meeting", "outbound"],
   ["post_meeting_followup", "No word since your meeting", "outbound"],
   ["send_pre_2", "Intro sequence — second email is due", "outbound"],
   ["send_pre_3", "Intro sequence — third email is due", "outbound"],
-  ["send_pre_4", "Intro sequence — fourth email is due", "outbound"],
+  ["send_pre_4", "Breakup email is due — the last one before you let this go", "outbound"],
   ["send_nurture_1", "Nurture sequence — email 1 is due", "outbound"],
   ["send_nurture_5", "Nurture sequence — email 5 is due", "outbound"],
   ["reengage", "Gone quiet — worth re-opening", "outbound"],
-  ["switch_to_nurture", "Moving them to the slower nurture track", "outbound"],
+  ["switch_to_nurture", "Three emails, no reply — switch them to the slow track?", "outbound"],
 ];
 
 describe("describeQueueSituation — one label per situation, in plain English", () => {
@@ -120,6 +124,48 @@ describe("describeQueueSituation — one label per situation, in plain English",
     // And it does NOT pass the generic head of that label off as the headline.
     expect(s.label).not.toContain("Follow up anytime");
   });
+
+  it("scopes the volume cap to THIS lead and to the automatic send", () => {
+    // The cap is max_emails_per_lead_per_7d/_30d — per lead, not per account —
+    // and followupRule.ts requires the label not to read as "you may not act".
+    const { label } = describeQueueSituation({ next_action_key: "rate_limited", next_action_label: null });
+    expect(label).toMatch(/this lead/i);
+    expect(label).not.toMatch(/your sending limit|your daily limit|you're over your/i);
+    expect(label).toMatch(/you can still write/i);
+  });
+
+  it("asks about the nurture switch rather than announcing it", () => {
+    // `auto_nurture_eligible` is a read-only flag; nothing switches the motion,
+    // so a status-shaped label would tell the rep to skip the one card that
+    // needs their decision.
+    const { label } = describeQueueSituation({ next_action_key: "switch_to_nurture", next_action_label: null });
+    expect(label.endsWith("?")).toBe(true);
+    expect(label).not.toMatch(/^Moving|^Switching|^Moved/);
+  });
+
+  it("says 'breakup' on the breakup email", () => {
+    const { label } = describeQueueSituation({ next_action_key: "send_pre_4", next_action_label: null });
+    expect(label).toMatch(/breakup/i);
+  });
+
+  it("says 'message', not 'email', on a cross-channel follow-up trigger", () => {
+    // last_outbound_at is stamped by the SMS and WhatsApp senders too.
+    const { label } = describeQueueSituation({ next_action_key: "followup_due", next_action_label: null });
+    expect(label).toMatch(/message/);
+    expect(label).not.toMatch(/email/i);
+  });
+
+  it("suppresses the timestamp where it would date the wrong thing", () => {
+    // recap: there is no outbound AFTER the meeting, so last_outbound_at is a
+    // pre-meeting email; rate_limited: "Not sent … sent 3 hours ago".
+    for (const key of ["generate_post_meeting_recap", "rate_limited", "ooo_return_followup"]) {
+      expect(
+        describeQueueSituation({ next_action_key: key, next_action_label: null }).showTime,
+        `${key} should not be dated`,
+      ).toBe(false);
+    }
+    expect(describeQueueSituation({ next_action_key: "followup_due", next_action_label: null }).showTime).toBe(true);
+  });
 });
 
 describe("buildWhyNowLine — the line the rep reads", () => {
@@ -133,13 +179,21 @@ describe("buildWhyNowLine — the line the rep reads", () => {
       inbound ? ({ intent: inbound.intent } as never) : undefined,
     );
 
-  it("a rate-limited card says nothing was sent, and when it can be", () => {
+  it("a rate-limited card says nothing was sent, and when auto-send resumes", () => {
     const s = line("rate_limited", {
       next_action_label: "Follow up anytime — auto-send paused until Sep 12",
+      last_outbound_at: hoursAgo(3),
     });
-    expect(s).toContain("Not sent");
+    expect(s).toContain("nothing was sent");
     expect(s).toContain("auto-send paused until Sep 12");
     expect(s.startsWith("Follow up")).toBe(false);
+    // The line must not contradict itself: "Not sent … sent 3 hours ago".
+    expect(s).not.toMatch(/sent \d+ hour/);
+  });
+
+  it("does not date a recap card off a pre-meeting email", () => {
+    const s = line("generate_post_meeting_recap", { last_outbound_at: daysAgo(8) });
+    expect(s).toBe("Send them the recap from your meeting");
   });
 
   it("times a follow-up off the rep's own last message", () => {
