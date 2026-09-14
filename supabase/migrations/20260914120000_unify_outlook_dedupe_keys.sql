@@ -63,9 +63,28 @@ BEGIN;
 -- tenant-ambiguous: 'outlook:<Message-ID>' and 'outlook:<graph id>'.
 -- Excludes the already-scoped new shape, the UUID fallback, and the webhook
 -- shape (which is not derivable and, measured, does not occur).
+-- THE REWRITE MUST PRODUCE A SHAPE THE HELPER CAN EMIT.
+--
+-- `outlookEmailDedupeKey` emits `outlook:<lead>:<Message-ID>` when Graph gave an
+-- internetMessageId and `outlook:<lead>:graph:<id>` when it did not. A rewrite
+-- that prefixed the lead onto BOTH legacy forms produced
+-- `outlook:<lead>:<graph id>` for the second — a shape the helper will never
+-- build — so the next sync could not recognise the migrated row and would
+-- import the message a second time. That is precisely the duplicate this unit
+-- exists to remove, reintroduced by its own backfill.
+--
+-- Telling the two legacy forms apart: an RFC 2822 Message-ID is
+-- `<local@domain>`; a Graph id is opaque base64 with no angle brackets.
+-- Verified against production — 580 of the 581 legacy timeline keys match
+-- `<…@…>`, and the one that does not is an outlook-send row whose
+-- metadata_json.provider_message_id is a Graph id. A bracket-less Message-ID
+-- would be namespaced as `graph:` and go unrecognised, so the test suite pins
+-- this classification against the helper's real output.
 CREATE TEMP TABLE _outlook_key_rewrite ON COMMIT DROP AS
 SELECT 'lead_timeline_items'::text AS src, t.id, t.lead_id, t.dedupe_key AS old_key,
-       'outlook:' || t.lead_id::text || ':' || substring(t.dedupe_key from 9) AS new_key
+       'outlook:' || t.lead_id::text || ':'
+         || CASE WHEN substring(t.dedupe_key from 9) LIKE '<%@%>' THEN '' ELSE 'graph:' END
+         || substring(t.dedupe_key from 9) AS new_key
 FROM lead_timeline_items t
 WHERE t.lead_id IS NOT NULL
   AND t.dedupe_key LIKE 'outlook:%'
@@ -74,7 +93,9 @@ WHERE t.lead_id IS NOT NULL
   AND t.dedupe_key NOT LIKE 'outlook:' || t.lead_id::text || ':%'
 UNION ALL
 SELECT 'interactions', i.id, i.lead_id, i.dedupe_key,
-       'outlook:' || i.lead_id::text || ':' || substring(i.dedupe_key from 9)
+       'outlook:' || i.lead_id::text || ':'
+         || CASE WHEN substring(i.dedupe_key from 9) LIKE '<%@%>' THEN '' ELSE 'graph:' END
+         || substring(i.dedupe_key from 9)
 FROM interactions i
 WHERE i.lead_id IS NOT NULL
   AND i.dedupe_key LIKE 'outlook:%'

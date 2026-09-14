@@ -55,7 +55,9 @@ function ctx(over: Partial<Parameters<typeof selectOutlookCandidates>[1]> = {}) 
     leadEmail: LEAD,
     repEmail: REP,
     alreadyStoredKeys: new Set<string>(),
+    legacyProviderIdsWithoutKey: new Set<string>(),
     bodyByDedupeKey: new Map<string, string | null>(),
+    bodyByLegacyProviderId: new Map<string, string | null>(),
     syncStartMs: Date.now() - 365 * DAY,
     ...over,
   };
@@ -160,6 +162,82 @@ describe("webhook-ingested messages do not consume selection slots", () => {
     );
     expect(idsOf(selected)).toEqual(["<wh@acme.com>"]);
     expect(selected[0].restoresPurgedBody).toBe(true);
+  });
+
+  it("a row written BEFORE dedupe keys existed is still recognised", () => {
+    // `outlook-send` stores the Graph id in `gmail_message_id` and leaves
+    // `dedupe_key` NULL. Asking only with the key made these invisible, so a
+    // later sync re-imported the rep's own sent mail.
+    const sent = msg({
+      id: "AAMkGRAPHID",
+      internetMessageId: null,
+      daysAgo: 1,
+      from: { emailAddress: { address: REP } },
+      toRecipients: [{ emailAddress: { address: LEAD } }],
+    });
+    expect(
+      idsOf(selectOutlookCandidates(
+        [sent],
+        ctx({
+          legacyProviderIdsWithoutKey: new Set(["AAMkGRAPHID"]),
+          bodyByLegacyProviderId: new Map([["AAMkGRAPHID", "the sent body"]]),
+        }),
+        10,
+      )),
+    ).toEqual([]);
+  });
+
+  it("a legacy row does not starve newer eligible messages either", () => {
+    const legacy = Array.from({ length: 20 }, (_, i) =>
+      msg({ id: `legacy-${i}`, internetMessageId: null, daysAgo: i }));
+    const reply = msg({ id: "reply", internetMessageId: "<reply@acme.com>", daysAgo: 30 });
+    expect(
+      idsOf(selectOutlookCandidates(
+        [...legacy, reply],
+        ctx({
+          legacyProviderIdsWithoutKey: new Set(legacy.map((m) => m.id)),
+          bodyByLegacyProviderId: new Map(legacy.map((m) => [m.id, "stored"])),
+        }),
+        20,
+      )),
+    ).toEqual(["<reply@acme.com>"]);
+  });
+
+  it("a legacy row whose body was purged is still re-selected to restore it", () => {
+    const sent = msg({ id: "AAMkGRAPHID", internetMessageId: null, daysAgo: 1 });
+    const selected = selectOutlookCandidates(
+      [sent],
+      ctx({
+        legacyProviderIdsWithoutKey: new Set(["AAMkGRAPHID"]),
+        bodyByLegacyProviderId: new Map([["AAMkGRAPHID", ""]]),
+      }),
+      10,
+    );
+    expect(idsOf(selected)).toEqual(["AAMkGRAPHID"]);
+    expect(selected[0].restoresPurgedBody).toBe(true);
+  });
+
+  it("the rep's own sent mail is recognised by its Graph id, not re-imported", () => {
+    // The pre-existing double-count: outlook-send stores the Sent Items GRAPH
+    // id with no dedupe_key, while the sync keys on the Message-ID. The sync's
+    // $search returns that same Sent Items copy, so its `id` is the stored one.
+    const sent = msg({
+      id: "AAMkSENTITEMS",
+      internetMessageId: "<sent@acme.com>", // present, so the key identity differs
+      daysAgo: 1,
+      from: { emailAddress: { address: REP } },
+      toRecipients: [{ emailAddress: { address: LEAD } }],
+    });
+    expect(
+      idsOf(selectOutlookCandidates(
+        [sent],
+        ctx({
+          legacyProviderIdsWithoutKey: new Set(["AAMkSENTITEMS"]),
+          bodyByLegacyProviderId: new Map([["AAMkSENTITEMS", "the sent body"]]),
+        }),
+        10,
+      )),
+    ).toEqual([]);
   });
 
   it("the key it filters on is scoped to THIS lead", () => {

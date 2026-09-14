@@ -59,8 +59,27 @@ export interface SelectionContext {
    * the filter and the insert agree by construction.
    */
   alreadyStoredKeys: ReadonlySet<string>;
+  /**
+   * LEGACY COMPATIBILITY, narrow and self-retiring: provider message ids from
+   * interaction rows that have NO dedupe_key at all.
+   *
+   * `outlook-send` writes the Graph id into `gmail_message_id` and leaves
+   * `dedupe_key` NULL, so those rows carry no key to match on. Asking only with
+   * the key made them invisible and a later sync re-imported the rep's own sent
+   * mail. This is not a second identity for NEW writes — every writer in this
+   * unit sets a key — it is a way to still recognise rows written before the
+   * key existed.
+   *
+   * RETIRED BY: `outlook-send` setting a dedupe_key on its `interactions`
+   * insert (it already builds one for the timeline), plus a one-off backfill of
+   * the rows it has already written. Until both happen this set is permanent
+   * and grows by one row per Outlook send.
+   */
+  legacyProviderIdsWithoutKey: ReadonlySet<string>;
   /** dedupe key -> stored body. An empty body means "re-fetch to restore it". */
   bodyByDedupeKey: ReadonlyMap<string, string | null | undefined>;
+  /** provider message id -> stored body, for the legacy rows above. */
+  bodyByLegacyProviderId?: ReadonlyMap<string, string | null | undefined>;
   /** Epoch ms; anything older than this is outside the sync window. */
   syncStartMs: number;
 }
@@ -146,8 +165,26 @@ export function selectOutlookCandidates<T extends OutlookCandidate>(
     }
     seen.add(dedupeKey);
 
-    const alreadyStored = ctx.alreadyStoredKeys.has(dedupeKey);
-    const storedBody = ctx.bodyByDedupeKey.get(dedupeKey);
+    // "Do we already hold this message?" — asked with the key, and, for rows
+    // that predate the key, with the provider id they do carry.
+    const storedByKey = ctx.alreadyStoredKeys.has(dedupeKey);
+    // Match the legacy set on BOTH identities this message could have been
+    // stored under: the key identity (`messageId`) and the raw Graph id.
+    //
+    // The Graph id matters for a case that was already broken before this unit:
+    // `outlook-send` stores the SENT ITEMS Graph id, while outlook-sync keys on
+    // the Message-ID, so a rep's own sent mail was re-imported as a duplicate
+    // whenever Graph supplied an internetMessageId — which is almost always.
+    // outlook-sync's `$search` returns that same Sent Items copy, so its `id`
+    // is the id outlook-send captured. Matching it recognises the row.
+    // A false skip is not possible: Graph ids are unique per mailbox item, and
+    // the set holds only ids from this lead's own key-less rows.
+    const storedByLegacyId = ctx.legacyProviderIdsWithoutKey.has(messageId) ||
+      (!!msg.id && ctx.legacyProviderIdsWithoutKey.has(msg.id));
+    const alreadyStored = storedByKey || storedByLegacyId;
+    const storedBody = storedByKey
+      ? ctx.bodyByDedupeKey.get(dedupeKey)
+      : (ctx.bodyByLegacyProviderId?.get(messageId) ?? ctx.bodyByLegacyProviderId?.get(msg.id));
     const restoresPurgedBody = alreadyStored && (!storedBody || storedBody.trim() === "");
     if (alreadyStored && !restoresPurgedBody) {
       onSkip?.(msg, "already_synced");

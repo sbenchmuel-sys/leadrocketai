@@ -120,9 +120,14 @@ DO $$ BEGIN
      <> 'outlook:00000000-0000-0000-0000-00000000f201:<legacy@example.com>'
   THEN RAISE EXCEPTION 'timeline key was not rewritten to the lead scope'; END IF;
 
+  -- The graph fallback must land on the helper's NAMESPACED shape. Prefixing
+  -- the lead onto the raw graph id produces a key `outlookEmailDedupeKey` can
+  -- never emit, so the next sync would not recognise the row and would import
+  -- the message again. src/test/outlookDedupeKeyMigrationParity.test.ts pins
+  -- this literal against the real helper's output.
   IF (SELECT dedupe_key FROM public.lead_timeline_items WHERE id = '00000000-0000-0000-0000-00000000e203')
-     <> 'outlook:00000000-0000-0000-0000-00000000f201:AAMkGRAPHID'
-  THEN RAISE EXCEPTION 'graph-id fallback key was not rewritten'; END IF;
+     <> 'outlook:00000000-0000-0000-0000-00000000f201:graph:AAMkGRAPHID'
+  THEN RAISE EXCEPTION 'graph-id fallback key was not rewritten to the namespaced shape'; END IF;
 
   IF (SELECT dedupe_key FROM public.lead_timeline_items WHERE id = '00000000-0000-0000-0000-00000000e204')
      <> 'outlook:interaction:00000000-0000-0000-0000-0000000000aa'

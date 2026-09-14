@@ -325,15 +325,29 @@ serve(async (req) => {
     // route. The filter now asks the same question the insert answers.
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("dedupe_key, body_text")
-      .eq("lead_id", leadId)
-      .not("dedupe_key", "is", null);
+      .select("dedupe_key, gmail_message_id, body_text")
+      .eq("lead_id", leadId);
+
+    type ExistingRow = { dedupe_key: string | null; gmail_message_id: string | null; body_text: string | null };
+    const existingRows = (existingInteractions || []) as ExistingRow[];
 
     const existingKeys = new Set<string>(
-      (existingInteractions || []).map(i => i.dedupe_key as string)
+      existingRows.filter(i => i.dedupe_key).map(i => i.dedupe_key as string)
     );
     const existingBodyByKey = new Map<string, string | null>(
-      (existingInteractions || []).map(i => [i.dedupe_key as string, i.body_text as string | null])
+      existingRows.filter(i => i.dedupe_key).map(i => [i.dedupe_key as string, i.body_text])
+    );
+
+    // LEGACY COMPATIBILITY — rows written before the dedupe key existed.
+    // `outlook-send` stores the Graph id in `gmail_message_id` and leaves
+    // `dedupe_key` NULL, so there is no key to match on and a later sync would
+    // re-import the rep's own sent mail. Scoped to rows with NO key, so it
+    // narrows itself: the moment a row has a key, the key alone answers.
+    // See `legacyProviderIdsWithoutKey` for what retires it.
+    const legacyRows = existingRows.filter(i => !i.dedupe_key && i.gmail_message_id);
+    const legacyProviderIds = new Set<string>(legacyRows.map(i => i.gmail_message_id as string));
+    const legacyBodyById = new Map<string, string | null>(
+      legacyRows.map(i => [i.gmail_message_id as string, i.body_text])
     );
 
     // FILTER FIRST, THEN COUNT — see `_shared/outlookCandidates.ts` for the full
@@ -358,7 +372,9 @@ serve(async (req) => {
         leadEmail: leadEmailNorm,
         repEmail,
         alreadyStoredKeys: existingKeys,
+        legacyProviderIdsWithoutKey: legacyProviderIds,
         bodyByDedupeKey: existingBodyByKey,
+        bodyByLegacyProviderId: legacyBodyById,
         syncStartMs,
       },
       maxResults,
