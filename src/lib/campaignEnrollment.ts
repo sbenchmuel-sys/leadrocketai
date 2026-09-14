@@ -386,8 +386,23 @@ export interface PlannedTouch {
  * touches get a max_age_at (auto-skip horizon) bounded by the next touch's gap so
  * a stuck manual touch never stalls the cadence; EMAIL touches leave it null
  * (the scheduler manages email staleness).
+ *
+ * `holdLinkedinUntil` — when this lead's LinkedIn profile URL is still being
+ * looked up, no LinkedIn touch may come due before that instant. EVERY path that
+ * writes touch rows builds them here (planEnrollment for "add people",
+ * planRelaunch for Launch), so the rule lives in this one function rather than
+ * being re-applied per planner — a third planner cannot lay out a schedule
+ * without passing through it. See deferral rationale on LINKEDIN_ENRICH_GRACE_MS.
+ *
+ * The hold moves ONLY this touch, never the cadence: later steps still space off
+ * the undeferred date, and a touch is never pushed to or past its own max_age_at
+ * (born-expired would be worse than the race being closed).
  */
-export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): PlannedTouch[] {
+export function buildTouchSchedule(
+  startDate: Date,
+  steps: CadenceStep[],
+  holdLinkedinUntil?: Date | null,
+): PlannedTouch[] {
   const touches: PlannedTouch[] = [];
   let prevEligible = nextBusinessDay(startDate);
   for (let i = 0; i < steps.length; i++) {
@@ -407,10 +422,20 @@ export function buildTouchSchedule(startDate: Date, steps: CadenceStep[]): Plann
       const horizon = Math.max(1, Math.min(nextGap, DEFAULT_MAX_AGE_BUSINESS_DAYS));
       maxAge = addBusinessDays(eligible, horizon);
     }
+    // Hold a LinkedIn touch that would otherwise come due while its profile
+    // lookup is still running. `prevEligible` above keeps the undeferred date, so
+    // the rest of the cadence is unchanged.
+    const hold =
+      holdLinkedinUntil &&
+      step.channel === "linkedin" &&
+      eligible.getTime() <= holdLinkedinUntil.getTime() &&
+      (!maxAge || holdLinkedinUntil.getTime() < maxAge.getTime())
+        ? holdLinkedinUntil
+        : eligible;
     touches.push({
       step_number: step.step_number,
       channel: step.channel,
-      eligible_at: eligible.toISOString(),
+      eligible_at: hold.toISOString(),
       max_age_at: maxAge ? maxAge.toISOString() : null,
     });
   }
@@ -644,54 +669,43 @@ export interface PlannedEnrollment {
  * lookup (enrich-lead-linkedin) to finish. One web search per lead, 4 in flight,
  * up to 50 per call — seconds in practice; 10 minutes is generous and still well
  * inside the touch's own max_age_at window (at least one business day).
- */
-export const LINKEDIN_ENRICH_GRACE_MS = 10 * 60 * 1000;
-
-/**
- * Hold back an immediately-due LinkedIn touch for a lead whose profile URL is
- * still being looked up.
  *
- * The race this closes: enrolling into an already-ACTIVE campaign whose step 1 is
- * LinkedIn commits that touch as due right now, and the lookup is fire-and-forget.
- * campaign-touch-scheduler runs every 5 minutes; if it fires while the search is
- * still in flight it sees no linkedin_url and auto-skips the step — PERMANENTLY,
- * with no way for the rep to get it back. Bulk enrollment widens the window.
+ * The race this closes: a cadence whose LinkedIn touch is due immediately, for a
+ * lead whose profile URL is still being searched for. campaign-touch-scheduler
+ * runs every 5 minutes; if it fires while the search is in flight it sees no
+ * linkedin_url and auto-skips the step — PERMANENTLY, with no way for the rep to
+ * get it back. Bulk enrollment widens the window. Two paths reach it: enrolling
+ * into an already-ACTIVE campaign, and launching a draft before the lookups
+ * kicked off at enrollment have finished.
  *
- * We only ever move eligible_at LATER, and only within the touch's existing
- * max_age_at, so nothing is shortened and no new state is introduced: the
- * scheduler already honours a future eligible_at (`lte("eligible_at", now)` plus a
- * fresh re-read), so it defers of its own accord. Applied to the plan BEFORE the
- * enrollment RPC, so the touch is committed already-deferred — there is no window
- * between the commit and the deferral for the cron to land in.
+ * Nothing new is persisted and the scheduler is unchanged: it already honours a
+ * future eligible_at. Both planners pass this through buildTouchSchedule, so the
+ * hold is part of the committed schedule — there is no window between the write
+ * and a later "fix up the dates" step for the cron to land in.
  *
  * If the lookup genuinely finds nothing (or fails), the touch simply comes due
  * once the grace period is up and the scheduler auto-skips it with the usual
  * "no LinkedIn profile on file" note on the timeline. Nothing is left pending
  * forever — this only ever delays the existing outcome.
- *
- * Pure.
  */
-export function deferLinkedinTouchesPendingLookup(
-  plan: PlannedEnrollment[],
-  leadIdsAwaitingLookup: Set<string>,
-  now: Date = new Date(),
-): PlannedEnrollment[] {
-  if (leadIdsAwaitingLookup.size === 0) return plan;
-  const until = now.getTime() + LINKEDIN_ENRICH_GRACE_MS;
-  return plan.map((e) => {
-    if (!leadIdsAwaitingLookup.has(e.lead_id)) return e;
-    let changed = false;
-    const touches = e.touches.map((t) => {
-      if (t.channel !== "linkedin") return t;
-      if (new Date(t.eligible_at).getTime() > until) return t; // not due within the grace window
-      // Never push a touch past its own auto-skip horizon — that would make it
-      // born expired, which is worse than the race we're closing.
-      if (t.max_age_at && new Date(t.max_age_at).getTime() <= until) return t;
-      changed = true;
-      return { ...t, eligible_at: new Date(until).toISOString() };
-    });
-    return changed ? { ...e, touches } : e;
-  });
+export const LINKEDIN_ENRICH_GRACE_MS = 10 * 60 * 1000;
+
+/** Leads in `linkedinLookupPending` hold their LinkedIn touches until this instant. */
+function linkedinHoldUntil(anchor: Date): Date {
+  return new Date(anchor.getTime() + LINKEDIN_ENRICH_GRACE_MS);
+}
+
+/**
+ * Which of these leads still needs a LinkedIn profile lookup — i.e. the cadence
+ * has a LinkedIn step and the lead has no URL yet. Shared by both planners' call
+ * sites so "add people" and Launch agree on who is waiting.
+ */
+export function leadsAwaitingLinkedinLookup(
+  steps: CadenceStep[],
+  leads: { id: string; linkedin_url: string | null }[],
+): Set<string> {
+  if (!steps.some((s) => s.channel === "linkedin")) return new Set();
+  return new Set(leads.filter((l) => !l.linkedin_url).map((l) => l.id));
 }
 
 /**
@@ -705,14 +719,16 @@ export function planEnrollment(
   dailyCap: number,
   initialLoad: Record<number, number>,
   anchor: Date = new Date(),
+  linkedinLookupPending: Set<string> = new Set(),
 ): PlannedEnrollment[] {
   const starts = computeStaggeredStarts(leadIds.length, emailOffsets(steps), dailyCap, initialLoad);
+  const holdUntil = linkedinHoldUntil(anchor);
   return leadIds.map((lead_id, i) => {
     const startedAt = addBusinessDays(anchor, starts[i]);
     return {
       lead_id,
       started_at: startedAt.toISOString(),
-      touches: buildTouchSchedule(startedAt, steps),
+      touches: buildTouchSchedule(startedAt, steps, linkedinLookupPending.has(lead_id) ? holdUntil : null),
     };
   });
 }
@@ -784,15 +800,9 @@ export async function enrollLeadsInCampaign(
   // Leads whose LinkedIn profile URL we are about to look up (see the enrichment
   // pass at the end of this function). Their LinkedIn touches must not come due
   // while that search is still running, or the scheduler auto-skips them for good.
-  const awaitingLookup = new Set(
-    steps.some((s) => s.channel === "linkedin")
-      ? enrollable.filter((l) => !l.linkedin_url).map((l) => l.id)
-      : [],
-  );
-  const plan = deferLinkedinTouchesPendingLookup(
-    planEnrollment(enrollable.map((l) => l.id), steps, dailyCap, initialLoad, anchor),
-    awaitingLookup,
-    anchor,
+  const plan = planEnrollment(
+    enrollable.map((l) => l.id), steps, dailyCap, initialLoad, anchor,
+    leadsAwaitingLinkedinLookup(steps, enrollable),
   );
 
   const { data, error } = await supabase.rpc("enroll_campaign_leads" as any, {
@@ -848,9 +858,9 @@ export async function enrollLeadsInCampaign(
   // no profile URL — look them up now (enrich-lead-linkedin, fail-closed matcher)
   // instead of letting the scheduler auto-skip every LinkedIn touch later for a
   // missing handle. Fire-and-forget is safe because any LinkedIn touch that would
-  // otherwise have been due inside the lookup window was already pushed past it by
-  // deferLinkedinTouchesPendingLookup above, so the scheduler can't skip it
-  // mid-search; the scheduler reads the lead fresh when it is finally due.
+  // otherwise have been due inside the lookup window was committed with its
+  // eligible_at already held past it (buildTouchSchedule), so the scheduler can't
+  // skip it mid-search; the scheduler reads the lead fresh when it is finally due.
   const linkedinLookups = requestLinkedinLookups(steps, stampedLeads);
 
   return { enrolled: stampedLeads.length, skips, channelSkips, capacity, linkedinLookups };
@@ -1002,13 +1012,15 @@ export function planRelaunch(
   dailyCap: number,
   initialLoad: Record<number, number>,
   anchor: Date = new Date(),
+  linkedinLookupPending: Set<string> = new Set(),
 ): RelaunchPlan {
   const starts = computeStaggeredStarts(enrollments.length, emailOffsets(steps), dailyCap, initialLoad);
+  const holdUntil = linkedinHoldUntil(anchor);
   const plan: RelaunchPlan = { starts: [], touchRows: [] };
   enrollments.forEach((enr, i) => {
     const startedAt = addBusinessDays(anchor, starts[i]);
     plan.starts.push({ enrollmentId: enr.id, startedAt: startedAt.toISOString() });
-    for (const t of buildTouchSchedule(startedAt, steps)) {
+    for (const t of buildTouchSchedule(startedAt, steps, linkedinLookupPending.has(enr.lead_id) ? holdUntil : null)) {
       plan.touchRows.push({
         enrollment_id: enr.id, campaign_id: campaignId, lead_id: enr.lead_id,
         step_number: t.step_number, channel: t.channel, status: "scheduled",
@@ -1076,7 +1088,19 @@ export async function launchCampaignWithSchedule(campaignId: string): Promise<{ 
       const off = businessDayOffset(anchor, new Date(et.eligible_at));
       initialLoad[off] = (initialLoad[off] ?? 0) + 1;
     }
-    const plan = planRelaunch(campaignId, enrollments, steps, dailyCap, initialLoad, anchor);
+    // Same hold as "add people": these leads were enrolled earlier, and launching
+    // right afterwards can beat their profile lookups. Re-anchoring rebuilds every
+    // touch from now, so without this the first LinkedIn touch would be due
+    // immediately again and the scheduler would auto-skip it for good.
+    let lookupPending = new Set<string>();
+    if (steps.some((st) => st.channel === "linkedin") && enrollments.length > 0) {
+      const { data: leadRows } = await supabase
+        .from("leads")
+        .select("id, linkedin_url")
+        .in("id", enrollments.map((e) => e.lead_id));
+      lookupPending = leadsAwaitingLinkedinLookup(steps, (leadRows || []) as { id: string; linkedin_url: string | null }[]);
+    }
+    const plan = planRelaunch(campaignId, enrollments, steps, dailyCap, initialLoad, anchor, lookupPending);
 
     // Regroup the flat touch rows per enrollment — the RPC's wire shape.
     const touchesByEnrollment = new Map<string, PlannedTouch[]>();

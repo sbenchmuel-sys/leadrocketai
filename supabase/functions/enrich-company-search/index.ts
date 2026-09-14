@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { ingestSignals, type SignalInput } from "../_shared/signalIngestion.ts";
-import { runSearch, type SearchResult } from "../_shared/webSearch.ts";
+import { runSearch, SEARCH_PROVIDER, type SearchResult } from "../_shared/webSearch.ts";
 
 // ---- CORS ----
 const corsHeaders = {
@@ -176,7 +176,7 @@ Deno.serve(async (req) => {
       lead_id: lead_id ?? null,
       company,
       query: queries.join(" | "),
-      provider,
+      provider: SEARCH_PROVIDER,
       results: allResults,
       signals,
       requested_by_user_id: user.id,
@@ -209,7 +209,7 @@ Deno.serve(async (req) => {
       await ingestSignals(admin, signalInputs);
     }
 
-    logger.info("enrichment_complete", { lead_id, company, provider, resultCount: allResults.length, signalCount: signals.length });
+    logger.info("enrichment_complete", { lead_id, company, provider: SEARCH_PROVIDER, resultCount: allResults.length, signalCount: signals.length });
 
     return new Response(JSON.stringify(inserted), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

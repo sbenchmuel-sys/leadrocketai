@@ -115,18 +115,38 @@ describe("a conditional step reads as conditional outside edit mode (P2)", () =>
 });
 
 describe("an immediately-due LinkedIn touch is not exposed mid-enrichment (P2)", () => {
-  // The pure deferral is unit-tested in campaignEnrollment.test.ts. What a unit
-  // test can't see is whether enrollLeadsInCampaign still APPLIES it, and applies
-  // it to the plan BEFORE the enrollment RPC commits the touches — afterwards
-  // would leave a window for the 5-minute scheduler to auto-skip the step for
-  // good.
-  it("the deferral is applied to the plan before enroll_campaign_leads is called", () => {
-    const src = read("src/lib/campaignEnrollment.ts");
-    const deferAt = src.indexOf("deferLinkedinTouchesPendingLookup(\n");
-    const rpcAt = src.indexOf('rpc("enroll_campaign_leads"');
-    expect(deferAt).toBeGreaterThan(-1);
-    expect(rpcAt).toBeGreaterThan(-1);
-    expect(deferAt).toBeLessThan(rpcAt);
+  // The hold itself is unit-tested through both planners in
+  // campaignEnrollment.test.ts. What a unit test can't see is a THIRD path that
+  // lays out touches without passing the hold through — the shape that already
+  // bit us once, when Launch's planRelaunch discarded the hold that "add people"
+  // applied. buildTouchSchedule is the one function every touch row is built by,
+  // so every call inside it must decide about the hold explicitly.
+  const src = read("src/lib/campaignEnrollment.ts");
+
+  it("every planner builds its touches through buildTouchSchedule with the hold", () => {
+    // Each call's argument list, up to the line end — the declaration itself is
+    // the one whose first argument is the parameter name.
+    const calls = [...src.matchAll(/buildTouchSchedule\((.*)$/gm)]
+      .map((m) => m[1])
+      // Drop the declaration, whose "(" ends the line.
+      .filter((args) => args.trim().length > 0 && !args.includes("startDate"));
+    expect(calls.length).toBeGreaterThanOrEqual(2); // planEnrollment + planRelaunch
+    for (const args of calls) {
+      // Every builder must decide about the hold, not silently omit it.
+      expect(args).toMatch(/linkedinLookupPending/);
+    }
+  });
+
+  it("both planners take the pending set, and both call sites supply it", () => {
+    for (const planner of ["export function planEnrollment", "export function planRelaunch"]) {
+      const sig = src.slice(src.indexOf(planner), src.indexOf(planner) + 600);
+      expect(sig).toMatch(/linkedinLookupPending/);
+    }
+    // The RPC call sites: "add people" and Launch.
+    const enrollAt = src.indexOf('rpc("enroll_campaign_leads"');
+    const launchAt = src.indexOf('rpc("launch_campaign_with_schedule"');
+    expect(src.slice(0, enrollAt)).toMatch(/planEnrollment\([\s\S]{0,400}leadsAwaitingLinkedinLookup/);
+    expect(src.slice(enrollAt, launchAt)).toMatch(/planRelaunch\([^)]*lookupPending\)/);
   });
 });
 
@@ -145,5 +165,33 @@ describe("concurrent enrollment of one lead can't abort the batch (P2)", () => {
     expect(lockAt).toBeLessThan(checkAt);
     // Deterministic lock order, or two overlapping batches deadlock instead.
     expect(fn).toMatch(/ORDER BY id\s*\n\s*FOR UPDATE/);
+  });
+});
+
+describe("the shared web-search helper owns the provider name (P1)", () => {
+  // enrich-company-search referenced a bare `provider` that the extraction into
+  // _shared/webSearch.ts had removed: every UNCACHED enrichment ran its three
+  // searches, threw ReferenceError while building the row, and returned 500 with
+  // nothing stored. Cached lookups kept working, which is why it shipped.
+  it("no caller re-derives the provider or uses a bare, undeclared one", () => {
+    for (const rel of [
+      "supabase/functions/enrich-company-search/index.ts",
+      "supabase/functions/enrich-lead-linkedin/index.ts",
+    ]) {
+      const src = read(rel);
+      if (!/webSearch\.ts/.test(src)) continue;
+      // No local re-read of the env var — the helper is the single source.
+      expect(src).not.toMatch(/ENRICHMENT_PROVIDER/);
+      // No `provider` shorthand property / bare reference: that is exactly the
+      // dangling identifier the extraction left behind.
+      expect(src).not.toMatch(/(?<![.\w])provider\s*(?:,|\}|\))/);
+    }
+  });
+
+  it("webSearch exports the provider it actually branches on", () => {
+    const src = read("supabase/functions/_shared/webSearch.ts");
+    expect(src).toMatch(/export const SEARCH_PROVIDER\s*=/);
+    // The dispatch reads the exported binding, so the two can't drift.
+    expect(src).toMatch(/if \(SEARCH_PROVIDER === "serpapi"\)/);
   });
 });

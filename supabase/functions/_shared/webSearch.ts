@@ -13,12 +13,18 @@ export interface SearchResult {
   link: string;
 }
 
-const provider = Deno.env.get("ENRICHMENT_PROVIDER") ?? "serpapi";
+/**
+ * The provider that serves every search from this module — exported because
+ * enrich-company-search records it on the enrichment row and in its completion
+ * log. Callers MUST import this rather than re-reading ENRICHMENT_PROVIDER, so
+ * the name recorded can never disagree with the provider that actually ran.
+ */
+export const SEARCH_PROVIDER = Deno.env.get("ENRICHMENT_PROVIDER") ?? "serpapi";
 
 export async function runSearch(query: string): Promise<SearchResult[]> {
-  if (provider === "serpapi") return runSerpApi(query);
-  if (provider === "google_cse") return runGoogleCSE(query);
-  throw new Error(`Invalid ENRICHMENT_PROVIDER: ${provider}`);
+  if (SEARCH_PROVIDER === "serpapi") return runSerpApi(query);
+  if (SEARCH_PROVIDER === "google_cse") return runGoogleCSE(query);
+  throw new Error(`Invalid ENRICHMENT_PROVIDER: ${SEARCH_PROVIDER}`);
 }
 
 async function runSerpApi(query: string): Promise<SearchResult[]> {
