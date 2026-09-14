@@ -46,6 +46,13 @@ interface OutreachCardProps {
   onDone: (touchId: string) => void;
   /** Restore the card if the action failed. */
   onRestore: (touchId: string) => void;
+  /**
+   * The action landed server-side. Separate from `onDone` (which fires
+   * optimistically, BEFORE the request): completing a touch can queue the next
+   * step immediately, possibly in another channel, so the parent re-reads the
+   * counts only once there is actually something new to count.
+   */
+  onCompleted?: (touchId: string) => void;
 }
 
 // Small collapsible preview of the copy the rep is about to use. Keeps the
@@ -85,7 +92,7 @@ function PreviewBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
-export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
+export function OutreachCard({ touch, onDone, onRestore, onCompleted }: OutreachCardProps) {
   const [busy, setBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [subject, setSubject] = useState(touch.subject || "");
@@ -164,6 +171,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       return;
     }
     toast.success(successMsg);
+    onCompleted?.(touch.id);
   }
 
   const handleMarkHandled = () => run(() => markTouchSent(touch.id), "Marked as handled");
@@ -199,6 +207,7 @@ export function OutreachCard({ touch, onDone, onRestore }: OutreachCardProps) {
       return;
     }
     toast.success("Sent");
+    onCompleted?.(touch.id);
   }
 
   async function prepareDesktopCall() {

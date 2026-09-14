@@ -57,7 +57,13 @@ import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachToday } from "@/components/queue/OutreachToday";
 import { OutreachDigest } from "@/components/queue/OutreachDigest";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
-import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachChannel, type OutreachTouch } from "@/lib/outreachQueue";
+import {
+  fetchOutreachQueue,
+  reconcileCompleted,
+  OUTREACH_PAGE_SIZE,
+  type OutreachChannel,
+  type OutreachTouch,
+} from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -114,9 +120,12 @@ export default function Queue() {
   const [outreachTotal, setOutreachTotal] = useState(0);
   // Backlog per channel (server counts) — the Today view's chip numbers; the tab
   // badge is their sum so it never depends on which channel is selected.
-  const [outreachByChannel, setOutreachByChannel] = useState<Record<OutreachChannel, number>>(
+  // null for a channel = that count could not be read. Never rendered as 0.
+  const [outreachByChannel, setOutreachByChannel] = useState<Record<OutreachChannel, number | null>>(
     { email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 },
   );
+  // A failed load must not look like an empty backlog, so the tab says so.
+  const [outreachError, setOutreachError] = useState<string | null>(null);
   const [outreachChannel, setOutreachChannel] = useState<OutreachChannel | null>(null);
   const [outreachLimit, setOutreachLimit] = useState(OUTREACH_PAGE_SIZE);
   const [outreachLoading, setOutreachLoading] = useState(true);
@@ -125,18 +134,36 @@ export default function Queue() {
   // response may touch state — otherwise a slow earlier request could overwrite the
   // newer snapshot (and tab count) with stale data.
   const outreachReqId = useRef(0);
+  // Touches the rep has already finished, and the completion counter that lets a
+  // later response retire them — see reconcileCompleted. Focus mode pre-loads the
+  // next page before the current card is handled, so without this the completed
+  // card comes straight back when that response lands.
+  const completedTouches = useRef<Map<string, number>>(new Map());
+  const completionSeq = useRef(0);
   const loadOutreach = useCallback(async () => {
     const reqId = ++outreachReqId.current;
+    const startedAtSeq = completionSeq.current;
     setOutreachLoading(true);
     try {
       const page = await fetchOutreachQueue(outreachLimit, { channel: outreachChannel });
       if (reqId === outreachReqId.current) {
-        setOutreachTouches(page.touches);
+        const { touches, completed } = reconcileCompleted(
+          page.touches,
+          completedTouches.current,
+          startedAtSeq,
+        );
+        completedTouches.current = completed;
+        setOutreachTouches(touches);
         setOutreachTotal(page.total);
         setOutreachByChannel(page.byChannel);
+        setOutreachError(null);
       }
-    } catch {
-      /* non-fatal — the reactive lists still render */
+    } catch (err) {
+      // Non-fatal for the reactive lists, but the Outreach tab must NOT render
+      // this as "nothing to do" — it keeps whatever it had and says it's stale.
+      if (reqId === outreachReqId.current) {
+        setOutreachError(err instanceof Error ? err.message : "Couldn't load your outreach");
+      }
     } finally {
       if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
@@ -154,16 +181,29 @@ export default function Queue() {
     if (tab === "outreach") void loadOutreach();
   }, [tab, loadOutreach]);
   const removeTouch = (id: string) => {
+    completedTouches.current.set(id, ++completionSeq.current);
     setOutreachTouches((prev) => {
       const gone = prev.find((t) => t.id === id);
       if (gone) {
-        setOutreachByChannel((c) => ({ ...c, [gone.channel]: Math.max(0, c[gone.channel] - 1) }));
+        setOutreachByChannel((c) => ({
+          ...c,
+          // An unknown count stays unknown — decrementing it would invent a number.
+          [gone.channel]: c[gone.channel] === null ? null : Math.max(0, (c[gone.channel] as number) - 1),
+        }));
       }
       return prev.filter((t) => t.id !== id);
     });
     setOutreachTotal((n) => Math.max(0, n - 1));
   };
-  const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
+  const restoreTouch = (id: string) => {
+    completedTouches.current.delete(id);
+    void loadOutreach();
+  }; // simplest correct restore
+  // The action actually went through. Re-read the server counts: completing a
+  // touch whose next step has ZERO delay queues that step immediately, often in
+  // another channel — so an email→call transition used to leave a due call while
+  // the Calls chip sat at 0 and disabled until the rep reloaded the page.
+  const completeTouch = (_id: string) => { void loadOutreach(); };
   const showMoreOutreach = useCallback(() => setOutreachLimit((n) => n + OUTREACH_PAGE_SIZE), []);
 
   // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
@@ -223,7 +263,11 @@ export default function Queue() {
     () => ({
       replied: chipCounts.replied,
       followup: chipCounts.followup_due,
-      outreach: Object.values(outreachByChannel).reduce((a, b) => a + b, 0),
+      // Unknown (a failed count read) propagates as null → the tab shows "—",
+      // never a reassuring 0.
+      outreach: Object.values(outreachByChannel).some((n) => n === null)
+        ? null
+        : Object.values(outreachByChannel).reduce((a: number, b) => a + (b as number), 0),
     }),
     [chipCounts, outreachByChannel],
   );
@@ -399,8 +443,10 @@ export default function Queue() {
             channel={outreachChannel}
             onSelectChannel={selectOutreachChannel}
             onShowMore={outreachTouches.length < outreachTotal ? showMoreOutreach : null}
+            error={outreachError}
             onDone={removeTouch}
             onRestore={restoreTouch}
+            onCompleted={completeTouch}
           />
         </>
       ) : (

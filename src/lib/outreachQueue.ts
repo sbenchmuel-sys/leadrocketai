@@ -116,8 +116,18 @@ export interface OutreachQueuePage {
   touches: OutreachTouch[];
   /** Every due touch matching the query (channel filter included), NOT just this page. */
   total: number;
-  /** Due touches per channel across the WHOLE backlog — the Today view's group counts. */
-  byChannel: Record<OutreachChannel, number>;
+  /**
+   * Due touches per channel across the WHOLE backlog — the Today view's group
+   * counts. `null` means THAT COUNT IS UNKNOWN because its read failed, and is
+   * deliberately NOT the same value as 0.
+   *
+   * PostgREST resolves a failed request as `{ count: null, error }` rather than
+   * rejecting, so the previous `count ?? 0` turned every transient read failure
+   * into a confident "nothing to do": the chip read 0, went disabled, and the
+   * tab badge undercounted — with a real backlog sitting behind it. Callers
+   * render null as "—" and must never disable an affordance on it.
+   */
+  byChannel: Record<OutreachChannel, number | null>;
 }
 
 export const OUTREACH_CHANNELS: OutreachChannel[] = ["email", "voice", "sms", "whatsapp", "linkedin"];
@@ -139,17 +149,23 @@ export async function fetchOutreachQueue(
   opts?: { channel?: OutreachChannel | null },
 ): Promise<OutreachQueuePage> {
   const nowIso = new Date().toISOString();
-  const emptyByChannel = (): Record<OutreachChannel, number> =>
+  const emptyByChannel = (): Record<OutreachChannel, number | null> =>
     ({ email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 });
 
   // Resolve ACTIVE campaigns FIRST (RLS scopes this to the rep's workspace), then
   // constrain the touch query to them BEFORE applying the page limit — so a
   // paused campaign's stale queued rows can't consume the page and hide active,
   // currently-due work that sits beyond the cap.
-  const { data: activeCamps } = await supabase
+  const { data: activeCamps, error: campsError } = await supabase
     .from("campaigns")
     .select("id, name")
     .eq("status", "active");
+  // A failed read is not an empty workspace. Without this throw, one hiccup on
+  // the campaigns query emptied `activeIds` and the function returned a clean
+  // "nothing due" page — the rep's whole cold backlog, silently reported as
+  // done. Throwing keeps the numbers already on screen and lets the tab say the
+  // list couldn't be loaded.
+  if (campsError) throw new Error(campsError.message || "Couldn't load your outreach");
   const campaignMap = new Map(((activeCamps || []) as any[]).map((c) => [c.id, c]));
   const activeIds = [...campaignMap.keys()];
   if (activeIds.length === 0) return { touches: [], total: 0, byChannel: emptyByChannel() };
@@ -187,8 +203,14 @@ export async function fetchOutreachQueue(
       dueBase("id, leads!inner(id)", { count: "exact", head: true }).eq("channel", ch),
     ),
   ]);
+  // Same rule for the page itself: `{ data: null, error }` would otherwise
+  // render as an empty, cheerful queue.
+  if (pageRes.error) throw new Error(pageRes.error.message || "Couldn't load your outreach");
   const byChannel = emptyByChannel();
-  OUTREACH_CHANNELS.forEach((ch, i) => { byChannel[ch] = countRes[i].count ?? 0; });
+  OUTREACH_CHANNELS.forEach((ch, i) => {
+    // error → unknown (null). No error and a null count → genuinely 0.
+    byChannel[ch] = countRes[i].error ? null : countRes[i].count ?? 0;
+  });
   const rows = (pageRes.data || []) as any[];
   const total = pageRes.count ?? rows.length;
   if (rows.length === 0) return { touches: [], total, byChannel };
@@ -317,6 +339,36 @@ export async function fetchOutreachQueue(
   return { touches: mapped, total, byChannel };
 }
 
+
+// ── Completed-touch reconciliation (focus mode's in-flight page load) ─────────
+
+/**
+ * Focus mode pulls the next page the moment the rep lands on the last loaded
+ * card — BEFORE they act on it. If they then complete that card, the in-flight
+ * response still lists it as queued (the server had not yet been told) and the
+ * card the rep just finished pops back onto the screen.
+ *
+ * So the page keeps the ids it has completed and every response is reconciled
+ * against them. `seq` is a monotonic counter: a completion recorded at seq N is
+ * only forgotten once a request STARTED at or after N comes back without it —
+ * at that point the server agrees the touch is gone and the suppression has done
+ * its job. (Without the prune, a touch snoozed and later re-queued in the same
+ * session would stay invisible.)
+ *
+ * Pure — the whole point is that a test can drive it.
+ */
+export function reconcileCompleted<T extends { id: string }>(
+  fetched: T[],
+  completed: ReadonlyMap<string, number>,
+  requestSeq: number,
+): { touches: T[]; completed: Map<string, number> } {
+  const fetchedIds = new Set(fetched.map((t) => t.id));
+  const next = new Map(completed);
+  for (const [id, seq] of completed) {
+    if (seq <= requestSeq && !fetchedIds.has(id)) next.delete(id);
+  }
+  return { touches: fetched.filter((t) => !completed.has(t.id)), completed: next };
+}
 
 // ── Rep actions (all funnel through the edge function → shared helpers) ────────
 

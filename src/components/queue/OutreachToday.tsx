@@ -40,19 +40,23 @@ interface OutreachTodayProps {
   touches: OutreachTouch[];
   /** Backlog size for the CURRENT selection (all, or the selected channel). */
   total: number;
-  /** Backlog size per channel — the chip counts. */
-  byChannel: Record<OutreachChannel, number>;
+  /** Backlog size per channel — the chip counts. null = unknown (a read failed). */
+  byChannel: Record<OutreachChannel, number | null>;
   loading: boolean;
+  /** Set when the last load failed. The tab says so instead of showing "nothing due". */
+  error?: string | null;
   channel: OutreachChannel | null;
   onSelectChannel: (ch: OutreachChannel | null) => void;
   /** Grow the page window; null when every due touch is already on screen. */
   onShowMore: (() => void) | null;
   onDone: (touchId: string) => void;
   onRestore: (touchId: string) => void;
+  /** Fired after an action actually succeeded server-side (counts need a re-read). */
+  onCompleted?: (touchId: string) => void;
 }
 
 export function OutreachToday({
-  touches, total, byChannel, loading, channel, onSelectChannel, onShowMore, onDone, onRestore,
+  touches, total, byChannel, loading, error, channel, onSelectChannel, onShowMore, onDone, onRestore, onCompleted,
 }: OutreachTodayProps) {
   const [focus, setFocus] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
@@ -74,8 +78,12 @@ export function OutreachToday({
     onShowMore();
   }, [focus, loading, safeIdx, touches.length, total, onShowMore]);
 
-  const allCount = OUTREACH_CHANNELS.reduce((n, ch) => n + byChannel[ch], 0);
-  const chips: { id: OutreachChannel | null; label: string; count: number; icon?: ReactNode }[] = [
+  // One unknown channel makes the total unknown: summing what we do have would
+  // print a smaller, confident number over a backlog we can't see.
+  const allCount = OUTREACH_CHANNELS.some((ch) => byChannel[ch] === null)
+    ? null
+    : OUTREACH_CHANNELS.reduce((n, ch) => n + (byChannel[ch] as number), 0);
+  const chips: { id: OutreachChannel | null; label: string; count: number | null; icon?: ReactNode }[] = [
     { id: null, label: "All", count: allCount },
     ...OUTREACH_CHANNELS.map((ch) => ({ id: ch, label: CHANNEL_LABEL[ch], count: byChannel[ch], icon: CHANNEL_ICON[ch] })),
   ];
@@ -91,6 +99,8 @@ export function OutreachToday({
             variant={isActive ? "default" : "outline"}
             size="sm"
             aria-pressed={isActive}
+            /* A null count means "we don't know", so the chip stays clickable —
+               a failed read must never lock the rep out of a channel. */
             disabled={!isActive && chip.count === 0 && chip.id !== null}
             onClick={() => onSelectChannel(chip.id)}
             className={cn(
@@ -107,7 +117,7 @@ export function OutreachToday({
                 isActive ? "bg-primary-foreground/20 text-primary-foreground" : "",
               )}
             >
-              {chip.count}
+              {chip.count ?? "—"}
             </Badge>
           </Button>
         );
@@ -118,7 +128,7 @@ export function OutreachToday({
           size="sm"
           variant={focus ? "secondary" : "ghost"}
           className="h-8 gap-1.5 text-xs"
-          disabled={total === 0 && !focus}
+          disabled={total === 0 && !focus && !error}
           onClick={() => { setFocus((f) => !f); setFocusIdx(0); }}
           aria-pressed={focus}
           title={focus ? "Back to the list" : "Work this queue one card at a time"}
@@ -129,6 +139,14 @@ export function OutreachToday({
       </div>
     </div>
   );
+
+  // Shown above every layout below. Deliberately not an empty state: the rep
+  // must be able to tell "nothing due" from "we couldn't look".
+  const errorBanner = error ? (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+      Couldn't load your outreach: {error}. The numbers below may be out of date — nothing has been sent or skipped.
+    </div>
+  ) : null;
 
   const skeleton = (
     <div className="space-y-2">
@@ -152,9 +170,10 @@ export function OutreachToday({
     return (
       <div className="space-y-3">
         {chipRow}
+        {errorBanner}
         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
           <span className="text-xs text-muted-foreground">
-            {queueName} · {total === 0 ? "nothing due" : `${Math.min(safeIdx + 1, total)} of ${total}`}
+            {queueName} · {error ? "couldn't load" : total === 0 ? "nothing due" : `${Math.min(safeIdx + 1, total)} of ${total}`}
           </span>
           <div className="flex items-center gap-1">
             <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label="Previous card"
@@ -168,8 +187,8 @@ export function OutreachToday({
           </div>
         </div>
         {loading && touches.length === 0 ? skeleton
-          : !current ? <QueueEmptyState variant="no_matches" />
-          : <OutreachCard key={current.id} touch={current} onDone={onDone} onRestore={onRestore} />}
+          : !current ? (error ? null : <QueueEmptyState variant="no_matches" />)
+          : <OutreachCard key={current.id} touch={current} onDone={onDone} onRestore={onRestore} onCompleted={onCompleted} />}
       </div>
     );
   }
@@ -179,11 +198,12 @@ export function OutreachToday({
     return (
       <div className="space-y-3">
         {chipRow}
+        {errorBanner}
         {loading && touches.length === 0 ? skeleton
-          : touches.length === 0 ? <QueueEmptyState variant="no_matches" />
+          : touches.length === 0 && !error ? <QueueEmptyState variant="no_matches" />
           : (
             <div className="space-y-2">
-              {touches.map((t) => <OutreachCard key={t.id} touch={t} onDone={onDone} onRestore={onRestore} />)}
+              {touches.map((t) => <OutreachCard key={t.id} touch={t} onDone={onDone} onRestore={onRestore} onCompleted={onCompleted} />)}
               {showMore}
             </div>
           )}
@@ -196,8 +216,9 @@ export function OutreachToday({
   return (
     <div className="space-y-3">
       {chipRow}
+      {errorBanner}
       {loading && touches.length === 0 ? skeleton
-        : groups.length === 0 ? <QueueEmptyState variant="no_matches" />
+        : groups.length === 0 && !error ? <QueueEmptyState variant="no_matches" />
         : (
           <div className="space-y-4">
             {groups.map((g) => (
@@ -206,8 +227,10 @@ export function OutreachToday({
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground">
                     {CHANNEL_ICON[g.channel]} {CHANNEL_LABEL[g.channel]}
                   </span>
-                  <span className="text-xs tabular-nums text-muted-foreground">{byChannel[g.channel]} due</span>
-                  {byChannel[g.channel] > g.touches.length && (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {byChannel[g.channel] === null ? "count unavailable" : `${byChannel[g.channel]} due`}
+                  </span>
+                  {(byChannel[g.channel] ?? 0) > g.touches.length && (
                     <button type="button" className="text-xs text-primary hover:underline"
                       onClick={() => onSelectChannel(g.channel)}>
                       Open this queue
@@ -215,7 +238,7 @@ export function OutreachToday({
                   )}
                 </div>
                 <div className="space-y-2">
-                  {g.touches.map((t) => <OutreachCard key={t.id} touch={t} onDone={onDone} onRestore={onRestore} />)}
+                  {g.touches.map((t) => <OutreachCard key={t.id} touch={t} onDone={onDone} onRestore={onRestore} onCompleted={onCompleted} />)}
                 </div>
               </section>
             ))}
