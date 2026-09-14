@@ -41,8 +41,10 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
-const { fetchOutreachQueue, reconcileCompleted } = await import("@/lib/outreachQueue");
+const { fetchOutreachQueue, reconcileCompleted, sumChannelCounts, UNKNOWN_CHANNEL_COUNTS } =
+  await import("@/lib/outreachQueue");
 const { OutreachToday } = await import("@/components/queue/OutreachToday");
+const { QueueChips } = await import("@/components/queue/QueueChips");
 
 /** Is this chain one of the five per-channel HEAD counts, and for which channel? */
 function countChannel(chain: Call[]): string | null {
@@ -220,5 +222,36 @@ describe("reconcileCompleted — an in-flight page load can't re-add a finished 
     completed = first.completed;
     const second = reconcileCompleted([touch("t2")], completed, 11);
     expect(second.touches.map((t) => t.id)).toEqual(["t2"]); // and back on the next
+  });
+});
+
+describe("the tab strip — the surface a rep reads before opening anything", () => {
+  it("starts UNKNOWN, so a failed first load can't render as a confident zero", () => {
+    // The all-zero initializer is what let "Outreach 0" sit on the tab strip
+    // through a totally failed load. A rep who sees 0 never opens the tab, so
+    // they never see the banner that would have told them.
+    expect(sumChannelCounts(UNKNOWN_CHANNEL_COUNTS)).toBeNull();
+  });
+
+  it("renders '—' on the Outreach tab when the total is unknown", () => {
+    render(
+      <QueueChips active={null} counts={{ replied: 2, followup: 1, outreach: null }} onSelect={() => {}} />,
+    );
+    const outreach = screen.getByRole("button", { name: /Outreach/ });
+    expect(outreach.textContent).toContain("—");
+    expect(outreach.textContent).not.toContain("0");
+  });
+
+  it("still shows a real zero when the backlog genuinely is empty", () => {
+    expect(sumChannelCounts({ email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 })).toBe(0);
+    render(
+      <QueueChips active={null} counts={{ replied: 0, followup: 0, outreach: 0 }} onSelect={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: /Outreach/ }).textContent).toContain("0");
+  });
+
+  it("refuses to sum a partially-known set", () => {
+    // A smaller, confident number over a backlog we cannot see is worse than "—".
+    expect(sumChannelCounts({ email: 4, voice: null, sms: 1, whatsapp: 0, linkedin: 0 })).toBeNull();
   });
 });

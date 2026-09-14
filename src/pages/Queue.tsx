@@ -62,6 +62,8 @@ import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
 import {
   fetchOutreachQueue,
   reconcileCompleted,
+  sumChannelCounts,
+  UNKNOWN_CHANNEL_COUNTS,
   OUTREACH_PAGE_SIZE,
   type OutreachChannel,
   type OutreachTouch,
@@ -122,10 +124,19 @@ export default function Queue() {
   const [outreachTotal, setOutreachTotal] = useState(0);
   // Backlog per channel (server counts) — the Today view's chip numbers; the tab
   // badge is their sum so it never depends on which channel is selected.
-  // null for a channel = that count could not be read. Never rendered as 0.
-  const [outreachByChannel, setOutreachByChannel] = useState<Record<OutreachChannel, number | null>>(
-    { email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 },
-  );
+  // null for a channel = THAT COUNT IS UNKNOWN. This is the one value every
+  // count-rendering surface reads, so "unknown" cannot be lost on the way to any
+  // of them — see the list in the Outreach tab's render below.
+  //
+  // It starts all-null, not all-zero: before the first successful read we do not
+  // know the backlog, and the all-zero initializer is exactly what kept the
+  // top-level Outreach chip confidently saying "0" through a totally failed
+  // load. A rep who sees 0 on the tab strip never opens the tab, so they never
+  // see the banner that would have told them. A read that fails AFTER a good one
+  // keeps the last real numbers (stale, but true when they were taken) and the
+  // banner says the list could not be refreshed.
+  const [outreachByChannel, setOutreachByChannel] =
+    useState<Record<OutreachChannel, number | null>>(UNKNOWN_CHANNEL_COUNTS);
   // A failed load must not look like an empty backlog, so the tab says so.
   const [outreachError, setOutreachError] = useState<string | null>(null);
   const [outreachChannel, setOutreachChannel] = useState<OutreachChannel | null>(null);
@@ -274,9 +285,10 @@ export default function Queue() {
       followup: chipCounts.followup_due,
       // Unknown (a failed count read) propagates as null → the tab shows "—",
       // never a reassuring 0.
-      outreach: Object.values(outreachByChannel).some((n) => n === null)
-        ? null
-        : Object.values(outreachByChannel).reduce((a: number, b) => a + (b as number), 0),
+      // Unknown (a failed or not-yet-completed count read) propagates as null →
+      // the tab shows "—", never a reassuring 0. Same derivation as the Today
+      // view's "All" chip, so the two can never disagree.
+      outreach: sumChannelCounts(outreachByChannel),
     }),
     [chipCounts, outreachByChannel],
   );
@@ -463,6 +475,7 @@ export default function Queue() {
           )}
           <OutreachDigest
             dueNow={outreachByChannel}
+            loading={outreachLoading}
             refreshKey={outreachTouches.length}
             onOpenChannel={selectOutreachChannel}
           />

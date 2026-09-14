@@ -143,6 +143,37 @@ export interface OutreachQueuePage {
 
 export const OUTREACH_CHANNELS: OutreachChannel[] = ["email", "voice", "sms", "whatsapp", "linkedin"];
 
+/**
+ * The backlog before anything has been read: UNKNOWN, not empty.
+ *
+ * Exported so no screen can hand-write `{ email: 0, … }` as an initial value
+ * again — that all-zero initializer is what kept the top-level Outreach chip
+ * saying a confident "0" through a completely failed load, on the one surface a
+ * rep reads before opening anything.
+ */
+export const UNKNOWN_CHANNEL_COUNTS: Record<OutreachChannel, number | null> = {
+  email: null, voice: null, sms: null, whatsapp: null, linkedin: null,
+};
+
+/**
+ * The ONE derivation of a total from the per-channel counts. Unknown is
+ * infectious: if any channel could not be read, the total is unknown, because a
+ * sum of the rest is a smaller, confident number over a backlog we cannot see.
+ *
+ * Every surface that shows a total reads this — the tab-strip badge and the
+ * Today view's "All" chip today — so a fourth one cannot quietly re-derive it
+ * with `?? 0`.
+ */
+export function sumChannelCounts(byChannel: Record<OutreachChannel, number | null>): number | null {
+  let total = 0;
+  for (const ch of OUTREACH_CHANNELS) {
+    const n = byChannel[ch];
+    if (n === null || n === undefined) return null;
+    total += n;
+  }
+  return total;
+}
+
 /** The rep's word for each channel, for error copy. Mirrors CHANNEL_LABEL in
  *  src/lib/outreachToday.ts — kept here so the data layer has no UI import. */
 const CHANNEL_COUNT_LABEL: Record<OutreachChannel, string> = {

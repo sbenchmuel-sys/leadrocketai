@@ -389,3 +389,48 @@ describe("the card refuses an uncorrelated body", () => {
     expect(screen.queryByText("Your message")).toBeNull();
   });
 });
+
+describe("orphan recovery for an anchored send", () => {
+  const NURTURE_AT = "2026-09-01T09:00:00Z";
+
+  beforeEach(() => {
+    emailThreadCalls.length = 0;
+    threadEmails = [];
+    timelineRows = [];
+  });
+
+  it("recovers the nurture send from interactions when its projection failed", async () => {
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-12T09:00:00Z", body_text: "unrelated later email", subject: "Invoice" },
+      { direction: "outbound", occurred_at: NURTURE_AT, body_text: "nurture three", subject: "Thought you'd like this" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe("nurture three");
+  });
+
+  it("still refuses the newer unrelated send when the anchored one isn't there either", async () => {
+    // The whole reason anchored leads were excluded from the repair. They no
+    // longer are, so this is the check that keeps it safe.
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-12T09:00:00Z", body_text: "unrelated later email", subject: "Invoice" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(map.has("lead-1")).toBe(false);
+  });
+
+  it("does not go looking when the anchored row was already found", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: NURTURE_AT, event_type: "email_outbound", direction: "outbound",
+        snippet_text: "nurture three", subject: "s", metadata_json: {}, intent: null },
+    ];
+    await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(emailThreadCalls).toEqual([]);
+  });
+});

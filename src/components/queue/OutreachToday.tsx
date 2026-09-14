@@ -25,7 +25,12 @@ import { cn } from "@/lib/utils";
 import { Mail, PhoneCall, Phone, MessageSquare, Linkedin, ChevronLeft, ChevronRight, Crosshair, X } from "lucide-react";
 import { OutreachCard } from "@/components/queue/OutreachCard";
 import { QueueEmptyState } from "@/components/queue/QueueEmptyState";
-import { OUTREACH_CHANNELS, type OutreachChannel, type OutreachTouch } from "@/lib/outreachQueue";
+import {
+  OUTREACH_CHANNELS,
+  sumChannelCounts,
+  type OutreachChannel,
+  type OutreachTouch,
+} from "@/lib/outreachQueue";
 import { CHANNEL_LABEL, groupByChannel } from "@/lib/outreachToday";
 
 const CHANNEL_ICON: Record<OutreachChannel, ReactNode> = {
@@ -78,11 +83,9 @@ export function OutreachToday({
     onShowMore();
   }, [focus, loading, safeIdx, touches.length, total, onShowMore]);
 
-  // One unknown channel makes the total unknown: summing what we do have would
-  // print a smaller, confident number over a backlog we can't see.
-  const allCount = OUTREACH_CHANNELS.some((ch) => byChannel[ch] === null)
-    ? null
-    : OUTREACH_CHANNELS.reduce((n, ch) => n + (byChannel[ch] as number), 0);
+  // One unknown channel makes the total unknown — see sumChannelCounts, which
+  // the tab-strip badge reads too.
+  const allCount = sumChannelCounts(byChannel);
   const chips: { id: OutreachChannel | null; label: string; count: number | null; icon?: ReactNode }[] = [
     { id: null, label: "All", count: allCount },
     ...OUTREACH_CHANNELS.map((ch) => ({ id: ch, label: CHANNEL_LABEL[ch], count: byChannel[ch], icon: CHANNEL_ICON[ch] })),
@@ -93,8 +96,10 @@ export function OutreachToday({
   // precisely how this failed the first time — a per-channel count failed, the
   // page's success branch cleared its error, and "Queue clear. Nice." rendered
   // under a badge reading "—".
+  // `loading` guard: before the first read completes the counts are legitimately
+  // unknown and the skeleton says so — that is not a failure to report.
   const notice = error
-    ?? (OUTREACH_CHANNELS.some((ch) => byChannel[ch] === null)
+    ?? (!loading && OUTREACH_CHANNELS.some((ch) => byChannel[ch] === null)
       ? "Some backlog counts couldn't be read."
       : null);
 

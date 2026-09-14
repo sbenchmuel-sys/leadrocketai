@@ -906,11 +906,20 @@ export async function fetchLatestOutboundsWithOrphans(
     leads.map((l) => ({ id: l.id, anchorAt: l.anchorAt })),
   );
 
-  // The repair is about `last_outbound_at` specifically. A lead anchored to a
-  // different clock is not "missing its newest send"; recovering that send would
-  // hand the card the very row the anchor exists to exclude.
-  const stale = leads.filter(
-    (l) => !l.anchorAt && needsOrphanBackfill(l, map.get(l.id)?.occurred_at),
+  // Two ways a preview can be missing, and both are repairable because the
+  // ANCHOR is what makes looking safe:
+  //   • un-anchored ("newest outbound"): the newest send never reached the
+  //     timeline — `needsOrphanBackfill` spots the date/preview mismatch.
+  //   • anchored (today: a nurture send): the row AT the anchor is absent. An
+  //     earlier revision excluded these outright, to stop the repair handing the
+  //     card the very row the anchor exists to exclude. That was the right
+  //     instinct and the wrong scope: the recovery below only ever accepts an
+  //     interaction AT the anchor timestamp, so it cannot return the unrelated
+  //     newer touch. Excluding them merely lost the preview permanently for a
+  //     nurture email whose projection failed, while the interaction sat there
+  //     matching the anchor exactly.
+  const stale = leads.filter((l) =>
+    l.anchorAt ? !map.has(l.id) : needsOrphanBackfill(l, map.get(l.id)?.occurred_at),
   );
   if (stale.length === 0) return map;
 
@@ -918,12 +927,21 @@ export async function fetchLatestOutboundsWithOrphans(
     stale.map(async (l) => {
       try {
         const { emails } = await getLeadEmailThread(l.id, 10);
-        const newest = emails
-          .filter((e) => e.direction === "outbound")
-          .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0];
+        const outbound = emails.filter((e) => e.direction === "outbound");
+        const anchorMs = l.anchorAt ? new Date(l.anchorAt).getTime() : NaN;
+        const newest = Number.isFinite(anchorMs)
+          // Anchored: the send the card was scheduled FROM, or nothing. Never
+          // "the newest", which is what the anchor exists to rule out.
+          ? outbound.find(
+              (e) => Math.abs(new Date(e.occurred_at).getTime() - anchorMs) <= ANCHOR_MATCH_SKEW_MS,
+            )
+          : outbound.sort(
+              (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
+            )[0];
         if (!newest) return;
         // Only replace when the recovered row really is newer than what the
-        // timeline gave us — never downgrade a good preview.
+        // timeline gave us — never downgrade a good preview. (An anchored lead
+        // reaches here only with no entry at all, so this is a no-op for it.)
         const have = map.get(l.id);
         if (have && new Date(newest.occurred_at).getTime() <= new Date(have.occurred_at).getTime()) return;
         map.set(l.id, {
