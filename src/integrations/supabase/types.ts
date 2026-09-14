@@ -4358,6 +4358,14 @@ export type Database = {
         Args: { p_lead_id: string; p_source: string; p_workspace_id: string }
         Returns: undefined
       }
+      enroll_campaign_leads: {
+        Args: {
+          _campaign_id: string
+          _enrollments: Json
+          _step_fingerprint: string
+        }
+        Returns: Json
+      }
       expire_old_messages: {
         Args: never
         Returns: {
@@ -4419,6 +4427,10 @@ export type Database = {
       is_workspace_member: {
         Args: { _user_id: string; _workspace_id: string }
         Returns: boolean
+      }
+      launch_campaign_with_schedule: {
+        Args: { _campaign_id: string; _plan: Json }
+        Returns: Json
       }
       mark_action_handled: {
         Args: { p_lead_id: string; p_permanent?: boolean; p_restore?: Json }
