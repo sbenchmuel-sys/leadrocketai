@@ -36,7 +36,8 @@ import {
   applyChipFilter,
   countChipBuckets,
   fetchLatestInbounds,
-  fetchLatestMeetings,
+  fetchRecapMeetings,
+  outboundAnchorFor,
   fetchLatestOutboundsWithOrphans,
   type QueueChipBucket,
   type QueueLatestInbound,
@@ -312,8 +313,15 @@ export default function Queue() {
     // the lead's own `last_outbound_at` so a send whose timeline projection
     // failed is recovered from `interactions` instead of the card quoting the
     // previous message under the new send's date.
+    // `anchorAt` is the clock that scheduled each card (see QueueAnchorField):
+    // a nurture card is scheduled from `last_nurture_outbound_at`, so the fetch
+    // must bring back THAT send and not whatever the rep did most recently.
     void fetchLatestOutboundsWithOrphans(
-      pageLeads.map((l) => ({ id: l.id, last_outbound_at: l.last_outbound_at })),
+      pageLeads.map((l) => ({
+        id: l.id,
+        last_outbound_at: l.last_outbound_at,
+        anchorAt: outboundAnchorFor(l),
+      })),
     ).then((map) => {
       if (!cancelled) setLatestOutbounds(map);
     });
@@ -322,7 +330,7 @@ export default function Queue() {
       .map((l) => l.id);
     if (recapIds.length === 0) setLatestMeetings(new Map());
     else {
-      void fetchLatestMeetings(recapIds).then((map) => {
+      void fetchRecapMeetings(recapIds).then((map) => {
         if (!cancelled) setLatestMeetings(map);
       });
     }

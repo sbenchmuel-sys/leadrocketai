@@ -267,6 +267,8 @@ export interface QueueLeadRow {
   action_reason_code: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
+  /** The clock `send_nurture_N` is scheduled from (syncEngine branch E). */
+  last_nurture_outbound_at: string | null;
   action_dismissed_at: string | null;
   action_permanently_dismissed: boolean;
   action_resurfaced_at: string | null;
@@ -316,7 +318,7 @@ export type QueueLatestMessage = QueueLatestInbound & {
 const QUEUE_LEAD_COLUMNS = `
   id, name, company, email,
   needs_action, next_action_key, next_action_label, action_reason_code,
-  last_inbound_at, last_outbound_at,
+  last_inbound_at, last_outbound_at, last_nurture_outbound_at,
   action_dismissed_at, action_permanently_dismissed, action_resurfaced_at,
   motion, stage,
   whatsapp_number, phone, wa_opted_in, sms_opted_in, country,
@@ -685,9 +687,18 @@ export async function fetchLatestInbounds(
  * classify-inbound only annotates inbound rows.
  */
 export async function fetchLatestOutbounds(
-  leadIds: string[],
+  leads: Array<{ id: string; anchorAt?: string | null }>,
 ): Promise<Map<string, QueueLatestMessage>> {
+  const leadIds = leads.map((l) => l.id);
   if (leadIds.length === 0) return new Map();
+  // Leads whose card is scheduled from a SPECIFIC outbound (today: the nurture
+  // clock) want that row, not the newest one. Everything else wants the newest,
+  // which is the same thing for a `last_outbound_at`-anchored card.
+  const anchors = new Map<string, number>();
+  for (const l of leads) {
+    const t = l.anchorAt ? new Date(l.anchorAt).getTime() : NaN;
+    if (Number.isFinite(t)) anchors.set(l.id, t);
+  }
 
   const { data, error } = await supabase
     .from("lead_timeline_items")
@@ -718,6 +729,15 @@ export async function fetchLatestOutbounds(
     // other direction. The three written types are outbound by their own name.
     if (isOutboundCall(row) && row.direction !== "outbound") continue;
     if (map.has(row.lead_id)) continue;
+    const anchor = anchors.get(row.lead_id);
+    if (anchor !== undefined) {
+      // Anchored lead: rows arrive newest-first, so skip past anything newer
+      // than the scheduling event and take only the row AT it. If the anchored
+      // row never appears (purged, or outside the window), the lead gets no
+      // entry and the card shows no body — which is the point.
+      const t = new Date(row.occurred_at).getTime();
+      if (!Number.isFinite(t) || Math.abs(t - anchor) > ANCHOR_MATCH_SKEW_MS) continue;
+    }
     const duration = (row.metadata_json ?? {}).duration_sec;
     map.set(row.lead_id, {
       lead_id: row.lead_id,
@@ -734,27 +754,70 @@ export async function fetchLatestOutbounds(
 }
 
 /**
- * Latest meeting row per lead — the context a recap card is about.
+ * The meeting a recap card is actually about — resolved through the OUTSTANDING
+ * meeting pack, not by taking the newest meeting row.
  *
- * Same bounded shape as the two message fetches. A lead with no Zoom-matched
- * meeting simply has no entry and the card renders no preview, which is the
- * floor: showing nothing beats showing an unrelated email.
+ * `gmail-sync` sets `hasMeetingWithoutFollowup` by walking EVERY pack on the
+ * lead, so the pack that caused the card is the one still missing a
+ * `follow_up_email_body` — which may be an older meeting than the most recent
+ * one. Ordering meeting rows newest-first therefore showed the rep the meeting
+ * they had already written up, while telling them to write it up.
+ *
+ * `meeting_packs.source_meeting_summary_id` is the FK to `meeting_summaries`,
+ * which is the `source_id` of the timeline row `process-zoom-summary` projects —
+ * so the correlation is exact where it exists at all.
+ *
+ * Deliberately conservative, per this unit's rule: a lead with TWO outstanding
+ * packs has no identifiable triggering meeting (either could be the one the rep
+ * means), and a pack with no `source_meeting_summary_id` has no row to point at.
+ * Both cases return nothing and the card renders no context. A plausible guess
+ * is worse than a blank.
  */
-export async function fetchLatestMeetings(
+export async function fetchRecapMeetings(
   leadIds: string[],
 ): Promise<Map<string, QueueLatestMessage>> {
   if (leadIds.length === 0) return new Map();
 
+  const { data: packs, error: packErr } = await supabase
+    .from("meeting_packs")
+    .select("lead_id, follow_up_email_body, source_meeting_summary_id")
+    .in("lead_id", leadIds);
+
+  if (packErr) {
+    console.warn("[queueQueries] meeting pack fetch failed:", packErr.message);
+    return new Map();
+  }
+
+  // lead → the single outstanding pack's summary id, or null once ambiguous.
+  const summaryIdByLead = new Map<string, string | null>();
+  for (const p of (packs ?? []) as Array<{
+    lead_id: string;
+    follow_up_email_body: string | null;
+    source_meeting_summary_id: string | null;
+  }>) {
+    if ((p.follow_up_email_body ?? "").trim() !== "") continue; // already written up
+    summaryIdByLead.set(
+      p.lead_id,
+      summaryIdByLead.has(p.lead_id) ? null : p.source_meeting_summary_id,
+    );
+  }
+
+  const wanted = new Map<string, string>();
+  for (const [leadId, summaryId] of summaryIdByLead) {
+    if (summaryId) wanted.set(summaryId, leadId);
+  }
+  if (wanted.size === 0) return new Map();
+
   const { data, error } = await supabase
     .from("lead_timeline_items")
-    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent")
+    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent, source_id")
     .in("lead_id", leadIds)
     .eq("event_type", MEETING_EVENT_TYPE)
-    .order("occurred_at", { ascending: false })
+    .in("source_id", [...wanted.keys()])
     .limit(500);
 
   if (error) {
-    console.warn("[queueQueries] latest meeting fetch failed:", error.message);
+    console.warn("[queueQueries] recap meeting fetch failed:", error.message);
     return new Map();
   }
 
@@ -767,7 +830,10 @@ export async function fetchLatestMeetings(
     subject: string | null;
     metadata_json: Record<string, unknown> | null;
     intent: string | null;
+    source_id: string | null;
   }>) {
+    // Only the row the outstanding pack points at, and only for that pack's lead.
+    if (!row.source_id || wanted.get(row.source_id) !== row.lead_id) continue;
     if (map.has(row.lead_id)) continue;
     map.set(row.lead_id, {
       lead_id: row.lead_id,
@@ -834,11 +900,18 @@ export function needsOrphanBackfill(
  * server-side — the same shape as `get_latest_intents_for_leads`.
  */
 export async function fetchLatestOutboundsWithOrphans(
-  leads: Array<{ id: string; last_outbound_at: string | null }>,
+  leads: Array<{ id: string; last_outbound_at: string | null; anchorAt?: string | null }>,
 ): Promise<Map<string, QueueLatestMessage>> {
-  const map = await fetchLatestOutbounds(leads.map((l) => l.id));
+  const map = await fetchLatestOutbounds(
+    leads.map((l) => ({ id: l.id, anchorAt: l.anchorAt })),
+  );
 
-  const stale = leads.filter((l) => needsOrphanBackfill(l, map.get(l.id)?.occurred_at));
+  // The repair is about `last_outbound_at` specifically. A lead anchored to a
+  // different clock is not "missing its newest send"; recovering that send would
+  // hand the card the very row the anchor exists to exclude.
+  const stale = leads.filter(
+    (l) => !l.anchorAt && needsOrphanBackfill(l, map.get(l.id)?.occurred_at),
+  );
   if (stale.length === 0) return map;
 
   await Promise.all(
@@ -1036,6 +1109,29 @@ export function queueButtonLabel(input: {
 
 export type QueueBodySource = "inbound" | "outbound" | "meeting";
 
+/**
+ * WHICH CLOCK SCHEDULED THIS CARD.
+ *
+ * The single rule this unit kept re-discovering, stated once: a card must quote
+ * the event that caused it, and `deriveAction` does not always schedule off the
+ * newest thing that happened. `send_nurture_N` is scheduled from
+ * `last_nurture_outbound_at`, so a manual call or an unrelated email sent since
+ * must not be quoted or dated. `generate_post_meeting_recap` is scheduled from a
+ * meeting pack, not from a timestamp on the lead at all.
+ *
+ * A new key inherits the rule by naming its anchor here; the preview then
+ * follows automatically, and where the anchored row cannot be found the card
+ * shows no body rather than a plausible-looking neighbour.
+ */
+export type QueueAnchorField =
+  | "last_inbound_at"
+  | "last_outbound_at"
+  | "last_nurture_outbound_at"
+  /** Not a column: correlated through the outstanding meeting pack. */
+  | "meeting_pack"
+  /** Nothing to correlate to — the card carries no quoted body. */
+  | null;
+
 export interface QueueSituation {
   /** Plain English, what a rep would say out loud. No enum names, no jargon. */
   label: string;
@@ -1049,6 +1145,8 @@ export interface QueueSituation {
    * and reads as though the rep has been ignoring the lead for a fortnight.
    */
   showTime: boolean;
+  /** The clock that scheduled this card — see QueueAnchorField. */
+  anchorField: QueueAnchorField;
 }
 
 /** Everything on the rep's own side of the conversation shares this shape. */
@@ -1057,6 +1155,7 @@ const MINE = (label: string, detail: string | null = null): QueueSituation => ({
   detail,
   bodySource: "outbound",
   showTime: true,
+  anchorField: "last_outbound_at",
 });
 
 /**
@@ -1066,12 +1165,19 @@ const MINE = (label: string, detail: string | null = null): QueueSituation => ({
  * fails if a new key is added upstream without a label here.
  */
 const SITUATIONS: Record<string, QueueSituation> = {
-  reply_now: { label: "They replied", detail: null, bodySource: "inbound", showTime: true },
+  reply_now: {
+    label: "They replied",
+    detail: null,
+    bodySource: "inbound",
+    showTime: true,
+    anchorField: "last_inbound_at",
+  },
   ooo_return_followup: {
     label: "They were away — they're back now",
     detail: null,
     bodySource: "outbound",
     showTime: false,
+    anchorField: "last_outbound_at",
   },
   // "email" would be a lie on a cross-channel trigger: `leads.last_outbound_at`
   // is stamped by sms-send and the WhatsApp path too (executionSettings.ts), and
@@ -1095,6 +1201,7 @@ const SITUATIONS: Record<string, QueueSituation> = {
     detail: null,
     bodySource: "outbound",
     showTime: false,
+    anchorField: "last_outbound_at",
   },
   closing_followup: MINE("Your proposal needs chasing"),
   // No time phrase, and no OUTBOUND body: this fires on
@@ -1109,6 +1216,7 @@ const SITUATIONS: Record<string, QueueSituation> = {
     detail: null,
     bodySource: "meeting",
     showTime: false,
+    anchorField: "meeting_pack",
   },
   post_meeting_followup: MINE("No word since your meeting"),
   send_pre_2: MINE("Intro sequence — second email is due"),
@@ -1125,6 +1233,69 @@ const SITUATIONS: Record<string, QueueSituation> = {
   // is the one the rep scrolls past. It asks.
   switch_to_nurture: MINE("Three emails, no reply — switch them to the slow track?"),
 };
+
+/**
+ * The moment that scheduled this card, read off the lead through the
+ * situation's anchor. Null when there is nothing on the lead to anchor to
+ * (`meeting_pack`, or a situation with no anchor at all).
+ */
+export function anchorTimestamp(
+  lead: Pick<QueueLeadRow, "last_inbound_at" | "last_outbound_at" | "last_nurture_outbound_at">,
+  situation: Pick<QueueSituation, "anchorField">,
+): string | null {
+  switch (situation.anchorField) {
+    case "last_inbound_at": return lead.last_inbound_at;
+    case "last_outbound_at": return lead.last_outbound_at;
+    case "last_nurture_outbound_at": return lead.last_nurture_outbound_at;
+    default: return null;
+  }
+}
+
+/** Two timestamps written by different statements in one send. */
+const ANCHOR_MATCH_SKEW_MS = 60_000;
+
+/**
+ * Is this preview row the event the card was scheduled from?
+ *
+ * The card may quote a row ONLY if it can establish the correlation. A
+ * `meeting_pack` anchor is correlated upstream (the fetch resolves the
+ * outstanding pack's summary id, so any row it returns is by definition the
+ * right one); a column anchor is checked here against the row's own timestamp.
+ * Anything else renders no body — "I can't tell which one" must never render as
+ * a plausible guess.
+ */
+export function previewMatchesAnchor(
+  lead: Pick<QueueLeadRow, "last_inbound_at" | "last_outbound_at" | "last_nurture_outbound_at">,
+  situation: Pick<QueueSituation, "anchorField">,
+  message: { occurred_at: string } | null | undefined,
+): boolean {
+  if (!message) return false;
+  if (situation.anchorField === "meeting_pack") return true;
+  const anchor = anchorTimestamp(lead, situation);
+  if (!anchor) return false;
+  const a = new Date(anchor).getTime();
+  const m = new Date(message.occurred_at).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(m)) return false;
+  return Math.abs(a - m) <= ANCHOR_MATCH_SKEW_MS;
+}
+
+/**
+ * Which outbound row the preview fetch should bring back for this lead: a
+ * specific timestamp when the card is scheduled off its own clock, or null for
+ * "the newest", which is what a `last_outbound_at`-anchored card wants anyway.
+ *
+ * General by construction — a future outbound key that names a different anchor
+ * inherits this without touching the fetch.
+ */
+export function outboundAnchorFor(lead: QueueLeadRow): string | null {
+  const situation = describeQueueSituation({
+    next_action_key: lead.next_action_key,
+    next_action_label: lead.next_action_label,
+  });
+  if (situation.bodySource !== "outbound") return null;
+  if (situation.anchorField === "last_outbound_at" || situation.anchorField === null) return null;
+  return anchorTimestamp(lead, situation);
+}
 
 /**
  * Pull the useful tail off a server-written `next_action_label`.
@@ -1174,8 +1345,18 @@ export function describeQueueSituation(
   if (fixed) return fixed;
 
   // send_nurture_1 … send_nurture_8 — one line, not eight table rows.
+  // Anchored to the NURTURE clock, not to `last_outbound_at`: syncEngine
+  // schedules this from `metrics.last_nurture_outbound_at`, so a manual call or
+  // an unrelated email sent since is neither what the card is about nor what
+  // dates it — and quoting it put "email 3 is due · sent 2 days ago" over
+  // yesterday's SMS about something else.
   const nurture = /^send_nurture_(\d+)$/.exec(key);
-  if (nurture) return MINE(`Nurture sequence — email ${nurture[1]} is due`);
+  if (nurture) {
+    return {
+      ...MINE(`Nurture sequence — email ${nurture[1]} is due`),
+      anchorField: "last_nurture_outbound_at",
+    };
+  }
 
   // Unknown key (a new one upstream, or a null). Prefer whatever the server
   // wrote over inventing a label; "Needs a look" beats a raw enum name.

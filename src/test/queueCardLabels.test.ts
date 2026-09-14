@@ -16,8 +16,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  anchorTimestamp,
   describeQueueSituation,
   needsOrphanBackfill,
+  outboundAnchorFor,
+  previewMatchesAnchor,
   type QueueLeadRow,
 } from "@/lib/queueQueries";
 import { buildWhyNowLine } from "@/components/queue/QueueCard";
@@ -39,6 +42,7 @@ function lead(over: Partial<QueueLeadRow> = {}): QueueLeadRow {
     action_reason_code: null,
     last_inbound_at: hoursAgo(2),
     last_outbound_at: daysAgo(6),
+    last_nurture_outbound_at: null,
     action_dismissed_at: null,
     action_permanently_dismissed: false,
     action_resurfaced_at: null,
@@ -145,6 +149,17 @@ describe("describeQueueSituation — one label per situation, in plain English",
     expect(s.detail).toBe("auto-send paused until Sep 12");
     // And it does NOT pass the generic head of that label off as the headline.
     expect(s.label).not.toContain("Follow up anytime");
+  });
+
+  it("anchors each key to the clock that actually scheduled it", () => {
+    const anchorOf = (key: string) =>
+      describeQueueSituation({ next_action_key: key, next_action_label: null }).anchorField;
+    expect(anchorOf("reply_now")).toBe("last_inbound_at");
+    expect(anchorOf("followup_due")).toBe("last_outbound_at");
+    // syncEngine branch E schedules from metrics.last_nurture_outbound_at.
+    expect(anchorOf("send_nurture_3")).toBe("last_nurture_outbound_at");
+    // Not a column at all — correlated through the outstanding meeting pack.
+    expect(anchorOf("generate_post_meeting_recap")).toBe("meeting_pack");
   });
 
   it("points a recap card at the MEETING, never at the pre-meeting email", () => {
@@ -297,5 +312,56 @@ describe("needsOrphanBackfill — a send whose timeline projection failed", () =
 
   it("never fires for a lead that has never had an outbound", () => {
     expect(needsOrphanBackfill({ last_outbound_at: null }, undefined)).toBe(false);
+  });
+});
+
+describe("the preview follows the scheduling event", () => {
+  const NURTURE_AT = "2026-09-01T09:00:00.000Z";
+  const SMS_AT = "2026-09-12T09:00:00.000Z"; // an unrelated manual touch since
+  const nurtureLead = lead({
+    next_action_key: "send_nurture_3",
+    last_nurture_outbound_at: NURTURE_AT,
+    last_outbound_at: SMS_AT,
+  });
+  const situation = describeQueueSituation({ next_action_key: "send_nurture_3", next_action_label: null });
+
+  it("dates a nurture card off the nurture send, not off a later manual touch", () => {
+    expect(anchorTimestamp(nurtureLead, situation)).toBe(NURTURE_AT);
+    expect(anchorTimestamp(nurtureLead, situation)).not.toBe(SMS_AT);
+  });
+
+  it("asks the fetch for the nurture send specifically", () => {
+    expect(outboundAnchorFor(nurtureLead)).toBe(NURTURE_AT);
+    // A plain follow-up wants the newest outbound, which is what it is anchored
+    // to — no extra work, and no second code path.
+    expect(outboundAnchorFor(lead({ next_action_key: "followup_due" }))).toBeNull();
+  });
+
+  it("refuses to quote the unrelated later message", () => {
+    expect(previewMatchesAnchor(nurtureLead, situation, { occurred_at: SMS_AT })).toBe(false);
+    expect(previewMatchesAnchor(nurtureLead, situation, { occurred_at: NURTURE_AT })).toBe(true);
+  });
+
+  it("shows nothing when the scheduling event cannot be found at all", () => {
+    expect(previewMatchesAnchor(nurtureLead, situation, undefined)).toBe(false);
+    // No nurture clock on the lead → nothing to correlate to → no body.
+    expect(
+      previewMatchesAnchor(lead({ last_nurture_outbound_at: null }), situation, { occurred_at: SMS_AT }),
+    ).toBe(false);
+  });
+
+  it("tolerates write skew between the send and its projection", () => {
+    expect(
+      previewMatchesAnchor(nurtureLead, situation, { occurred_at: "2026-09-01T09:00:30.000Z" }),
+    ).toBe(true);
+  });
+
+  it("trusts a meeting row, because the fetch resolved it through the pack", () => {
+    const recap = describeQueueSituation({
+      next_action_key: "generate_post_meeting_recap",
+      next_action_label: null,
+    });
+    expect(previewMatchesAnchor(lead(), recap, { occurred_at: "2026-08-01T00:00:00.000Z" })).toBe(true);
+    expect(previewMatchesAnchor(lead(), recap, undefined)).toBe(false);
   });
 });

@@ -15,22 +15,26 @@ import type { QueueLeadRow, QueueLatestMessage } from "@/lib/queueQueries";
 // Chainable fake PostgREST: awaiting any chain resolves `timelineRows`, and the
 // chain itself is recorded so a test can assert what was asked for.
 let timelineRows: unknown[] = [];
+let packRows: unknown[] = [];
 let lastChain: { fn: string; args: unknown[] }[] = [];
-function builder(chain: { fn: string; args: unknown[] }[]): unknown {
+function builder(table: string, chain: { fn: string; args: unknown[] }[]): unknown {
   const target = () => undefined;
   return new Proxy(target, {
     get(_t, prop) {
       if (prop === "then") {
         lastChain = chain;
-        return (ok: (v: unknown) => unknown) =>
-          Promise.resolve({ data: timelineRows, error: null }).then(ok);
+        const data = table === "meeting_packs" ? packRows : timelineRows;
+        return (ok: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(ok);
       }
-      return (...args: unknown[]) => builder([...chain, { fn: String(prop), args }]);
+      return (...args: unknown[]) => builder(table, [...chain, { fn: String(prop), args }]);
     },
   });
 }
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: () => builder([]), auth: { getUser: async () => ({ data: { user: null } }) } },
+  supabase: {
+    from: (table: string) => builder(table, []),
+    auth: { getUser: async () => ({ data: { user: null } }) },
+  },
 }));
 
 // The orphan repair reuses the real merge in supabaseQueries; here we only need
@@ -45,16 +49,21 @@ vi.mock("@/lib/supabaseQueries", () => ({
 }));
 
 const { QueueCard } = await import("@/components/queue/QueueCard");
-const { fetchLatestOutbounds, fetchLatestOutboundsWithOrphans, isOutboundCall } =
+const { fetchLatestOutbounds, fetchLatestOutboundsWithOrphans, fetchRecapMeetings, isOutboundCall } =
   await import("@/lib/queueQueries");
 
 const THEIRS = "Sounds good, what does pricing look like for 40 seats?";
 const MINE = "Following up on the proposal I sent over last week.";
 
-function msg(snippet: string, event_type: string): QueueLatestMessage {
+// Fixtures are timed AT the lead's anchors below — a real preview row always is,
+// and a row that is not is exactly what the anchor rule exists to reject.
+const INBOUND_AT = new Date(Date.now() - 9 * 86_400_000).toISOString();
+const OUTBOUND_AT = new Date(Date.now() - 6 * 86_400_000).toISOString();
+
+function msg(snippet: string, event_type: string, occurred_at?: string): QueueLatestMessage {
   return {
     lead_id: "lead-1",
-    occurred_at: new Date().toISOString(),
+    occurred_at: occurred_at ?? (event_type.endsWith("_inbound") ? INBOUND_AT : OUTBOUND_AT),
     ai_summary: null,
     snippet_text: snippet,
     subject: "Seats",
@@ -73,8 +82,9 @@ function lead(next_action_key: string): QueueLeadRow {
   return {
     id: "lead-1", name: "Dana Okafor", company: "Acme", email: "dana@acme.test",
     needs_action: true, next_action_key, next_action_label: null, action_reason_code: null,
-    last_inbound_at: new Date(Date.now() - 9 * 86_400_000).toISOString(),
-    last_outbound_at: new Date(Date.now() - 6 * 86_400_000).toISOString(),
+    last_inbound_at: INBOUND_AT,
+    last_outbound_at: OUTBOUND_AT,
+    last_nurture_outbound_at: null,
     action_dismissed_at: null, action_permanently_dismissed: false, action_resurfaced_at: null,
     motion: null, stage: null, whatsapp_number: null, phone: null,
     wa_opted_in: null, sms_opted_in: null, country: null, campaign_id: null,
@@ -167,7 +177,7 @@ describe("a follow-up triggered by a phone call", () => {
 describe("fetchLatestOutbounds", () => {
   it("asks the ledger for completed calls alongside the three written channels", async () => {
     timelineRows = [];
-    await fetchLatestOutbounds(["lead-1"]);
+    await fetchLatestOutbounds([{ id: "lead-1" }]);
     const types = lastChain.find((c) => c.fn === "in" && c.args[0] === "event_type")?.args[1] as string[];
     expect(types).toEqual(
       expect.arrayContaining(["email_outbound", "sms_outbound", "whatsapp_outbound", "call_completed"]),
@@ -181,7 +191,7 @@ describe("fetchLatestOutbounds", () => {
       { lead_id: "lead-1", occurred_at: "2026-09-01T10:00:00Z", event_type: "email_outbound",
         direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
     ];
-    const map = await fetchLatestOutbounds(["lead-1"]);
+    const map = await fetchLatestOutbounds([{ id: "lead-1" }]);
     const row = map.get("lead-1")!;
     expect(row.event_type).toBe("email_outbound");
     expect(isOutboundCall(row)).toBe(false);
@@ -193,7 +203,7 @@ describe("fetchLatestOutbounds", () => {
         direction: "outbound", snippet_text: "Phone call (outbound) — 3 min", subject: null,
         metadata_json: { duration_sec: 154 }, intent: null },
     ];
-    const row = (await fetchLatestOutbounds(["lead-1"])).get("lead-1")!;
+    const row = (await fetchLatestOutbounds([{ id: "lead-1" }])).get("lead-1")!;
     expect(isOutboundCall(row)).toBe(true);
     expect(row.duration_sec).toBe(154);
   });
@@ -300,5 +310,82 @@ describe("fetchLatestOutboundsWithOrphans", () => {
     ]);
     expect(emailThreadCalls).toEqual(["lead-1"]);
     expect(map.get("lead-1")!.snippet_text).toBe(MINE);
+  });
+});
+
+describe("fetchLatestOutbounds with a scheduling anchor", () => {
+  const NURTURE_AT = "2026-09-01T09:00:00Z";
+  const row = (occurred_at: string, snippet: string) => ({
+    lead_id: "lead-1", occurred_at, event_type: "email_outbound", direction: "outbound",
+    snippet_text: snippet, subject: "s", metadata_json: {}, intent: null,
+  });
+
+  it("returns the anchored send, not the newest unrelated touch", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "unrelated SMS follow-up"), row(NURTURE_AT, "nurture three")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1", anchorAt: NURTURE_AT }]);
+    expect(map.get("lead-1")!.snippet_text).toBe("nurture three");
+  });
+
+  it("returns nothing when the anchored send is not in the window", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "unrelated SMS follow-up")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1", anchorAt: NURTURE_AT }]);
+    expect(map.has("lead-1")).toBe(false); // → the card shows no body
+  });
+
+  it("still takes the newest when no anchor is requested", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "newest"), row(NURTURE_AT, "older")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1" }]);
+    expect(map.get("lead-1")!.snippet_text).toBe("newest");
+  });
+});
+
+describe("fetchRecapMeetings — the meeting that is still unwritten", () => {
+  const OLD = { lead_id: "lead-1", occurred_at: "2026-08-01T10:00:00Z", event_type: "meeting",
+    snippet_text: "the older, unwritten meeting", subject: "Discovery", metadata_json: {}, intent: null, source_id: "sum-old" };
+  const NEW = { lead_id: "lead-1", occurred_at: "2026-09-05T10:00:00Z", event_type: "meeting",
+    snippet_text: "the newer meeting, already written up", subject: "Deep dive", metadata_json: {}, intent: null, source_id: "sum-new" };
+
+  it("picks the OUTSTANDING pack's meeting even when a newer one exists", async () => {
+    packRows = [
+      { lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: "sum-old" },
+      { lead_id: "lead-1", follow_up_email_body: "[Sent via Gmail]", source_meeting_summary_id: "sum-new" },
+    ];
+    timelineRows = [NEW, OLD];
+    const map = await fetchRecapMeetings(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe("the older, unwritten meeting");
+  });
+
+  it("shows nothing when TWO packs are outstanding — either could be the one", async () => {
+    packRows = [
+      { lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: "sum-old" },
+      { lead_id: "lead-1", follow_up_email_body: "  ", source_meeting_summary_id: "sum-new" },
+    ];
+    timelineRows = [NEW, OLD];
+    expect((await fetchRecapMeetings(["lead-1"])).has("lead-1")).toBe(false);
+  });
+
+  it("shows nothing when the outstanding pack has no meeting summary to point at", async () => {
+    packRows = [{ lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: null }];
+    timelineRows = [NEW, OLD];
+    expect((await fetchRecapMeetings(["lead-1"])).has("lead-1")).toBe(false);
+  });
+});
+
+describe("the card refuses an uncorrelated body", () => {
+  it("renders no quote when the nurture send cannot be found", () => {
+    render(
+      <MemoryRouter>
+        <QueueCard
+          lead={{ ...lead("send_nurture_3"), last_nurture_outbound_at: "2026-09-01T09:00:00Z" }}
+          latestInbound={undefined}
+          latestOutbound={msg("unrelated SMS about the invoice", "sms_outbound")}
+          onMarkHandled={() => {}}
+          onSnooze={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/Nurture sequence — email 3 is due/)).toBeTruthy();
+    expect(screen.queryByText(/unrelated SMS about the invoice/)).toBeNull();
+    expect(screen.queryByText("Your message")).toBeNull();
   });
 });

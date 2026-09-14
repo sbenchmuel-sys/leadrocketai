@@ -37,9 +37,11 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
 import {
+  anchorTimestamp,
   describeOutboundCall,
   describeQueueSituation,
   isOutboundCall,
+  previewMatchesAnchor,
   queueButtonLabel,
   type QueueLeadRow,
   type QueueLatestInbound,
@@ -95,9 +97,11 @@ export function buildWhyNowLine(
   /** The message (or call) the card is about — the one `situation.bodySource` names. */
   message: QueueLatestMessage | undefined,
 ): string {
-  // The timestamp matches the message the card is about: their reply for an
-  // inbound card, my unanswered message for a follow-up.
-  const ts = situation.bodySource === "inbound" ? lead.last_inbound_at : lead.last_outbound_at;
+  // The timestamp is the clock that SCHEDULED the card (see QueueAnchorField) —
+  // their reply, my unanswered message, or the nurture send specifically. Using
+  // `last_outbound_at` for a nurture card dated it off whatever the rep had done
+  // most recently, which is not what the cadence measured.
+  const ts = anchorTimestamp(lead, situation);
 
   let timePhrase = "";
   if (situation.showTime && ts) {
@@ -147,11 +151,16 @@ export function QueueCard({
   // or — for a recap — the meeting itself.
   const showingMine = situation.bodySource === "outbound";
   const showingMeeting = situation.bodySource === "meeting";
-  const message = showingMeeting
+  const candidate = showingMeeting
     ? latestMeeting
     : showingMine
       ? latestOutbound
       : latestInbound;
+  // Quote it ONLY if it is the event that scheduled this card. Where the
+  // correlation can't be established — a nurture send that has scrolled out of
+  // the window, an unidentifiable meeting — the card carries no body rather
+  // than a plausible-looking neighbour.
+  const message = previewMatchesAnchor(lead, situation, candidate) ? candidate : undefined;
   const whyNow = buildWhyNowLine(lead, situation, message);
   // A call has no text to quote. Rather than reaching past it for an older
   // email — which is what this card used to do, under a caption claiming the
