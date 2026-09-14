@@ -11,6 +11,9 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { detectBounce } from "../_shared/bounceDetection.ts";
+import { bounceDisposition } from "./bounceDisposition.ts";
+import { isDirectConversation } from "../_shared/directConversation.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { deriveAction } from "../_shared/bulkSyncAction.ts";
@@ -148,6 +151,69 @@ function getMessageBody(message: GmailMessage): string {
   }
   
   return message.snippet || "";
+}
+
+/**
+ * Concatenate every `message/delivery-status` part of a DSN.
+ *
+ * A standards-shaped multipart/report bounce names the failed address and its
+ * RFC 3463 status code ONLY in this machine part — `getMessageBody` returns
+ * the human text/plain part, which often carries neither. Without it a real
+ * 5.x.x hard bounce classifies as "unclassifiable" → soft → never suppressed.
+ *
+ * ponytail: byte-identical to gmail-sync's private copy. It stays duplicated
+ * because gmail-sync is owned by another unit right now; the upgrade path is
+ * one `_shared/gmailPayload.ts` when both files are in the same hand.
+ */
+// deno-lint-ignore no-explicit-any
+function getDeliveryStatusText(message: any): string {
+  const out: string[] = [];
+  // deno-lint-ignore no-explicit-any
+  const walk = (part: any) => {
+    const mime = (part.mimeType || "").toLowerCase();
+    if (part.body?.data && mime.includes("delivery-status")) {
+      out.push(decodeBase64Url(part.body.data));
+    }
+    if (part.parts) for (const p of part.parts) walk(p);
+  };
+  if (message?.payload?.parts) for (const p of message.payload.parts) walk(p);
+  return out.join("\n\n");
+}
+
+/**
+ * Permanently stop a lead after a HARD bounce, and record why.
+ *
+ * Only ever called when `classifyBounce` returned "hard". A soft/transient
+ * bounce (mailbox full, greylisting, an out-of-office autoresponder that looks
+ * DSN-ish) must never reach this — it used to, and it permanently opted real
+ * customers out of all future contact.
+ */
+// deno-lint-ignore no-explicit-any
+async function applyHardBounceStop(
+  serviceSupabase: any,
+  leadId: string,
+  workspaceId: string | null,
+  subject: string,
+): Promise<void> {
+  await serviceSupabase.from("leads").update({
+    unsubscribed: true,
+    needs_action: false,
+    eligible_at: null,
+    next_action_key: null,
+    next_action_label: null,
+    action_reason_code: null,
+    nurture_status: "inactive",
+  }).eq("id", leadId);
+
+  await createCanonicalInteraction(serviceSupabase, {
+    lead_id: leadId,
+    type: "system_note",
+    source: "automation",
+    body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
+    occurred_at: new Date().toISOString(),
+    workspace_id: workspaceId,
+    provider: "automation",
+  });
 }
 
 // deno-lint-ignore no-explicit-any
@@ -330,11 +396,23 @@ async function syncLeadEmails(
   accessToken: string,
   lead: { id: string; email: string; stage: string; strategy: string; workspace_id?: string | null },
   maxResults: number,
-  cadenceModes: CadenceModes | null = null
+  cadenceModes: CadenceModes | null = null,
+  // The mailbox we are syncing FROM. Required by the rep↔lead gate below; when
+  // it is unknown the gate fails closed and nothing is stored (see the gate).
+  repEmail = "",
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
   const workspaceId = lead.workspace_id ?? null;
-  const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim() : "";
+  // Lower-cased: every address comparison below (the gate, the DSN attribution,
+  // the direction test) is case-insensitive, and RFC 5321 local parts arrive in
+  // whatever case the sender typed.
+  const leadEmailNorm = typeof leadEmail === "string" ? leadEmail.trim().toLowerCase() : "";
+  const repEmailNorm = repEmail.trim().toLowerCase();
+  if (!repEmailNorm) {
+    console.warn(
+      `[gmail-bulk-sync] Lead ${leadId}: no rep mailbox address available — the direct-conversation gate will drop every message. Reconnect Gmail to repopulate gmail_connections.gmail_email.`,
+    );
+  }
   const errors: string[] = [];
   let synced = 0;
   let hasClosingKeywords = false;
@@ -459,13 +537,6 @@ async function syncLeadEmails(
       }
       
       lockedThreadIds.add(threadId);
-      
-      if (!messageInvolvesLead(headers, leadEmailNorm)) {
-        console.warn(
-          `[gmail-bulk-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
-        );
-        continue;
-      }
 
       const from = getHeader(headers, "From") || "";
       const to = getHeader(headers, "To") || "";
@@ -476,7 +547,42 @@ async function syncLeadEmails(
       const date = getHeader(headers, "Date");
       const occurredAt = date ? new Date(date).toISOString() : new Date(parseInt(message.internalDate)).toISOString();
 
-      const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
+      // A DSN comes FROM postmaster/mailer-daemon and names the lead only in
+      // its body, so it fails both gates below. Detect it first and let it
+      // through — the bounce block does its own attribution.
+      const bounce = detectBounce(from, subject);
+
+      if (!messageInvolvesLead(headers, leadEmailNorm) && !bounce.isBounce) {
+        console.warn(
+          `[gmail-bulk-sync] Skipping message ${gmailMessageId} (does not involve lead email ${leadEmailNorm})`
+        );
+        continue;
+      }
+
+      // DIRECT-CONVERSATION GATE (Unit G-B P1).
+      //
+      // `messageInvolvesLead` only asks "is this address anywhere in the
+      // headers?" — true for a newsletter the lead is subscribed to, a vendor
+      // thread they are Cc'd on, or any third-party mail that happens to name
+      // them. bulk-sync had nothing stronger, so all of that was stored on the
+      // lead's timeline and counted in its inbound/outbound metrics. gmail-sync
+      // and outlook-sync have always required a direct rep↔lead exchange; this
+      // is the same rule, from the same shared function.
+      if (!bounce.isBounce && !isDirectConversation({
+        fromEmails: extractEmailAddresses(from),
+        recipientEmails: toEmailsArr,
+        leadEmail: leadEmailNorm,
+        repEmail: repEmailNorm,
+      })) {
+        console.log(
+          `[gmail-bulk-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
+        );
+        continue;
+      }
+
+      // Exact-address direction test. A substring test ("does From contain the
+      // lead's address") called "joann@acme.com" a message from "ann@acme.com".
+      const isFromLead = extractEmailAddresses(from).includes(leadEmailNorm);
       const direction = isFromLead ? "inbound" : "outbound";
       const type = isFromLead ? "email_inbound" : "email_outbound";
 
@@ -486,50 +592,53 @@ async function syncLeadEmails(
         hasClosingKeywords = true;
       }
 
-      // Bounce / undeliverable detection
-      const fromLower = from.toLowerCase();
-      const subjectLower = subject.toLowerCase();
-      const isBounce = (
-        fromLower.includes("postmaster") ||
-        fromLower.includes("mailer-daemon") ||
-        fromLower.includes("mail delivery") ||
-        subjectLower.includes("delivery status notification") ||
-        subjectLower.includes("undeliverable") ||
-        subjectLower.includes("mail delivery failed") ||
-        subjectLower.includes("returned mail") ||
-        subjectLower.includes("failure notice") ||
-        subjectLower.includes("delivery failure")
-      );
+      // BOUNCE HANDLING (Unit G-B P1). Two defects fixed here:
+      //   1. ANY DSN-ish keyword used to set `unsubscribed = true`. A SOFT
+      //      bounce — mailbox full, greylisting, a temporary defer — therefore
+      //      opted a real, reachable customer out of all future contact,
+      //      permanently. `classifyBounce` decides; only a clear 5.x.x /
+      //      permanent-failure signal suppresses, and anything unclassifiable
+      //      falls back to soft (never burn a good lead).
+      //   2. The DSN then FELL THROUGH to the normal insert. It is from
+      //      postmaster, so `isFromLead` is false and it was stored as
+      //      `email_outbound` — a fake "sent email" that corrupted
+      //      last_outbound_at and every outbound counter. Both branches now
+      //      `continue`.
+      if (bounce.isBounce) {
+        const verdict = bounceDisposition({
+          fromEmail: from,
+          subject,
+          bodyText,
+          deliveryStatusText: getDeliveryStatusText(message),
+          leadEmail: leadEmailNorm,
+          headersInvolveLead: messageInvolvesLead(headers, leadEmailNorm),
+        });
 
-      if (isBounce) {
-        console.log(`[gmail-bulk-sync] Lead ${leadId}: Bounce detected (subject: "${subject}") — stopping automation`);
-        await serviceSupabase.from("leads").update({
-          unsubscribed: true,
-          needs_action: false,
-          eligible_at: null,
-          next_action_key: null,
-          next_action_label: null,
-          action_reason_code: null,
-          nurture_status: "inactive",
-        }).eq("id", leadId);
+        if (verdict.disposition === "not_about_lead") {
+          console.log(`[gmail-bulk-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
+          continue;
+        }
+        if (verdict.disposition === "transient") {
+          console.log(
+            `[gmail-bulk-sync] Lead ${leadId}: transient bounce (code: ${verdict.statusCode ?? "none"}, basis: ${verdict.basis}) — leaving cadence to retry`,
+          );
+          existingMessageIds.add(gmailMessageId);
+          continue;
+        }
 
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId,
-            type: "system_note",
-            source: "automation",
-            body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
-            occurred_at: new Date().toISOString(),
-            workspace_id: workspaceId,
-            provider: "automation",
-          });
+        console.log(`[gmail-bulk-sync] Lead ${leadId}: Hard bounce (code: ${verdict.statusCode ?? "keyword/none"}, subject: "${subject}") — stopping automation`);
+        await applyHardBounceStop(serviceSupabase, leadId, workspaceId, subject);
+        existingMessageIds.add(gmailMessageId);
+        continue;
       }
-
+      // Past this point the message is NOT a bounce — every bounce branch above
+      // ends in `continue` — so the inbound handlers no longer test for one.
       // Set when applyOOOPause paused the lead but deliberately KEPT it
       // actionable (auto-reply carrying a live commercial question). The
       // defer branch below must not then clear needs_action again.
       let oooKeptActionable = false;
       // OOO / Auto-reply detection — must run BEFORE counting as real inbound
-      if (direction === "inbound" && !isBounce) {
+      if (direction === "inbound") {
         const oooResult = isOutOfOfficeReply(headers, subject, bodyText);
         const oooPause = await applyOOOPause({
           supabase: serviceSupabase,
@@ -552,7 +661,7 @@ async function syncLeadEmails(
 
       // ── Defer / "reconnect later" detection ──
       // Skipped when the OOO deliberately kept this lead actionable.
-      if (direction === "inbound" && !isBounce && !oooKeptActionable) {
+      if (direction === "inbound" && !oooKeptActionable) {
         const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
         await applyDeferPause({
           supabase: serviceSupabase,
@@ -564,7 +673,7 @@ async function syncLeadEmails(
       }
 
       // ── Meeting confirmation detection ──
-      if (direction === "inbound" && !isBounce) {
+      if (direction === "inbound") {
         const meetingResult = detectMeetingConfirmation(subject, bodyText);
         if (meetingResult.isConfirmed) {
           // Body-aware override (EDGE_CASES #4): see gmail-sync for rationale.
@@ -659,12 +768,6 @@ async function syncLeadEmails(
         if (existingMessageIds.has(gmailMessageId) && !shouldRestorePurgedBody) continue;
 
         const headers = message.payload?.headers || [];
-        if (!messageInvolvesLead(headers, leadEmailNorm)) {
-          console.warn(
-            `[gmail-bulk-sync] Skipping thread message ${gmailMessageId} in thread ${threadId} (does not involve lead email ${leadEmailNorm})`
-          );
-          continue;
-        }
 
         const from = getHeader(headers, "From") || "";
         const to = getHeader(headers, "To") || "";
@@ -678,7 +781,31 @@ async function syncLeadEmails(
         // history but must not drive the destructive guardrails (see constant).
         const isStaleForActions = (Date.now() - new Date(occurredAt).getTime()) > BACKFILL_RECENCY_MS;
 
-        const isFromLead = from.toLowerCase().includes(leadEmailNorm.toLowerCase());
+        const bounceT = detectBounce(from, subject);
+
+        if (!messageInvolvesLead(headers, leadEmailNorm) && !bounceT.isBounce) {
+          console.warn(
+            `[gmail-bulk-sync] Skipping thread message ${gmailMessageId} in thread ${threadId} (does not involve lead email ${leadEmailNorm})`
+          );
+          continue;
+        }
+
+        // Same direct-conversation gate as the per-message loop above. Thread
+        // expansion pulls EVERY message in a locked thread, so without it a
+        // third party joining the thread had their mail stored on the lead.
+        if (!bounceT.isBounce && !isDirectConversation({
+          fromEmails: extractEmailAddresses(from),
+          recipientEmails: toEmailsArr,
+          leadEmail: leadEmailNorm,
+          repEmail: repEmailNorm,
+        })) {
+          console.log(
+            `[gmail-bulk-sync] Skipping 3rd-party thread message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
+          );
+          continue;
+        }
+
+        const isFromLead = extractEmailAddresses(from).includes(leadEmailNorm);
         const direction = isFromLead ? "inbound" : "outbound";
         const type = isFromLead ? "email_inbound" : "email_outbound";
 
@@ -688,53 +815,50 @@ async function syncLeadEmails(
           hasClosingKeywords = true;
         }
 
-        // Bounce / undeliverable detection in thread messages
-        const fromLowerT = from.toLowerCase();
-        const subjectLowerT = subject.toLowerCase();
-        const isBounceT = (
-          fromLowerT.includes("postmaster") ||
-          fromLowerT.includes("mailer-daemon") ||
-          fromLowerT.includes("mail delivery") ||
-          subjectLowerT.includes("delivery status notification") ||
-          subjectLowerT.includes("undeliverable") ||
-          subjectLowerT.includes("mail delivery failed") ||
-          subjectLowerT.includes("returned mail") ||
-          subjectLowerT.includes("failure notice") ||
-          subjectLowerT.includes("delivery failure")
-        );
+        // Bounce handling — same two fixes as the per-message loop: classify
+        // soft vs hard before suppressing anyone, and never fall through to
+        // store a DSN as a fake outbound email.
+        if (bounceT.isBounce) {
+          // A stale (old) bounce must not fire the destructive unsubscribe/stop.
+          if (isStaleForActions) {
+            existingMessageIds.add(gmailMessageId);
+            continue;
+          }
 
-        // A stale (old) bounce must not fire the destructive unsubscribe/stop,
-        // and we don't want to import an old DSN as a fake outbound — skip it.
-        if (isBounceT && isStaleForActions) {
+          const verdictT = bounceDisposition({
+            fromEmail: from,
+            subject,
+            bodyText,
+            deliveryStatusText: getDeliveryStatusText(message),
+            leadEmail: leadEmailNorm,
+            headersInvolveLead: messageInvolvesLead(headers, leadEmailNorm),
+          });
+
+          if (verdictT.disposition === "not_about_lead") {
+            console.log(`[gmail-bulk-sync] Thread bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
+            continue;
+          }
+          if (verdictT.disposition === "transient") {
+            console.log(
+              `[gmail-bulk-sync] Lead ${leadId}: transient bounce in thread (code: ${verdictT.statusCode ?? "none"}, basis: ${verdictT.basis}) — leaving cadence to retry`,
+            );
+            existingMessageIds.add(gmailMessageId);
+            continue;
+          }
+
+          console.log(`[gmail-bulk-sync] Lead ${leadId}: Hard bounce in thread (code: ${verdictT.statusCode ?? "keyword/none"}, subject: "${subject}") — stopping automation`);
+          await applyHardBounceStop(serviceSupabase, leadId, workspaceId, subject);
           existingMessageIds.add(gmailMessageId);
           continue;
         }
-
-        if (isBounceT) {
-          console.log(`[gmail-bulk-sync] Lead ${leadId}: Bounce detected in thread (subject: "${subject}") — stopping automation`);
-          await serviceSupabase.from("leads").update({
-            unsubscribed: true,
-            needs_action: false,
-            eligible_at: null,
-            next_action_key: null,
-            next_action_label: null,
-            action_reason_code: null,
-            nurture_status: "inactive",
-          }).eq("id", leadId);
-
-          await createCanonicalInteraction(serviceSupabase, {
-            lead_id: leadId, type: "system_note", source: "automation",
-            body_text: `Email bounced/undeliverable (subject: "${subject}") — automation stopped permanently. Please verify the email address.`,
-            occurred_at: new Date().toISOString(), workspace_id: workspaceId, provider: "automation",
-          });
-        }
+        // Past this point the thread message is NOT a bounce.
 
         // Set when applyOOOPause paused the lead but deliberately KEPT it
         // actionable (auto-reply carrying a live commercial question). The
         // defer branch below must not then clear needs_action again.
         let oooKeptActionableT = false;
         // OOO detection in thread messages
-        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
+        if (direction === "inbound" && !isStaleForActions) {
           const oooResultT = isOutOfOfficeReply(headers, subject, bodyText);
           const oooPauseT = await applyOOOPause({
             supabase: serviceSupabase,
@@ -757,7 +881,7 @@ async function syncLeadEmails(
 
         // ── Defer detection in thread messages ──
         // Skipped when the OOO deliberately kept this lead actionable.
-        if (direction === "inbound" && !isBounceT && !isStaleForActions && !oooKeptActionableT) {
+        if (direction === "inbound" && !isStaleForActions && !oooKeptActionableT) {
           const deferResult = detectDeferSignal(bodyText, new Date(occurredAt));
           await applyDeferPause({
             supabase: serviceSupabase,
@@ -769,7 +893,7 @@ async function syncLeadEmails(
         }
 
         // ── Meeting confirmation detection (thread messages) ──
-        if (direction === "inbound" && !isBounceT && !isStaleForActions) {
+        if (direction === "inbound" && !isStaleForActions) {
           const meetingResult = detectMeetingConfirmation(subject, bodyText);
           if (meetingResult.isConfirmed) {
             // Body-aware override (EDGE_CASES #4): see gmail-sync for rationale.
@@ -1127,7 +1251,9 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
 
   const { data: connections, error: connErr } = await serviceSupabase
     .from("gmail_connections")
-    .select("user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect, bulk_sync_cursor");
+    // gmail_email is the rep's mailbox address — required by the
+    // direct-conversation gate in syncLeadEmails (Unit G-B P1).
+    .select("user_id, gmail_email, access_token_encrypted, refresh_token_encrypted, token_expires_at, needs_reconnect, bulk_sync_cursor");
 
   if (connErr) {
     console.error("[gmail-bulk-sync] cron: failed to load gmail_connections:", connErr.message);
@@ -1279,7 +1405,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         .eq("user_id", conn.user_id);
 
       try {
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes, conn.gmail_email ?? "");
         totalSynced += result.synced;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1493,7 +1619,7 @@ serve(async (req) => {
 
       for (const lead of groupLeads) {
         console.log(`[gmail-bulk-sync] Syncing lead ${lead.id} (${lead.email}) [ws=${workspaceId ?? "legacy"}]`);
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults, cadenceModes);
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, maxResults, cadenceModes, connection.gmail_email ?? "");
         results.push({
           leadId: lead.id,
           synced: result.synced,

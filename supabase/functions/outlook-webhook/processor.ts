@@ -24,6 +24,7 @@ import {
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
+import { outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
 import {
   renewOutlookSubscription,
   SUBSCRIPTION_LIFETIME_MS,
@@ -296,19 +297,50 @@ async function processChangeNotification(
     return;
   }
 
-  // --- 3. Get mail account email (needed for direct conversation filter) ---
+  // --- 3. Get mail account email + WORKSPACE (needed for the direct
+  //        conversation filter and for workspace-scoping every lead lookup) ---
   const { data: mailAccount } = await serviceClient
     .from("mail_accounts")
-    .select("email_address")
+    .select("email_address, workspace_id")
     .eq("id", mailAccountId)
     .single();
 
   const repEmail = (mailAccount as { email_address?: string } | null)?.email_address?.toLowerCase().trim() || "";
 
+  // WORKSPACE ISOLATION (Unit G-B P1).
+  //
+  // Every lead lookup below used to be `.eq("email", …)` with no workspace
+  // filter. `leads.email` is not globally unique — the same contact can exist
+  // as a lead in several tenants — so an inbound message could be attached to
+  // ANOTHER workspace's lead, and that workspace's automation paused/stopped
+  // by mail it never received. This is the mailbox's workspace, and it is the
+  // only workspace this notification may write to.
+  //
+  // FAIL CLOSED: no workspace on the mailbox row means we cannot prove which
+  // tenant this mail belongs to, so we process nothing rather than guess.
+  const mailboxWorkspaceId =
+    (mailAccount as { workspace_id?: string | null } | null)?.workspace_id ?? null;
+  if (!mailboxWorkspaceId) {
+    logger.warn("mail.outlook.webhook_no_mailbox_workspace", {
+      mail_account_id: mailAccountId,
+      provider_message_id: providerMessageId,
+    });
+    return;
+  }
+
   // --- 4. Fetch full message from Graph (with headers + body for safeguards) ---
   let senderEmail: string | null = null;
   let messageSubject: string | null = null;
   let conversationId: string | null = null;
+  // RFC 2822 Message-ID. The stable cross-path identity of this message:
+  // outlook-sync keys on it too, so both paths must derive the SAME
+  // dedupe key from it or the same email is stored twice (Unit G-B P1).
+  let internetMessageId: string | null = null;
+  // The time the message actually arrived, per Graph. The webhook used to
+  // stamp `occurred_at = now()`, which is the time WE processed it — wrong
+  // whenever a notification is delayed or replayed, and it puts the row in
+  // the wrong place in the lead's timeline.
+  let receivedAt: string | null = null;
   let bodyText = "";
   let bodyTextLined = ""; // newline-preserving copy, used only for unsubscribe quote-stripping
   let toRecipients: string[] = [];
@@ -327,6 +359,11 @@ async function processChangeNotification(
       senderEmail = msg.from?.emailAddress?.address?.toLowerCase() ?? null;
       messageSubject = msg.subject ?? null;
       conversationId = msg.conversationId ?? null;
+      internetMessageId = msg.internetMessageId ?? null;
+      // Guard against an unparseable value — an invalid Date would serialise
+      // to a throw, and a bad timestamp is worse than falling back to now().
+      const received = msg.receivedDateTime ? new Date(msg.receivedDateTime) : null;
+      receivedAt = received && !Number.isNaN(received.getTime()) ? received.toISOString() : null;
 
       if (msg.body?.content) {
         bodyText = msg.body.contentType === "html"
@@ -374,6 +411,10 @@ async function processChangeNotification(
     });
   }
 
+  // The message's real arrival time (falls back to now() only if Graph did not
+  // give us one — e.g. the message fetch above failed).
+  const occurredAt = receivedAt ?? new Date().toISOString();
+
   // --- 5. Record in idempotency log ---
   await serviceClient.from("mail_event_log").insert({
     provider: "outlook",
@@ -410,10 +451,17 @@ async function processChangeNotification(
 
   if (isBounce) {
     for (const recipientEmail of toRecipients) {
+      // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
+      // `.limit(1)` (rather than a bare maybeSingle) because a workspace can
+      // legitimately hold two lead rows for one address; maybeSingle would
+      // error on that and silently drop the bounce.
       const { data: bounceLead } = await serviceClient
         .from("leads")
         .select("id, name")
         .eq("email", recipientEmail)
+        .eq("workspace_id", mailboxWorkspaceId)
+        .order("created_at", { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       if (bounceLead) {
@@ -446,14 +494,21 @@ async function processChangeNotification(
   }
 
   // --- 7. Identify lead by sender email ---
+  // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
   const { data: lead } = await serviceClient
     .from("leads")
     .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
     .eq("email", senderEmail)
+    .eq("workspace_id", mailboxWorkspaceId)
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (!lead) {
-    logger.info("mail.outlook.webhook_no_lead_match", { sender_email: senderEmail });
+    logger.info("mail.outlook.webhook_no_lead_match", {
+      sender_email: senderEmail,
+      workspace_id: mailboxWorkspaceId,
+    });
     return;
   }
 
@@ -491,7 +546,7 @@ async function processChangeNotification(
       workspaceId: leadRow.workspace_id ?? null,
       leadName: leadRow.name,
       oooResult,
-      occurredAt: new Date().toISOString(),
+      occurredAt,
       logPrefix: "[outlook-webhook]",
     });
     // Pause the automation whenever an OOO landed, but only RETURN (i.e.
@@ -602,7 +657,8 @@ async function processChangeNotification(
     type: "email_inbound",
     source: "outlook",
     body_text: bodyText.substring(0, 10000),
-    occurred_at: new Date().toISOString(),
+    // The message's real arrival time, not our processing time.
+    occurred_at: occurredAt,
     direction: "inbound",
     subject: messageSubject,
     from_email: senderEmail,
@@ -618,15 +674,21 @@ async function processChangeNotification(
       // 500-char snippet (Codex P1, PR #143). This path is always inbound.
       [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText),
     },
-    dedupe_key: `outlook:webhook:${providerMessageId}`,
+    // ONE key for both Outlook paths. The webhook used to write
+    // `outlook:webhook:<graphId>` while outlook-sync wrote
+    // `outlook:<internetMessageId>` — two different keys for the same
+    // message, so a lead whose mail arrived by webhook AND was later
+    // re-synced got it stored twice. Both paths now derive the key from the
+    // RFC 2822 Message-ID via the same helper. (Unit G-B P1.)
+    dedupe_key: outlookEmailDedupeKey(internetMessageId, providerMessageId, providerMessageId),
   });
 
   // --- 12. Update lead state ---
   await serviceClient
     .from("leads")
     .update({
-      last_inbound_at: new Date().toISOString(),
-      last_activity_at: new Date().toISOString(),
+      last_inbound_at: occurredAt,
+      last_activity_at: occurredAt,
       ...(leadRow.stage === "new" || leadRow.stage === "contacted" ? { stage: "engaged" } : {}),
     })
     .eq("id", leadRow.id);

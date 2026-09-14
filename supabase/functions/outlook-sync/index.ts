@@ -21,7 +21,8 @@ import {
 } from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
-import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { projectTimelineItem, outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
+import { isDirectConversation } from "../_shared/directConversation.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { classifyBounce } from "../_shared/bounceDetection.ts";
@@ -258,7 +259,25 @@ serve(async (req) => {
     // The direct-conversation filter + body correlation in the loop gate what's
     // actually processed; this just widens the candidate set.
     const searchKql = `"participants:${leadEmailNorm}" OR "body:${leadEmailNorm}"`;
-    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
+    // DETERMINISTIC WINDOW (Unit G-B P2).
+    //
+    // `$search` cannot be combined with `$orderby` or `$filter`, so Graph
+    // returns RELEVANCE order. Taking a bare `$top=maxResults` off that list
+    // meant WHICH of a lead's messages got synced was effectively arbitrary —
+    // a busy thread could return 20 old messages and never the newest reply,
+    // and two identical runs could disagree.
+    //
+    // So: over-pull a bounded candidate page, then sort by the message's own
+    // timestamp (newest first) and cut to `maxResults` ourselves. The result
+    // is a stable "the N most recent messages involving this lead", and the
+    // existing per-message `syncStartMs` guard still drops anything older than
+    // the sync window.
+    // ponytail: ceiling is SEARCH_CANDIDATE_TOP — a lead with >100 matching
+    // messages inside the window can still miss the tail on one run. The
+    // upgrade path is Graph delta queries per mailbox folder, not a bigger top.
+    const SEARCH_CANDIDATE_TOP = 100;
+    const candidateTop = Math.max(maxResults, Math.min(SEARCH_CANDIDATE_TOP, maxResults * 5));
+    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${candidateTop}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
       headers: {
@@ -283,9 +302,21 @@ serve(async (req) => {
     }
 
     const searchData = await searchResp.json();
-    const messages: GraphMessage[] = searchData.value || [];
+    const candidates: GraphMessage[] = searchData.value || [];
 
-    console.log(`[outlook-sync] Found ${messages.length} messages for ${leadEmailNorm}`);
+    // Newest first, then cut — see DETERMINISTIC WINDOW above. Messages with an
+    // unparseable/absent timestamp sort last rather than jumping the queue.
+    const msgTime = (m: GraphMessage): number => {
+      const t = new Date(m.receivedDateTime || m.sentDateTime || "").getTime();
+      return Number.isFinite(t) ? t : -Infinity;
+    };
+    const messages: GraphMessage[] = [...candidates]
+      .sort((a, b) => msgTime(b) - msgTime(a))
+      .slice(0, maxResults);
+
+    console.log(
+      `[outlook-sync] Found ${candidates.length} candidates for ${leadEmailNorm}; processing newest ${messages.length}`,
+    );
 
     // Get existing message IDs for dedup (use internetMessageId as the stable key)
     const { data: existingInteractions } = await supabase
@@ -327,10 +358,15 @@ serve(async (req) => {
 
         // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
         const isFromLead = fromEmail === leadEmailNorm;
-        const isFromRep = fromEmail === repEmail;
-        const isToLead = recipientEmails.includes(leadEmailNorm);
-        const isToRep = recipientEmails.includes(repEmail);
-        const isDirectConversation = (isFromLead && isToRep) || (isFromRep && isToLead);
+        // Shared rep↔lead gate (same function gmail-bulk-sync uses) so the two
+        // providers cannot drift apart again. Outlook passes To + Cc + Bcc as
+        // recipients — see the note above on the widened `participants:` search.
+        const isDirect = isDirectConversation({
+          fromEmails: [fromEmail],
+          recipientEmails,
+          leadEmail: leadEmailNorm,
+          repEmail,
+        });
 
         // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
         // they'd be dropped here before isBounce runs — and the bounce-stop +
@@ -349,7 +385,7 @@ serve(async (req) => {
           _subjL.includes("failure notice") ||
           _subjL.includes("delivery failure");
 
-        if (!isDirectConversation && !isLikelyBounce) {
+        if (!isDirect && !isLikelyBounce) {
           console.log(`[outlook-sync] Skipping 3rd-party message ${msg.id} (from: "${fromEmail}", to: "${toEmails.join(",")}")`);
           continue;
         }
@@ -392,7 +428,7 @@ serve(async (req) => {
           // Attribute a bounce to THIS lead only if it's actually named in it —
           // a direct message, or the DSN body contains the failed address. The
           // broadened search can return DSNs; this prevents mis-attribution.
-          const aboutThisLead = isDirectConversation || bodyText.toLowerCase().includes(leadEmailNorm);
+          const aboutThisLead = isDirect || bodyText.toLowerCase().includes(leadEmailNorm);
           if (!aboutThisLead) {
             console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
             continue;
@@ -631,7 +667,12 @@ serve(async (req) => {
               ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
               : {}),
           },
-          dedupe_key: emailDedupeKey("outlook", messageId, messageId),
+          // Same helper the webhook now uses, so both Outlook paths produce
+          // ONE key per message (Unit G-B P1). Identical to the previous
+          // `emailDedupeKey("outlook", …)` output whenever Graph gives us an
+          // internetMessageId; the graph-id fallback is now namespaced
+          // (`outlook:graph:<id>`) so it can never collide with a Message-ID.
+          dedupe_key: outlookEmailDedupeKey(msg.internetMessageId ?? null, msg.id ?? null, messageId),
         });
 
         if (canonResult.error && canonResult.error !== "duplicate") {
