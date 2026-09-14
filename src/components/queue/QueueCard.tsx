@@ -37,7 +37,9 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
 import {
+  describeOutboundCall,
   describeQueueSituation,
+  isOutboundCall,
   queueButtonLabel,
   type QueueLeadRow,
   type QueueLatestInbound,
@@ -88,7 +90,8 @@ const INTENT_DISPLAY: Record<string, string> = {
 export function buildWhyNowLine(
   lead: QueueLeadRow,
   situation: QueueSituation,
-  latestInbound: QueueLatestInbound | undefined,
+  /** The message (or call) the card is about — the one `situation.bodySource` names. */
+  message: QueueLatestMessage | undefined,
 ): string {
   // The timestamp matches the message the card is about: their reply for an
   // inbound card, my unanswered message for a follow-up.
@@ -100,7 +103,10 @@ export function buildWhyNowLine(
       const dt = new Date(ts);
       if (Number.isFinite(dt.getTime())) {
         const rel = formatDistanceToNow(dt, { addSuffix: false });
-        timePhrase = situation.bodySource === "outbound" ? `sent ${rel} ago` : `${rel} ago`;
+        timePhrase = situation.bodySource !== "outbound"
+          ? `${rel} ago`
+          // Nothing was "sent" when the rep picked up the phone.
+          : isOutboundCall(message) ? `called ${rel} ago` : `sent ${rel} ago`;
       }
     } catch {
       timePhrase = "";
@@ -111,7 +117,7 @@ export function buildWhyNowLine(
   // inbound card. Deterministic-detector classes (bounce, OOO, calendar accept)
   // carry no display string — those rows are normally intent-hidden anyway, and
   // annotating one would dress noise up as a signal.
-  const rawIntent = situation.bodySource === "inbound" ? latestInbound?.intent ?? null : null;
+  const rawIntent = situation.bodySource === "inbound" ? message?.intent ?? null : null;
   const intentSuffix = rawIntent && INTENT_DISPLAY[rawIntent] ? ` — ${INTENT_DISPLAY[rawIntent]}` : "";
 
   // Examples:
@@ -125,15 +131,23 @@ export function buildWhyNowLine(
 }
 
 export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, onSnooze }: QueueCardProps) {
-  const situation = describeQueueSituation({
-    next_action_key: lead.next_action_key,
-    next_action_label: lead.next_action_label,
-  });
-  const whyNow = buildWhyNowLine(lead, situation, latestInbound);
+  // Computed BEFORE the situation because the situation depends on it: a
+  // follow-up triggered by a call is a different sentence from one triggered by
+  // an email, and the card must not describe a call as a message.
+  const latestOutboundIsCall = isOutboundCall(latestOutbound);
+  const situation = describeQueueSituation(
+    { next_action_key: lead.next_action_key, next_action_label: lead.next_action_label },
+    { latestOutboundIsCall },
+  );
   // The message this card is ACTUALLY about: their reply, or my unanswered one.
   const showingMine = situation.bodySource === "outbound";
   const message = showingMine ? latestOutbound : latestInbound;
-  const aiSummary = (message?.ai_summary ?? "").trim();
+  const whyNow = buildWhyNowLine(lead, situation, message);
+  // A call has no text to quote. Rather than reaching past it for an older
+  // email — which is what this card used to do, under a caption claiming the
+  // email was the thing — it is rendered as the call it is.
+  const showingCall = showingMine && latestOutboundIsCall;
+  const aiSummary = showingCall ? "" : (message?.ai_summary ?? "").trim();
   // When ai_summary contains bullets, render with SummaryBody (keeps bullet
   // structure). Otherwise fall back to cleanBodyText prose flow.
   const aiSummaryIsBulleted = aiSummary
@@ -141,11 +155,13 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
     : false;
   const proseBody = aiSummaryIsBulleted
     ? ""
-    : cleanBodyText({
-        ai_summary: message?.ai_summary ?? null,
-        snippet_text: message?.snippet_text ?? null,
-        subject: message?.subject ?? null,
-      });
+    : showingCall
+      ? describeOutboundCall(latestOutbound)
+      : cleanBodyText({
+          ai_summary: message?.ai_summary ?? null,
+          snippet_text: message?.snippet_text ?? null,
+          subject: message?.subject ?? null,
+        });
   const hasContent = aiSummaryIsBulleted || !!proseBody;
 
   const buttonLabel = queueButtonLabel({
@@ -228,7 +244,7 @@ export function QueueCard({ lead, latestInbound, latestOutbound, onMarkHandled, 
             tell the customer's reply from their own unanswered email. */}
         {!!message && (
           <p className="mt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-            {showingMine ? "Your message" : "Their message"}
+            {showingCall ? "Your call" : showingMine ? "Your message" : "Their message"}
           </p>
         )}
 

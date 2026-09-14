@@ -84,6 +84,57 @@ export const OUTBOUND_EVENT_TYPES: readonly string[] = [
   "sms_outbound",
 ];
 
+/**
+ * A completed OUTBOUND phone call is an outbound touch like any other, and the
+ * Queue has to know about it: `twilio-voice-webhook` writes a `voice_outbound`
+ * `interactions` row and then calls `postSendDeriveAction`, which recomputes
+ * `leads.last_outbound_at` from interactions — so a follow-up card can be timed
+ * off a CALL. With only the three written channels above in the preview fetch,
+ * that card quoted whatever email happened to be next-newest, possibly weeks
+ * old, under a caption saying "Your message". Confident, and about a different
+ * conversation.
+ *
+ * Only `call_completed` matters here. The webhook projects `call_failed`,
+ * `call_busy`, `call_no-answer` and `call_canceled` too, but it writes the
+ * interactions row and recomputes ONLY for `status === "completed" &&
+ * direction === "outbound"` — so no other call event can move
+ * `last_outbound_at`, and none of them should ever claim a card.
+ *
+ * NOTE the direction check at the call site: inbound calls produce a
+ * `call_completed` row as well, and one of those is emphatically not "your
+ * last outbound".
+ */
+export const OUTBOUND_CALL_EVENT_TYPE = "call_completed";
+
+/** What `fetchLatestOutbounds` asks the ledger for. */
+export const OUTBOUND_PREVIEW_EVENT_TYPES: readonly string[] = [
+  ...OUTBOUND_EVENT_TYPES,
+  OUTBOUND_CALL_EVENT_TYPE,
+];
+
+/** Is this preview row a phone call rather than something with words in it? */
+export function isOutboundCall(row: { event_type: string } | null | undefined): boolean {
+  return row?.event_type === OUTBOUND_CALL_EVENT_TYPE;
+}
+
+/**
+ * What to show where a quoted message would go, when the last outbound was a
+ * call. Duration comes from `metadata_json.duration_sec`, which the webhook
+ * always writes.
+ *
+ * It says nothing about how the call WENT. The timeline row carries
+ * `{ call_sid, duration_sec, status }` and `status` is "completed" for every row
+ * that can reach here, so there is no answered-by-a-human vs went-to-voicemail
+ * signal to read. Length is the only honest hint, and the rep knows the rest.
+ */
+export function describeOutboundCall(row: { duration_sec?: number | null } | null | undefined): string {
+  const secs = row?.duration_sec;
+  if (typeof secs === "number" && Number.isFinite(secs) && secs > 0) {
+    return `You called them — ${Math.max(1, Math.ceil(secs / 60))} min`;
+  }
+  return "You called them";
+}
+
 // ── Sort priority ──────────────────────────────────────────────────
 
 /**
@@ -237,7 +288,10 @@ export interface QueueLatestInbound {
  * the "Inbound" in the original name is only true half the time; the alias keeps
  * the existing exported name (TodoView, tests) working.
  */
-export type QueueLatestMessage = QueueLatestInbound;
+export type QueueLatestMessage = QueueLatestInbound & {
+  /** Call rows only: `metadata_json.duration_sec`. Undefined for written messages. */
+  duration_sec?: number | null;
+};
 
 const QUEUE_LEAD_COLUMNS = `
   id, name, company, email,
@@ -617,9 +671,9 @@ export async function fetchLatestOutbounds(
 
   const { data, error } = await supabase
     .from("lead_timeline_items")
-    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent")
+    .select("lead_id, occurred_at, event_type, direction, snippet_text, subject, metadata_json, intent")
     .in("lead_id", leadIds)
-    .in("event_type", OUTBOUND_EVENT_TYPES as string[])
+    .in("event_type", OUTBOUND_PREVIEW_EVENT_TYPES as string[])
     .order("occurred_at", { ascending: false })
     .limit(500);
 
@@ -633,12 +687,18 @@ export async function fetchLatestOutbounds(
     lead_id: string;
     occurred_at: string;
     event_type: string;
+    direction: string | null;
     snippet_text: string | null;
     subject: string | null;
     metadata_json: Record<string, unknown> | null;
     intent: string | null;
   }>) {
+    // An INBOUND call is projected with the same `call_completed` event type.
+    // Taking one of those as "your last outbound" would be the same lie in the
+    // other direction. The three written types are outbound by their own name.
+    if (isOutboundCall(row) && row.direction !== "outbound") continue;
     if (map.has(row.lead_id)) continue;
+    const duration = (row.metadata_json ?? {}).duration_sec;
     map.set(row.lead_id, {
       lead_id: row.lead_id,
       occurred_at: row.occurred_at,
@@ -646,6 +706,7 @@ export async function fetchLatestOutbounds(
       snippet_text: row.snippet_text,
       subject: row.subject,
       intent: row.intent,
+      duration_sec: typeof duration === "number" && Number.isFinite(duration) ? duration : null,
       ...readInboundMetadata(row.metadata_json),
     });
   }
@@ -911,11 +972,23 @@ function labelTail(next_action_label: string | null | undefined): string | null 
  * What is this card about, in words a salesperson would use, and whose message
  * belongs under it. Pure — no DB, no clock, no React.
  */
-export function describeQueueSituation(lead: {
-  next_action_key: string | null;
-  next_action_label: string | null;
-}): QueueSituation {
+export function describeQueueSituation(
+  lead: { next_action_key: string | null; next_action_label: string | null },
+  opts: {
+    /** The rep's newest outbound touch is a completed phone call, not a message. */
+    latestOutboundIsCall?: boolean;
+  } = {},
+): QueueSituation {
   const key = lead.next_action_key ?? "";
+
+  // `followup_due` fires on "my last touch, unanswered for N days" and
+  // `last_outbound_at` is stamped by the voice webhook too, so that touch may be
+  // a call. "No reply to your last message" over a call recording is the same
+  // class of wrong that "email" was over an SMS. Only this key is adjusted: the
+  // others are about a proposal or a meeting, not about the medium.
+  if (key === FOLLOWUP_DUE_KEY && opts.latestOutboundIsCall) {
+    return MINE("Nothing back since your call");
+  }
 
   if (key === "rate_limited") {
     // The tail is the server's own "auto-send paused until <date>", rendered in

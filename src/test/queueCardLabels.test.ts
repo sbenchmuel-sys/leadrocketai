@@ -105,6 +105,24 @@ describe("describeQueueSituation — one label per situation, in plain English",
     }
   });
 
+  it("describes a call-triggered follow-up as a call, not as a message", () => {
+    // twilio-voice-webhook writes a voice_outbound interaction and calls
+    // postSendDeriveAction, which recomputes leads.last_outbound_at — so
+    // followup_due can be timed off a phone call.
+    const call = describeQueueSituation(
+      { next_action_key: "followup_due", next_action_label: null },
+      { latestOutboundIsCall: true },
+    );
+    expect(call.label).toBe("Nothing back since your call");
+    expect(call.bodySource).toBe("outbound");
+    // Everything else is about a proposal or a meeting, not about the medium.
+    const closing = describeQueueSituation(
+      { next_action_key: "closing_followup", next_action_label: null },
+      { latestOutboundIsCall: true },
+    );
+    expect(closing.label).toBe("Your proposal needs chasing");
+  });
+
   it("falls back to the server's own label, never to a raw key", () => {
     const s = describeQueueSituation({
       next_action_key: "some_future_key",
@@ -169,14 +187,18 @@ describe("describeQueueSituation — one label per situation, in plain English",
 });
 
 describe("buildWhyNowLine — the line the rep reads", () => {
-  const line = (key: string, over: Partial<QueueLeadRow> = {}, inbound?: { intent: string | null }) =>
+  const line = (
+    key: string,
+    over: Partial<QueueLeadRow> = {},
+    msg?: { intent?: string | null; event_type?: string },
+  ) =>
     buildWhyNowLine(
       lead({ next_action_key: key, ...over }),
-      describeQueueSituation({
-        next_action_key: key,
-        next_action_label: over.next_action_label ?? null,
-      }),
-      inbound ? ({ intent: inbound.intent } as never) : undefined,
+      describeQueueSituation(
+        { next_action_key: key, next_action_label: over.next_action_label ?? null },
+        { latestOutboundIsCall: msg?.event_type === "call_completed" },
+      ),
+      msg ? ({ intent: msg.intent ?? null, event_type: msg.event_type ?? "email_inbound" } as never) : undefined,
     );
 
   it("a rate-limited card says nothing was sent, and when auto-send resumes", () => {
@@ -189,6 +211,12 @@ describe("buildWhyNowLine — the line the rep reads", () => {
     expect(s.startsWith("Follow up")).toBe(false);
     // The line must not contradict itself: "Not sent … sent 3 hours ago".
     expect(s).not.toMatch(/sent \d+ hour/);
+  });
+
+  it("says 'called', not 'sent', when the last outbound was a phone call", () => {
+    const s = line("followup_due", { last_outbound_at: daysAgo(4) }, { event_type: "call_completed" });
+    expect(s).toBe("Nothing back since your call · called 4 days ago");
+    expect(s).not.toContain("sent");
   });
 
   it("does not date a recap card off a pre-meeting email", () => {
