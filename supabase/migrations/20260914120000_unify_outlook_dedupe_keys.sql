@@ -193,6 +193,72 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- ── pause_leads_on_inbound: the instant-pause guardrail as ONE write ────────
+--
+-- WHY A FUNCTION. The Outlook webhook's pause used to be a TypeScript routine
+-- that looked up `automation_log` first and only touched the LEAD if it found
+-- an account-scoped log row. Three paths left the lead untouched (query error;
+-- no log row at all; a legacy log row, which it paused and then returned), and
+-- the fourth cleared needs_action but not eligible_at. automation-executor's
+-- candidate query never reads automation_log — it selects on
+--
+--   needs_action = true AND eligible_at IS NOT NULL AND eligible_at <= now()
+--   AND automation_mode IS NOT NULL AND status IN ('active','new')
+--   AND unsubscribed = false AND manual_mode = false
+--   AND next_action_key <> 'ooo_return_followup'
+--
+-- so a lead armed with no log row (armed but not yet sent, the normal state of
+-- a queued first touch) stayed a live send candidate after the contact
+-- replied. "Every duplicate gets the guardrail" was true of the CALL and false
+-- of the EFFECT. Making it a SQL function means the test suite runs the real
+-- write and then asserts the executor's own predicate against the row.
+--
+-- The lead write comes FIRST and is UNCONDITIONAL — it is the guardrail. The
+-- automation_log update is bookkeeping and covers every live row for the lead
+-- (no account scoping: a paused log row for a lead that just replied is always
+-- right, and the executor does not read it).
+--
+-- p_clear_action = false is the OOO-kept-actionable case: applyOOOPause has
+-- deliberately set a human `reply_now` prompt that must survive. We still null
+-- eligible_at — a prompt key with a due eligible_at IS a send trigger (see
+-- _shared/followupRule.ts::mustClearEligibleAt), so defusing it is what makes
+-- keeping the prompt safe.
+CREATE OR REPLACE FUNCTION public.pause_leads_on_inbound(
+  p_lead_ids uuid[],
+  p_reason text,
+  p_clear_action boolean DEFAULT true
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_leads int;
+BEGIN
+  IF p_clear_action THEN
+    UPDATE public.leads
+       SET needs_action = false,
+           eligible_at = NULL,
+           next_action_key = NULL,
+           next_action_label = NULL,
+           action_reason_code = NULL
+     WHERE id = ANY(p_lead_ids);
+  ELSE
+    UPDATE public.leads
+       SET eligible_at = NULL
+     WHERE id = ANY(p_lead_ids);
+  END IF;
+  GET DIAGNOSTICS v_leads = ROW_COUNT;
+
+  UPDATE public.automation_log
+     SET status = 'paused',
+         error_message = p_reason,
+         completed_at = now()
+   WHERE lead_id = ANY(p_lead_ids)
+     AND status IN ('pending', 'sent');
+
+  RETURN v_leads;
+END;
+$$;
+
 COMMIT;
 
 -- Post-apply check. Expect 0 rows in both: every Outlook key either carries its

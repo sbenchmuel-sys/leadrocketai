@@ -65,7 +65,28 @@ CREATE TABLE public.leads (
   -- Added for outlook_webhook_recency.test.sql (Unit G-B): the webhook's
   -- advance-only recency writes touch both columns.
   last_activity_at timestamptz,
-  action_dismissed_at timestamptz
+  action_dismissed_at timestamptz,
+  -- Added for inbound_pause_defuses_executor.test.sql (Unit G-B): every column
+  -- automation-executor's candidate query reads, so the test can assert that
+  -- exact predicate against a paused row.
+  eligible_at timestamptz,
+  next_action_key text,
+  next_action_label text,
+  action_reason_code text,
+  status text NOT NULL DEFAULT 'new',
+  manual_mode boolean NOT NULL DEFAULT false
+);
+
+-- Added for inbound_pause_defuses_executor.test.sql (Unit G-B).
+CREATE TABLE IF NOT EXISTS public.automation_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid REFERENCES public.leads(id) ON DELETE CASCADE,
+  mail_account_id uuid,
+  status text NOT NULL DEFAULT 'pending',
+  action_key text,
+  error_message text,
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TYPE public.campaign_step_type AS ENUM (

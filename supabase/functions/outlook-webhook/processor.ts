@@ -637,15 +637,12 @@ async function processChangeNotification(
       //
       // EVERY matching row, for the same reason as the reply pause below: the
       // contact is away, so no duplicate of theirs should keep sending.
-      for (const m of matches) {
-        await pauseActiveAutomation(
-          serviceClient,
-          m.id,
-          mailAccountId,
-          "ooo_reply",
-          oooPause.skipInbound,
-        );
-      }
+      await pauseActiveAutomation(
+        serviceClient,
+        matches.map((m) => m.id),
+        "ooo_reply",
+        oooPause.skipInbound,
+      );
       if (oooPause.skipInbound) return;
       oooKeptActionable = true;
     }
@@ -842,9 +839,7 @@ async function processChangeNotification(
   // costs nothing; missing an armed one emails a customer who just wrote back.
   // (Production has a duplicate group with SEVERAL armed rows, so "pause the one
   // we picked" would genuinely have left a sender running.)
-  for (const m of matches) {
-    await pauseActiveAutomation(serviceClient, m.id, mailAccountId, "reply_received");
-  }
+  await pauseActiveAutomation(serviceClient, matches.map((m) => m.id), "reply_received");
 
   logger.info("mail.outlook.inbound_processed", {
     lead_id: leadRow.id,
@@ -854,101 +849,57 @@ async function processChangeNotification(
 }
 
 // ============================================================
-// Helper: Pause active automation_log entries
+// Helper: instant-pause-on-inbound, for every matching lead row
 // ============================================================
 /**
- * Pause the lead's active automation_log row.
+ * Defuse automation for these leads. ONE database call, unconditional.
  *
- * `clearLeadAction` (default true) also blanks the lead's human reply
- * prompt (needs_action / next_action_key / next_action_label). That is
- * right for a routine auto-reply, and WRONG for an OOO that carries a
- * live commercial question: applyOOOPause has just deliberately set
- * `reply_now`, and clearing it here undid that one line later — the
- * message was stored (previous fix worked) but never became actionable.
- * Callers in that case pass `clearLeadAction: false`: we still pause the
- * robot, we just don't take the question off the rep's board.
- * (Codex P1 on PR #143.)
+ * This replaces a routine that looked up `automation_log` first and only
+ * touched the LEAD when it found an account-scoped log row. Three of its paths
+ * left the lead untouched (query error; no log row; a legacy log row, which it
+ * paused and then returned from), and the fourth cleared needs_action but not
+ * eligible_at. automation-executor's candidate query does not read
+ * automation_log at all — it selects on needs_action / eligible_at /
+ * automation_mode — so a lead armed with no log row (armed but not yet sent:
+ * the normal state of a queued first touch) stayed a live send candidate after
+ * the contact replied. That held for the PRIMARY lead as much as for
+ * duplicates; the duplicate finding just made it visible.
+ *
+ * The work is `public.pause_leads_on_inbound` (see the migration) so the SQL
+ * suite can run the real write and assert the executor's own predicate against
+ * the row afterwards — a test on state, not on this call.
+ *
+ * `clearLeadAction = false` (OOO that carries a live question): applyOOOPause
+ * has set a human `reply_now` prompt that must survive. eligible_at is still
+ * nulled — a prompt next to a due eligible_at is a send trigger — which is
+ * exactly what makes keeping the prompt safe.
  */
 async function pauseActiveAutomation(
   serviceClient: ReturnType<typeof createClient>,
-  leadId: string,
-  mailAccountId: string,
+  leadIds: string[],
   reason: string,
   clearLeadAction = true,
 ): Promise<void> {
-  const { data: activeLog, error: logErr } = await serviceClient
-    .from("automation_log")
-    .select("id, status, action_key")
-    .eq("lead_id", leadId)
-    .eq("mail_account_id", mailAccountId)
-    .in("status", ["pending", "sent"])
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (logErr) {
-    logger.error("mail.outlook.webhook_log_query_failed", {
-      lead_id: leadId,
-      error: logErr.message,
+  if (leadIds.length === 0) return;
+  const { data, error } = await serviceClient.rpc("pause_leads_on_inbound", {
+    p_lead_ids: leadIds,
+    p_reason: reason,
+    p_clear_action: clearLeadAction,
+  });
+  if (error) {
+    // Loud. This is the guardrail; a silent failure here is the failure mode
+    // this whole unit has been closing.
+    logger.error("mail.outlook.pause_on_inbound_failed", {
+      lead_ids: leadIds,
+      reason,
+      error: error.message,
     });
     return;
   }
-
-  if (!activeLog) {
-    const { data: legacyLog } = await serviceClient
-      .from("automation_log")
-      .select("id, status, action_key")
-      .eq("lead_id", leadId)
-      .in("status", ["pending", "sent"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (legacyLog) {
-      const row = legacyLog as { id: string; action_key: string };
-      await serviceClient
-        .from("automation_log")
-        .update({
-          status: "paused",
-          error_message: reason,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", row.id);
-
-      logger.info("mail.outlook.automation_paused", {
-        lead_id: leadId,
-        automation_log_id: row.id,
-        reason,
-      });
-    }
-    return;
-  }
-
-  const row = activeLog as { id: string; action_key: string };
-  await serviceClient
-    .from("automation_log")
-    .update({
-      status: "paused",
-      error_message: reason,
-      completed_at: new Date().toISOString(),
-    })
-    .eq("id", row.id);
-
-  if (clearLeadAction) {
-    await serviceClient
-      .from("leads")
-      .update({
-        needs_action: false,
-        next_action_key: null,
-        next_action_label: null,
-      })
-      .eq("id", leadId);
-  }
-
   logger.info("mail.outlook.automation_paused", {
-    lead_id: leadId,
-    automation_log_id: row.id,
-    action_key: row.action_key,
+    lead_ids: leadIds,
+    leads_updated: data,
     reason,
+    cleared_action: clearLeadAction,
   });
 }

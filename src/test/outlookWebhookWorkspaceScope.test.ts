@@ -87,15 +87,22 @@ describe("outlook-webhook guardrails reach every duplicate lead row", () => {
     }
   });
 
-  it("the reply pause is applied to every matched row, not just the primary", () => {
-    // `pauseActiveAutomation` must never be called with the primary row's id —
-    // every call site iterates the full match set.
-    const pauseCalls = [...code.matchAll(/pauseActiveAutomation\(\s*\n?\s*serviceClient,\s*\n?\s*([A-Za-z0-9_.]+)/g)]
-      .map((m) => m[1]);
-    expect(pauseCalls.length).toBeGreaterThan(0);
+  it("the pause is handed the FULL match set, and does its work in one DB call", () => {
+    // Both call sites pass every matched id. This guard checks the CALL; the
+    // EFFECT — that each of those rows stops being an executor send candidate,
+    // with or without an automation_log row — is proven on real rows by
+    // supabase/tests/inbound_pause_defuses_executor.test.sql. (An earlier
+    // version of this guard passed while the effect was still broken; a guard
+    // on a call is never proof of state.)
+    const pauseCalls = [...code.matchAll(/pauseActiveAutomation\(\s*\n?\s*serviceClient,\s*\n?\s*([^,]+),/g)]
+      .map((m) => m[1].trim());
+    expect(pauseCalls.length).toBe(2);
     for (const arg of pauseCalls) {
-      expect(arg, `pauseActiveAutomation called with ${arg}`).not.toBe("leadRow.id");
+      expect(arg, `pauseActiveAutomation called with ${arg}`).toBe("matches.map((m) => m.id)");
     }
+    // The work is the SQL function, not a TypeScript lookup of automation_log.
+    expect(code).toMatch(/rpc\(\s*["']pause_leads_on_inbound["']/);
+    expect(code).not.toMatch(/from\("automation_log"\)/);
   });
 
   it("the opt-out stop is applied to every matched row", () => {
