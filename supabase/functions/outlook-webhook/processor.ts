@@ -25,6 +25,12 @@ import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
+import { pickPrimaryLead } from "../_shared/leadResolution.ts";
+
+// How many duplicate lead rows for one address we will act on. Production's
+// largest group today is 3; this is a sanity bound, not a business rule. If it
+// is ever hit the log line below says so.
+const DUPLICATE_LEAD_SCAN_LIMIT = 25;
 import {
   renewOutlookSubscription,
   SUBSCRIPTION_LIFETIME_MS,
@@ -452,22 +458,24 @@ async function processChangeNotification(
   if (isBounce) {
     for (const recipientEmail of toRecipients) {
       // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
-      // `.limit(1)` (rather than a bare maybeSingle) because a workspace can
-      // legitimately hold two lead rows for one address; maybeSingle would
-      // error on that and silently drop the bounce.
-      const { data: bounceLead } = await serviceClient
+      //
+      // ALL matching rows, not the oldest one. A workspace legitimately holds
+      // several lead rows for one address, and a bounce says the ADDRESS is
+      // undeliverable — so every row carrying it must stop, or the duplicate we
+      // did not pick carries on mailing a dead mailbox. (The previous
+      // `.order(created_at).limit(1)` picked one arbitrarily.)
+      const { data: bounceLeads } = await serviceClient
         .from("leads")
         .select("id, name")
         .eq("email", recipientEmail)
         .eq("workspace_id", mailboxWorkspaceId)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
+        .limit(DUPLICATE_LEAD_SCAN_LIMIT);
 
-      if (bounceLead) {
+      for (const row of (bounceLeads ?? []) as Array<{ id: string }>) {
         logger.info("mail.outlook.bounce_detected", {
-          lead_id: (bounceLead as { id: string }).id,
+          lead_id: row.id,
           subject: messageSubject,
+          matched_rows: (bounceLeads ?? []).length,
         });
 
         await serviceClient.from("leads").update({
@@ -478,10 +486,10 @@ async function processChangeNotification(
           next_action_label: null,
           action_reason_code: null,
           nurture_status: "inactive",
-        }).eq("id", (bounceLead as { id: string }).id);
+        }).eq("id", row.id);
 
         await createCanonicalInteraction(serviceClient, {
-          lead_id: (bounceLead as { id: string }).id,
+          lead_id: row.id,
           type: "system_note",
           source: "automation",
           body_text: `Email bounced/undeliverable (subject: "${messageSubject}") — automation stopped permanently. Please verify the email address.`,
@@ -495,24 +503,27 @@ async function processChangeNotification(
 
   // --- 7. Identify lead by sender email ---
   // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
-  const { data: lead } = await serviceClient
+  //
+  // ALL matching rows. A workspace legitimately holds more than one lead row
+  // for an address, and this used to resolve that with
+  // `.order("created_at").limit(1)` — the OLDEST row. That is close to the
+  // worst available answer: the row carrying the live campaign is usually the
+  // NEWER one, so the reply AND the instant-pause that rides with it both
+  // landed on a dormant duplicate, while the active row carried on emailing
+  // someone who had just written back. Instant-pause-on-inbound is a guardrail;
+  // it was being routed to the wrong row.
+  //
+  // Now: attribution goes to the most-live row (`pickPrimaryLead`), and the
+  // guardrails below are applied to EVERY matching row. See
+  // `_shared/leadResolution.ts` for the ordering and its reasoning.
+  const { data: leadMatches } = await serviceClient
     .from("leads")
-    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
+    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id, automation_mode, nurture_status, last_activity_at, created_at")
     .eq("email", senderEmail)
     .eq("workspace_id", mailboxWorkspaceId)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(DUPLICATE_LEAD_SCAN_LIMIT);
 
-  if (!lead) {
-    logger.info("mail.outlook.webhook_no_lead_match", {
-      sender_email: senderEmail,
-      workspace_id: mailboxWorkspaceId,
-    });
-    return;
-  }
-
-  const leadRow = lead as {
+  type LeadMatch = {
     id: string;
     name: string;
     owner_user_id: string | null;
@@ -521,7 +532,32 @@ async function processChangeNotification(
     ooo_until: string | null;
     unsubscribed: boolean;
     workspace_id: string | null;
+    automation_mode: string | null;
+    nurture_status: string | null;
+    last_activity_at: string | null;
+    created_at: string | null;
   };
+
+  const matches = (leadMatches ?? []) as LeadMatch[];
+  const leadRow = pickPrimaryLead(matches);
+
+  if (!leadRow) {
+    logger.info("mail.outlook.webhook_no_lead_match", {
+      sender_email: senderEmail,
+      workspace_id: mailboxWorkspaceId,
+    });
+    return;
+  }
+
+  if (matches.length > 1) {
+    logger.info("mail.outlook.webhook_duplicate_leads", {
+      sender_email: senderEmail,
+      workspace_id: mailboxWorkspaceId,
+      matched_rows: matches.length,
+      attributed_to: leadRow.id,
+      armed_rows: matches.filter((m) => m.automation_mode).length,
+    });
+  }
 
   // --- 8. Direct conversation filter ---
   if (repEmail && !toRecipients.includes(repEmail)) {
@@ -556,13 +592,18 @@ async function processChangeNotification(
     if (oooPause.paused) {
       // clearLeadAction=false when we kept the lead actionable — pausing the
       // automation must not blank the reply_now applyOOOPause just wrote.
-      await pauseActiveAutomation(
-        serviceClient,
-        leadRow.id,
-        mailAccountId,
-        "ooo_reply",
-        oooPause.skipInbound,
-      );
+      //
+      // EVERY matching row, for the same reason as the reply pause below: the
+      // contact is away, so no duplicate of theirs should keep sending.
+      for (const m of matches) {
+        await pauseActiveAutomation(
+          serviceClient,
+          m.id,
+          mailAccountId,
+          "ooo_reply",
+          oooPause.skipInbound,
+        );
+      }
       if (oooPause.skipInbound) return;
       oooKeptActionable = true;
     }
@@ -629,6 +670,9 @@ async function processChangeNotification(
     if (isHumanUnsubscribeRequest(bodyLower)) {
       logger.info("mail.outlook.unsubscribe_detected", { lead_id: leadRow.id });
 
+      // EVERY matching row: the human said stop emailing me, so every lead row
+      // carrying this address must stop — not just the one we attributed the
+      // message to.
       await serviceClient.from("leads").update({
         unsubscribed: true,
         needs_action: false,
@@ -637,7 +681,7 @@ async function processChangeNotification(
         next_action_label: null,
         action_reason_code: null,
         nurture_status: "inactive",
-      }).eq("id", leadRow.id);
+      }).in("id", matches.map((m) => m.id));
 
       await createCanonicalInteraction(serviceClient, {
         lead_id: leadRow.id,
@@ -746,7 +790,17 @@ async function processChangeNotification(
   }
 
   // --- 13. Pause active automation ---
-  await pauseActiveAutomation(serviceClient, leadRow.id, mailAccountId, "reply_received");
+  //
+  // EVERY matching row, not just the attributed one. This is the
+  // instant-pause-on-inbound guardrail, and it is the reason the tiebreak above
+  // is no longer safety-critical: whichever duplicate we attribute the reply to,
+  // every row carrying this address stops sending. Pausing a dormant duplicate
+  // costs nothing; missing an armed one emails a customer who just wrote back.
+  // (Production has a duplicate group with SEVERAL armed rows, so "pause the one
+  // we picked" would genuinely have left a sender running.)
+  for (const m of matches) {
+    await pauseActiveAutomation(serviceClient, m.id, mailAccountId, "reply_received");
+  }
 
   logger.info("mail.outlook.inbound_processed", {
     lead_id: leadRow.id,

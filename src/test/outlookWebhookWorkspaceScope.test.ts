@@ -62,3 +62,48 @@ describe("outlook-webhook lead lookups are workspace-scoped", () => {
     expect(guardAt).toBeLessThan(firstRead);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// SOURCE-TEXT guard (Unit G-B P1 — duplicate leads). Also not behavioural: the
+// tiebreak itself is covered behaviourally by src/test/leadResolution.test.ts,
+// but "the guardrail is applied to EVERY matching row, not just the attributed
+// one" is a property of the call sites, and those sit inside a module-private
+// function that builds its own client.
+//
+// THE BUG: attribution AND the instant-pause both went to the oldest duplicate,
+// so an armed newer row kept emailing a customer who had just replied.
+// ───────────────────────────────────────────────────────────────────────────
+describe("outlook-webhook guardrails reach every duplicate lead row", () => {
+  const code = stripComments(readFileSync(path.join(ROOT, FILE), "utf8"));
+
+  it("attribution goes through the shared liveness rule, not an ad-hoc order", () => {
+    expect(code).toMatch(/pickPrimaryLead\s*\(/);
+    // The old tiebreak must be gone: no LEAD lookup may order by created_at.
+    // (Scoped to `.from("leads")` statements — pauseActiveAutomation orders
+    // automation_log rows by created_at, which is unrelated and correct.)
+    for (const stmt of leadStatements(code)) {
+      expect(stmt, `lead statement orders by created_at:\n${stmt}`)
+        .not.toMatch(/\.order\(\s*["']created_at["']/);
+    }
+  });
+
+  it("the reply pause is applied to every matched row, not just the primary", () => {
+    // `pauseActiveAutomation` must never be called with the primary row's id —
+    // every call site iterates the full match set.
+    const pauseCalls = [...code.matchAll(/pauseActiveAutomation\(\s*\n?\s*serviceClient,\s*\n?\s*([A-Za-z0-9_.]+)/g)]
+      .map((m) => m[1]);
+    expect(pauseCalls.length).toBeGreaterThan(0);
+    for (const arg of pauseCalls) {
+      expect(arg, `pauseActiveAutomation called with ${arg}`).not.toBe("leadRow.id");
+    }
+  });
+
+  it("the opt-out stop is applied to every matched row", () => {
+    // `.in("id", matches...)` rather than `.eq("id", leadRow.id)`.
+    expect(code).toMatch(/unsubscribed:\s*true[\s\S]{0,400}?\.in\(\s*["']id["']\s*,\s*matches/);
+  });
+
+  it("the bounce stop iterates all matched rows", () => {
+    expect(code).toMatch(/for \(const row of \(bounceLeads \?\? \[\]\)/);
+  });
+});

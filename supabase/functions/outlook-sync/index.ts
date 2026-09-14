@@ -22,7 +22,7 @@ import {
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
 import { projectTimelineItem, outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
-import { isDirectConversation } from "../_shared/directConversation.ts";
+import { selectOutlookCandidates } from "../_shared/outlookCandidates.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { bounceDisposition } from "../_shared/bounceDisposition.ts";
@@ -31,7 +31,6 @@ import {
   type LeadUpdate,
   DEFAULT_CADENCE_SETTINGS,
   deepMergeCadence,
-  extractEmailAddresses,
   htmlToPlainText,
   containsClosingKeywords,
   getCorsHeaders,
@@ -272,13 +271,22 @@ serve(async (req) => {
     // is a stable "the N most recent messages involving this lead", and the
     // existing per-message `syncStartMs` guard still drops anything older than
     // the sync window.
-    // ponytail: ceiling is SEARCH_CANDIDATE_TOP. It is deliberately modest —
+    // ponytail: the remaining ceiling is SEARCH_CANDIDATE_TOP — what Graph
+    // returns, not what we then keep. It is deliberately modest because
     // `$select` includes `body`, so each extra candidate is a full message body
-    // over the wire — which means a lead with more than ~50 matching messages
-    // in the window can still miss the tail on one run. The upgrade path is
-    // Graph delta queries per mailbox folder, not a bigger top.
+    // over the wire. Honest statement of what can still be missed: if ALL 50
+    // candidates Graph returns are ineligible, this run imports nothing, and a
+    // 51st eligible message is not reached. That is now bounded by Graph's own
+    // relevance ranking rather than by our slice, and it no longer has the
+    // permanent-starvation shape (an eligible message ranked 21-50 is imported
+    // on the first run). The upgrade path is Graph delta queries per mailbox
+    // folder, not a bigger top.
     const SEARCH_CANDIDATE_TOP = 50;
-    const candidateTop = Math.max(maxResults, Math.min(SEARCH_CANDIDATE_TOP, maxResults * 3));
+    // A fixed candidate NET, not a multiple of maxResults: now that filtering
+    // happens before counting, the net's job is to contain enough eligible
+    // messages, and a caller asking for few results still needs to see past the
+    // ineligible ones.
+    const candidateTop = Math.max(maxResults, SEARCH_CANDIDATE_TOP);
     const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${candidateTop}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
@@ -306,20 +314,6 @@ serve(async (req) => {
     const searchData = await searchResp.json();
     const candidates: GraphMessage[] = searchData.value || [];
 
-    // Newest first, then cut — see DETERMINISTIC WINDOW above. Messages with an
-    // unparseable/absent timestamp sort last rather than jumping the queue.
-    const msgTime = (m: GraphMessage): number => {
-      const t = new Date(m.receivedDateTime || m.sentDateTime || "").getTime();
-      return Number.isFinite(t) ? t : -Infinity;
-    };
-    const messages: GraphMessage[] = [...candidates]
-      .sort((a, b) => msgTime(b) - msgTime(a))
-      .slice(0, maxResults);
-
-    console.log(
-      `[outlook-sync] Found ${candidates.length} candidates for ${leadEmailNorm}; processing newest ${messages.length}`,
-    );
-
     // Get existing message IDs for dedup (use internetMessageId as the stable key)
     const { data: existingInteractions } = await supabase
       .from("interactions")
@@ -327,75 +321,58 @@ serve(async (req) => {
       .eq("lead_id", leadId)
       .not("gmail_message_id", "is", null);
 
-    const existingMessageIds = new Set(
-      (existingInteractions || []).map(i => i.gmail_message_id)
+    const existingMessageIds = new Set<string>(
+      (existingInteractions || []).map(i => i.gmail_message_id as string)
     );
-    const existingBodyByMessageId = new Map(
-      (existingInteractions || []).map(i => [i.gmail_message_id, i.body_text])
+    const existingBodyByMessageId = new Map<string, string | null>(
+      (existingInteractions || []).map(i => [i.gmail_message_id as string, i.body_text as string | null])
+    );
+
+    // FILTER FIRST, THEN COUNT — see `_shared/outlookCandidates.ts` for the full
+    // reasoning. In short: this used to sort the candidates and then
+    // `.slice(0, maxResults)` BEFORE any skip gate ran. Graph's candidate set is
+    // mostly things the loop deliberately drops — drafts, third-party mail,
+    // already-synced messages, messages outside the sync window — so those
+    // ineligible messages spent the entire budget, and a genuine direct reply
+    // ranked below the newest 20 raw hits was never imported. Not late: never,
+    // because the candidate set is stable and the same 20 won the slice every
+    // run. The rep saw a customer who had not replied.
+    //
+    // `selectOutlookCandidates` walks the sorted candidates and stops once
+    // `maxResults` ELIGIBLE messages have been accepted. Its gates ARE the gates
+    // that used to live in the loop, and the loop below consumes exactly what it
+    // returned — so the counting predicate and the processing predicate cannot
+    // disagree, because there is only one of them.
+    const selected = selectOutlookCandidates(
+      candidates,
+      {
+        leadEmail: leadEmailNorm,
+        repEmail,
+        alreadySyncedIds: existingMessageIds,
+        bodyByMessageId: existingBodyByMessageId,
+        syncStartMs,
+      },
+      maxResults,
+      (msg, reason) => console.log(`[outlook-sync] Skipping message ${msg.id} (${reason})`),
+    );
+
+    console.log(
+      `[outlook-sync] ${candidates.length} candidates for ${leadEmailNorm}; ${selected.length} eligible (cap ${maxResults})`,
     );
 
     let synced = 0;
     const errors: string[] = [];
     let hasClosingKeywords = false;
 
-    for (const msg of messages) {
-      // Use internetMessageId as stable dedup key (falls back to Graph id)
-      const messageId = msg.internetMessageId || msg.id;
-      const existingBody = existingBodyByMessageId.get(messageId);
-      const shouldRestorePurgedBody = existingMessageIds.has(messageId) && (!existingBody || existingBody.trim() === "");
-      if (existingMessageIds.has(messageId) && !shouldRestorePurgedBody) continue;
-      if (msg.isDraft) continue;
-
+    // Every entry here is already eligible — selectOutlookCandidates applied the
+    // skip gates and the budget. `isDirect` / `isFromLead` come back with each
+    // message rather than being recomputed, so the facts the selection decided
+    // on are the facts the processing uses.
+    for (const { message: msg, messageId, isDirect, isFromLead } of selected) {
       try {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
         const ccEmails = (msg.ccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
-        const bccEmails = (msg.bccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
-        // Any recipient field counts as "addressed to": the widened participants:
-        // search now surfaces messages where the lead (or rep) is only Cc'd or Bcc'd,
-        // so the direct-conversation gate must check To + Cc + Bcc — otherwise those
-        // hits are found and then dropped as 3rd-party, silently losing real rep↔lead
-        // mail (e.g. a rep→lead where the lead was Cc'd).
-        const recipientEmails = [...toEmails, ...ccEmails, ...bccEmails];
-
-        // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
-        const isFromLead = fromEmail === leadEmailNorm;
-        // Shared rep↔lead gate (same function gmail-bulk-sync uses) so the two
-        // providers cannot drift apart again. Outlook passes To + Cc + Bcc as
-        // recipients — see the note above on the widened `participants:` search.
-        const isDirect = isDirectConversation({
-          fromEmails: [fromEmail],
-          recipientEmails,
-          leadEmail: leadEmailNorm,
-          repEmail,
-        });
-
-        // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
-        // they'd be dropped here before isBounce runs — and the bounce-stop +
-        // bounced_at stamp (the circuit breaker's signal) would never fire. Let
-        // likely bounces through; the isBounce block below still does the handling.
-        const _fromL = fromEmail;
-        const _subjL = (msg.subject || "").toLowerCase();
-        const isLikelyBounce =
-          _fromL.includes("postmaster") ||
-          _fromL.includes("mailer-daemon") ||
-          _fromL.includes("mail delivery") ||
-          _subjL.includes("delivery status notification") ||
-          _subjL.includes("undeliverable") ||
-          _subjL.includes("mail delivery failed") ||
-          _subjL.includes("returned mail") ||
-          _subjL.includes("failure notice") ||
-          _subjL.includes("delivery failure");
-
-        if (!isDirect && !isLikelyBounce) {
-          console.log(`[outlook-sync] Skipping 3rd-party message ${msg.id} (from: "${fromEmail}", to: "${toEmails.join(",")}")`);
-          continue;
-        }
-
-        // Server-side date guard (use whichever timestamp Graph provides)
-        const tsRaw = msg.receivedDateTime || msg.sentDateTime;
-        const msgTimestamp = tsRaw ? new Date(tsRaw).getTime() : NaN;
-        if (Number.isFinite(msgTimestamp) && msgTimestamp < syncStartMs) continue;
 
         const subject = msg.subject || "(no subject)";
         const occurredAt = msg.sentDateTime || msg.receivedDateTime;
