@@ -24,7 +24,7 @@ import {
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
-import { outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
+import { outlookEmailDedupeKey } from "../_shared/dedupeKeys.ts";
 import { pickPrimaryLead } from "../_shared/leadResolution.ts";
 
 // How many duplicate lead rows for one address we will act on. Production's
@@ -291,10 +291,22 @@ async function processChangeNotification(
   const mailAccountId: string = sub.mail_account_id as string;
 
   // --- 2. Idempotency check ---
+  //
+  // This asks a DIFFERENT question from the dedupe key: not "do we hold this
+  // message" but "have we already processed this NOTIFICATION". The right
+  // identity for that is the Graph message id, which is per-mailbox — so the
+  // lookup is scoped to the mailbox that owns it. Without that scope the match
+  // was global, and a Graph id colliding across two mailboxes would silently
+  // drop the second tenant's notification as already-seen. Graph ids embed the
+  // mailbox store so that should not happen, but a global match on a
+  // per-mailbox id is the same class of mistake this unit has been fixing, and
+  // narrowing it can only ever stop mail being dropped — a genuine duplicate is
+  // still caught downstream by the dedupe key.
   const { data: existing } = await serviceClient
     .from("mail_event_log")
     .select("id")
     .eq("provider", "outlook")
+    .eq("mail_account_id", mailAccountId)
     .eq("provider_message_id", providerMessageId)
     .maybeSingle();
 
@@ -718,13 +730,15 @@ async function processChangeNotification(
       // 500-char snippet (Codex P1, PR #143). This path is always inbound.
       [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText),
     },
-    // ONE key for both Outlook paths. The webhook used to write
-    // `outlook:webhook:<graphId>` while outlook-sync wrote
-    // `outlook:<internetMessageId>` — two different keys for the same
-    // message, so a lead whose mail arrived by webhook AND was later
-    // re-synced got it stored twice. Both paths now derive the key from the
-    // RFC 2822 Message-ID via the same helper. (Unit G-B P1.)
-    dedupe_key: outlookEmailDedupeKey(internetMessageId, providerMessageId, providerMessageId),
+    // ONE key for both Outlook paths, SCOPED TO THE LEAD. The webhook used to
+    // write `outlook:webhook:<graphId>` while outlook-sync wrote
+    // `outlook:<internetMessageId>` — two keys for one message, so a lead whose
+    // mail arrived by webhook and was later re-synced got it stored twice.
+    // Unifying them on the RFC 2822 Message-ID then exposed the opposite
+    // problem: that id is GLOBAL, so two tenants receiving the same message
+    // collided on `interactions`' global unique index and the second workspace
+    // resolved to the first's interaction row. See `_shared/dedupeKeys.ts`.
+    dedupe_key: outlookEmailDedupeKey(leadRow.id, internetMessageId, providerMessageId, providerMessageId),
   });
 
   // --- 12. Update lead state ---

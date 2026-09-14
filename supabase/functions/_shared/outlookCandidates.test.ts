@@ -17,22 +17,21 @@
 // reverted to a pre-filter slice.
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 
-/** Minimal describe/it shim over Deno.test so this mirrors the vitest file. */
 let currentSuite = "";
 function describe(name: string, body: () => void) { currentSuite = name; body(); currentSuite = ""; }
 function it(name: string, fn: () => void) { Deno.test(`${currentSuite} > ${name}`, fn); }
 const expect = (actual: any) => ({
   toBe: (e: unknown) => assertEquals(actual, e),
   toEqual: (e: unknown) => assertEquals(actual, e),
-  toBeNull: () => assertEquals(actual, null),
   toHaveLength: (n: number) => assertEquals(actual.length, n),
 });
 import {
   type OutlookCandidate,
-  outlookMessageId,
   selectOutlookCandidates,
 } from "./outlookCandidates.ts";
+import { outlookEmailDedupeKey } from "./dedupeKeys.ts";
 
+const LEAD_ID = "11111111-1111-1111-1111-111111111111";
 const LEAD = "manu@acme.com";
 const REP = "rep@drivepilot.io";
 const DAY = 86_400_000;
@@ -52,14 +51,19 @@ function msg(over: Partial<OutlookCandidate> & { id: string; daysAgo: number }):
 
 function ctx(over: Partial<Parameters<typeof selectOutlookCandidates>[1]> = {}) {
   return {
+    leadId: LEAD_ID,
     leadEmail: LEAD,
     repEmail: REP,
-    alreadySyncedIds: new Set<string>(),
-    bodyByMessageId: new Map<string, string | null>(),
+    alreadyStoredKeys: new Set<string>(),
+    bodyByDedupeKey: new Map<string, string | null>(),
     syncStartMs: Date.now() - 365 * DAY,
     ...over,
   };
 }
+
+/** The dedupe key a stored row for this candidate carries. */
+const keyOf = (m: OutlookCandidate) =>
+  outlookEmailDedupeKey(LEAD_ID, m.internetMessageId ?? null, m.id ?? null, m.id);
 
 const idsOf = (sel: ReturnType<typeof selectOutlookCandidates>) => sel.map((s) => s.messageId);
 
@@ -96,13 +100,13 @@ describe("selectOutlookCandidates: ineligible candidates never spend the budget"
   it("the same holds for already-synced noise", () => {
     const noise = Array.from({ length: 20 }, (_, i) => msg({ id: `old-${i}`, daysAgo: i }));
     const reply = msg({ id: "reply", daysAgo: 30 });
-    const synced = new Set(noise.map(outlookMessageId));
-    const bodies = new Map(noise.map((m) => [outlookMessageId(m), "already stored"]));
+    const synced = new Set(noise.map(keyOf));
+    const bodies = new Map(noise.map((m) => [keyOf(m), "already stored"]));
 
     expect(
       idsOf(selectOutlookCandidates(
         [...noise, reply],
-        ctx({ alreadySyncedIds: synced, bodyByMessageId: bodies }),
+        ctx({ alreadyStoredKeys: synced, bodyByDedupeKey: bodies }),
         20,
       )),
     ).toEqual(["reply"]);
@@ -115,6 +119,61 @@ describe("selectOutlookCandidates: ineligible candidates never spend the budget"
     // burned when the stale ones sort above a later eligible message.
     const selected = selectOutlookCandidates([...noise, reply], ctx({ syncStartMs: Date.now() - 90 * DAY }), 20);
     expect(idsOf(selected)).toEqual(["reply"]);
+  });
+});
+
+describe("webhook-ingested messages do not consume selection slots", () => {
+  it("THE REGRESSION — 20 messages the WEBHOOK already stored do not starve an older reply", () => {
+    // The webhook writes a dedupe_key but never populates `gmail_message_id`.
+    // The already-synced filter used to read that column, so every one of these
+    // looked NEW, won a slot, and was only rejected at insert. Once a lead had
+    // `maxResults` webhook deliveries newer than an unsynced message, that
+    // message was never reached. The filter now asks with the dedupe key — the
+    // same identity the insert uses.
+    const viaWebhook = Array.from({ length: 20 }, (_, i) =>
+      msg({ id: `wh-${i}`, internetMessageId: `<wh-${i}@acme.com>`, daysAgo: i }));
+    const neverSynced = msg({ id: "unsynced", internetMessageId: "<unsynced@acme.com>", daysAgo: 30 });
+
+    // Exactly what the webhook leaves behind: rows keyed by dedupe_key, with a
+    // body, and NOTHING in gmail_message_id.
+    const storedKeys = new Set(viaWebhook.map(keyOf));
+    const storedBodies = new Map(viaWebhook.map((m) => [keyOf(m), "stored by the webhook"]));
+
+    const selected = selectOutlookCandidates(
+      [...viaWebhook, neverSynced],
+      ctx({ alreadyStoredKeys: storedKeys, bodyByDedupeKey: storedBodies }),
+      20,
+    );
+
+    expect(idsOf(selected)).toEqual(["<unsynced@acme.com>"]);
+  });
+
+  it("a webhook row whose body was purged is still re-selected to restore it", () => {
+    const m = msg({ id: "wh", internetMessageId: "<wh@acme.com>", daysAgo: 2 });
+    const selected = selectOutlookCandidates(
+      [m],
+      ctx({
+        alreadyStoredKeys: new Set([keyOf(m)]),
+        bodyByDedupeKey: new Map([[keyOf(m), null]]),
+      }),
+      10,
+    );
+    expect(idsOf(selected)).toEqual(["<wh@acme.com>"]);
+    expect(selected[0].restoresPurgedBody).toBe(true);
+  });
+
+  it("the key it filters on is scoped to THIS lead", () => {
+    // A row stored against a DIFFERENT lead must not make this one look synced.
+    const m = msg({ id: "x", internetMessageId: "<x@acme.com>", daysAgo: 1 });
+    const otherLeadKey = outlookEmailDedupeKey(
+      "99999999-9999-9999-9999-999999999999",
+      "<x@acme.com>",
+      "x",
+      "x",
+    );
+    expect(
+      idsOf(selectOutlookCandidates([m], ctx({ alreadyStoredKeys: new Set([otherLeadKey]) }), 10)),
+    ).toEqual(["<x@acme.com>"]);
   });
 });
 
@@ -152,6 +211,9 @@ describe("selectOutlookCandidates: ordering and budget", () => {
     const c = msg({ id: "graph-c", internetMessageId: "<other@acme.com>", daysAgo: 3 });
     expect(idsOf(selectOutlookCandidates([a, b, c], ctx(), 2)))
       .toEqual(["<same@acme.com>", "<other@acme.com>"]);
+    // ...and the identity it deduped on is the dedupe key, not the Graph id.
+    expect(selectOutlookCandidates([a, b, c], ctx(), 2).map((s) => s.dedupeKey))
+      .toEqual([`outlook:${LEAD_ID}:<same@acme.com>`, `outlook:${LEAD_ID}:<other@acme.com>`]);
   });
 });
 
@@ -176,8 +238,8 @@ describe("selectOutlookCandidates: what counts as eligible", () => {
     const selected = selectOutlookCandidates(
       [m],
       ctx({
-        alreadySyncedIds: new Set([outlookMessageId(m)]),
-        bodyByMessageId: new Map([[outlookMessageId(m), ""]]),
+        alreadyStoredKeys: new Set([keyOf(m)]),
+        bodyByDedupeKey: new Map([[keyOf(m), ""]]),
       }),
       10,
     );

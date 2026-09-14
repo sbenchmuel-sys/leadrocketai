@@ -21,7 +21,7 @@ import {
 } from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
-import { projectTimelineItem, outlookEmailDedupeKey } from "../_shared/timelineProjector.ts";
+import { projectTimelineItem } from "../_shared/timelineProjector.ts";
 import { selectOutlookCandidates } from "../_shared/outlookCandidates.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
@@ -314,18 +314,26 @@ serve(async (req) => {
     const searchData = await searchResp.json();
     const candidates: GraphMessage[] = searchData.value || [];
 
-    // Get existing message IDs for dedup (use internetMessageId as the stable key)
+    // WHAT WE ALREADY HOLD, asked with the DEDUPE KEY (Unit G-B P1).
+    //
+    // This used to read `gmail_message_id`. The outlook-webhook path never
+    // populates that column, so every message the webhook had already ingested
+    // looked NEW to the selection below, won a `maxResults` slot, and was only
+    // rejected later by the unique index at insert time. Once a lead had
+    // `maxResults` webhook deliveries newer than an unsynced message, that
+    // message was never reached — the same permanent starvation, by a second
+    // route. The filter now asks the same question the insert answers.
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("gmail_message_id, body_text")
+      .select("dedupe_key, body_text")
       .eq("lead_id", leadId)
-      .not("gmail_message_id", "is", null);
+      .not("dedupe_key", "is", null);
 
-    const existingMessageIds = new Set<string>(
-      (existingInteractions || []).map(i => i.gmail_message_id as string)
+    const existingKeys = new Set<string>(
+      (existingInteractions || []).map(i => i.dedupe_key as string)
     );
-    const existingBodyByMessageId = new Map<string, string | null>(
-      (existingInteractions || []).map(i => [i.gmail_message_id as string, i.body_text as string | null])
+    const existingBodyByKey = new Map<string, string | null>(
+      (existingInteractions || []).map(i => [i.dedupe_key as string, i.body_text as string | null])
     );
 
     // FILTER FIRST, THEN COUNT — see `_shared/outlookCandidates.ts` for the full
@@ -346,10 +354,11 @@ serve(async (req) => {
     const selected = selectOutlookCandidates(
       candidates,
       {
+        leadId,
         leadEmail: leadEmailNorm,
         repEmail,
-        alreadySyncedIds: existingMessageIds,
-        bodyByMessageId: existingBodyByMessageId,
+        alreadyStoredKeys: existingKeys,
+        bodyByDedupeKey: existingBodyByKey,
         syncStartMs,
       },
       maxResults,
@@ -368,7 +377,7 @@ serve(async (req) => {
     // skip gates and the budget. `isDirect` / `isFromLead` come back with each
     // message rather than being recomputed, so the facts the selection decided
     // on are the facts the processing uses.
-    for (const { message: msg, messageId, isDirect, isFromLead } of selected) {
+    for (const { message: msg, messageId, dedupeKey, isDirect, isFromLead } of selected) {
       try {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
@@ -425,7 +434,7 @@ serve(async (req) => {
             console.log(
               `[outlook-sync] Lead ${leadId}: transient bounce (code: ${verdict.statusCode ?? "none"}, basis: ${verdict.basis}) — leaving cadence to retry`,
             );
-            existingMessageIds.add(messageId);
+            existingKeys.add(dedupeKey);
             continue;
           }
 
@@ -496,7 +505,7 @@ serve(async (req) => {
           // last_outbound_at / outbound counts and (for the broadened body-correlated
           // DSNs that aren't a direct rep↔lead message) recording a non-conversation
           // system message as a real sent email. Skip to the next message.
-          existingMessageIds.add(messageId);
+          existingKeys.add(dedupeKey);
           continue;
         }
 
@@ -519,7 +528,7 @@ serve(async (req) => {
           });
           // Branch on `.skipInbound`, never on the object — see gmail-sync.
           if (oooPause.skipInbound) {
-            existingMessageIds.add(messageId);
+            existingKeys.add(dedupeKey);
             synced++;
             continue;
           }
@@ -648,14 +657,14 @@ serve(async (req) => {
           // `emailDedupeKey("outlook", …)` output whenever Graph gives us an
           // internetMessageId; the graph-id fallback is now namespaced
           // (`outlook:graph:<id>`) so it can never collide with a Message-ID.
-          dedupe_key: outlookEmailDedupeKey(msg.internetMessageId ?? null, msg.id ?? null, messageId),
+          dedupe_key: dedupeKey,
         });
 
         if (canonResult.error && canonResult.error !== "duplicate") {
           errors.push(`Failed to insert message ${msg.id}: ${canonResult.error}`);
         } else if (!canonResult.error) {
           synced++;
-          existingMessageIds.add(messageId);
+          existingKeys.add(dedupeKey);
         }
       } catch (err) {
         errors.push(`Error processing message ${msg.id}: ${err instanceof Error ? err.message : "Unknown"}`);

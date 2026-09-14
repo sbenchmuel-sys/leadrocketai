@@ -25,6 +25,7 @@
 
 import { isDirectConversation } from "./directConversation.ts";
 import { detectBounce } from "./bounceDetection.ts";
+import { outlookEmailDedupeKey } from "./dedupeKeys.ts";
 
 /** The subset of a Graph message this module reads. */
 export interface OutlookCandidate {
@@ -41,12 +42,25 @@ export interface OutlookCandidate {
 }
 
 export interface SelectionContext {
+  /** The lead this sync is for. Part of the dedupe key, so it is required. */
+  leadId: string;
   leadEmail: string;
   repEmail: string;
-  /** Messages already stored for this lead, keyed the same way we key them. */
-  alreadySyncedIds: ReadonlySet<string>;
-  /** messageId -> stored body. An empty body means "re-fetch to restore it". */
-  bodyByMessageId: ReadonlyMap<string, string | null | undefined>;
+  /**
+   * DEDUPE KEYS already stored for this lead — the same identity the insert
+   * uses, built by the same function.
+   *
+   * It used to be a set of `interactions.gmail_message_id` values, and that is
+   * a different question: the outlook-webhook path never populates that column,
+   * so every webhook-ingested message looked NEW here, won a slot, and was only
+   * rejected at insert time by the unique index. Once a lead had `maxResults`
+   * webhook deliveries newer than an unsynced message, that message was never
+   * reached — the starvation, back by a second route. Asking with the key makes
+   * the filter and the insert agree by construction.
+   */
+  alreadyStoredKeys: ReadonlySet<string>;
+  /** dedupe key -> stored body. An empty body means "re-fetch to restore it". */
+  bodyByDedupeKey: ReadonlyMap<string, string | null | undefined>;
   /** Epoch ms; anything older than this is outside the sync window. */
   syncStartMs: number;
 }
@@ -62,6 +76,8 @@ export interface SelectedCandidate<T extends OutlookCandidate> {
   message: T;
   /** internetMessageId when Graph gave one, else the Graph id. */
   messageId: string;
+  /** The row identity — what the caller must write as `dedupe_key`. */
+  dedupeKey: string;
   /** Passed the rep↔lead gate. The caller reuses this; it is not recomputed. */
   isDirect: boolean;
   /** The sender is the lead — drives inbound/outbound direction downstream. */
@@ -119,19 +135,21 @@ export function selectOutlookCandidates<T extends OutlookCandidate>(
     if (chosen.length >= limit) break;
 
     const messageId = outlookMessageId(msg);
+    // The identity, built by the same function the insert uses.
+    const dedupeKey = outlookEmailDedupeKey(ctx.leadId, msg.internetMessageId ?? null, msg.id ?? null, messageId);
 
     // The same message can surface twice in one candidate set (e.g. a copy in
     // another folder). Take it once; a second copy must not spend the budget.
-    if (seen.has(messageId)) {
+    if (seen.has(dedupeKey)) {
       onSkip?.(msg, "duplicate_in_batch");
       continue;
     }
-    seen.add(messageId);
+    seen.add(dedupeKey);
 
-    const storedBody = ctx.bodyByMessageId.get(messageId);
-    const restoresPurgedBody = ctx.alreadySyncedIds.has(messageId) &&
-      (!storedBody || storedBody.trim() === "");
-    if (ctx.alreadySyncedIds.has(messageId) && !restoresPurgedBody) {
+    const alreadyStored = ctx.alreadyStoredKeys.has(dedupeKey);
+    const storedBody = ctx.bodyByDedupeKey.get(dedupeKey);
+    const restoresPurgedBody = alreadyStored && (!storedBody || storedBody.trim() === "");
+    if (alreadyStored && !restoresPurgedBody) {
       onSkip?.(msg, "already_synced");
       continue;
     }
@@ -176,6 +194,7 @@ export function selectOutlookCandidates<T extends OutlookCandidate>(
     chosen.push({
       message: msg,
       messageId,
+      dedupeKey,
       isDirect,
       isFromLead: fromEmail !== "" && fromEmail === leadEmail,
       restoresPurgedBody,

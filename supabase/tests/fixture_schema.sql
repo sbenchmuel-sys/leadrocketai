@@ -172,3 +172,34 @@ DO $$ BEGIN
     CREATE ROLE authenticated NOLOGIN;
   END IF;
 END $$;
+
+-- Added for outlook_dedupe_key_scope.test.sql (Unit G-B). Minimal stand-ins;
+-- what matters is the UNIQUE constraints, copied from production:
+--   idx_interactions_dedupe_key_unique  UNIQUE (dedupe_key) WHERE NOT NULL  <- GLOBAL
+--   uq_lead_timeline_dedupe             UNIQUE (lead_id, dedupe_key)        <- lead-scoped
+-- The global one is what made an unscoped Outlook key a cross-tenant write.
+CREATE TABLE IF NOT EXISTS public.interactions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  type text,
+  direction text,
+  body_text text,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  gmail_message_id text,
+  dedupe_key text
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interactions_dedupe_key_unique
+  ON public.interactions (dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.lead_timeline_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  lead_id uuid NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  event_type text,
+  provider text,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  dedupe_key text NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_timeline_dedupe
+  ON public.lead_timeline_items (lead_id, dedupe_key);
