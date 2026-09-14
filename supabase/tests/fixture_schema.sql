@@ -61,7 +61,32 @@ CREATE TABLE public.leads (
   needs_action boolean,
   stage text,
   has_future_meeting boolean,
-  last_inbound_at timestamptz
+  last_inbound_at timestamptz,
+  -- Added for outlook_webhook_recency.test.sql (Unit G-B): the webhook's
+  -- advance-only recency writes touch both columns.
+  last_activity_at timestamptz,
+  action_dismissed_at timestamptz,
+  -- Added for inbound_pause_defuses_executor.test.sql (Unit G-B): every column
+  -- automation-executor's candidate query reads, so the test can assert that
+  -- exact predicate against a paused row.
+  eligible_at timestamptz,
+  next_action_key text,
+  next_action_label text,
+  action_reason_code text,
+  status text NOT NULL DEFAULT 'new',
+  manual_mode boolean NOT NULL DEFAULT false
+);
+
+-- Added for inbound_pause_defuses_executor.test.sql (Unit G-B).
+CREATE TABLE IF NOT EXISTS public.automation_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid REFERENCES public.leads(id) ON DELETE CASCADE,
+  mail_account_id uuid,
+  status text NOT NULL DEFAULT 'pending',
+  action_key text,
+  error_message text,
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TYPE public.campaign_step_type AS ENUM (
@@ -168,3 +193,54 @@ DO $$ BEGIN
     CREATE ROLE authenticated NOLOGIN;
   END IF;
 END $$;
+
+-- Added for outlook_dedupe_key_scope.test.sql (Unit G-B). Minimal stand-ins;
+-- what matters is the UNIQUE constraints, copied from production:
+--   idx_interactions_dedupe_key_unique  UNIQUE (dedupe_key) WHERE NOT NULL  <- GLOBAL
+--   uq_lead_timeline_dedupe             UNIQUE (lead_id, dedupe_key)        <- lead-scoped
+-- The global one is what made an unscoped Outlook key a cross-tenant write.
+CREATE TABLE IF NOT EXISTS public.interactions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  type text,
+  direction text,
+  body_text text,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  gmail_message_id text,
+  dedupe_key text
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interactions_dedupe_key_unique
+  ON public.interactions (dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.lead_timeline_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  lead_id uuid NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  event_type text,
+  provider text,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  dedupe_key text NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_timeline_dedupe
+  ON public.lead_timeline_items (lead_id, dedupe_key);
+
+-- Added for outlook_dedupe_key_scope.test.sql (Unit G-B). The webhook's
+-- idempotency log, with production's ORIGINAL global constraint so the
+-- migration's re-scoping of it is exercised for real.
+CREATE TABLE IF NOT EXISTS public.mail_accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  provider text,
+  email_address text
+);
+CREATE TABLE IF NOT EXISTS public.mail_event_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  provider_message_id text NOT NULL,
+  mail_account_id uuid REFERENCES public.mail_accounts(id) ON DELETE CASCADE,
+  event_type text,
+  payload jsonb,
+  processed_at timestamptz,
+  CONSTRAINT mail_event_log_provider_provider_message_id_key UNIQUE (provider, provider_message_id)
+);

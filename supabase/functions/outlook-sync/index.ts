@@ -21,16 +21,16 @@ import {
 } from "../_shared/inboundIntentDetectors.ts";
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { captureWinningInteraction } from "../_shared/winningInteractions.ts";
-import { projectTimelineItem, emailDedupeKey } from "../_shared/timelineProjector.ts";
+import { projectTimelineItem } from "../_shared/timelineProjector.ts";
+import { selectOutlookCandidates } from "../_shared/outlookCandidates.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
-import { classifyBounce } from "../_shared/bounceDetection.ts";
+import { bounceDisposition } from "../_shared/bounceDisposition.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
   DEFAULT_CADENCE_SETTINGS,
   deepMergeCadence,
-  extractEmailAddresses,
   htmlToPlainText,
   containsClosingKeywords,
   getCorsHeaders,
@@ -258,7 +258,36 @@ serve(async (req) => {
     // The direct-conversation filter + body correlation in the loop gate what's
     // actually processed; this just widens the candidate set.
     const searchKql = `"participants:${leadEmailNorm}" OR "body:${leadEmailNorm}"`;
-    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${maxResults}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
+    // DETERMINISTIC WINDOW (Unit G-B P2).
+    //
+    // `$search` cannot be combined with `$orderby` or `$filter`, so Graph
+    // returns RELEVANCE order. Taking a bare `$top=maxResults` off that list
+    // meant WHICH of a lead's messages got synced was effectively arbitrary —
+    // a busy thread could return 20 old messages and never the newest reply,
+    // and two identical runs could disagree.
+    //
+    // So: over-pull a bounded candidate page, then sort by the message's own
+    // timestamp (newest first) and cut to `maxResults` ourselves. The result
+    // is a stable "the N most recent messages involving this lead", and the
+    // existing per-message `syncStartMs` guard still drops anything older than
+    // the sync window.
+    // ponytail: the remaining ceiling is SEARCH_CANDIDATE_TOP — what Graph
+    // returns, not what we then keep. It is deliberately modest because
+    // `$select` includes `body`, so each extra candidate is a full message body
+    // over the wire. Honest statement of what can still be missed: if ALL 50
+    // candidates Graph returns are ineligible, this run imports nothing, and a
+    // 51st eligible message is not reached. That is now bounded by Graph's own
+    // relevance ranking rather than by our slice, and it no longer has the
+    // permanent-starvation shape (an eligible message ranked 21-50 is imported
+    // on the first run). The upgrade path is Graph delta queries per mailbox
+    // folder, not a bigger top.
+    const SEARCH_CANDIDATE_TOP = 50;
+    // A fixed candidate NET, not a multiple of maxResults: now that filtering
+    // happens before counting, the net's job is to contain enough eligible
+    // messages, and a caller asking for few results still needs to see past the
+    // ineligible ones.
+    const candidateTop = Math.max(maxResults, SEARCH_CANDIDATE_TOP);
+    const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${candidateTop}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
       headers: {
@@ -283,81 +312,92 @@ serve(async (req) => {
     }
 
     const searchData = await searchResp.json();
-    const messages: GraphMessage[] = searchData.value || [];
+    const candidates: GraphMessage[] = searchData.value || [];
 
-    console.log(`[outlook-sync] Found ${messages.length} messages for ${leadEmailNorm}`);
-
-    // Get existing message IDs for dedup (use internetMessageId as the stable key)
+    // WHAT WE ALREADY HOLD, asked with the DEDUPE KEY (Unit G-B P1).
+    //
+    // This used to read `gmail_message_id`. The outlook-webhook path never
+    // populates that column, so every message the webhook had already ingested
+    // looked NEW to the selection below, won a `maxResults` slot, and was only
+    // rejected later by the unique index at insert time. Once a lead had
+    // `maxResults` webhook deliveries newer than an unsynced message, that
+    // message was never reached — the same permanent starvation, by a second
+    // route. The filter now asks the same question the insert answers.
     const { data: existingInteractions } = await supabase
       .from("interactions")
-      .select("gmail_message_id, body_text")
-      .eq("lead_id", leadId)
-      .not("gmail_message_id", "is", null);
+      .select("dedupe_key, gmail_message_id, body_text")
+      .eq("lead_id", leadId);
 
-    const existingMessageIds = new Set(
-      (existingInteractions || []).map(i => i.gmail_message_id)
+    type ExistingRow = { dedupe_key: string | null; gmail_message_id: string | null; body_text: string | null };
+    const existingRows = (existingInteractions || []) as ExistingRow[];
+
+    const existingKeys = new Set<string>(
+      existingRows.filter(i => i.dedupe_key).map(i => i.dedupe_key as string)
     );
-    const existingBodyByMessageId = new Map(
-      (existingInteractions || []).map(i => [i.gmail_message_id, i.body_text])
+    const existingBodyByKey = new Map<string, string | null>(
+      existingRows.filter(i => i.dedupe_key).map(i => [i.dedupe_key as string, i.body_text])
+    );
+
+    // LEGACY COMPATIBILITY — rows written before the dedupe key existed.
+    // `outlook-send` stores the Graph id in `gmail_message_id` and leaves
+    // `dedupe_key` NULL, so there is no key to match on and a later sync would
+    // re-import the rep's own sent mail. Scoped to rows with NO key, so it
+    // narrows itself: the moment a row has a key, the key alone answers.
+    // See `legacyProviderIdsWithoutKey` for what retires it.
+    const legacyRows = existingRows.filter(i => !i.dedupe_key && i.gmail_message_id);
+    const legacyProviderIds = new Set<string>(legacyRows.map(i => i.gmail_message_id as string));
+    const legacyBodyById = new Map<string, string | null>(
+      legacyRows.map(i => [i.gmail_message_id as string, i.body_text])
+    );
+
+    // FILTER FIRST, THEN COUNT — see `_shared/outlookCandidates.ts` for the full
+    // reasoning. In short: this used to sort the candidates and then
+    // `.slice(0, maxResults)` BEFORE any skip gate ran. Graph's candidate set is
+    // mostly things the loop deliberately drops — drafts, third-party mail,
+    // already-synced messages, messages outside the sync window — so those
+    // ineligible messages spent the entire budget, and a genuine direct reply
+    // ranked below the newest 20 raw hits was never imported. Not late: never,
+    // because the candidate set is stable and the same 20 won the slice every
+    // run. The rep saw a customer who had not replied.
+    //
+    // `selectOutlookCandidates` walks the sorted candidates and stops once
+    // `maxResults` ELIGIBLE messages have been accepted. Its gates ARE the gates
+    // that used to live in the loop, and the loop below consumes exactly what it
+    // returned — so the counting predicate and the processing predicate cannot
+    // disagree, because there is only one of them.
+    const selected = selectOutlookCandidates(
+      candidates,
+      {
+        leadId,
+        leadEmail: leadEmailNorm,
+        repEmail,
+        alreadyStoredKeys: existingKeys,
+        legacyProviderIdsWithoutKey: legacyProviderIds,
+        bodyByDedupeKey: existingBodyByKey,
+        bodyByLegacyProviderId: legacyBodyById,
+        syncStartMs,
+      },
+      maxResults,
+      (msg, reason) => console.log(`[outlook-sync] Skipping message ${msg.id} (${reason})`),
+    );
+
+    console.log(
+      `[outlook-sync] ${candidates.length} candidates for ${leadEmailNorm}; ${selected.length} eligible (cap ${maxResults})`,
     );
 
     let synced = 0;
     const errors: string[] = [];
     let hasClosingKeywords = false;
 
-    for (const msg of messages) {
-      // Use internetMessageId as stable dedup key (falls back to Graph id)
-      const messageId = msg.internetMessageId || msg.id;
-      const existingBody = existingBodyByMessageId.get(messageId);
-      const shouldRestorePurgedBody = existingMessageIds.has(messageId) && (!existingBody || existingBody.trim() === "");
-      if (existingMessageIds.has(messageId) && !shouldRestorePurgedBody) continue;
-      if (msg.isDraft) continue;
-
+    // Every entry here is already eligible — selectOutlookCandidates applied the
+    // skip gates and the budget. `isDirect` / `isFromLead` come back with each
+    // message rather than being recomputed, so the facts the selection decided
+    // on are the facts the processing uses.
+    for (const { message: msg, messageId, dedupeKey, isDirect, isFromLead } of selected) {
       try {
         const fromEmail = msg.from?.emailAddress?.address?.toLowerCase().trim() || "";
         const toEmails = (msg.toRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
         const ccEmails = (msg.ccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
-        const bccEmails = (msg.bccRecipients || []).map(r => r.emailAddress?.address?.toLowerCase().trim()).filter(Boolean);
-        // Any recipient field counts as "addressed to": the widened participants:
-        // search now surfaces messages where the lead (or rep) is only Cc'd or Bcc'd,
-        // so the direct-conversation gate must check To + Cc + Bcc — otherwise those
-        // hits are found and then dropped as 3rd-party, silently losing real rep↔lead
-        // mail (e.g. a rep→lead where the lead was Cc'd).
-        const recipientEmails = [...toEmails, ...ccEmails, ...bccEmails];
-
-        // STRICT DIRECTION FILTER: Only direct rep ↔ lead conversation
-        const isFromLead = fromEmail === leadEmailNorm;
-        const isFromRep = fromEmail === repEmail;
-        const isToLead = recipientEmails.includes(leadEmailNorm);
-        const isToRep = recipientEmails.includes(repEmail);
-        const isDirectConversation = (isFromLead && isToRep) || (isFromRep && isToLead);
-
-        // Bounce/DSN messages come FROM postmaster/mailer-daemon, not the lead, so
-        // they'd be dropped here before isBounce runs — and the bounce-stop +
-        // bounced_at stamp (the circuit breaker's signal) would never fire. Let
-        // likely bounces through; the isBounce block below still does the handling.
-        const _fromL = fromEmail;
-        const _subjL = (msg.subject || "").toLowerCase();
-        const isLikelyBounce =
-          _fromL.includes("postmaster") ||
-          _fromL.includes("mailer-daemon") ||
-          _fromL.includes("mail delivery") ||
-          _subjL.includes("delivery status notification") ||
-          _subjL.includes("undeliverable") ||
-          _subjL.includes("mail delivery failed") ||
-          _subjL.includes("returned mail") ||
-          _subjL.includes("failure notice") ||
-          _subjL.includes("delivery failure");
-
-        if (!isDirectConversation && !isLikelyBounce) {
-          console.log(`[outlook-sync] Skipping 3rd-party message ${msg.id} (from: "${fromEmail}", to: "${toEmails.join(",")}")`);
-          continue;
-        }
-
-        // Server-side date guard (use whichever timestamp Graph provides)
-        const tsRaw = msg.receivedDateTime || msg.sentDateTime;
-        const msgTimestamp = tsRaw ? new Date(tsRaw).getTime() : NaN;
-        if (Number.isFinite(msgTimestamp) && msgTimestamp < syncStartMs) continue;
 
         const subject = msg.subject || "(no subject)";
         const occurredAt = msg.sentDateTime || msg.receivedDateTime;
@@ -373,51 +413,48 @@ serve(async (req) => {
           hasClosingKeywords = true;
         }
 
-        // BOUNCE detection
-        const fromLower = fromEmail;
-        const subjectLower = subject.toLowerCase();
-        const isBounce = (
-          fromLower.includes("postmaster") ||
-          fromLower.includes("mailer-daemon") ||
-          fromLower.includes("mail delivery") ||
-          subjectLower.includes("delivery status notification") ||
-          subjectLower.includes("undeliverable") ||
-          subjectLower.includes("mail delivery failed") ||
-          subjectLower.includes("returned mail") ||
-          subjectLower.includes("failure notice") ||
-          subjectLower.includes("delivery failure")
-        );
+        // BOUNCE DISPOSITION — one shared decision with gmail-bulk-sync
+        // (`_shared/bounceDisposition.ts`). It folds in three things this
+        // inline block used to get wrong:
+        //   • a HUMAN forwarding a bounce ("Fwd: Undeliverable…", quoted
+        //     5.1.1 in the body) was classified as a hard bounce and the
+        //     lead permanently unsubscribed — and, because the branch
+        //     `continue`s, their message never reached the timeline;
+        //   • attribution used a SUBSTRING (`body.includes(leadEmail)`), so a
+        //     DSN naming only `joann@acme.com` stopped lead `ann@acme.com`;
+        //   • soft vs hard, which this file already did correctly.
+        //
+        // Exchange NDRs inline the diagnostic ("Remote Server returned
+        // '550 5.1.1 …'") and the recipient/Status fields directly in the body
+        // that getGraphMessageBody returns, so there is no separate
+        // delivery-status part to fetch (unlike Gmail) — hence the empty
+        // `deliveryStatusText`.
+        const verdict = bounceDisposition({
+          fromEmail,
+          subject,
+          bodyText,
+          deliveryStatusText: "",
+          leadEmail: leadEmailNorm,
+          headersInvolveLead: isDirect,
+          isDirectConversation: isDirect,
+        });
+        const isBounce = verdict.disposition !== "not_a_bounce";
 
         if (isBounce) {
-          // Attribute a bounce to THIS lead only if it's actually named in it —
-          // a direct message, or the DSN body contains the failed address. The
-          // broadened search can return DSNs; this prevents mis-attribution.
-          const aboutThisLead = isDirectConversation || bodyText.toLowerCase().includes(leadEmailNorm);
-          if (!aboutThisLead) {
+          if (verdict.disposition === "not_about_lead") {
             console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
             continue;
           }
 
-          // Soft (transient) vs hard (permanent) bounce — mirror of gmail-sync.
-          // A 4.x.x DSN (mailbox full, greylisting, temporary defer) must NOT
-          // permanently kill a good lead: leave unsubscribed/enrollment untouched
-          // and let the cadence retry. Only hard (5.x.x / clearly-permanent)
-          // bounces suppress the lead and feed the bounce circuit breaker.
-          // Unclassifiable → transient (fail-safe: don't burn a good lead).
-          // Exchange NDRs inline the diagnostic ("Remote Server returned
-          // '550 5.1.1 …'") and the recipient/Status fields directly in the body
-          // that getGraphMessageBody returns, so the RFC 3463 code is already
-          // present here (no separate delivery-status part to fetch, unlike Gmail).
-          const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText, recipientEmail: leadEmailNorm });
-          if (bounceClass.severity !== "hard") {
+          if (verdict.disposition === "transient") {
             console.log(
-              `[outlook-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,
+              `[outlook-sync] Lead ${leadId}: transient bounce (code: ${verdict.statusCode ?? "none"}, basis: ${verdict.basis}) — leaving cadence to retry`,
             );
-            existingMessageIds.add(messageId);
+            existingKeys.add(dedupeKey);
             continue;
           }
 
-          console.log(`[outlook-sync] Lead ${leadId}: Hard bounce detected (code: ${bounceClass.statusCode ?? "keyword/none"}) — stopping automation`);
+          console.log(`[outlook-sync] Lead ${leadId}: Hard bounce detected (code: ${verdict.statusCode ?? "keyword/none"}) — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true, needs_action: false, eligible_at: null,
             next_action_key: null, next_action_label: null, action_reason_code: null,
@@ -484,7 +521,7 @@ serve(async (req) => {
           // last_outbound_at / outbound counts and (for the broadened body-correlated
           // DSNs that aren't a direct rep↔lead message) recording a non-conversation
           // system message as a real sent email. Skip to the next message.
-          existingMessageIds.add(messageId);
+          existingKeys.add(dedupeKey);
           continue;
         }
 
@@ -507,7 +544,7 @@ serve(async (req) => {
           });
           // Branch on `.skipInbound`, never on the object — see gmail-sync.
           if (oooPause.skipInbound) {
-            existingMessageIds.add(messageId);
+            existingKeys.add(dedupeKey);
             synced++;
             continue;
           }
@@ -631,14 +668,19 @@ serve(async (req) => {
               ? { [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText) }
               : {}),
           },
-          dedupe_key: emailDedupeKey("outlook", messageId, messageId),
+          // Same helper the webhook now uses, so both Outlook paths produce
+          // ONE key per message (Unit G-B P1). Identical to the previous
+          // `emailDedupeKey("outlook", …)` output whenever Graph gives us an
+          // internetMessageId; the graph-id fallback is now namespaced
+          // (`outlook:graph:<id>`) so it can never collide with a Message-ID.
+          dedupe_key: dedupeKey,
         });
 
         if (canonResult.error && canonResult.error !== "duplicate") {
           errors.push(`Failed to insert message ${msg.id}: ${canonResult.error}`);
         } else if (!canonResult.error) {
           synced++;
-          existingMessageIds.add(messageId);
+          existingKeys.add(dedupeKey);
         }
       } catch (err) {
         errors.push(`Error processing message ${msg.id}: ${err instanceof Error ? err.message : "Unknown"}`);

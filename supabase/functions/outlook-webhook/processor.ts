@@ -24,6 +24,13 @@ import {
 import { detectMeetingConfirmation } from "../_shared/meetingConfirmation.ts";
 import { isHumanUnsubscribeRequest, stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
+import { outlookEmailDedupeKey } from "../_shared/dedupeKeys.ts";
+import { pickPrimaryLead } from "../_shared/leadResolution.ts";
+
+// How many duplicate lead rows for one address we will act on. Production's
+// largest group today is 3; this is a sanity bound, not a business rule. If it
+// is ever hit the log line below says so.
+const DUPLICATE_LEAD_SCAN_LIMIT = 25;
 import {
   renewOutlookSubscription,
   SUBSCRIPTION_LIFETIME_MS,
@@ -284,10 +291,22 @@ async function processChangeNotification(
   const mailAccountId: string = sub.mail_account_id as string;
 
   // --- 2. Idempotency check ---
+  //
+  // This asks a DIFFERENT question from the dedupe key: not "do we hold this
+  // message" but "have we already processed this NOTIFICATION". The right
+  // identity for that is the Graph message id, which is per-mailbox — so the
+  // lookup is scoped to the mailbox that owns it. Without that scope the match
+  // was global, and a Graph id colliding across two mailboxes would silently
+  // drop the second tenant's notification as already-seen. Graph ids embed the
+  // mailbox store so that should not happen, but a global match on a
+  // per-mailbox id is the same class of mistake this unit has been fixing, and
+  // narrowing it can only ever stop mail being dropped — a genuine duplicate is
+  // still caught downstream by the dedupe key.
   const { data: existing } = await serviceClient
     .from("mail_event_log")
     .select("id")
     .eq("provider", "outlook")
+    .eq("mail_account_id", mailAccountId)
     .eq("provider_message_id", providerMessageId)
     .maybeSingle();
 
@@ -296,19 +315,50 @@ async function processChangeNotification(
     return;
   }
 
-  // --- 3. Get mail account email (needed for direct conversation filter) ---
+  // --- 3. Get mail account email + WORKSPACE (needed for the direct
+  //        conversation filter and for workspace-scoping every lead lookup) ---
   const { data: mailAccount } = await serviceClient
     .from("mail_accounts")
-    .select("email_address")
+    .select("email_address, workspace_id")
     .eq("id", mailAccountId)
     .single();
 
   const repEmail = (mailAccount as { email_address?: string } | null)?.email_address?.toLowerCase().trim() || "";
 
+  // WORKSPACE ISOLATION (Unit G-B P1).
+  //
+  // Every lead lookup below used to be `.eq("email", …)` with no workspace
+  // filter. `leads.email` is not globally unique — the same contact can exist
+  // as a lead in several tenants — so an inbound message could be attached to
+  // ANOTHER workspace's lead, and that workspace's automation paused/stopped
+  // by mail it never received. This is the mailbox's workspace, and it is the
+  // only workspace this notification may write to.
+  //
+  // FAIL CLOSED: no workspace on the mailbox row means we cannot prove which
+  // tenant this mail belongs to, so we process nothing rather than guess.
+  const mailboxWorkspaceId =
+    (mailAccount as { workspace_id?: string | null } | null)?.workspace_id ?? null;
+  if (!mailboxWorkspaceId) {
+    logger.warn("mail.outlook.webhook_no_mailbox_workspace", {
+      mail_account_id: mailAccountId,
+      provider_message_id: providerMessageId,
+    });
+    return;
+  }
+
   // --- 4. Fetch full message from Graph (with headers + body for safeguards) ---
   let senderEmail: string | null = null;
   let messageSubject: string | null = null;
   let conversationId: string | null = null;
+  // RFC 2822 Message-ID. The stable cross-path identity of this message:
+  // outlook-sync keys on it too, so both paths must derive the SAME
+  // dedupe key from it or the same email is stored twice (Unit G-B P1).
+  let internetMessageId: string | null = null;
+  // The time the message actually arrived, per Graph. The webhook used to
+  // stamp `occurred_at = now()`, which is the time WE processed it — wrong
+  // whenever a notification is delayed or replayed, and it puts the row in
+  // the wrong place in the lead's timeline.
+  let receivedAt: string | null = null;
   let bodyText = "";
   let bodyTextLined = ""; // newline-preserving copy, used only for unsubscribe quote-stripping
   let toRecipients: string[] = [];
@@ -327,6 +377,11 @@ async function processChangeNotification(
       senderEmail = msg.from?.emailAddress?.address?.toLowerCase() ?? null;
       messageSubject = msg.subject ?? null;
       conversationId = msg.conversationId ?? null;
+      internetMessageId = msg.internetMessageId ?? null;
+      // Guard against an unparseable value — an invalid Date would serialise
+      // to a throw, and a bad timestamp is worse than falling back to now().
+      const received = msg.receivedDateTime ? new Date(msg.receivedDateTime) : null;
+      receivedAt = received && !Number.isNaN(received.getTime()) ? received.toISOString() : null;
 
       if (msg.body?.content) {
         bodyText = msg.body.contentType === "html"
@@ -374,8 +429,26 @@ async function processChangeNotification(
     });
   }
 
+  // The message's real arrival time (falls back to now() only if Graph did not
+  // give us one — e.g. the message fetch above failed).
+  const occurredAt = receivedAt ?? new Date().toISOString();
+
   // --- 5. Record in idempotency log ---
-  await serviceClient.from("mail_event_log").insert({
+  //
+  // This insert IS the claim on this notification, and it runs BEFORE any side
+  // effect below. Its result used to be ignored, which meant two things went
+  // wrong silently: a constraint violation left no marker (so every redelivery
+  // re-ran the pauses and system notes), and any other failure did the same.
+  //
+  //   • Unique violation → another delivery of this same notification for this
+  //     same mailbox already claimed it (concurrent redelivery). STOP: it is
+  //     running the side effects, or already has. The constraint is scoped
+  //     (provider, mail_account_id, provider_message_id) — see the migration —
+  //     so this can no longer fire because a DIFFERENT mailbox saw the same id.
+  //   • Any other error → log loudly and PROCEED. Losing an inbound reply is
+  //     the guardrail failure (the automation keeps sending); a replayed pause
+  //     or a duplicated system note is the lesser harm.
+  const { error: claimErr } = await serviceClient.from("mail_event_log").insert({
     provider: "outlook",
     provider_message_id: providerMessageId,
     mail_account_id: mailAccountId,
@@ -388,6 +461,22 @@ async function processChangeNotification(
     },
     processed_at: new Date().toISOString(),
   });
+  if (claimErr) {
+    const isUniqueViolation = claimErr.code === "23505" ||
+      /duplicate key|unique.?constraint|23505/i.test(claimErr.message ?? "");
+    if (isUniqueViolation) {
+      logger.info("mail.outlook.webhook_duplicate_race_lost", {
+        mail_account_id: mailAccountId,
+        provider_message_id: providerMessageId,
+      });
+      return;
+    }
+    logger.error("mail.outlook.webhook_claim_failed_proceeding", {
+      mail_account_id: mailAccountId,
+      provider_message_id: providerMessageId,
+      error: claimErr.message,
+    });
+  }
 
   if (!senderEmail) {
     logger.info("mail.outlook.webhook_no_sender", { provider_message_id: providerMessageId });
@@ -410,16 +499,25 @@ async function processChangeNotification(
 
   if (isBounce) {
     for (const recipientEmail of toRecipients) {
-      const { data: bounceLead } = await serviceClient
+      // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
+      //
+      // ALL matching rows, not the oldest one. A workspace legitimately holds
+      // several lead rows for one address, and a bounce says the ADDRESS is
+      // undeliverable — so every row carrying it must stop, or the duplicate we
+      // did not pick carries on mailing a dead mailbox. (The previous
+      // `.order(created_at).limit(1)` picked one arbitrarily.)
+      const { data: bounceLeads } = await serviceClient
         .from("leads")
         .select("id, name")
         .eq("email", recipientEmail)
-        .maybeSingle();
+        .eq("workspace_id", mailboxWorkspaceId)
+        .limit(DUPLICATE_LEAD_SCAN_LIMIT);
 
-      if (bounceLead) {
+      for (const row of (bounceLeads ?? []) as Array<{ id: string }>) {
         logger.info("mail.outlook.bounce_detected", {
-          lead_id: (bounceLead as { id: string }).id,
+          lead_id: row.id,
           subject: messageSubject,
+          matched_rows: (bounceLeads ?? []).length,
         });
 
         await serviceClient.from("leads").update({
@@ -430,10 +528,10 @@ async function processChangeNotification(
           next_action_label: null,
           action_reason_code: null,
           nurture_status: "inactive",
-        }).eq("id", (bounceLead as { id: string }).id);
+        }).eq("id", row.id);
 
         await createCanonicalInteraction(serviceClient, {
-          lead_id: (bounceLead as { id: string }).id,
+          lead_id: row.id,
           type: "system_note",
           source: "automation",
           body_text: `Email bounced/undeliverable (subject: "${messageSubject}") — automation stopped permanently. Please verify the email address.`,
@@ -446,18 +544,28 @@ async function processChangeNotification(
   }
 
   // --- 7. Identify lead by sender email ---
-  const { data: lead } = await serviceClient
+  // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
+  //
+  // ALL matching rows. A workspace legitimately holds more than one lead row
+  // for an address, and this used to resolve that with
+  // `.order("created_at").limit(1)` — the OLDEST row. That is close to the
+  // worst available answer: the row carrying the live campaign is usually the
+  // NEWER one, so the reply AND the instant-pause that rides with it both
+  // landed on a dormant duplicate, while the active row carried on emailing
+  // someone who had just written back. Instant-pause-on-inbound is a guardrail;
+  // it was being routed to the wrong row.
+  //
+  // Now: attribution goes to the most-live row (`pickPrimaryLead`), and the
+  // guardrails below are applied to EVERY matching row. See
+  // `_shared/leadResolution.ts` for the ordering and its reasoning.
+  const { data: leadMatches } = await serviceClient
     .from("leads")
-    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
+    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id, automation_mode, nurture_status, last_activity_at, created_at")
     .eq("email", senderEmail)
-    .maybeSingle();
+    .eq("workspace_id", mailboxWorkspaceId)
+    .limit(DUPLICATE_LEAD_SCAN_LIMIT);
 
-  if (!lead) {
-    logger.info("mail.outlook.webhook_no_lead_match", { sender_email: senderEmail });
-    return;
-  }
-
-  const leadRow = lead as {
+  type LeadMatch = {
     id: string;
     name: string;
     owner_user_id: string | null;
@@ -466,7 +574,32 @@ async function processChangeNotification(
     ooo_until: string | null;
     unsubscribed: boolean;
     workspace_id: string | null;
+    automation_mode: string | null;
+    nurture_status: string | null;
+    last_activity_at: string | null;
+    created_at: string | null;
   };
+
+  const matches = (leadMatches ?? []) as LeadMatch[];
+  const leadRow = pickPrimaryLead(matches);
+
+  if (!leadRow) {
+    logger.info("mail.outlook.webhook_no_lead_match", {
+      sender_email: senderEmail,
+      workspace_id: mailboxWorkspaceId,
+    });
+    return;
+  }
+
+  if (matches.length > 1) {
+    logger.info("mail.outlook.webhook_duplicate_leads", {
+      sender_email: senderEmail,
+      workspace_id: mailboxWorkspaceId,
+      matched_rows: matches.length,
+      attributed_to: leadRow.id,
+      armed_rows: matches.filter((m) => m.automation_mode).length,
+    });
+  }
 
   // --- 8. Direct conversation filter ---
   if (repEmail && !toRecipients.includes(repEmail)) {
@@ -491,7 +624,7 @@ async function processChangeNotification(
       workspaceId: leadRow.workspace_id ?? null,
       leadName: leadRow.name,
       oooResult,
-      occurredAt: new Date().toISOString(),
+      occurredAt,
       logPrefix: "[outlook-webhook]",
     });
     // Pause the automation whenever an OOO landed, but only RETURN (i.e.
@@ -501,10 +634,12 @@ async function processChangeNotification(
     if (oooPause.paused) {
       // clearLeadAction=false when we kept the lead actionable — pausing the
       // automation must not blank the reply_now applyOOOPause just wrote.
+      //
+      // EVERY matching row, for the same reason as the reply pause below: the
+      // contact is away, so no duplicate of theirs should keep sending.
       await pauseActiveAutomation(
         serviceClient,
-        leadRow.id,
-        mailAccountId,
+        matches.map((m) => m.id),
         "ooo_reply",
         oooPause.skipInbound,
       );
@@ -574,6 +709,9 @@ async function processChangeNotification(
     if (isHumanUnsubscribeRequest(bodyLower)) {
       logger.info("mail.outlook.unsubscribe_detected", { lead_id: leadRow.id });
 
+      // EVERY matching row: the human said stop emailing me, so every lead row
+      // carrying this address must stop — not just the one we attributed the
+      // message to.
       await serviceClient.from("leads").update({
         unsubscribed: true,
         needs_action: false,
@@ -582,7 +720,7 @@ async function processChangeNotification(
         next_action_label: null,
         action_reason_code: null,
         nurture_status: "inactive",
-      }).eq("id", leadRow.id);
+      }).in("id", matches.map((m) => m.id));
 
       await createCanonicalInteraction(serviceClient, {
         lead_id: leadRow.id,
@@ -602,7 +740,8 @@ async function processChangeNotification(
     type: "email_inbound",
     source: "outlook",
     body_text: bodyText.substring(0, 10000),
-    occurred_at: new Date().toISOString(),
+    // The message's real arrival time, not our processing time.
+    occurred_at: occurredAt,
     direction: "inbound",
     subject: messageSubject,
     from_email: senderEmail,
@@ -618,21 +757,89 @@ async function processChangeNotification(
       // 500-char snippet (Codex P1, PR #143). This path is always inbound.
       [SUBSTANTIVE_QUESTION_FLAG]: hasSubstantiveQuestion(bodyText),
     },
-    dedupe_key: `outlook:webhook:${providerMessageId}`,
+    // ONE key for both Outlook paths, SCOPED TO THE LEAD. The webhook used to
+    // write `outlook:webhook:<graphId>` while outlook-sync wrote
+    // `outlook:<internetMessageId>` — two keys for one message, so a lead whose
+    // mail arrived by webhook and was later re-synced got it stored twice.
+    // Unifying them on the RFC 2822 Message-ID then exposed the opposite
+    // problem: that id is GLOBAL, so two tenants receiving the same message
+    // collided on `interactions`' global unique index and the second workspace
+    // resolved to the first's interaction row. See `_shared/dedupeKeys.ts`.
+    dedupe_key: outlookEmailDedupeKey(leadRow.id, internetMessageId, providerMessageId, providerMessageId),
   });
 
   // --- 12. Update lead state ---
-  await serviceClient
-    .from("leads")
-    .update({
-      last_inbound_at: new Date().toISOString(),
-      last_activity_at: new Date().toISOString(),
-      ...(leadRow.stage === "new" || leadRow.stage === "contacted" ? { stage: "engaged" } : {}),
-    })
-    .eq("id", leadRow.id);
+  //
+  // MONOTONIC RECENCY, ENFORCED BY THE DATABASE.
+  //
+  // `occurred_at` on the timeline row is the message's real received time —
+  // that is what makes the timeline order right. But these two LEAD columns
+  // mean "how recently did something happen", and they must never move
+  // backwards, because `last_inbound_at` is what `syncEngine.buildLeadUpdate`
+  // compares against `action_dismissed_at` to decide whether to resurface a
+  // lead. A rewind silently un-resurfaces a lead a rep has handled, or re-arms
+  // a cadence against someone who just wrote in.
+  //
+  // Two ways they can go backwards:
+  //   1. Graph fires a change notification when a message is MOVED INTO the
+  //      watched folder, not only when it arrives — rescuing an old mail out of
+  //      Junk delivers a genuinely old receivedDateTime today.
+  //   2. Graph delivers notifications in PARALLEL. Two arriving close together
+  //      is ordinary, not exotic.
+  //
+  // Computing `max(current, new)` in TypeScript closes (1) and leaves (2) wide
+  // open: it is a read-modify-write over a snapshot taken before this function
+  // started, so the older request can finish last and clobber the newer one.
+  // So the comparison happens in Postgres instead, as the UPDATE's own WHERE
+  // clause — an advance-only write. Under READ COMMITTED a second UPDATE on the
+  // same row blocks on the first, then RE-EVALUATES this predicate against the
+  // committed row, so the loser simply matches nothing and writes nothing.
+  //
+  // `IS NULL OR <` rather than `GREATEST(col, $new)`: PostgREST update payloads
+  // carry literal values, so a column reference cannot be expressed there.
+  // (For the record, Postgres' GREATEST ignores NULL arguments rather than
+  // propagating them — verified, it is not the SQL-standard behaviour — so the
+  // NULL case would have been safe either way. Here it is explicit: a lead's
+  // FIRST inbound has last_inbound_at IS NULL, and that branch is what sets it.)
+  //
+  // Separate statements per column on purpose: a lead can have a newer
+  // `last_activity_at` (a later outbound) than `last_inbound_at`, so one shared
+  // guard would let an inbound drag activity backwards.
+  // `occurredAt` always comes from `Date.toISOString()`, which yields a
+  // `…T…Z` form containing none of PostgREST's reserved filter characters
+  // (no comma, parenthesis, or `+` offset), so it is safe to interpolate into
+  // the filter unquoted. Keep it that way: a `+01:00`-style offset would be
+  // read as a space in the query string and the filter would silently match
+  // nothing — which here means the timestamps quietly stop advancing.
+  const advanceOnly = (column: string) =>
+    serviceClient
+      .from("leads")
+      .update({ [column]: occurredAt })
+      .eq("id", leadRow.id)
+      .or(`${column}.is.null,${column}.lt.${occurredAt}`);
+
+  await advanceOnly("last_inbound_at");
+  await advanceOnly("last_activity_at");
+
+  // Stage is a forward-only ladder already gated on its current value, so it
+  // stays an unconditional write.
+  if (leadRow.stage === "new" || leadRow.stage === "contacted") {
+    await serviceClient
+      .from("leads")
+      .update({ stage: "engaged" })
+      .eq("id", leadRow.id);
+  }
 
   // --- 13. Pause active automation ---
-  await pauseActiveAutomation(serviceClient, leadRow.id, mailAccountId, "reply_received");
+  //
+  // EVERY matching row, not just the attributed one. This is the
+  // instant-pause-on-inbound guardrail, and it is the reason the tiebreak above
+  // is no longer safety-critical: whichever duplicate we attribute the reply to,
+  // every row carrying this address stops sending. Pausing a dormant duplicate
+  // costs nothing; missing an armed one emails a customer who just wrote back.
+  // (Production has a duplicate group with SEVERAL armed rows, so "pause the one
+  // we picked" would genuinely have left a sender running.)
+  await pauseActiveAutomation(serviceClient, matches.map((m) => m.id), "reply_received");
 
   logger.info("mail.outlook.inbound_processed", {
     lead_id: leadRow.id,
@@ -642,101 +849,57 @@ async function processChangeNotification(
 }
 
 // ============================================================
-// Helper: Pause active automation_log entries
+// Helper: instant-pause-on-inbound, for every matching lead row
 // ============================================================
 /**
- * Pause the lead's active automation_log row.
+ * Defuse automation for these leads. ONE database call, unconditional.
  *
- * `clearLeadAction` (default true) also blanks the lead's human reply
- * prompt (needs_action / next_action_key / next_action_label). That is
- * right for a routine auto-reply, and WRONG for an OOO that carries a
- * live commercial question: applyOOOPause has just deliberately set
- * `reply_now`, and clearing it here undid that one line later — the
- * message was stored (previous fix worked) but never became actionable.
- * Callers in that case pass `clearLeadAction: false`: we still pause the
- * robot, we just don't take the question off the rep's board.
- * (Codex P1 on PR #143.)
+ * This replaces a routine that looked up `automation_log` first and only
+ * touched the LEAD when it found an account-scoped log row. Three of its paths
+ * left the lead untouched (query error; no log row; a legacy log row, which it
+ * paused and then returned from), and the fourth cleared needs_action but not
+ * eligible_at. automation-executor's candidate query does not read
+ * automation_log at all — it selects on needs_action / eligible_at /
+ * automation_mode — so a lead armed with no log row (armed but not yet sent:
+ * the normal state of a queued first touch) stayed a live send candidate after
+ * the contact replied. That held for the PRIMARY lead as much as for
+ * duplicates; the duplicate finding just made it visible.
+ *
+ * The work is `public.pause_leads_on_inbound` (see the migration) so the SQL
+ * suite can run the real write and assert the executor's own predicate against
+ * the row afterwards — a test on state, not on this call.
+ *
+ * `clearLeadAction = false` (OOO that carries a live question): applyOOOPause
+ * has set a human `reply_now` prompt that must survive. eligible_at is still
+ * nulled — a prompt next to a due eligible_at is a send trigger — which is
+ * exactly what makes keeping the prompt safe.
  */
 async function pauseActiveAutomation(
   serviceClient: ReturnType<typeof createClient>,
-  leadId: string,
-  mailAccountId: string,
+  leadIds: string[],
   reason: string,
   clearLeadAction = true,
 ): Promise<void> {
-  const { data: activeLog, error: logErr } = await serviceClient
-    .from("automation_log")
-    .select("id, status, action_key")
-    .eq("lead_id", leadId)
-    .eq("mail_account_id", mailAccountId)
-    .in("status", ["pending", "sent"])
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (logErr) {
-    logger.error("mail.outlook.webhook_log_query_failed", {
-      lead_id: leadId,
-      error: logErr.message,
+  if (leadIds.length === 0) return;
+  const { data, error } = await serviceClient.rpc("pause_leads_on_inbound", {
+    p_lead_ids: leadIds,
+    p_reason: reason,
+    p_clear_action: clearLeadAction,
+  });
+  if (error) {
+    // Loud. This is the guardrail; a silent failure here is the failure mode
+    // this whole unit has been closing.
+    logger.error("mail.outlook.pause_on_inbound_failed", {
+      lead_ids: leadIds,
+      reason,
+      error: error.message,
     });
     return;
   }
-
-  if (!activeLog) {
-    const { data: legacyLog } = await serviceClient
-      .from("automation_log")
-      .select("id, status, action_key")
-      .eq("lead_id", leadId)
-      .in("status", ["pending", "sent"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (legacyLog) {
-      const row = legacyLog as { id: string; action_key: string };
-      await serviceClient
-        .from("automation_log")
-        .update({
-          status: "paused",
-          error_message: reason,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", row.id);
-
-      logger.info("mail.outlook.automation_paused", {
-        lead_id: leadId,
-        automation_log_id: row.id,
-        reason,
-      });
-    }
-    return;
-  }
-
-  const row = activeLog as { id: string; action_key: string };
-  await serviceClient
-    .from("automation_log")
-    .update({
-      status: "paused",
-      error_message: reason,
-      completed_at: new Date().toISOString(),
-    })
-    .eq("id", row.id);
-
-  if (clearLeadAction) {
-    await serviceClient
-      .from("leads")
-      .update({
-        needs_action: false,
-        next_action_key: null,
-        next_action_label: null,
-      })
-      .eq("id", leadId);
-  }
-
   logger.info("mail.outlook.automation_paused", {
-    lead_id: leadId,
-    automation_log_id: row.id,
-    action_key: row.action_key,
+    lead_ids: leadIds,
+    leads_updated: data,
     reason,
+    cleared_action: clearLeadAction,
   });
 }

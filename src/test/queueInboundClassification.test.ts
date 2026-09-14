@@ -691,10 +691,18 @@ describe("overrideSurvivesEveryLayer", () => {
 
   // --- P1(1): pauseActiveAutomation must not blank the reply prompt ---
   it("pausing the automation log can be told to keep the lead's action", () => {
+    // Unit G-B moved the pause into the SQL function `pause_leads_on_inbound`
+    // (its old TypeScript body early-returned without touching the lead when
+    // no automation_log row existed, leaving armed leads as executor send
+    // candidates after a reply). The property this test guards is unchanged:
+    // the OOO caller passes skipInbound as the clear flag, so a kept-actionable
+    // OOO (skipInbound=false) keeps the lead's reply_now prompt. That is now
+    // proven ON STATE by supabase/tests/inbound_pause_defuses_executor.test.sql
+    // (section 3); this remains the source-text half.
     const src = read(WEBHOOK);
     expect(src).toContain("clearLeadAction = true,");
-    // The lead-clearing UPDATE is now behind the flag…
-    expect(src).toContain("if (clearLeadAction) {");
+    // The flag is forwarded to the SQL function as p_clear_action…
+    expect(src).toContain("p_clear_action: clearLeadAction,");
     // …and the OOO caller passes skipInbound, so a kept-actionable OOO
     // (skipInbound=false) does NOT clear needs_action.
     const call = src.slice(src.indexOf("if (oooPause.paused) {"), src.indexOf("oooKeptActionable = true;"));
@@ -702,12 +710,17 @@ describe("overrideSurvivesEveryLayer", () => {
   });
 
   it("the lead-action clear is the ONLY thing gated — the log still pauses", () => {
-    const src = read(WEBHOOK);
-    const fn = src.slice(src.indexOf("async function pauseActiveAutomation("));
-    // status:"paused" writes are outside the flag, so the robot is always held.
-    const gated = fn.slice(fn.indexOf("if (clearLeadAction) {"));
-    expect(gated).not.toContain('status: "paused"');
-    expect(fn).toContain('status: "paused"');
+    // In pause_leads_on_inbound the automation_log UPDATE sits OUTSIDE the
+    // p_clear_action branch, so the robot is always held. Read from the
+    // migration that defines it.
+    const sql = read("supabase/migrations/20260914120000_unify_outlook_dedupe_keys.sql");
+    const fn = sql.slice(sql.indexOf("CREATE OR REPLACE FUNCTION public.pause_leads_on_inbound"));
+    const body = fn.slice(0, fn.indexOf("$$;") + 3);
+    const afterBranch = body.slice(body.indexOf("END IF;"));
+    expect(afterBranch).toContain("status = 'paused'");
+    // ...and the branch itself never touches automation_log.
+    const branch = body.slice(body.indexOf("IF p_clear_action THEN"), body.indexOf("END IF;"));
+    expect(branch).not.toContain("automation_log");
   });
 
   // --- P1(2): the classifier honours the full-body verdict ---

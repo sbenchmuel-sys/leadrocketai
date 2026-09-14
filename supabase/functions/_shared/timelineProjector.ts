@@ -180,17 +180,11 @@ export function emailDedupeKey(provider: string, messageId: string | null, inter
   return `${provider}:interaction:${interactionId}`;
 }
 
-/**
- * Build a stable dedupe key for Outlook emails.
- * Prefers internet_message_id (RFC 2822 Message-ID) which is
- * consistent between outlook-sync and outlook-webhook.
- * Falls back to the Outlook graph message ID if unavailable.
- */
-export function outlookEmailDedupeKey(internetMessageId: string | null, graphMessageId: string | null, interactionId: string): string {
-  if (internetMessageId) return `outlook:${internetMessageId}`;
-  if (graphMessageId) return `outlook:graph:${graphMessageId}`;
-  return `outlook:interaction:${interactionId}`;
-}
+// The Outlook key builder moved to `_shared/dedupeKeys.ts`. It had to become
+// LEAD-SCOPED — the RFC 2822 Message-ID it is built from is global, so the
+// unscoped key collided across tenants on `interactions`' global unique index —
+// and it is imported by a pure module a vitest spec loads, which cannot reach
+// this file (the esm.sh type import above trips `src/test/sharedPurity.test.ts`).
 
 /**
  * Build a standard dedupe key for WhatsApp events.
