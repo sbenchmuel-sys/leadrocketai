@@ -719,6 +719,7 @@ export type Database = {
           active: boolean
           campaign_id: string
           channel: string
+          condition: string | null
           created_at: string
           cta_type: string
           custom_instructions: string | null
@@ -739,6 +740,7 @@ export type Database = {
           active?: boolean
           campaign_id: string
           channel?: string
+          condition?: string | null
           created_at?: string
           cta_type?: string
           custom_instructions?: string | null
@@ -759,6 +761,7 @@ export type Database = {
           active?: boolean
           campaign_id?: string
           channel?: string
+          condition?: string | null
           created_at?: string
           cta_type?: string
           custom_instructions?: string | null
@@ -2383,6 +2386,7 @@ export type Database = {
           last_nurture_outbound_at: string | null
           last_outbound_at: string | null
           last_read_at: string | null
+          linkedin_connected_at: string | null
           linkedin_url: string | null
           manual_mode: boolean
           manual_mode_reason: string | null
@@ -2458,6 +2462,7 @@ export type Database = {
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
           last_read_at?: string | null
+          linkedin_connected_at?: string | null
           linkedin_url?: string | null
           manual_mode?: boolean
           manual_mode_reason?: string | null
@@ -2533,6 +2538,7 @@ export type Database = {
           last_nurture_outbound_at?: string | null
           last_outbound_at?: string | null
           last_read_at?: string | null
+          linkedin_connected_at?: string | null
           linkedin_url?: string | null
           manual_mode?: boolean
           manual_mode_reason?: string | null
