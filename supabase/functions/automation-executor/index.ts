@@ -2402,12 +2402,34 @@ serve(async (req) => {
             try {
               unmet = await stepConditionUnmetReason(supabase, touch);
             } catch (err) {
-              // Unverified condition → do NOT send; the touch stays scheduled for next tick.
-              console.warn(`[automation-executor:cold] condition check failed for touch ${touch.id}, leaving pending:`, err instanceof Error ? err.message : String(err));
+              // Unverified condition → do NOT send (correct: never send on a
+              // condition we could not evaluate). But the touch must still MOVE.
+              // STARVATION GUARD (Unit G-C class): the cold scan is ordered
+              // eligible_at ASC and capped at COLD_DUE_SCAN_LIMIT, so a touch
+              // that keeps its original past eligible_at sorts to the FRONT of
+              // every page. A condition check that throws persistently — a
+              // malformed condition on one campaign, a schema or permission
+              // problem — does exactly that for every touch of that campaign, so
+              // 200 of them monopolise the scan on every tick, forever. It also
+              // wrote no ledger row, so the rep had no way to see why.
+              console.warn(`[automation-executor:cold] condition check failed for touch ${touch.id}, deferring:`, err instanceof Error ? err.message : String(err));
+              logColdSkip(touch, "Could not check this step's send condition — will retry");
+              await supabase.from("campaign_touch")
+                .update({ eligible_at: blockedRowRetryAt().toISOString() })
+                .eq("id", touch.id);
               continue;
             }
             if (unmet) {
-              await advanceColdEnrollment(supabase, await loadExecutionSettings(lead.owner_user_id, supabase), touch, "auto_skipped", { skipReason: unmet });
+              // lead.workspace_id is REQUIRED (Unit G-C): without it the loader
+              // short-circuits the workspaces read and returns timezone:null, so
+              // computeNextEligibleAt cannot snap the NEXT touch into business
+              // hours and schedules it at the raw delayed time. Not a cross-tenant
+              // read — workspace_profiles is keyed by user_id — but the next touch
+              // lands outside the send window and costs an extra deferral cycle.
+              // tsc does not cover supabase/functions (tsconfig.app.json includes
+              // only `src`), so a missing required argument here compiles clean.
+              const skipExec = await loadExecutionSettings(lead.owner_user_id, supabase, lead.workspace_id);
+              await advanceColdEnrollment(supabase, skipExec, touch, "auto_skipped", { skipReason: unmet });
               console.log(`[automation-executor:cold] auto-skipped touch ${touch.id} — condition not met`);
               continue;
             }
