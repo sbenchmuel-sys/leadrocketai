@@ -115,6 +115,74 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
   settings_read_failed: false,
 };
 
+// ── Guardrail coercion (Codex P1 sibling) ──────────────────────────────────
+// cadence_settings is workspace JSON spread over the typed defaults with no
+// coercion, so a non-numeric value (hand-edited row, schema change, a string
+// that isn't a number) landed straight on a guardrail. Every one of these feeds
+// a `>=` or `<` comparison, and NaN loses EVERY comparison — so the per-lead 7d
+// and 30d caps and the per-mailbox daily cap would silently stop capping. Same
+// shape as the MAX_SENDS_PER_RUN bug, different input path, larger blast radius:
+// these are the caps standing between a customer and a pile of automated email.
+//
+// Coerced ONCE here, where the JSON meets the defaults, so every consumer
+// inherits a sane value — never at the comparison sites.
+const NUMERIC_GUARDRAILS = [
+  "min_gap_hours_between_emails",
+  "max_emails_per_lead_per_7d",
+  "max_emails_per_lead_per_30d",
+  "jitter_percent",
+  "max_sends_per_day_per_mailbox",
+] as const;
+
+/**
+ * A guardrail value is READABLE only if it is a number, or a non-blank string
+ * that parses as one. null / "" / [] / booleans are NOT read as 0 — `Number(null)`
+ * is 0, and silently turning "unset" into a zero cap would mean "never send".
+ */
+function readGuardrailNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") return Number(value);
+  return NaN;
+}
+
+/**
+ * ZERO IS PRESERVED, deliberately, for every one of these:
+ *   - min_gap_hours_between_emails: 0 is a legitimate setting — no minimum gap.
+ *   - the caps: 0 means "never send" (`count >= 0` is always true). That is
+ *     STRICTER than the default, and a coercion that raised it to the default
+ *     would WEAKEN a guardrail an operator deliberately set. This unit does not
+ *     weaken guardrails, so 0 stands.
+ * Anything not finite-and->=-0 (NaN, Infinity, negative, null, "", true, {}) is
+ * unreadable AS A LIMIT and falls back to the documented default — never to
+ * "no limit" — and says so in the log so an operator who mistypes a guardrail
+ * finds out from the ledger rather than from a customer.
+ */
+function coerceGuardrails(
+  rawGuardrails: Record<string, unknown> | undefined,
+  ownerUserId: string,
+): Guardrails {
+  const merged: Record<string, unknown> = {
+    ...DEFAULT_EXECUTION_SETTINGS.guardrails,
+    ...(rawGuardrails || {}),
+  };
+  for (const key of NUMERIC_GUARDRAILS) {
+    const raw = merged[key];
+    const n = readGuardrailNumber(raw);
+    if (Number.isFinite(n) && n >= 0) {
+      merged[key] = n;
+      continue;
+    }
+    const fallback = DEFAULT_EXECUTION_SETTINGS.guardrails[key];
+    console.warn(
+      `[executionSettings] guardrail ${key} is not a finite number >= 0 for owner ` +
+      `${ownerUserId} (got ${JSON.stringify(raw)}) — falling back to the documented ` +
+      `default ${fallback}. A limit that cannot be read must not become "no limit".`,
+    );
+    merged[key] = fallback;
+  }
+  return merged as unknown as Guardrails;
+}
+
 // ── Loader (cached per owner+workspace within a single executor run) ─
 
 const cache = new Map<string, ExecutionSettings>();
@@ -189,10 +257,7 @@ export async function loadExecutionSettings(
         ...((raw.time_rules as any)?.send_window_local || {}),
       },
     },
-    guardrails: {
-      ...DEFAULT_EXECUTION_SETTINGS.guardrails,
-      ...(raw.guardrails as Record<string, unknown> || {}),
-    },
+    guardrails: coerceGuardrails(raw.guardrails as Record<string, unknown> | undefined, ownerUserId),
     stop_pause_rules: {
       ...DEFAULT_EXECUTION_SETTINGS.stop_pause_rules,
       ...(raw.stop_pause_rules as Record<string, unknown> || {}),

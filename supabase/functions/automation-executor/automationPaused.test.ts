@@ -367,3 +367,69 @@ Deno.test("the newest authoritative outbound email wins when several exist", asy
   assertEquals(res.allowed, false);
   assertEquals(res.anchorAt, newer);
 });
+
+// ── Guardrail coercion (Codex P1 sibling) ───────────────────────────────────
+// cadence_settings is workspace JSON spread over typed defaults. A non-numeric
+// value landed straight on a guardrail, and NaN loses every comparison — so the
+// per-lead 7d/30d caps and the per-mailbox daily cap silently stopped capping.
+// A limit that cannot be read must fall back to the documented default, never to
+// "no limit". Zero is preserved everywhere (see the helper's doc comment).
+
+function guardrailClient(cadenceSettings: Record<string, unknown>) {
+  return {
+    from: (table: string) => {
+      if (table === "workspace_profiles") return tableStub([{ cadence_settings: cadenceSettings }]);
+      if (table === "workspaces") return tableStub([{ id: "ws", timezone: "UTC" }]);
+      throw new Error(`unexpected table ${table}`);
+    },
+  } as any;
+}
+
+async function guardrailsFor(guardrails: Record<string, unknown> | undefined) {
+  clearSettingsCache();
+  const s = await loadExecutionSettings("owner-g", guardrailClient({ guardrails }), "ws");
+  return s.guardrails;
+}
+
+Deno.test("an unreadable cap falls back to the documented default and really caps", async () => {
+  const g = await guardrailsFor({ max_emails_per_lead_per_7d: "oops" });
+  assertEquals(g.max_emails_per_lead_per_7d, 3);
+  // The bug: NaN made this comparison false, i.e. no cap at all.
+  assertEquals(99 >= g.max_emails_per_lead_per_7d, true);
+});
+
+Deno.test("every numeric guardrail falls back when unreadable — never to 'no limit'", async () => {
+  assertEquals((await guardrailsFor({ max_sends_per_day_per_mailbox: " " })).max_sends_per_day_per_mailbox, 40);
+  assertEquals((await guardrailsFor({ min_gap_hours_between_emails: "abc" })).min_gap_hours_between_emails, 16);
+  assertEquals((await guardrailsFor({ jitter_percent: {} })).jitter_percent, 0.15);
+  for (const bad of [null, "", true, -1, Infinity]) {
+    assertEquals((await guardrailsFor({ max_emails_per_lead_per_30d: bad })).max_emails_per_lead_per_30d, 8);
+  }
+});
+
+Deno.test("ZERO is preserved: a legitimate no-gap setting, and a deliberately stricter cap", async () => {
+  const noGap = await guardrailsFor({ min_gap_hours_between_emails: 0 });
+  assertEquals(noGap.min_gap_hours_between_emails, 0);
+  assertEquals(checkMinGap(new Date().toISOString(), noGap.min_gap_hours_between_emails).allowed, true);
+
+  // 0 means "never send" — STRICTER than the default. Raising it to the default
+  // would weaken a guardrail an operator deliberately set.
+  const neverSend = await guardrailsFor({ max_emails_per_lead_per_7d: 0 });
+  assertEquals(neverSend.max_emails_per_lead_per_7d, 0);
+  assertEquals(0 >= neverSend.max_emails_per_lead_per_7d, true);
+});
+
+Deno.test("legitimate values are untouched; a numeric string becomes a real number", async () => {
+  const g = await guardrailsFor({ min_gap_hours_between_emails: 24, max_emails_per_lead_per_7d: 5 });
+  assertEquals(g.min_gap_hours_between_emails, 24);
+  assertEquals(g.max_emails_per_lead_per_7d, 5);
+  const asString = await guardrailsFor({ max_emails_per_lead_per_7d: "5" });
+  assertEquals(asString.max_emails_per_lead_per_7d, 5);
+  assertEquals(typeof asString.max_emails_per_lead_per_7d, "number");
+});
+
+Deno.test("absent guardrails give the defaults; non-numeric guardrails pass through", async () => {
+  const d = await guardrailsFor(undefined);
+  assertEquals([d.min_gap_hours_between_emails, d.max_emails_per_lead_per_7d, d.max_sends_per_day_per_mailbox], [16, 3, 40]);
+  assertEquals((await guardrailsFor({ same_day_send_allowed: true })).same_day_send_allowed, true);
+});

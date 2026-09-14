@@ -1178,3 +1178,33 @@ describe("sendCapNormalisation", () => {
     expect(999 > Math.max(1, Math.min(Math.max(1, nan), ceiling - 1))).toBe(false); // count > threshold
   });
 });
+
+// ── Guardrail coercion, source-text (behaviour is covered by the Deno suite) ─
+describe("guardrailCoercion", () => {
+  it("the JSON is coerced where it meets the defaults, not at the comparison sites", () => {
+    expect(settingsSrc).toContain("guardrails: coerceGuardrails(raw.guardrails as Record<string, unknown> | undefined, ownerUserId),");
+    // The raw spread was the bug — a non-numeric value landed straight on a limit.
+    expect(settingsSrc).not.toMatch(/guardrails: \{\s*\.\.\.DEFAULT_EXECUTION_SETTINGS\.guardrails,\s*\.\.\.\(raw\.guardrails/);
+  });
+
+  it("every numeric guardrail is covered, and the test knows if one is added", () => {
+    const listed = [...settingsSrc.matchAll(/^\s{2}"(\w+)",$/gm)].map((m) => m[1]);
+    const declared = settingsSrc.slice(settingsSrc.indexOf("export interface Guardrails {"));
+    const fields = [...declared.slice(0, declared.indexOf("}")).matchAll(/(\w+): number;/g)].map((m) => m[1]);
+    expect(fields.length).toBeGreaterThan(0);
+    for (const f of fields) {
+      expect(listed, `guardrail ${f} is numeric but not in NUMERIC_GUARDRAILS`).toContain(f);
+    }
+  });
+
+  it("unreadable falls back to the default and is logged; zero is preserved", () => {
+    const fn = settingsSrc.slice(settingsSrc.indexOf("function coerceGuardrails("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    expect(body).toContain("Number.isFinite(n) && n >= 0");   // 0 passes through
+    expect(body).toContain("DEFAULT_EXECUTION_SETTINGS.guardrails[key]");
+    expect(body).toContain("console.warn(");                  // operators can find it
+    // null/""/booleans must not be read as 0 by Number() coercion.
+    const reader = settingsSrc.slice(settingsSrc.indexOf("function readGuardrailNumber("));
+    expect(reader.slice(0, reader.indexOf("\n}") + 2)).toContain('typeof value === "number"');
+  });
+});
