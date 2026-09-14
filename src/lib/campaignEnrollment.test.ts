@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   nextBusinessDay,
   addBusinessDays,
@@ -15,6 +15,7 @@ import {
   planRelaunch,
   planEnrollment,
   leadsAwaitingLinkedinLookup,
+  launchCampaignWithSchedule,
   LINKEDIN_ENRICH_GRACE_MS,
   type CadenceStep,
   type LeadContactInfo,
@@ -485,5 +486,79 @@ describe("a LinkedIn touch never comes due while its profile lookup is running",
     const plain = buildTouchSchedule(now, linkedinFirst);
     expect(touches[0].eligible_at).toBe(plain[0].eligible_at);
     expect(new Date(touches[0].max_age_at!).getTime()).toBeLessThan(far.getTime());
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Launch path, with a fake PostgREST client. Only this block uses the mock; the
+// pure planner tests above never touch supabase.
+// ─────────────────────────────────────────────────────────────────────────────
+const tableResult: Record<string, { data: unknown; error: unknown }> = {};
+let rpcPayload: any = null;
+
+function fakeBuilder(table: string): unknown {
+  const target = () => undefined;
+  return new Proxy(target, {
+    get(_t, prop) {
+      if (prop === "then") {
+        const res = tableResult[table] ?? { data: [], error: null };
+        return (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) =>
+          Promise.resolve(res).then(ok, bad);
+      }
+      return () => fakeBuilder(table);
+    },
+  });
+}
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: (table: string) => fakeBuilder(table),
+    auth: { getUser: () => Promise.resolve({ data: { user: null } }) },
+    rpc: (_name: string, args: unknown) => {
+      rpcPayload = args;
+      return Promise.resolve({ data: { reanchored: 1 }, error: null });
+    },
+    functions: { invoke: () => Promise.resolve({ data: null, error: null }) },
+  },
+}));
+
+describe("launchCampaignWithSchedule fails CLOSED when it can't read LinkedIn URLs", () => {
+  beforeEach(() => {
+    rpcPayload = null;
+    for (const k of Object.keys(tableResult)) delete tableResult[k];
+    // A cadence whose FIRST touch is LinkedIn, and one not-started enrollment.
+    tableResult.campaign_steps = {
+      data: [
+        { step_number: 1, channel: "linkedin", delay_days: 0, active: true },
+        { step_number: 2, channel: "email", delay_days: 2, active: true },
+      ],
+      error: null,
+    };
+    tableResult.campaign_enrollment = { data: [{ id: "enr-a", lead_id: "lead-a" }], error: null };
+    tableResult.campaign_touch = { data: [], error: null };
+  });
+
+  const firstLinkedinEligible = () => {
+    const touches = rpcPayload._plan[0].touches as { channel: string; eligible_at: string }[];
+    return new Date(touches.find((t) => t.channel === "linkedin")!.eligible_at).getTime();
+  };
+
+  it("holds the first LinkedIn touch when the leads read ERRORS", async () => {
+    tableResult.leads = { data: null, error: { message: "statement timeout" } };
+    await launchCampaignWithSchedule("camp-1");
+    // Held roughly a grace period out, not due now — the scheduler can't reach it
+    // and auto-skip the step while a lookup may still be running.
+    expect(firstLinkedinEligible()).toBeGreaterThan(Date.now() + LINKEDIN_ENRICH_GRACE_MS - 60_000);
+  });
+
+  it("holds a lead the read silently omitted (RLS, deleted since)", async () => {
+    tableResult.leads = { data: [], error: null };
+    await launchCampaignWithSchedule("camp-1");
+    expect(firstLinkedinEligible()).toBeGreaterThan(Date.now() + LINKEDIN_ENRICH_GRACE_MS - 60_000);
+  });
+
+  it("does NOT hold a lead that positively has a URL", async () => {
+    tableResult.leads = { data: [{ id: "lead-a", linkedin_url: "https://www.linkedin.com/in/a" }], error: null };
+    await launchCampaignWithSchedule("camp-1");
+    expect(firstLinkedinEligible()).toBeLessThanOrEqual(Date.now());
   });
 });

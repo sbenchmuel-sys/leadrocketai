@@ -1094,11 +1094,25 @@ export async function launchCampaignWithSchedule(campaignId: string): Promise<{ 
     // immediately again and the scheduler would auto-skip it for good.
     let lookupPending = new Set<string>();
     if (steps.some((st) => st.channel === "linkedin") && enrollments.length > 0) {
-      const { data: leadRows } = await supabase
+      const { data: leadRows, error: leadErr } = await supabase
         .from("leads")
         .select("id, linkedin_url")
         .in("id", enrollments.map((e) => e.lead_id));
-      lookupPending = leadsAwaitingLinkedinLookup(steps, (leadRows || []) as { id: string; linkedin_url: string | null }[]);
+      if (leadErr) {
+        console.warn("[launchCampaignWithSchedule] couldn't read LinkedIn URLs; holding every LinkedIn touch:", leadErr.message);
+      }
+      // FAIL CLOSED. A lead we did not positively observe to HAVE a URL counts as
+      // awaiting a lookup — whether the read errored (data is null) or simply
+      // didn't return that row (RLS, deleted since). The asymmetry decides it:
+      // holding a touch we needn't have costs a ten-minute delay; failing to hold
+      // one we should have costs the rep that LinkedIn step permanently.
+      const seen = new Map(
+        ((leadRows || []) as { id: string; linkedin_url: string | null }[]).map((l) => [l.id, l.linkedin_url]),
+      );
+      lookupPending = leadsAwaitingLinkedinLookup(
+        steps,
+        enrollments.map((e) => ({ id: e.lead_id, linkedin_url: seen.get(e.lead_id) ?? null })),
+      );
     }
     const plan = planRelaunch(campaignId, enrollments, steps, dailyCap, initialLoad, anchor, lookupPending);
 
