@@ -4514,6 +4514,14 @@ export type Database = {
           title: string
         }[]
       }
+      pause_leads_on_inbound: {
+        Args: {
+          p_clear_action?: boolean
+          p_lead_ids: string[]
+          p_reason: string
+        }
+        Returns: number
+      }
       purge_call_media: {
         Args: never
         Returns: {
