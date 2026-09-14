@@ -128,9 +128,26 @@ export interface OutreachQueuePage {
    * render null as "—" and must never disable an affordance on it.
    */
   byChannel: Record<OutreachChannel, number | null>;
+  /**
+   * Set when ANY count above is unknown — a ready-made sentence for the tab to
+   * show. It is returned rather than left for the caller to derive because the
+   * caller deriving it is exactly what went wrong the first time: a per-channel
+   * count could fail on its own, the function returned normally, the page's
+   * success branch cleared its error, and every `&& !error` guard passed — so
+   * the chip and badge read "—" while the body underneath said "Queue clear.
+   * Nice." and focus mode was disabled. Four surfaces, one screen, and the
+   * biggest one confidently wrong.
+   */
+  countsError: string | null;
 }
 
 export const OUTREACH_CHANNELS: OutreachChannel[] = ["email", "voice", "sms", "whatsapp", "linkedin"];
+
+/** The rep's word for each channel, for error copy. Mirrors CHANNEL_LABEL in
+ *  src/lib/outreachToday.ts — kept here so the data layer has no UI import. */
+const CHANNEL_COUNT_LABEL: Record<OutreachChannel, string> = {
+  email: "Email", voice: "Call", sms: "Text", whatsapp: "WhatsApp", linkedin: "LinkedIn",
+};
 
 /**
  * Load the due cold touches for the Outreach tab, oldest-due first, with each
@@ -168,7 +185,9 @@ export async function fetchOutreachQueue(
   if (campsError) throw new Error(campsError.message || "Couldn't load your outreach");
   const campaignMap = new Map(((activeCamps || []) as any[]).map((c) => [c.id, c]));
   const activeIds = [...campaignMap.keys()];
-  if (activeIds.length === 0) return { touches: [], total: 0, byChannel: emptyByChannel() };
+  if (activeIds.length === 0) {
+    return { touches: [], total: 0, byChannel: emptyByChannel(), countsError: null };
+  }
 
   // Scope the touch query to leads this rep can actually SEE by INNER-joining leads:
   // PostgREST applies the leads table's own RLS (owner-or-admin) to the embedded rows,
@@ -211,9 +230,15 @@ export async function fetchOutreachQueue(
     // error → unknown (null). No error and a null count → genuinely 0.
     byChannel[ch] = countRes[i].error ? null : countRes[i].count ?? 0;
   });
+  // One sentence naming the channels whose backlog we could not see, in the
+  // words the chips use ("Call", not "voice").
+  const unknown = OUTREACH_CHANNELS.filter((ch) => byChannel[ch] === null);
+  const countsError = unknown.length === 0
+    ? null
+    : `Couldn't read the ${unknown.map((ch) => CHANNEL_COUNT_LABEL[ch]).join(", ")} backlog ${unknown.length === 1 ? "count" : "counts"}.`;
   const rows = (pageRes.data || []) as any[];
   const total = pageRes.count ?? rows.length;
-  if (rows.length === 0) return { touches: [], total, byChannel };
+  if (rows.length === 0) return { touches: [], total, byChannel, countsError };
   const leadOf = (t: any) => (Array.isArray(t.leads) ? t.leads[0] : t.leads) || {};
 
   const campaignIds = [...new Set(rows.map((t) => t.campaign_id))];
@@ -336,7 +361,7 @@ export async function fetchOutreachQueue(
       linkedinAction: t.channel === "linkedin" ? linkedinActionFromStepType(stepType) : undefined,
     };
   });
-  return { touches: mapped, total, byChannel };
+  return { touches: mapped, total, byChannel, countsError };
 }
 
 
@@ -350,10 +375,16 @@ export async function fetchOutreachQueue(
  *
  * So the page keeps the ids it has completed and every response is reconciled
  * against them. `seq` is a monotonic counter: a completion recorded at seq N is
- * only forgotten once a request STARTED at or after N comes back without it —
- * at that point the server agrees the touch is gone and the suppression has done
- * its job. (Without the prune, a touch snoozed and later re-queued in the same
- * session would stay invisible.)
+ * suppressed until a request that STARTED at or after N comes back — that
+ * response is the first one that could possibly know about the completion, so
+ * after it the memory has done its job and is dropped.
+ *
+ * The drop is deliberately NOT conditional on the touch being absent from that
+ * response. It was, and the condition was unreachable for the one case it named:
+ * a touch snoozed and later re-queued in the same session is PRESENT in the
+ * response, so it was never pruned and never shown again — suppressed for the
+ * rest of the page session. The current response is still filtered against the
+ * pre-prune map, so nothing the rep just finished can reappear.
  *
  * Pure — the whole point is that a test can drive it.
  */
@@ -362,10 +393,9 @@ export function reconcileCompleted<T extends { id: string }>(
   completed: ReadonlyMap<string, number>,
   requestSeq: number,
 ): { touches: T[]; completed: Map<string, number> } {
-  const fetchedIds = new Set(fetched.map((t) => t.id));
   const next = new Map(completed);
   for (const [id, seq] of completed) {
-    if (seq <= requestSeq && !fetchedIds.has(id)) next.delete(id);
+    if (seq <= requestSeq) next.delete(id);
   }
   return { touches: fetched.filter((t) => !completed.has(t.id)), completed: next };
 }

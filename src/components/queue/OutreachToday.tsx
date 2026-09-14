@@ -88,6 +88,16 @@ export function OutreachToday({
     ...OUTREACH_CHANNELS.map((ch) => ({ id: ch, label: CHANNEL_LABEL[ch], count: byChannel[ch], icon: CHANNEL_ICON[ch] })),
   ];
 
+  // Belt and braces: the tab refuses to render an all-clear over counts it does
+  // not have, even if a caller forgets to pass `error` down. That forgetting is
+  // precisely how this failed the first time — a per-channel count failed, the
+  // page's success branch cleared its error, and "Queue clear. Nice." rendered
+  // under a badge reading "—".
+  const notice = error
+    ?? (OUTREACH_CHANNELS.some((ch) => byChannel[ch] === null)
+      ? "Some backlog counts couldn't be read."
+      : null);
+
   const chipRow = (
     <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1" role="group" aria-label="Outreach channel">
       {chips.map((chip) => {
@@ -128,7 +138,7 @@ export function OutreachToday({
           size="sm"
           variant={focus ? "secondary" : "ghost"}
           className="h-8 gap-1.5 text-xs"
-          disabled={total === 0 && !focus && !error}
+          disabled={total === 0 && !focus && !notice}
           onClick={() => { setFocus((f) => !f); setFocusIdx(0); }}
           aria-pressed={focus}
           title={focus ? "Back to the list" : "Work this queue one card at a time"}
@@ -142,9 +152,9 @@ export function OutreachToday({
 
   // Shown above every layout below. Deliberately not an empty state: the rep
   // must be able to tell "nothing due" from "we couldn't look".
-  const errorBanner = error ? (
+  const errorBanner = notice ? (
     <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-      Couldn't load your outreach: {error}. The numbers below may be out of date — nothing has been sent or skipped.
+      {notice} Nothing has been sent or skipped — the numbers here may be incomplete, so treat an empty list as "unknown", not "done".
     </div>
   ) : null;
 
@@ -173,7 +183,7 @@ export function OutreachToday({
         {errorBanner}
         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
           <span className="text-xs text-muted-foreground">
-            {queueName} · {error ? "couldn't load" : total === 0 ? "nothing due" : `${Math.min(safeIdx + 1, total)} of ${total}`}
+            {queueName} · {notice ? "couldn't load" : total === 0 ? "nothing due" : `${Math.min(safeIdx + 1, total)} of ${total}`}
           </span>
           <div className="flex items-center gap-1">
             <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label="Previous card"
@@ -187,7 +197,7 @@ export function OutreachToday({
           </div>
         </div>
         {loading && touches.length === 0 ? skeleton
-          : !current ? (error ? null : <QueueEmptyState variant="no_matches" />)
+          : !current ? (notice ? null : <QueueEmptyState variant="no_matches" />)
           : <OutreachCard key={current.id} touch={current} onDone={onDone} onRestore={onRestore} onCompleted={onCompleted} />}
       </div>
     );
@@ -200,7 +210,7 @@ export function OutreachToday({
         {chipRow}
         {errorBanner}
         {loading && touches.length === 0 ? skeleton
-          : touches.length === 0 && !error ? <QueueEmptyState variant="no_matches" />
+          : touches.length === 0 && !notice ? <QueueEmptyState variant="no_matches" />
           : (
             <div className="space-y-2">
               {touches.map((t) => <OutreachCard key={t.id} touch={t} onDone={onDone} onRestore={onRestore} onCompleted={onCompleted} />)}
@@ -218,7 +228,7 @@ export function OutreachToday({
       {chipRow}
       {errorBanner}
       {loading && touches.length === 0 ? skeleton
-        : groups.length === 0 && !error ? <QueueEmptyState variant="no_matches" />
+        : groups.length === 0 && !notice ? <QueueEmptyState variant="no_matches" />
         : (
           <div className="space-y-4">
             {groups.map((g) => (

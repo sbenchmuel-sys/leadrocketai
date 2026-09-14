@@ -156,13 +156,18 @@ export default function Queue() {
         setOutreachTouches(touches);
         setOutreachTotal(page.total);
         setOutreachByChannel(page.byChannel);
-        setOutreachError(null);
+        // NOT `null`: a per-channel count can fail while the page read succeeds,
+        // and clearing the error there is what let "Queue clear. Nice." render
+        // over an unknown backlog.
+        setOutreachError(page.countsError);
       }
     } catch (err) {
       // Non-fatal for the reactive lists, but the Outreach tab must NOT render
       // this as "nothing to do" — it keeps whatever it had and says it's stale.
       if (reqId === outreachReqId.current) {
-        setOutreachError(err instanceof Error ? err.message : "Couldn't load your outreach");
+        setOutreachError(
+          `Couldn't load your outreach: ${err instanceof Error ? err.message : "the read failed"}.`,
+        );
       }
     } finally {
       if (reqId === outreachReqId.current) setOutreachLoading(false);
