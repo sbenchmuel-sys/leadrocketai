@@ -123,47 +123,90 @@ Deno.test("NO workspace_profiles row is 'never configured', not 'unreadable' —
 
 // ── checkEmailMinGap: the email gap must not count a text as an email ────────
 
-/**
- * `lastEmail` is the newest lead_timeline_items email_outbound mirror row (null =
- * no mirror row). `authEmail` is the newest authoritative `interactions` outbound
- * email (undefined = same as the mirror, i.e. a consistent database).
- */
-function stubTimelineClient(
-  lastEmail: string | null,
-  opts: {
-    error?: boolean;            // mirror read fails
-    authEmail?: string | null;  // authoritative answer when the mirror is empty
-    authError?: boolean;        // authoritative read fails
-    onQuery?: () => void;       // counts mirror reads
-    onAuthQuery?: () => void;   // counts authoritative reads
-  } = {},
-) {
-  const chain = (result: unknown, depth: number) => {
-    // A tiny builder that swallows `depth` chained filter calls then resolves.
-    let node: any = { maybeSingle: async () => result };
-    node.limit = () => node;
-    node.order = () => node;
-    node.eq = () => node;
-    node.in = () => node;
-    node.select = () => node;
-    void depth;
-    return node;
+// ── A stub that ACTUALLY EVALUATES the filters ──────────────────────────────
+// The previous stub returned whatever row the test handed it, regardless of the
+// query's filters. That made it fake safety: it passed against a predicate
+// (`direction = 'outbound'`) that matches NONE of the rows gmail-send writes,
+// because gmail-send omits `direction` and the column is bare nullable text.
+// This stub stores rows and applies the real predicate, so a wrong filter fails.
+
+type Row = Record<string, unknown>;
+
+/** Split on top-level commas, respecting parentheses. */
+function splitTop(expr: string): string[] {
+  const out: string[] = [];
+  let depth = 0, cur = "";
+  for (const ch of expr) {
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Evaluate one PostgREST term: `col.eq.value` or `and(term,term)`. */
+function matchTerm(row: Row, term: string): boolean {
+  const t = term.trim();
+  if (t.startsWith("and(")) {
+    return splitTop(t.slice(4, -1)).every((inner) => matchTerm(row, inner));
+  }
+  const [col, op, ...rest] = t.split(".");
+  const value = rest.join(".");
+  if (op !== "eq") throw new Error(`stub does not model operator "${op}"`);
+  // SQL three-valued logic: NULL never equals anything.
+  const actual = row[col];
+  return actual !== null && actual !== undefined && actual === value;
+}
+
+/** Minimal PostgREST-ish builder over an in-memory row set. */
+function tableStub(rows: Row[], onRead?: () => void, failWith?: string) {
+  const preds: Array<(r: Row) => boolean> = [];
+  let desc = false;
+  const node: any = {
+    select: () => node,
+    eq: (col: string, val: unknown) => {
+      preds.push((r) => r[col] !== null && r[col] !== undefined && r[col] === val);
+      return node;
+    },
+    in: (col: string, vals: unknown[]) => {
+      preds.push((r) => r[col] !== null && r[col] !== undefined && vals.includes(r[col]));
+      return node;
+    },
+    or: (expr: string) => {
+      const terms = splitTop(expr);
+      preds.push((r) => terms.some((t) => matchTerm(r, t)));
+      return node;
+    },
+    order: (_c: string, o?: { ascending?: boolean }) => { desc = o?.ascending === false; return node; },
+    limit: () => node,
+    maybeSingle: async () => {
+      onRead?.();
+      if (failWith) return { data: null, error: { message: failWith } };
+      const hits = rows.filter((r) => preds.every((p) => p(r)));
+      hits.sort((a, b) => String(a.occurred_at).localeCompare(String(b.occurred_at)));
+      if (desc) hits.reverse();
+      return { data: hits[0] ?? null, error: null };
+    },
   };
+  return node;
+}
+
+interface GapStub {
+  mirror?: Row[];        // lead_timeline_items rows
+  interactions?: Row[];  // authoritative rows
+  mirrorError?: string;
+  authError?: string;
+  onMirror?: () => void;
+  onAuth?: () => void;
+}
+
+function gapClient(o: GapStub = {}) {
   return {
     from: (table: string) => {
-      if (table === "lead_timeline_items") {
-        opts.onQuery?.();
-        return chain(opts.error
-          ? { data: null, error: { message: "boom" } }
-          : { data: lastEmail ? { occurred_at: lastEmail } : null, error: null }, 4);
-      }
-      if (table === "interactions") {
-        opts.onAuthQuery?.();
-        const auth = opts.authEmail === undefined ? lastEmail : opts.authEmail;
-        return chain(opts.authError
-          ? { data: null, error: { message: "authoritative boom" } }
-          : { data: auth ? { occurred_at: auth } : null, error: null }, 5);
-      }
+      if (table === "lead_timeline_items") return tableStub(o.mirror ?? [], o.onMirror, o.mirrorError);
+      if (table === "interactions") return tableStub(o.interactions ?? [], o.onAuth, o.authError);
       throw new Error(`unexpected table ${table}`);
     },
   } as any;
@@ -171,101 +214,156 @@ function stubTimelineClient(
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
-Deno.test("no query at all when the cross-channel gap already allows the send", async () => {
-  let queried = 0;
-  const res = await checkEmailMinGap("lead-1", hoursAgo(20), 16, stubTimelineClient(null, { onQuery: () => queried++ }));
+/** EXACT shape gmail-send/index.ts inserts — note: NO `direction` key. */
+function gmailSentRow(leadId: string, occurredAt: string): Row {
+  return {
+    lead_id: leadId,
+    type: "email_outbound",
+    source: "gmail",
+    occurred_at: occurredAt,
+    subject: "s",
+    from_email: "rep@acme.com",
+    to_email: "lead@x.com",
+    to_emails: ["lead@x.com"],
+    cc_emails: [],
+    body_text: "b",
+    gmail_message_id: "m1",
+    gmail_thread_id: "t1",
+  };
+}
+
+/** EXACT shape outlook-send/index.ts inserts — this one DOES set direction. */
+function outlookSentRow(leadId: string, occurredAt: string): Row {
+  return {
+    lead_id: leadId,
+    type: "email_outbound",
+    source: "outlook",
+    occurred_at: occurredAt,
+    subject: "s",
+    from_email: "rep@acme.com",
+    to_email: "lead@x.com",
+    to_emails: ["lead@x.com"],
+    cc_emails: [],
+    body_text: "b",
+    direction: "outbound",
+    gmail_message_id: "m1",
+    gmail_thread_id: "t1",
+  };
+}
+
+const mirrorRow = (leadId: string, occurredAt: string): Row =>
+  ({ lead_id: leadId, event_type: "email_outbound", occurred_at: occurredAt });
+
+Deno.test("cheap path: neither table is read when the cross-channel gap already allows", async () => {
+  let mirror = 0, auth = 0;
+  const res = await checkEmailMinGap("L", hoursAgo(20), 16,
+    gapClient({ onMirror: () => mirror++, onAuth: () => auth++ }));
   assertEquals(res.allowed, true);
-  assertEquals(queried, 0);
+  assertEquals(mirror, 0);
+  assertEquals(auth, 0);
 });
 
 Deno.test("an SMS two hours ago no longer defers the next EMAIL", async () => {
-  // last_outbound_at is 2h old (the SMS, which sms-send stamps), but the last
-  // EMAIL was 40h ago — well outside the 16h email gap.
+  // last_outbound_at is 2h old (the SMS, which sms-send stamps); the last EMAIL
+  // was 40h ago — well outside the 16h email gap.
   const smsAt = hoursAgo(2);
   const lastEmail = hoursAgo(40);
-  const res = await checkEmailMinGap("lead-2", smsAt, 16, stubTimelineClient(lastEmail));
+  let auth = 0;
+  const res = await checkEmailMinGap("L", smsAt, 16,
+    gapClient({ mirror: [mirrorRow("L", lastEmail)], onAuth: () => auth++ }));
   assertEquals(res.allowed, true);
-  // Anchored on the email, never on the text.
-  assertEquals(res.anchorAt, lastEmail);
-  // Sanity: the old cross-channel behaviour would have blocked this send.
-  assertEquals(checkMinGap(smsAt, 16).allowed, false);
+  assertEquals(res.anchorAt, lastEmail);  // anchored on the email, never the text
+  assertEquals(auth, 0);                  // a present mirror row answers alone
+  assertEquals(checkMinGap(smsAt, 16).allowed, false); // the old behaviour blocked
 });
 
 Deno.test("a real EMAIL inside the gap still defers, anchored on that email", async () => {
   const lastEmail = hoursAgo(3);
-  const res = await checkEmailMinGap("lead-3", hoursAgo(2), 16, stubTimelineClient(lastEmail));
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16,
+    gapClient({ mirror: [mirrorRow("L", lastEmail)] }));
   assertEquals(res.allowed, false);
   assertEquals(res.anchorAt, lastEmail);
 });
 
-Deno.test("a lead that has never been emailed is not held by someone else's channel", async () => {
-  const res = await checkEmailMinGap("lead-4", hoursAgo(1), 16, stubTimelineClient(null));
-  assertEquals(res.allowed, true);
-  assertEquals(res.anchorAt, null);
-});
-
-Deno.test("a failed last-email lookup keeps the conservative block (fail closed)", async () => {
+Deno.test("the MIRROR read erroring keeps the conservative block (fail closed)", async () => {
   const crossChannel = hoursAgo(1);
-  const res = await checkEmailMinGap("lead-5", crossChannel, 16, stubTimelineClient(null, { error: true }));
+  const res = await checkEmailMinGap("L", crossChannel, 16,
+    gapClient({ mirrorError: "boom" }));
   assertEquals(res.allowed, false);
   assertEquals(res.anchorAt, crossChannel);
 });
 
 // ── An ABSENT mirror row is not evidence (Codex P2) ─────────────────────────
 // lead_timeline_items is a projection and a missing row is a supported failure
-// mode. "Never emailed" and "the mirror lost the row" look identical there, and
-// only the first may send inside the minimum gap. The authoritative record
-// (`interactions`, written by gmail-send / outlook-send) separates them.
+// mode, so "never emailed" and "the mirror lost the row" look identical there.
+// Only the first may send. `interactions` is the source of truth.
+//
+// These rows are built by copying the INSERTS in gmail-send / outlook-send, not
+// by writing what the query hopes to find. gmail-send omits `direction`
+// entirely, and `direction` is bare nullable text — so a predicate requiring
+// direction='outbound' matches none of them.
 
-Deno.test("missing mirror row + an authoritative email inside the gap → BLOCKED", async () => {
-  let mirrorReads = 0, authReads = 0;
+Deno.test("missing mirror + a GMAIL-shaped authoritative row (no direction column) → BLOCKED", async () => {
+  let auth = 0;
   const emailAt = hoursAgo(3);
-  const res = await checkEmailMinGap("lead-m1", hoursAgo(2), 16, stubTimelineClient(null, {
-    authEmail: emailAt, onQuery: () => mirrorReads++, onAuthQuery: () => authReads++,
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16, gapClient({
+    interactions: [gmailSentRow("L", emailAt)], onAuth: () => auth++,
   }));
-  assertEquals(res.allowed, false);          // previously: allowed → a second email inside the gap
-  assertEquals(res.anchorAt, emailAt);       // anchored on the real email
-  assertEquals(mirrorReads, 1);
-  assertEquals(authReads, 1);                // consulted exactly once
+  assertEquals(res.allowed, false);   // was: allowed → a second email inside the gap
+  assertEquals(res.anchorAt, emailAt);
+  assertEquals(auth, 1);
 });
 
-Deno.test("missing mirror row + NO email anywhere in the authoritative record → ALLOWED", async () => {
-  // The case this helper exists for: last touch was an SMS, never emailed.
-  let authReads = 0;
-  const res = await checkEmailMinGap("lead-m2", hoursAgo(2), 16, stubTimelineClient(null, {
-    authEmail: null, onAuthQuery: () => authReads++,
+Deno.test("missing mirror + an OUTLOOK-shaped authoritative row (direction set) → BLOCKED", async () => {
+  const emailAt = hoursAgo(3);
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16, gapClient({
+    interactions: [outlookSentRow("L", emailAt)],
+  }));
+  assertEquals(res.allowed, false);
+  assertEquals(res.anchorAt, emailAt);
+});
+
+Deno.test("missing mirror + a LEGACY 'email' + direction='outbound' row → BLOCKED", async () => {
+  const emailAt = hoursAgo(3);
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16, gapClient({
+    interactions: [{ lead_id: "L", type: "email", direction: "outbound", occurred_at: emailAt }],
+  }));
+  assertEquals(res.allowed, false);
+  assertEquals(res.anchorAt, emailAt);
+});
+
+Deno.test("missing mirror + only INBOUND email in the authoritative record → ALLOWED", async () => {
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16, gapClient({
+    interactions: [{ lead_id: "L", type: "email_inbound", occurred_at: hoursAgo(1) }],
   }));
   assertEquals(res.allowed, true);
   assertEquals(res.anchorAt, null);
-  assertEquals(authReads, 1);
 });
 
-Deno.test("missing mirror row + the AUTHORITATIVE read errors → BLOCKED (fail closed)", async () => {
+Deno.test("missing mirror + NO email anywhere → ALLOWED (the case this helper exists for)", async () => {
+  // Last touch was an SMS; the lead has genuinely never been emailed. Blocking
+  // here would be the cross-channel over-blocking this helper removes.
+  let auth = 0;
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16,
+    gapClient({ interactions: [], onAuth: () => auth++ }));
+  assertEquals(res.allowed, true);
+  assertEquals(res.anchorAt, null);
+  assertEquals(auth, 1);
+});
+
+Deno.test("missing mirror + the AUTHORITATIVE read errors → BLOCKED (fail closed)", async () => {
   const crossChannel = hoursAgo(2);
-  const res = await checkEmailMinGap("lead-m3", crossChannel, 16, stubTimelineClient(null, {
-    authError: true,
+  const res = await checkEmailMinGap("L", crossChannel, 16,
+    gapClient({ authError: "authoritative boom" }));
+  assertEquals(res.allowed, false);
+  assertEquals(res.anchorAt, crossChannel);
+});
+
+Deno.test("the newest authoritative outbound email wins when several exist", async () => {
+  const older = hoursAgo(50), newer = hoursAgo(3);
+  const res = await checkEmailMinGap("L", hoursAgo(2), 16, gapClient({
+    interactions: [gmailSentRow("L", older), gmailSentRow("L", newer)],
   }));
   assertEquals(res.allowed, false);
-  assertEquals(res.anchorAt, crossChannel); // conservative block retained
-});
-
-Deno.test("a present mirror row answers on its own — no authoritative read", async () => {
-  let authReads = 0;
-  const emailAt = hoursAgo(40);
-  const res = await checkEmailMinGap("lead-m4", hoursAgo(2), 16, stubTimelineClient(emailAt, {
-    onAuthQuery: () => authReads++,
-  }));
-  assertEquals(res.allowed, true);
-  assertEquals(res.anchorAt, emailAt);
-  assertEquals(authReads, 0); // second read only when the first comes back empty
-});
-
-Deno.test("the cheap path still costs nothing: neither table is read when the gap already allows", async () => {
-  let mirrorReads = 0, authReads = 0;
-  const res = await checkEmailMinGap("lead-m5", hoursAgo(20), 16, stubTimelineClient(null, {
-    onQuery: () => mirrorReads++, onAuthQuery: () => authReads++,
-  }));
-  assertEquals(res.allowed, true);
-  assertEquals(mirrorReads, 0);
-  assertEquals(authReads, 0);
+  assertEquals(res.anchorAt, newer);
 });

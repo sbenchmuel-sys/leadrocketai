@@ -466,7 +466,8 @@ export function checkMinGap(
  *     against the authoritative record rather than assumed to mean "no email".
  * lead_timeline_items is a PROJECTION and a missing mirror row is a supported
  * failure mode in this codebase; `interactions` is the source of truth for
- * outbound email (gmail-send / outlook-send are its sole writers). Treating an
+ * outbound email (gmail-send / outlook-send are its sole writers — see the
+ * discriminator note below, which is derived from what they actually insert). Treating an
  * absent projection row as "never emailed" let a second email go out inside the
  * minimum gap. Treating it as "blocked" would have been just as wrong the other
  * way — it would hold a lead who really has only ever been texted, which is the
@@ -512,17 +513,28 @@ export async function checkEmailMinGap(
   // this already-narrow path (the cross-channel check has already blocked AND the
   // projection came back empty).
   //
-  // Discriminator: direction='outbound' AND type IN ('email','email_outbound').
-  // Current writers (gmail-send, outlook-send) store 'email_outbound'; older rows
-  // in this database use the bare 'email' with the direction column, so both are
-  // matched. A wider match can only make this MORE conservative. occurred_at is
-  // metadata and survives the 72h body purge, so old rows still answer.
+  // Discriminator — taken from the WRITERS, not from other readers:
+  //   gmail-send/index.ts  inserts { type: "email_outbound", ... } and NO direction
+  //   outlook-send/index.ts inserts { type: "email_outbound", direction: "outbound" }
+  // `direction` is a bare nullable text column (20260106223153_*.sql,
+  // `ADD COLUMN IF NOT EXISTS direction text;`) with no default and no backfill,
+  // so every row Gmail has ever written has direction NULL. Requiring
+  // direction='outbound' therefore matched NONE of them — under SQL's
+  // three-valued logic NULL = 'outbound' is NULL, not false — and this lookup
+  // silently returned "no email ever", allowing a second email inside the gap.
+  // That is the bug this read exists to close, so the predicate must not depend
+  // on the column at all for the modern spelling:
+  //     type = 'email_outbound'  OR  (type = 'email' AND direction = 'outbound')
+  // The value 'email_outbound' already carries the direction. The bare 'email'
+  // spelling (older rows) is the only one that needs `direction` to tell an
+  // inbound from an outbound, and a NULL there is genuinely ambiguous, so it is
+  // correctly excluded rather than guessed at.
+  // occurred_at is metadata and survives the 72h body purge, so old rows answer.
   const { data: authoritative, error: authError } = await serviceClient
     .from("interactions")
     .select("occurred_at")
     .eq("lead_id", leadId)
-    .eq("direction", "outbound")
-    .in("type", ["email", "email_outbound"])
+    .or("type.eq.email_outbound,and(type.eq.email,direction.eq.outbound)")
     .order("occurred_at", { ascending: false })
     .limit(1)
     .maybeSingle();

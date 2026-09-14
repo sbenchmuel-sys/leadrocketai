@@ -697,8 +697,28 @@ describe("failClosedAndStarvation", () => {
     expect(mirrorShortCircuit).toBeGreaterThan(-1);
     expect(authAt).toBeGreaterThan(mirrorShortCircuit);
     const authBlock = fn.slice(authAt, authAt + 500);
-    expect(authBlock).toContain('.eq("direction", "outbound")');
-    expect(authBlock).toContain('.in("type", ["email", "email_outbound"])');
+    // The predicate must NOT depend on `direction` for the modern spelling.
+    // gmail-send inserts { type: "email_outbound" } with NO direction key, and
+    // `direction` is bare nullable text (no default, no backfill) — so under SQL
+    // three-valued logic `direction = 'outbound'` matched none of Gmail's rows
+    // and this lookup silently answered "never emailed".
+    expect(authBlock).toContain('.or("type.eq.email_outbound,and(type.eq.email,direction.eq.outbound)")');
+    expect(authBlock, "a bare direction filter would exclude every gmail-send row")
+      .not.toContain('.eq("direction"');
+    // `email_outbound` alone must be sufficient — assert it is not ANDed with
+    // anything about direction.
+    expect(authBlock).not.toMatch(/and\(type\.eq\.email_outbound/);
+
+    // The writers this predicate is derived from must still write what it expects.
+    const gmailSend = readFileSync(path.join(ROOT, "supabase/functions/gmail-send/index.ts"), "utf8");
+    const outlookSend = readFileSync(path.join(ROOT, "supabase/functions/outlook-send/index.ts"), "utf8");
+    for (const [name, writer] of Object.entries({ gmailSend, outlookSend })) {
+      const insertAt = writer.indexOf('from("interactions")\n            .insert({');
+      const at = insertAt > -1 ? insertAt : writer.indexOf('from("interactions")');
+      expect(at, `${name}: interactions insert not found`).toBeGreaterThan(-1);
+      expect(writer.slice(at, at + 900), `${name} must still write type: "email_outbound"`)
+        .toContain('type: "email_outbound"');
+    }
     // Read-only: CLAUDE.md forbids reintroducing WRITES to the legacy table.
     expect(fn).not.toMatch(/from\("interactions"\)[\s\S]{0,200}\.(insert|update|upsert|delete)\(/);
     // The authoritative read fails closed too.
