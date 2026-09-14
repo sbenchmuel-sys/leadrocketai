@@ -123,19 +123,48 @@ Deno.test("NO workspace_profiles row is 'never configured', not 'unreadable' —
 
 // ── checkEmailMinGap: the email gap must not count a text as an email ────────
 
-/** `lastEmail` is the newest lead_timeline_items email_outbound, or null. */
-function stubTimelineClient(lastEmail: string | null, opts: { error?: boolean; onQuery?: () => void } = {}) {
+/**
+ * `lastEmail` is the newest lead_timeline_items email_outbound mirror row (null =
+ * no mirror row). `authEmail` is the newest authoritative `interactions` outbound
+ * email (undefined = same as the mirror, i.e. a consistent database).
+ */
+function stubTimelineClient(
+  lastEmail: string | null,
+  opts: {
+    error?: boolean;            // mirror read fails
+    authEmail?: string | null;  // authoritative answer when the mirror is empty
+    authError?: boolean;        // authoritative read fails
+    onQuery?: () => void;       // counts mirror reads
+    onAuthQuery?: () => void;   // counts authoritative reads
+  } = {},
+) {
+  const chain = (result: unknown, depth: number) => {
+    // A tiny builder that swallows `depth` chained filter calls then resolves.
+    let node: any = { maybeSingle: async () => result };
+    node.limit = () => node;
+    node.order = () => node;
+    node.eq = () => node;
+    node.in = () => node;
+    node.select = () => node;
+    void depth;
+    return node;
+  };
   return {
     from: (table: string) => {
-      if (table !== "lead_timeline_items") throw new Error(`unexpected table ${table}`);
-      opts.onQuery?.();
-      return {
-        select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ limit: () => ({
-          maybeSingle: async () => opts.error
-            ? { data: null, error: { message: "boom" } }
-            : { data: lastEmail ? { occurred_at: lastEmail } : null, error: null },
-        }) }) }) }) }),
-      };
+      if (table === "lead_timeline_items") {
+        opts.onQuery?.();
+        return chain(opts.error
+          ? { data: null, error: { message: "boom" } }
+          : { data: lastEmail ? { occurred_at: lastEmail } : null, error: null }, 4);
+      }
+      if (table === "interactions") {
+        opts.onAuthQuery?.();
+        const auth = opts.authEmail === undefined ? lastEmail : opts.authEmail;
+        return chain(opts.authError
+          ? { data: null, error: { message: "authoritative boom" } }
+          : { data: auth ? { occurred_at: auth } : null, error: null }, 5);
+      }
+      throw new Error(`unexpected table ${table}`);
     },
   } as any;
 }
@@ -180,4 +209,63 @@ Deno.test("a failed last-email lookup keeps the conservative block (fail closed)
   const res = await checkEmailMinGap("lead-5", crossChannel, 16, stubTimelineClient(null, { error: true }));
   assertEquals(res.allowed, false);
   assertEquals(res.anchorAt, crossChannel);
+});
+
+// ── An ABSENT mirror row is not evidence (Codex P2) ─────────────────────────
+// lead_timeline_items is a projection and a missing row is a supported failure
+// mode. "Never emailed" and "the mirror lost the row" look identical there, and
+// only the first may send inside the minimum gap. The authoritative record
+// (`interactions`, written by gmail-send / outlook-send) separates them.
+
+Deno.test("missing mirror row + an authoritative email inside the gap → BLOCKED", async () => {
+  let mirrorReads = 0, authReads = 0;
+  const emailAt = hoursAgo(3);
+  const res = await checkEmailMinGap("lead-m1", hoursAgo(2), 16, stubTimelineClient(null, {
+    authEmail: emailAt, onQuery: () => mirrorReads++, onAuthQuery: () => authReads++,
+  }));
+  assertEquals(res.allowed, false);          // previously: allowed → a second email inside the gap
+  assertEquals(res.anchorAt, emailAt);       // anchored on the real email
+  assertEquals(mirrorReads, 1);
+  assertEquals(authReads, 1);                // consulted exactly once
+});
+
+Deno.test("missing mirror row + NO email anywhere in the authoritative record → ALLOWED", async () => {
+  // The case this helper exists for: last touch was an SMS, never emailed.
+  let authReads = 0;
+  const res = await checkEmailMinGap("lead-m2", hoursAgo(2), 16, stubTimelineClient(null, {
+    authEmail: null, onAuthQuery: () => authReads++,
+  }));
+  assertEquals(res.allowed, true);
+  assertEquals(res.anchorAt, null);
+  assertEquals(authReads, 1);
+});
+
+Deno.test("missing mirror row + the AUTHORITATIVE read errors → BLOCKED (fail closed)", async () => {
+  const crossChannel = hoursAgo(2);
+  const res = await checkEmailMinGap("lead-m3", crossChannel, 16, stubTimelineClient(null, {
+    authError: true,
+  }));
+  assertEquals(res.allowed, false);
+  assertEquals(res.anchorAt, crossChannel); // conservative block retained
+});
+
+Deno.test("a present mirror row answers on its own — no authoritative read", async () => {
+  let authReads = 0;
+  const emailAt = hoursAgo(40);
+  const res = await checkEmailMinGap("lead-m4", hoursAgo(2), 16, stubTimelineClient(emailAt, {
+    onAuthQuery: () => authReads++,
+  }));
+  assertEquals(res.allowed, true);
+  assertEquals(res.anchorAt, emailAt);
+  assertEquals(authReads, 0); // second read only when the first comes back empty
+});
+
+Deno.test("the cheap path still costs nothing: neither table is read when the gap already allows", async () => {
+  let mirrorReads = 0, authReads = 0;
+  const res = await checkEmailMinGap("lead-m5", hoursAgo(20), 16, stubTimelineClient(null, {
+    onQuery: () => mirrorReads++, onAuthQuery: () => authReads++,
+  }));
+  assertEquals(res.allowed, true);
+  assertEquals(mirrorReads, 0);
+  assertEquals(authReads, 0);
 });

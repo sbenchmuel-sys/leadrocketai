@@ -686,6 +686,26 @@ describe("failClosedAndStarvation", () => {
     expect(fn).toContain("if (crossChannel.allowed) return { ...crossChannel, anchorAt: lastOutboundAt };");
     // Fail closed: a failed lookup keeps the conservative (blocked) answer.
     expect(fn).toMatch(/if \(error\) \{[\s\S]{0,400}return \{ \.\.\.crossChannel, anchorAt: lastOutboundAt \};/);
+    // An ABSENT mirror row is not evidence (Codex P2). lead_timeline_items is a
+    // projection and a missing row is a supported failure mode, so "never
+    // emailed" and "the mirror lost the row" look identical there. Only the
+    // first may send. The authoritative record separates them — and is consulted
+    // ONLY when the projection came back empty.
+    const authAt = fn.indexOf('.from("interactions")');
+    const mirrorShortCircuit = fn.indexOf("if (mirroredAt) return");
+    expect(authAt).toBeGreaterThan(-1);
+    expect(mirrorShortCircuit).toBeGreaterThan(-1);
+    expect(authAt).toBeGreaterThan(mirrorShortCircuit);
+    const authBlock = fn.slice(authAt, authAt + 500);
+    expect(authBlock).toContain('.eq("direction", "outbound")');
+    expect(authBlock).toContain('.in("type", ["email", "email_outbound"])');
+    // Read-only: CLAUDE.md forbids reintroducing WRITES to the legacy table.
+    expect(fn).not.toMatch(/from\("interactions"\)[\s\S]{0,200}\.(insert|update|upsert|delete)\(/);
+    // The authoritative read fails closed too.
+    expect(fn).toMatch(/if \(authError\) \{[\s\S]{0,400}return \{ \.\.\.crossChannel, anchorAt: lastOutboundAt \};/);
+    // ...and the old conflation is gone.
+    expect(fn).not.toContain("No email has ever gone out (or none on record)");
+
     // BOTH senders use it — the cold pass reads the same cross-channel field.
     expect([...src.matchAll(/checkEmailMinGap\(/g)].length).toBe(2);
     expect(src).not.toMatch(/[^l]checkMinGap\(/); // no raw cross-channel gap left in the executor

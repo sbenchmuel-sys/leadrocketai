@@ -460,8 +460,19 @@ export function checkMinGap(
  * touch the database not at all. Only when it blocks do we spend one read to ask
  * whether the blocking touch was actually an email.
  *
- * FAILS CLOSED: if that read errors we keep the conservative (blocked) answer
- * and defer, rather than sending on the strength of a query we could not run.
+ * FAILS CLOSED on BOTH unknowns:
+ *   - a read ERROR keeps the conservative (blocked) answer;
+ *   - an ABSENT mirror row is not evidence of anything, so it is resolved
+ *     against the authoritative record rather than assumed to mean "no email".
+ * lead_timeline_items is a PROJECTION and a missing mirror row is a supported
+ * failure mode in this codebase; `interactions` is the source of truth for
+ * outbound email (gmail-send / outlook-send are its sole writers). Treating an
+ * absent projection row as "never emailed" let a second email go out inside the
+ * minimum gap. Treating it as "blocked" would have been just as wrong the other
+ * way — it would hold a lead who really has only ever been texted, which is the
+ * cross-channel over-blocking this helper exists to remove. So the two cases are
+ * separated by asking the authoritative record, and only when the projection
+ * comes back empty.
  *
  * `anchorAt` is the timestamp the decision was made against, so the caller can
  * compute the deferral without re-deriving it.
@@ -492,9 +503,42 @@ export async function checkEmailMinGap(
     return { ...crossChannel, anchorAt: lastOutboundAt };
   }
 
-  // No email has ever gone out (or none on record) → the blocking touch was not
-  // an email, so the EMAIL gap is not in play.
-  const lastEmailAt = ((data as any)?.occurred_at as string | null | undefined) ?? null;
+  const mirroredAt = ((data as any)?.occurred_at as string | null | undefined) ?? null;
+  if (mirroredAt) return { ...checkMinGap(mirroredAt, minGapHours), anchorAt: mirroredAt };
+
+  // No mirror row. That is TWO different facts wearing one shape: this lead has
+  // never been emailed, or the projection is simply missing the row. Only the
+  // first may send. Ask the authoritative record — one extra read, and only on
+  // this already-narrow path (the cross-channel check has already blocked AND the
+  // projection came back empty).
+  //
+  // Discriminator: direction='outbound' AND type IN ('email','email_outbound').
+  // Current writers (gmail-send, outlook-send) store 'email_outbound'; older rows
+  // in this database use the bare 'email' with the direction column, so both are
+  // matched. A wider match can only make this MORE conservative. occurred_at is
+  // metadata and survives the 72h body purge, so old rows still answer.
+  const { data: authoritative, error: authError } = await serviceClient
+    .from("interactions")
+    .select("occurred_at")
+    .eq("lead_id", leadId)
+    .eq("direction", "outbound")
+    .in("type", ["email", "email_outbound"])
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (authError) {
+    console.warn(
+      `[executionSettings] authoritative last-email lookup failed for lead ${leadId} — ` +
+      `keeping the cross-channel min-gap block (fail closed): ${JSON.stringify(authError)}`,
+    );
+    return { ...crossChannel, anchorAt: lastOutboundAt };
+  }
+
+  // Now the answer is a fact either way: a timestamp means the gap applies from
+  // it; null means no outbound email exists in the source of truth, so the lead
+  // genuinely has never been emailed and the EMAIL gap is not in play.
+  const lastEmailAt = ((authoritative as any)?.occurred_at as string | null | undefined) ?? null;
   return { ...checkMinGap(lastEmailAt, minGapHours), anchorAt: lastEmailAt };
 }
 
