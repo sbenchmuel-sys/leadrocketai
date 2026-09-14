@@ -1,20 +1,20 @@
 # DrivePilot master upgrade — checkpoint
 
-Updated: 2026-09-14 10:45 (Israel time) · origin/main `bcfc45c2` · **Every unit is merged. Zero open PRs. Your turn.**
+Updated: 2026-09-14 19:15 (Israel time) · origin/main `dbe61fd0` · **14 units merged. Zero open PRs. One migration for you, then the next wave starts.**
 
 ## WHERE THE PROGRAM STANDS
 
 All twelve units have gone through the four gates and merged. There is no engineering work left that can proceed without you. What remains is three things only you can do: apply the batch in Lovable, observe a handful of real-world results, and settle two product decisions.
 
-## PRODUCTION — do in Lovable, in this order
+## PRODUCTION — do in Lovable
 
-Say each of these to Lovable chat, one at a time, waiting for each to finish:
+**Batch 2 is done** — you applied all three (enrollment RPCs, cadence conditions, call-media purge). Confirmed from the commits Lovable pushed back.
 
-1. `Apply migration supabase/migrations/20260907000000_transactional_enrollment_rpcs.sql`
-2. `Apply migration supabase/migrations/20260907000100_cadence_step_conditions.sql`
-3. `Apply migration supabase/migrations/20260908150000_purge_call_media.sql`
+**Batch 3 — one migration, and order matters:**
 
-The third one is the retention fix: it strips verbatim customer quotes out of two columns the 90-day purge had never been clearing. It rewrites historical rows, so let it finish before doing anything else.
+`Apply migration supabase/migrations/20260914120000_unify_outlook_dedupe_keys.sql`
+
+Apply this **before** Lovable redeploys the email sync functions (it will do that on its own once main is pulled). The new code writes email identities in a new shape and calls a database function this migration creates; if the functions go first, Outlook messages already stored look new and get imported twice until the backfill lands. Not destructive, but a rep would see duplicates. It rewrites ~950 existing Outlook rows.
 
 **Standing rule: never tell Lovable to apply `20260908000000_codify_cron_jobs_staging.sql`.** It is staging-only and would point production's scheduled jobs at the wrong database.
 
@@ -53,7 +53,11 @@ After the batch, give the scheduled jobs an hour and tell me — I'll verify aga
 9. **Company enrichment failed for every company not already cached** — the searches ran, the credits were spent, then it crashed and saved nothing.
 10. **The automatic sender could starve itself.** Seven separate ways a blocked row could sit at the front of a capped scan forever, hiding every other customer behind it.
 11. **A mistyped send-cap secret disabled both the cap and the alarm meant to catch it** — an uncapped sender, silently.
-12. **Your local repo had been frozen since 6 September** on three abandoned lock files. That was why GitHub Desktop looked stuck.
+12. **The Outlook webhook matched leads by email with no workspace filter.** 350 addresses exist as leads in more than one workspace; mail could land on another tenant's lead. Latent — the webhook has never run in production — but live code. (G-B.)
+13. **A soft bounce permanently opted real customers out**, and a customer forwarding you a bounce opted *themselves* out. (G-B.)
+14. **"Instant pause on reply" did not pause a lead that had never sent.** The pause function returned early when no send log existed — the normal state for a queued first touch — so a customer could reply and still receive the automated email. Predates this program. (G-B.)
+15. **Twelve Queue situations all said "Follow up"**, every card quoted the customer's message even when the card was about your unanswered email, and a blocked send said "Follow up" so reps assumed it went out. (Q2.)
+16. **Your local repo had been frozen since 6 September** on three abandoned lock files. That was why GitHub Desktop looked stuck.
 
 Still queued, documented, not yet built: Outlook has no periodic re-check · `followup_wait_days` isn't settable from the UI · `twilio-voice-token` issues tokens to non-members · no per-workspace owned-numbers table · meeting transcripts are never analysed (`transcript-poller` calls the analyser with no auth header).
 
@@ -66,6 +70,10 @@ Logged deliberately rather than forgotten. None is a major bug; each was judged 
 - The paused-owner prefilter reads one page of profiles; past ~1,000 paused owners it could truncate.
 - An out-of-office deferral moves the current touch but not later pre-created ones.
 - Completing a call card with the generic "Mark as handled" doesn't record an outcome, so a "no answer" follow-up can queue after a call that was answered.
+- More than 25 duplicate lead rows for one email address in one workspace would let some escape the reply-pause (production max today: a handful).
+- `outlook-sync` stays off the cron until Q1b builds the prompt-only version.
+- `outlook-send` writes a key shape no other writer recognises, so a rep's own Outlook sent mail can double-count — pre-existing, its own small fix.
+- `/app/leads` (TodoView) still uses its own wording, so a lead reads differently there than in the Queue. ~30 lines.
 
 ## What the review layers caught
 
@@ -79,4 +87,4 @@ Real defects caught before merge, across the program: a wrong-customer delete ra
 
 ## Confidence
 
-**~92%.** Twelve units through the loop end to end, all merged, `main` green on every gate. What would take it to ≥95% is entirely in your hands now: the batch applied cleanly with the scheduled jobs quiet for an hour afterwards, and one real email you can see with your own eyes.
+**~93%.** Fourteen units through the loop end to end, all merged, `main` green on every gate. What would take it to ≥95% is entirely in your hands now: the batch applied cleanly with the scheduled jobs quiet for an hour afterwards, and one real email you can see with your own eyes.
