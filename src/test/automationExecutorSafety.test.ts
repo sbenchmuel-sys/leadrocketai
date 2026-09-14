@@ -219,7 +219,10 @@ describe("smsPhoneSelected", () => {
     const cols = selectLine.split(",").map((c) => c.trim());
     expect(cols).toContain("phone");
     expect(cols).toContain("email");
-    expect(src).toContain("if (!lead.phone)");
+    // Was `if (!lead.phone)` inside the SMS send branch. The precondition moved
+    // ~400 lines earlier and is now channel-scoped (Codex P1) — see
+    // smsPreconditionRunsBeforeAnySpending below.
+    expect(src).toContain('if (resolvedChannel === "sms" && !lead.phone)');
   });
 });
 
@@ -304,10 +307,12 @@ describe("smsChannelGating", () => {
     expect(src).toContain('.eq("unsubscribed", false)');
   });
 
-  it("the SMS send path is actually reachable: no mailbox needed, phone required", () => {
+  it("the SMS send path is actually reachable: no mailbox needed", () => {
     const smsBranch = legacy.slice(legacy.indexOf('if (resolvedChannel === "sms") {'));
     const body = smsBranch.slice(0, smsBranch.indexOf("} else if (mailProvider"));
-    expect(body).toContain("if (!lead.phone)");
+    // The phone precondition no longer lives here — it runs before anything is
+    // spent (Codex P1). What must remain true is that the send path needs no
+    // mailbox.
     expect(body).toContain("functions/v1/sms-send");
     expect(body).not.toContain("mailAccountId");
   });
@@ -845,11 +850,9 @@ const LEAVE_IN_PLACE_LEGACY: Exempt[] = [
   { match: "Consent withdrawn mid-flight",
     why: "the candidate query requires automation_mode IS NOT NULL, so these rows cannot be selected again" },
   { match: "Duplicate send guard: email sent/pending within last hour",
-    why: "self-clearing within 1h (4 ticks); a full page of these blocks at most 4 ticks, then drains" },
+    why: "VERIFIED: the query matches automation_log status in (sent,pending) for this lead in the last hour, and logEntry is never inserted while still 'pending' (every insert site sets skipped/failed/claiming first), so only 'sent' rows can match and they age out in <=1h (4 ticks)" },
   { match: "if (claimError)",
-    why: "lost the claim race; the claim unique index is per (lead, action_key, claim_date), so it cannot repeat today" },
-  { match: "No phone number for SMS",
-    why: "parks the lead — see the branch; listed because the claim row, not the lead, carries the skip" },
+    why: "VERIFIED with a bound: the winning run holds a claiming/sent row, and automation_log_claim_unique is PARTIAL (WHERE status IN ('claiming','sent')) so our retry keeps failing only while that row lives; a send clears needs_action, a failure/expiry drops the row out of the index, and stale-claim recovery expires abandoned ones every run" },
 ];
 
 const LEAVE_IN_PLACE_COLD: Exempt[] = [
@@ -860,7 +863,7 @@ const LEAVE_IN_PLACE_COLD: Exempt[] = [
   { match: "Touch is not due yet",
     why: "the scan filters eligible_at <= now; an advanced touch is already out of the page" },
   { match: "Not the next step in line",
-    why: "self-clearing: the earlier step sorts OLDER in the eligible_at ASC scan, so it is reached first and its send re-anchors this one" },
+    why: "VERIFIED with a bound: steps are scheduled with increasing delays, so the earlier step has an older eligible_at and sorts ahead in this ASC scan; its send re-anchors this touch. Bound: both rows sit in the same 200-row page, so this only fails if one enrollment has >200 out-of-order touches" },
   { match: "Campaign is not active or not in automatic send mode",
     why: "the scan filters campaign_id IN (active + automatic); defense in depth only" },
   { match: "Workspace cold auto-send gate is off",
@@ -868,11 +871,11 @@ const LEAVE_IN_PLACE_COLD: Exempt[] = [
   { match: "Lead no longer exists",
     why: "leads!inner join — a touch with no lead is not returned by the scan" },
   { match: "Another executor run already claimed this touch",
-    why: "claim unique index makes a same-day repeat impossible" },
+    why: "VERIFIED: the winner's claim is claiming/sent, and on success advanceColdEnrollment moves this touch out of the status='scheduled' scan; an abandoned claim is expired by stale-claim recovery at the top of every run, so the block cannot outlive one claim_expires_at window" },
   { match: "claim failed:",
-    why: "real insert failure; transient, and the touch is retried next tick without holding a slot it already lost" },
+    why: "RESIDUAL RISK, accepted and reported: a non-23505 insert failure is assumed transient. If one were persistent (e.g. a schema/constraint change), 200 such touches would hold this page. Not observed; flagged to the coordinator rather than fixed, since deferring here would also defer genuine transient claim races" },
   { match: "send failed",
-    why: "deliberate: the provider call failed, the touch stays scheduled so the next tick retries (documented at the branch)" },
+    why: "RESIDUAL RISK, accepted and reported: the touch is left scheduled so a transient provider error retries promptly (documented at the branch). A provider down for one owner with >200 due touches would hold this page; a backoff is the right fix and is a follow-up, not a same-round change to the send-failure path" },
 ];
 
 /** Writes that take a row out of its scan's filters. */
@@ -940,5 +943,50 @@ describe("everyRefusalMovesTheRowOrIsJustified", () => {
     }
     // Keep the list small enough to stay reviewable.
     expect(LEAVE_IN_PLACE_LEGACY.length + LEAVE_IN_PLACE_COLD.length).toBeLessThanOrEqual(20);
+  });
+});
+
+// ── Codex P1 (final): the no-phone refusal must cost nothing and move the lead
+describe("smsPreconditionRunsBeforeAnySpending", () => {
+  const legacy = legacySection();
+
+  it("the phone check runs before the draft is consumed, the AI call and the claim", () => {
+    const check = legacy.indexOf('if (resolvedChannel === "sms" && !lead.phone)');
+    expect(check).toBeGreaterThan(-1);
+    // Everything it used to run AFTER, destroying or spending something each tick.
+    const approvedConsumed = legacy.indexOf('from("drafts").update({ status: "sent" })');
+    const auditDraftRow = legacy.indexOf('from("drafts").insert(');
+    const aiCall = legacy.indexOf("functions/v1/ai_task");
+    const claim = legacy.indexOf('logEntry.status = "claiming"');
+    for (const [name, at] of Object.entries({ approvedConsumed, auditDraftRow, aiCall, claim })) {
+      expect(at, `${name} not found`).toBeGreaterThan(-1);
+      expect(check, `phone check must precede ${name}`).toBeLessThan(at);
+    }
+    // ...and it is resolved AFTER the channel is known, or it would gate email too.
+    expect(check).toBeGreaterThan(legacy.indexOf("const resolvedChannel: string"));
+  });
+
+  it("it writes a ledger row AND moves the lead — the claim row never parked it", () => {
+    const check = legacy.indexOf('if (resolvedChannel === "sms" && !lead.phone)');
+    const branch = legacy.slice(check, check + 1200);
+    expect(branch).toContain('from("automation_log").insert(logEntry)');
+    expect(branch).toContain("No phone number for SMS");
+    expect(branch).toContain("blockedRowRetryAt()");
+    expect(branch).toContain("continue;");
+  });
+
+  it("the old in-send-branch check is gone (one source of truth)", () => {
+    expect([...legacy.matchAll(/!lead\.phone/g)].length).toBe(1);
+    expect(legacy).not.toContain('error_message: "No phone number for SMS", completed_at');
+  });
+
+  it("no allow-list entry justifies itself with the partial claim index parking a lead", () => {
+    // automation_log_claim_unique is WHERE status IN ('claiming','sent'), so a
+    // claim flipped to 'skipped' leaves the index and frees the slot. Any
+    // exemption resting on "the claim row parks it" is false by construction.
+    for (const e of [...LEAVE_IN_PLACE_LEGACY, ...LEAVE_IN_PLACE_COLD]) {
+      expect(e.why, `bad justification: ${e.match}`).not.toMatch(/parks the lead|claim row.*parks/i);
+    }
+    expect(LEAVE_IN_PLACE_LEGACY.some((e) => e.match.includes("No phone number for SMS"))).toBe(false);
   });
 });

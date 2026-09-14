@@ -1324,6 +1324,37 @@ serve(async (req) => {
           continue;
         }
 
+        // ── SMS PRECONDITION (sms only; BEFORE spending anything) ──────
+        // Codex P1. This used to live inside the SMS send branch, ~400 lines
+        // below — AFTER the approved draft had been flipped to "sent", after the
+        // ai_task call, after the audit drafts row, and after the claim. Three
+        // things were wrong with that:
+        //   1. The rep's approved SMS copy was consumed and never given back, so
+        //      it was destroyed for a lead that could never be texted.
+        //   2. Every tick re-ran the whole chain and inserted another audit
+        //      drafts row.
+        //   3. It marked the CLAIM row 'skipped' and left the lead untouched —
+        //      and automation_log_claim_unique is partial
+        //      (WHERE status IN ('claiming','sent')), so a 'skipped' claim frees
+        //      the slot. Nothing stopped the lead being re-selected and
+        //      re-claimed on the very next tick, so 20 phoneless SMS leads
+        //      refilled the capped scan forever. (This is the branch whose
+        //      allow-list exemption claimed the claim row parked it. It did not.)
+        // `lead.phone` comes from the candidate query and is not re-read in
+        // between, so checking it here is identical — just before the spending.
+        if (resolvedChannel === "sms" && !lead.phone) {
+          console.warn(`[automation-executor] Lead ${lead.id}: SMS step but no phone number — deferring`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "No phone number for SMS — add a mobile number to text this lead";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          // Same treatment as the other "can't receive on this channel" cases: a
+          // number can be added, so defer rather than park.
+          await supabase.from("leads").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", lead.id);
+          skipped++;
+          continue;
+        }
+
         // ── EARLY SEND FLOOR (email only) — SAME helper as the cold path ──
         // Runs BEFORE the cached draft is consumed / the AI call, so a permanent
         // block (unsubscribed, invalid email, do-not-contact list) never spends
@@ -1743,14 +1774,9 @@ serve(async (req) => {
         let sendResponse: Response;
         if (resolvedChannel === "sms") {
           // ── SMS SEND ──────────────────────────────────────────
-          if (!lead.phone) {
-            console.warn(`[automation-executor] Lead ${lead.id}: SMS channel but no phone number — skipping`);
-            await supabase.from("automation_log")
-              .update({ status: "skipped", error_message: "No phone number for SMS", completed_at: new Date().toISOString() })
-              .eq("id", claimId);
-            skipped++;
-            continue;
-          }
+          // The no-phone precondition ran far above, before the draft lookup, the
+          // AI call and the claim (see "SMS PRECONDITION"). lead.phone is not
+          // re-read between there and here, so there is nothing left to check.
           // LATE OPT-OUT GUARD for SMS — the counterpart of the email late floor
           // above. Opt-out is about the PERSON, not the channel: a recipient can
           // unsubscribe (form, keyword, bounce, admin) during the claim/draft/AI
