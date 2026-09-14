@@ -61,7 +61,11 @@ CREATE TABLE public.leads (
   needs_action boolean,
   stage text,
   has_future_meeting boolean,
-  last_inbound_at timestamptz
+  last_inbound_at timestamptz,
+  -- Added for outlook_webhook_recency.test.sql (Unit G-B): the webhook's
+  -- advance-only recency writes touch both columns.
+  last_activity_at timestamptz,
+  action_dismissed_at timestamptz
 );
 
 CREATE TYPE public.campaign_step_type AS ENUM (

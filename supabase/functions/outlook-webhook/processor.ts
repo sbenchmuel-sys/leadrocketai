@@ -497,7 +497,7 @@ async function processChangeNotification(
   // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
   const { data: lead } = await serviceClient
     .from("leads")
-    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id, last_inbound_at, last_activity_at")
+    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
     .eq("email", senderEmail)
     .eq("workspace_id", mailboxWorkspaceId)
     .order("created_at", { ascending: true })
@@ -521,8 +521,6 @@ async function processChangeNotification(
     ooo_until: string | null;
     unsubscribed: boolean;
     workspace_id: string | null;
-    last_inbound_at: string | null;
-    last_activity_at: string | null;
   };
 
   // --- 8. Direct conversation filter ---
@@ -687,25 +685,65 @@ async function processChangeNotification(
 
   // --- 12. Update lead state ---
   //
-  // MONOTONIC RECENCY. `occurred_at` on the timeline row is the message's real
-  // received time — that is what makes the timeline order right. But these two
-  // LEAD columns mean "how recently did something happen", and Graph fires a
-  // change notification when a message is MOVED INTO the watched folder, not
-  // only when it arrives. Rescuing a six-month-old mail out of Junk would
-  // otherwise rewind `last_inbound_at` over a genuine recent reply — and
-  // `last_inbound_at` feeds the re-arm / dismissal-clearing decision in
-  // `syncEngine.buildLeadUpdate`. So: never move them backwards.
-  const newestOf = (a: string | null, b: string): string =>
-    a && new Date(a).getTime() > new Date(b).getTime() ? a : b;
+  // MONOTONIC RECENCY, ENFORCED BY THE DATABASE.
+  //
+  // `occurred_at` on the timeline row is the message's real received time —
+  // that is what makes the timeline order right. But these two LEAD columns
+  // mean "how recently did something happen", and they must never move
+  // backwards, because `last_inbound_at` is what `syncEngine.buildLeadUpdate`
+  // compares against `action_dismissed_at` to decide whether to resurface a
+  // lead. A rewind silently un-resurfaces a lead a rep has handled, or re-arms
+  // a cadence against someone who just wrote in.
+  //
+  // Two ways they can go backwards:
+  //   1. Graph fires a change notification when a message is MOVED INTO the
+  //      watched folder, not only when it arrives — rescuing an old mail out of
+  //      Junk delivers a genuinely old receivedDateTime today.
+  //   2. Graph delivers notifications in PARALLEL. Two arriving close together
+  //      is ordinary, not exotic.
+  //
+  // Computing `max(current, new)` in TypeScript closes (1) and leaves (2) wide
+  // open: it is a read-modify-write over a snapshot taken before this function
+  // started, so the older request can finish last and clobber the newer one.
+  // So the comparison happens in Postgres instead, as the UPDATE's own WHERE
+  // clause — an advance-only write. Under READ COMMITTED a second UPDATE on the
+  // same row blocks on the first, then RE-EVALUATES this predicate against the
+  // committed row, so the loser simply matches nothing and writes nothing.
+  //
+  // `IS NULL OR <` rather than `GREATEST(col, $new)`: PostgREST update payloads
+  // carry literal values, so a column reference cannot be expressed there.
+  // (For the record, Postgres' GREATEST ignores NULL arguments rather than
+  // propagating them — verified, it is not the SQL-standard behaviour — so the
+  // NULL case would have been safe either way. Here it is explicit: a lead's
+  // FIRST inbound has last_inbound_at IS NULL, and that branch is what sets it.)
+  //
+  // Separate statements per column on purpose: a lead can have a newer
+  // `last_activity_at` (a later outbound) than `last_inbound_at`, so one shared
+  // guard would let an inbound drag activity backwards.
+  // `occurredAt` always comes from `Date.toISOString()`, which yields a
+  // `…T…Z` form containing none of PostgREST's reserved filter characters
+  // (no comma, parenthesis, or `+` offset), so it is safe to interpolate into
+  // the filter unquoted. Keep it that way: a `+01:00`-style offset would be
+  // read as a space in the query string and the filter would silently match
+  // nothing — which here means the timestamps quietly stop advancing.
+  const advanceOnly = (column: string) =>
+    serviceClient
+      .from("leads")
+      .update({ [column]: occurredAt })
+      .eq("id", leadRow.id)
+      .or(`${column}.is.null,${column}.lt.${occurredAt}`);
 
-  await serviceClient
-    .from("leads")
-    .update({
-      last_inbound_at: newestOf(leadRow.last_inbound_at, occurredAt),
-      last_activity_at: newestOf(leadRow.last_activity_at, occurredAt),
-      ...(leadRow.stage === "new" || leadRow.stage === "contacted" ? { stage: "engaged" } : {}),
-    })
-    .eq("id", leadRow.id);
+  await advanceOnly("last_inbound_at");
+  await advanceOnly("last_activity_at");
+
+  // Stage is a forward-only ladder already gated on its current value, so it
+  // stays an unconditional write.
+  if (leadRow.stage === "new" || leadRow.stage === "contacted") {
+    await serviceClient
+      .from("leads")
+      .update({ stage: "engaged" })
+      .eq("id", leadRow.id);
+  }
 
   // --- 13. Pause active automation ---
   await pauseActiveAutomation(serviceClient, leadRow.id, mailAccountId, "reply_received");
