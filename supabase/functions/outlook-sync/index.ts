@@ -272,11 +272,13 @@ serve(async (req) => {
     // is a stable "the N most recent messages involving this lead", and the
     // existing per-message `syncStartMs` guard still drops anything older than
     // the sync window.
-    // ponytail: ceiling is SEARCH_CANDIDATE_TOP — a lead with >100 matching
-    // messages inside the window can still miss the tail on one run. The
-    // upgrade path is Graph delta queries per mailbox folder, not a bigger top.
-    const SEARCH_CANDIDATE_TOP = 100;
-    const candidateTop = Math.max(maxResults, Math.min(SEARCH_CANDIDATE_TOP, maxResults * 5));
+    // ponytail: ceiling is SEARCH_CANDIDATE_TOP. It is deliberately modest —
+    // `$select` includes `body`, so each extra candidate is a full message body
+    // over the wire — which means a lead with more than ~50 matching messages
+    // in the window can still miss the tail on one run. The upgrade path is
+    // Graph delta queries per mailbox folder, not a bigger top.
+    const SEARCH_CANDIDATE_TOP = 50;
+    const candidateTop = Math.max(maxResults, Math.min(SEARCH_CANDIDATE_TOP, maxResults * 3));
     const graphUrl = `${GRAPH_BASE}/me/messages?$search=${encodeURIComponent(searchKql)}&$top=${candidateTop}&$select=id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,internetMessageId,isDraft,internetMessageHeaders`;
 
     const searchResp = await fetch(graphUrl, {
