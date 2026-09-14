@@ -15,21 +15,25 @@ import { fetchOutreachDigest, type OutreachDigest as Digest } from "@/lib/outrea
 
 const COLLAPSE_KEY = "outreach_digest_collapsed";
 
-/** "3 calls · 2 emails" — non-zero channels only, in channel order. */
-function channelSummary(counts: Record<OutreachChannel, number>): string {
-  const parts = OUTREACH_CHANNELS.filter((ch) => counts[ch] > 0).map((ch) => `${counts[ch]} ${CHANNEL_LABEL[ch]}`);
+/** "3 calls · 2 emails" — non-zero channels only, in channel order.
+ *  A null count is unknown, not zero, so it is named rather than dropped. */
+function channelSummary(counts: Record<OutreachChannel, number | null>): string {
+  const parts = OUTREACH_CHANNELS.filter((ch) => counts[ch] === null || (counts[ch] as number) > 0)
+    .map((ch) => (counts[ch] === null ? `${CHANNEL_LABEL[ch]} unavailable` : `${counts[ch]} ${CHANNEL_LABEL[ch]}`));
   return parts.length ? parts.join(" · ") : "none";
 }
 
 interface OutreachDigestProps {
-  /** Due-now counts per channel — the same numbers the chips show. */
-  dueNow: Record<OutreachChannel, number>;
+  /** Due-now counts per channel — the same numbers the chips show. null = unknown. */
+  dueNow: Record<OutreachChannel, number | null>;
+  /** Counts are still being read — say "…" rather than "couldn't load". */
+  loading?: boolean;
   /** Bump to re-fetch (e.g. after a card action). */
   refreshKey: number;
   onOpenChannel: (ch: OutreachChannel) => void;
 }
 
-export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDigestProps) {
+export function OutreachDigest({ dueNow, loading, refreshKey, onOpenChannel }: OutreachDigestProps) {
   const { workspaceTimezone } = useWorkspace();
   const [digest, setDigest] = useState<Digest | null>(null);
   /** A read failed. We say so rather than rendering zeros or a permanent "…". */
@@ -55,7 +59,8 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
     });
   };
 
-  const dueNowTotal = OUTREACH_CHANNELS.reduce((n, ch) => n + dueNow[ch], 0);
+  const dueNowUnknown = OUTREACH_CHANNELS.some((ch) => dueNow[ch] === null);
+  const dueNowTotal = OUTREACH_CHANNELS.reduce((n, ch) => n + (dueNow[ch] ?? 0), 0);
   const laterTotal = digest ? OUTREACH_CHANNELS.reduce((n, ch) => n + digest.laterToday[ch], 0) : 0;
   const overdueTotal = digest?.overdueTotal ?? 0;
   const skippedTotal = digest?.skippedYesterdayTotal ?? 0;
@@ -74,7 +79,7 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
         {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         <span className="font-medium text-foreground">Today</span>
         <span className="truncate text-muted-foreground">
-          {dueNowTotal} due now{laterTotal > 0 ? ` · ${laterTotal}${digest?.laterTodayTruncated ? "+" : ""} later today` : ""}
+          {dueNowUnknown ? (loading ? "due now: …" : "due now: couldn't load") : `${dueNowTotal} due now`}{laterTotal > 0 ? ` · ${laterTotal}${digest?.laterTodayTruncated ? "+" : ""} later today` : ""}
           {overdueTotal > 0 ? ` · ${overdueTotal} overdue` : ""}
           {skippedTotal > 0 ? ` · ${skippedTotal}${digest?.skippedYesterdayTruncated ? "+" : ""} auto-skipped yesterday` : ""}
         </span>
@@ -85,7 +90,8 @@ export function OutreachDigest({ dueNow, refreshKey, onOpenChannel }: OutreachDi
           <div className="flex items-start gap-2">
             <CalendarCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <div>
-              <span className="text-foreground">Due now:</span> {channelSummary(dueNow)}
+              <span className="text-foreground">Due now:</span>{" "}
+              {dueNowUnknown && loading ? "…" : channelSummary(dueNow)}
               {digest && laterTotal > 0 && (
                 <> · <span className="text-foreground">later today:</span> {channelSummary(digest.laterToday)}{digest.laterTodayTruncated ? " (first 500 shown)" : ""}</>
               )}

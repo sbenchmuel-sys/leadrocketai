@@ -36,8 +36,12 @@ import {
   applyChipFilter,
   countChipBuckets,
   fetchLatestInbounds,
+  fetchRecapMeetings,
+  outboundAnchorFor,
+  fetchLatestOutboundsWithOrphans,
   type QueueChipBucket,
   type QueueLatestInbound,
+  type QueueLatestMessage,
   type QueueLeadRow,
 } from "@/lib/queueQueries";
 import {
@@ -55,7 +59,15 @@ import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachToday } from "@/components/queue/OutreachToday";
 import { OutreachDigest } from "@/components/queue/OutreachDigest";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
-import { fetchOutreachQueue, OUTREACH_PAGE_SIZE, type OutreachChannel, type OutreachTouch } from "@/lib/outreachQueue";
+import {
+  fetchOutreachQueue,
+  reconcileCompleted,
+  sumChannelCounts,
+  UNKNOWN_CHANNEL_COUNTS,
+  OUTREACH_PAGE_SIZE,
+  type OutreachChannel,
+  type OutreachTouch,
+} from "@/lib/outreachQueue";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -112,9 +124,21 @@ export default function Queue() {
   const [outreachTotal, setOutreachTotal] = useState(0);
   // Backlog per channel (server counts) — the Today view's chip numbers; the tab
   // badge is their sum so it never depends on which channel is selected.
-  const [outreachByChannel, setOutreachByChannel] = useState<Record<OutreachChannel, number>>(
-    { email: 0, voice: 0, sms: 0, whatsapp: 0, linkedin: 0 },
-  );
+  // null for a channel = THAT COUNT IS UNKNOWN. This is the one value every
+  // count-rendering surface reads, so "unknown" cannot be lost on the way to any
+  // of them — see the list in the Outreach tab's render below.
+  //
+  // It starts all-null, not all-zero: before the first successful read we do not
+  // know the backlog, and the all-zero initializer is exactly what kept the
+  // top-level Outreach chip confidently saying "0" through a totally failed
+  // load. A rep who sees 0 on the tab strip never opens the tab, so they never
+  // see the banner that would have told them. A read that fails AFTER a good one
+  // keeps the last real numbers (stale, but true when they were taken) and the
+  // banner says the list could not be refreshed.
+  const [outreachByChannel, setOutreachByChannel] =
+    useState<Record<OutreachChannel, number | null>>(UNKNOWN_CHANNEL_COUNTS);
+  // A failed load must not look like an empty backlog, so the tab says so.
+  const [outreachError, setOutreachError] = useState<string | null>(null);
   const [outreachChannel, setOutreachChannel] = useState<OutreachChannel | null>(null);
   const [outreachLimit, setOutreachLimit] = useState(OUTREACH_PAGE_SIZE);
   const [outreachLoading, setOutreachLoading] = useState(true);
@@ -123,18 +147,41 @@ export default function Queue() {
   // response may touch state — otherwise a slow earlier request could overwrite the
   // newer snapshot (and tab count) with stale data.
   const outreachReqId = useRef(0);
+  // Touches the rep has already finished, and the completion counter that lets a
+  // later response retire them — see reconcileCompleted. Focus mode pre-loads the
+  // next page before the current card is handled, so without this the completed
+  // card comes straight back when that response lands.
+  const completedTouches = useRef<Map<string, number>>(new Map());
+  const completionSeq = useRef(0);
   const loadOutreach = useCallback(async () => {
     const reqId = ++outreachReqId.current;
+    const startedAtSeq = completionSeq.current;
     setOutreachLoading(true);
     try {
       const page = await fetchOutreachQueue(outreachLimit, { channel: outreachChannel });
       if (reqId === outreachReqId.current) {
-        setOutreachTouches(page.touches);
+        const { touches, completed } = reconcileCompleted(
+          page.touches,
+          completedTouches.current,
+          startedAtSeq,
+        );
+        completedTouches.current = completed;
+        setOutreachTouches(touches);
         setOutreachTotal(page.total);
         setOutreachByChannel(page.byChannel);
+        // NOT `null`: a per-channel count can fail while the page read succeeds,
+        // and clearing the error there is what let "Queue clear. Nice." render
+        // over an unknown backlog.
+        setOutreachError(page.countsError);
       }
-    } catch {
-      /* non-fatal — the reactive lists still render */
+    } catch (err) {
+      // Non-fatal for the reactive lists, but the Outreach tab must NOT render
+      // this as "nothing to do" — it keeps whatever it had and says it's stale.
+      if (reqId === outreachReqId.current) {
+        setOutreachError(
+          `Couldn't load your outreach: ${err instanceof Error ? err.message : "the read failed"}.`,
+        );
+      }
     } finally {
       if (reqId === outreachReqId.current) setOutreachLoading(false);
     }
@@ -152,16 +199,29 @@ export default function Queue() {
     if (tab === "outreach") void loadOutreach();
   }, [tab, loadOutreach]);
   const removeTouch = (id: string) => {
+    completedTouches.current.set(id, ++completionSeq.current);
     setOutreachTouches((prev) => {
       const gone = prev.find((t) => t.id === id);
       if (gone) {
-        setOutreachByChannel((c) => ({ ...c, [gone.channel]: Math.max(0, c[gone.channel] - 1) }));
+        setOutreachByChannel((c) => ({
+          ...c,
+          // An unknown count stays unknown — decrementing it would invent a number.
+          [gone.channel]: c[gone.channel] === null ? null : Math.max(0, (c[gone.channel] as number) - 1),
+        }));
       }
       return prev.filter((t) => t.id !== id);
     });
     setOutreachTotal((n) => Math.max(0, n - 1));
   };
-  const restoreTouch = (_id: string) => { void loadOutreach(); }; // simplest correct restore
+  const restoreTouch = (id: string) => {
+    completedTouches.current.delete(id);
+    void loadOutreach();
+  }; // simplest correct restore
+  // The action actually went through. Re-read the server counts: completing a
+  // touch whose next step has ZERO delay queues that step immediately, often in
+  // another channel — so an email→call transition used to leave a due call while
+  // the Calls chip sat at 0 and disabled until the rep reloaded the page.
+  const completeTouch = (_id: string) => { void loadOutreach(); };
   const showMoreOutreach = useCallback(() => setOutreachLimit((n) => n + OUTREACH_PAGE_SIZE), []);
 
   // Pre-flight: cold send is blocked workspace-wide until a postal address exists.
@@ -189,6 +249,11 @@ export default function Queue() {
   // Latest inbound rows for VISIBLE leads only — see brief §6.
   // Fetched after snapshot resolves; chip-filter pageful = ≤25 leads.
   const [latestInbounds, setLatestInbounds] = useState<Map<string, QueueLatestInbound>>(new Map());
+  // …and the rep's own latest message. A follow-up card is about MY unanswered
+  // email, so the card needs both sides to be able to quote the right one.
+  const [latestOutbounds, setLatestOutbounds] = useState<Map<string, QueueLatestMessage>>(new Map());
+  // Meeting context for recap cards. Fetched only when the page actually has one.
+  const [latestMeetings, setLatestMeetings] = useState<Map<string, QueueLatestMessage>>(new Map());
 
   // ── Derived list ───────────────────────────────────────────────
   // The snapshot itself never reorders (brief §8). The view layer is
@@ -218,7 +283,12 @@ export default function Queue() {
     () => ({
       replied: chipCounts.replied,
       followup: chipCounts.followup_due,
-      outreach: Object.values(outreachByChannel).reduce((a, b) => a + b, 0),
+      // Unknown (a failed count read) propagates as null → the tab shows "—",
+      // never a reassuring 0.
+      // Unknown (a failed or not-yet-completed count read) propagates as null →
+      // the tab shows "—", never a reassuring 0. Same derivation as the Today
+      // view's "All" chip, so the two can never disagree.
+      outreach: sumChannelCounts(outreachByChannel),
     }),
     [chipCounts, outreachByChannel],
   );
@@ -243,12 +313,39 @@ export default function Queue() {
     let cancelled = false;
     if (pageLeads.length === 0) {
       setLatestInbounds(new Map());
+      setLatestOutbounds(new Map());
+      setLatestMeetings(new Map());
       return;
     }
     const ids = pageLeads.map((l) => l.id);
     void fetchLatestInbounds(ids).then((map) => {
       if (!cancelled) setLatestInbounds(map);
     });
+    // Passes the rows, not just the ids: the fetch compares each preview against
+    // the lead's own `last_outbound_at` so a send whose timeline projection
+    // failed is recovered from `interactions` instead of the card quoting the
+    // previous message under the new send's date.
+    // `anchorAt` is the clock that scheduled each card (see QueueAnchorField):
+    // a nurture card is scheduled from `last_nurture_outbound_at`, so the fetch
+    // must bring back THAT send and not whatever the rep did most recently.
+    void fetchLatestOutboundsWithOrphans(
+      pageLeads.map((l) => ({
+        id: l.id,
+        last_outbound_at: l.last_outbound_at,
+        anchorAt: outboundAnchorFor(l),
+      })),
+    ).then((map) => {
+      if (!cancelled) setLatestOutbounds(map);
+    });
+    const recapIds = pageLeads
+      .filter((l) => l.next_action_key === "generate_post_meeting_recap")
+      .map((l) => l.id);
+    if (recapIds.length === 0) setLatestMeetings(new Map());
+    else {
+      void fetchRecapMeetings(recapIds).then((map) => {
+        if (!cancelled) setLatestMeetings(map);
+      });
+    }
     return () => {
       cancelled = true;
     };
@@ -378,6 +475,7 @@ export default function Queue() {
           )}
           <OutreachDigest
             dueNow={outreachByChannel}
+            loading={outreachLoading}
             refreshKey={outreachTouches.length}
             onOpenChannel={selectOutreachChannel}
           />
@@ -390,8 +488,10 @@ export default function Queue() {
             channel={outreachChannel}
             onSelectChannel={selectOutreachChannel}
             onShowMore={outreachTouches.length < outreachTotal ? showMoreOutreach : null}
+            error={outreachError}
             onDone={removeTouch}
             onRestore={restoreTouch}
+            onCompleted={completeTouch}
           />
         </>
       ) : (
@@ -436,6 +536,8 @@ export default function Queue() {
               key={lead.id}
               lead={lead}
               latestInbound={latestInbounds.get(lead.id)}
+              latestOutbound={latestOutbounds.get(lead.id)}
+              latestMeeting={latestMeetings.get(lead.id)}
               onMarkHandled={handleMarkHandled}
               onSnooze={handleSnooze}
             />

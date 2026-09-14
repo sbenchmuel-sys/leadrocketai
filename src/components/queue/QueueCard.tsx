@@ -22,7 +22,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { fetchLatestInboundBody } from "@/lib/queueQueries";
+import { fetchLatestMessageBody } from "@/lib/queueQueries";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -37,11 +37,16 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { cleanBodyText } from "@/lib/cleanBodyText";
 import {
-  chipForLead,
-  leadWasAway,
+  anchorTimestamp,
+  describeOutboundCall,
+  describeQueueSituation,
+  isOutboundCall,
+  previewMatchesAnchor,
   queueButtonLabel,
   type QueueLeadRow,
   type QueueLatestInbound,
+  type QueueLatestMessage,
+  type QueueSituation,
 } from "@/lib/queueQueries";
 import { useBackgroundDraftQueue } from "@/hooks/useBackgroundDraftQueue";
 import ReEngagementCard from "@/components/lead/ReEngagementCard";
@@ -50,17 +55,13 @@ import { isReEngagementCandidate } from "@/lib/reEngagement";
 export interface QueueCardProps {
   lead: QueueLeadRow;
   latestInbound: QueueLatestInbound | undefined;
+  /** The rep's own latest message — what a follow-up card is about. */
+  latestOutbound: QueueLatestMessage | undefined;
+  /** The meeting a recap card is about. Undefined → the card shows no preview. */
+  latestMeeting?: QueueLatestMessage | undefined;
   onMarkHandled: (lead: QueueLeadRow) => void;
   onSnooze: (lead: QueueLeadRow, days: 3 | 5 | 7) => void;
 }
-
-// Friendly category labels keyed off the chip bucket. Why-now line
-// derives from these so chip-vs-card stays in lockstep (brief
-// "chip-bucket mapping" note).
-const CATEGORY_LABEL: Record<"replied" | "followup_due", string> = {
-  replied: "Replied",
-  followup_due: "Follow up",
-};
 
 // Intents we DISPLAY as why-now context. Deterministic-detector
 // intents (calendar_accept, ooo_reply, bounce, zoom_recap,
@@ -82,63 +83,90 @@ const INTENT_DISPLAY: Record<string, string> = {
   unknown: "",
 };
 
-function buildWhyNowLine(lead: QueueLeadRow, latestInbound: QueueLatestInbound | undefined): string {
-  const bucket = chipForLead({
-    next_action_key: lead.next_action_key,
-    action_resurfaced_at: lead.action_resurfaced_at,
-  });
-  const category = bucket ? CATEGORY_LABEL[bucket] : (lead.next_action_label ?? "Action needed");
-
-  // Back-from-away: the trigger is the return, not the last-outbound
-  // age (which predates the absence and would read oddly). Show just
-  // the category — the "was away — back now" note below carries the
-  // context.
-  if (leadWasAway({ next_action_key: lead.next_action_key })) {
-    return category; // "Follow up"
-  }
-
-  // Pick the timestamp that matches the action type. Customer-waiting
-  // → relative to last inbound. Rep-waiting → relative to last outbound.
-  const ts = bucket === "replied" ? lead.last_inbound_at : lead.last_outbound_at;
+/**
+ * The why-now line: what happened, when, and (when it's their message) what it
+ * was about. The "what happened" half comes from `describeQueueSituation` —
+ * a pure table in queueQueries — so a dozen different follow-up keys no longer
+ * collapse into the single word "Follow up".
+ *
+ * Exported for the label test: it composes the clauses, the table supplies them.
+ */
+export function buildWhyNowLine(
+  lead: QueueLeadRow,
+  situation: QueueSituation,
+  /** The message (or call) the card is about — the one `situation.bodySource` names. */
+  message: QueueLatestMessage | undefined,
+): string {
+  // The timestamp is the clock that SCHEDULED the card (see QueueAnchorField) —
+  // their reply, my unanswered message, or the nurture send specifically. Using
+  // `last_outbound_at` for a nurture card dated it off whatever the rep had done
+  // most recently, which is not what the cadence measured.
+  const ts = anchorTimestamp(lead, situation);
 
   let timePhrase = "";
-  if (ts) {
+  if (situation.showTime && ts) {
     try {
       const dt = new Date(ts);
       if (Number.isFinite(dt.getTime())) {
         const rel = formatDistanceToNow(dt, { addSuffix: false });
-        // Outbound side uses "sent X ago" framing per the brief examples.
-        timePhrase = bucket === "followup_due" ? `sent ${rel} ago` : `${rel} ago`;
+        timePhrase = situation.bodySource !== "outbound"
+          ? `${rel} ago`
+          // Nothing was "sent" when the rep picked up the phone.
+          : isOutboundCall(message) ? `called ${rel} ago` : `sent ${rel} ago`;
       }
     } catch {
       timePhrase = "";
     }
   }
 
-  // Intent annotation, only when meaningful AND when the row isn't a
-  // deterministic-detector class (defensive — those should already be
-  // hidden but a show-all rep could see them).
-  let intentSuffix = "";
-  const rawIntent = latestInbound?.intent ?? null;
-  if (rawIntent && INTENT_DISPLAY[rawIntent]) {
-    intentSuffix = ` — ${INTENT_DISPLAY[rawIntent]}`;
-  }
+  // Intent annotation belongs to THEIR message, so it only rides along on an
+  // inbound card. Deterministic-detector classes (bounce, OOO, calendar accept)
+  // carry no display string — those rows are normally intent-hidden anyway, and
+  // annotating one would dress noise up as a signal.
+  const rawIntent = situation.bodySource === "inbound" ? message?.intent ?? null : null;
+  const intentSuffix = rawIntent && INTENT_DISPLAY[rawIntent] ? ` — ${INTENT_DISPLAY[rawIntent]}` : "";
 
-  // Compose. Examples from the brief:
-  //   "Replied 2h ago — pricing question"
-  //   "Follow up — sent 6d ago"
-  if (bucket === "followup_due") {
-    return `${category}${timePhrase ? " — " + timePhrase : ""}${intentSuffix}`;
-  }
-  return `${category}${timePhrase ? " " + timePhrase : ""}${intentSuffix}`;
+  // Examples:
+  //   "They replied 2 hours ago — pricing question"
+  //   "No reply to your last email · sent 6 days ago"
+  //   "Not sent — you're over your sending limit · auto-send paused until Sep 12"
+  const clauses = [situation.label, situation.detail, timePhrase].filter(
+    (c): c is string => !!c && c.length > 0,
+  );
+  return clauses.join(" · ") + intentSuffix;
 }
 
-export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: QueueCardProps) {
-  const whyNow = buildWhyNowLine(lead, latestInbound);
-  // Only genuine out-of-office returns get the note — never plain
-  // follow-ups (gated on the ooo_return_followup key via leadWasAway).
-  const wasAway = leadWasAway({ next_action_key: lead.next_action_key });
-  const aiSummary = (latestInbound?.ai_summary ?? "").trim();
+export function QueueCard({
+  lead, latestInbound, latestOutbound, latestMeeting, onMarkHandled, onSnooze,
+}: QueueCardProps) {
+  // Computed BEFORE the situation because the situation depends on it: a
+  // follow-up triggered by a call is a different sentence from one triggered by
+  // an email, and the card must not describe a call as a message.
+  const latestOutboundIsCall = isOutboundCall(latestOutbound);
+  const situation = describeQueueSituation(
+    { next_action_key: lead.next_action_key, next_action_label: lead.next_action_label },
+    { latestOutboundIsCall },
+  );
+  // The thing this card is ACTUALLY about: their reply, my unanswered message,
+  // or — for a recap — the meeting itself.
+  const showingMine = situation.bodySource === "outbound";
+  const showingMeeting = situation.bodySource === "meeting";
+  const candidate = showingMeeting
+    ? latestMeeting
+    : showingMine
+      ? latestOutbound
+      : latestInbound;
+  // Quote it ONLY if it is the event that scheduled this card. Where the
+  // correlation can't be established — a nurture send that has scrolled out of
+  // the window, an unidentifiable meeting — the card carries no body rather
+  // than a plausible-looking neighbour.
+  const message = previewMatchesAnchor(lead, situation, candidate) ? candidate : undefined;
+  const whyNow = buildWhyNowLine(lead, situation, message);
+  // A call has no text to quote. Rather than reaching past it for an older
+  // email — which is what this card used to do, under a caption claiming the
+  // email was the thing — it is rendered as the call it is.
+  const showingCall = showingMine && latestOutboundIsCall;
+  const aiSummary = showingCall ? "" : (message?.ai_summary ?? "").trim();
   // When ai_summary contains bullets, render with SummaryBody (keeps bullet
   // structure). Otherwise fall back to cleanBodyText prose flow.
   const aiSummaryIsBulleted = aiSummary
@@ -146,11 +174,13 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     : false;
   const proseBody = aiSummaryIsBulleted
     ? ""
-    : cleanBodyText({
-        ai_summary: latestInbound?.ai_summary ?? null,
-        snippet_text: latestInbound?.snippet_text ?? null,
-        subject: latestInbound?.subject ?? null,
-      });
+    : showingCall
+      ? describeOutboundCall(latestOutbound)
+      : cleanBodyText({
+          ai_summary: message?.ai_summary ?? null,
+          snippet_text: message?.snippet_text ?? null,
+          subject: message?.subject ?? null,
+        });
   const hasContent = aiSummaryIsBulleted || !!proseBody;
 
   const buttonLabel = queueButtonLabel({
@@ -185,7 +215,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     void enqueue(lead.id);
   };
 
-  // Full inbound email, fetched on demand (see fetchLatestInboundBody).
+  // Full message, fetched on demand (see fetchLatestMessageBody) — the same
+  // direction the card body quotes, so "Show full email" opens the email the
+  // card is about rather than the other side of the thread.
   const [fullBody, setFullBody] = useState<string | null>(null);
   const [loadingBody, setLoadingBody] = useState(false);
 
@@ -196,7 +228,9 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
     }
     setLoadingBody(true);
     try {
-      const body = await fetchLatestInboundBody(lead.id);
+      // Inbound only — the button is rendered only on inbound cards (outbound
+      // bodies purge at 72h), so the default direction is the right one.
+      const body = await fetchLatestMessageBody(lead.id);
       if (!body) {
         toast.info("The full text of this email is no longer stored — showing the summary.");
       } else {
@@ -227,8 +261,18 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
 
         <p className="mt-0.5 text-xs text-muted-foreground">{whyNow}</p>
 
-        {wasAway && (
-          <p className="mt-0.5 text-xs text-muted-foreground/80">was away — back now</p>
+        {/* Whose words are quoted below. Without this the rep has no way to
+            tell the customer's reply from their own unanswered email. */}
+        {!!message && !(showingMeeting && !hasContent) && (
+          <p className="mt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            {showingCall
+              ? "Your call"
+              : showingMeeting
+                ? "The meeting"
+                : showingMine
+                  ? "Your message"
+                  : "Their message"}
+          </p>
         )}
 
         {aiSummaryIsBulleted ? (
@@ -239,10 +283,15 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
               textClassName="text-sm text-foreground/85 leading-relaxed"
             />
           </div>
+        ) : showingMeeting && !hasContent ? (
+          // No Zoom-matched meeting row (or its summary has purged). Showing
+          // nothing beats reaching past the meeting for an unrelated email —
+          // which is exactly what this card used to do.
+          null
         ) : (
           <p
             className={cn(
-              "mt-1.5 text-sm",
+              "mt-0.5 text-sm",
               hasContent ? "text-foreground/85" : "text-muted-foreground/60 italic",
             )}
           >
@@ -251,9 +300,17 @@ export function QueueCard({ lead, latestInbound, onMarkHandled, onSnooze }: Queu
         )}
       </Link>
 
-      {/* Full inbound email — the card body is a summary/500-char snippet, so
-          reps can pull the whole message in place before replying. */}
-      {!!latestInbound && (
+      {/* Full message — the card body is a summary/500-char snippet, so reps can
+          pull the whole thing in place before replying.
+
+          INBOUND ONLY, deliberately. `interactions.body_text` purges
+          unconditionally at occurred_at + 72h for outbound rows (the inbound
+          classifier gate does not apply — migration
+          20260523000000_purge_gate_classified.sql), and a follow-up card is by
+          definition about a message older than the 3/5-day wait. The button
+          would toast "no longer stored" every single time. The subject/snippet
+          fallback in the body above is what survives, and it stays. */}
+      {situation.bodySource === "inbound" && !!message && (
         <div className="px-4 pb-2">
           {fullBody && (
             <p className="mb-1.5 whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm text-foreground/85">

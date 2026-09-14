@@ -27,6 +27,7 @@
 // ============================================================
 
 import { supabase } from "@/integrations/supabase/client";
+import { getLeadEmailThread } from "@/lib/supabaseQueries";
 import { INTENT_HIDE_FROM_QUEUE as BASE_HIDE_SET } from "@/lib/dashboardUtils";
 import { FOLLOWUP_DUE_KEY, PROMPT_ONLY_KEYS } from "@shared/followupRule";
 
@@ -69,6 +70,90 @@ export const INBOUND_EVENT_TYPES: readonly string[] = [
   "whatsapp_inbound",
   "sms_inbound",
 ];
+
+/**
+ * Canonical OUTBOUND `lead_timeline_items.event_type` values — the mirror of
+ * `INBOUND_EVENT_TYPES`. A follow-up card is about MY unanswered message, so the
+ * card body has to be able to read my side of the ledger too; before Unit Q2 the
+ * Queue only ever fetched inbound rows, so every follow-up card showed the
+ * customer's last message under a "Follow up" heading — the wrong message
+ * entirely.
+ */
+export const OUTBOUND_EVENT_TYPES: readonly string[] = [
+  "email_outbound",
+  "whatsapp_outbound",
+  "sms_outbound",
+];
+
+/**
+ * A completed OUTBOUND phone call is an outbound touch like any other, and the
+ * Queue has to know about it: `twilio-voice-webhook` writes a `voice_outbound`
+ * `interactions` row and then calls `postSendDeriveAction`, which recomputes
+ * `leads.last_outbound_at` from interactions — so a follow-up card can be timed
+ * off a CALL. With only the three written channels above in the preview fetch,
+ * that card quoted whatever email happened to be next-newest, possibly weeks
+ * old, under a caption saying "Your message". Confident, and about a different
+ * conversation.
+ *
+ * Only `call_completed` matters here. The webhook projects `call_failed`,
+ * `call_busy`, `call_no-answer` and `call_canceled` too, but it writes the
+ * interactions row and recomputes ONLY for `status === "completed" &&
+ * direction === "outbound"` — so no other call event can move
+ * `last_outbound_at`, and none of them should ever claim a card.
+ *
+ * NOTE the direction check at the call site: inbound calls produce a
+ * `call_completed` row as well, and one of those is emphatically not "your
+ * last outbound".
+ */
+export const OUTBOUND_CALL_EVENT_TYPE = "call_completed";
+
+/**
+ * The meeting row `process-zoom-summary` projects: `subject` is the meeting
+ * title, `snippet_text` the first 500 chars of the summary. It is what a recap
+ * card is actually about.
+ *
+ * Present only for meetings a Zoom summary matched — `hasMeetingWithoutFollowup`
+ * is derived from `meeting_packs`, which can exist without one. So the recap
+ * card shows meeting context WHEN THE LEDGER HAS IT and shows nothing when it
+ * does not; it never falls back to a written message, because by construction
+ * there is no outbound after the meeting (gmail-sync only sets the flag when no
+ * outbound interaction exists after the meeting date) and the newest outbound is
+ * therefore a pre-meeting email.
+ *
+ * `snippet_text` on this row purges at 72h like every non-inbound row, leaving
+ * the title — which is why the body goes through `cleanBodyText`'s subject
+ * fallback rather than quoting `snippet_text` directly.
+ */
+export const MEETING_EVENT_TYPE = "meeting";
+
+/** What `fetchLatestOutbounds` asks the ledger for. */
+export const OUTBOUND_PREVIEW_EVENT_TYPES: readonly string[] = [
+  ...OUTBOUND_EVENT_TYPES,
+  OUTBOUND_CALL_EVENT_TYPE,
+];
+
+/** Is this preview row a phone call rather than something with words in it? */
+export function isOutboundCall(row: { event_type: string } | null | undefined): boolean {
+  return row?.event_type === OUTBOUND_CALL_EVENT_TYPE;
+}
+
+/**
+ * What to show where a quoted message would go, when the last outbound was a
+ * call. Duration comes from `metadata_json.duration_sec`, which the webhook
+ * always writes.
+ *
+ * It says nothing about how the call WENT. The timeline row carries
+ * `{ call_sid, duration_sec, status }` and `status` is "completed" for every row
+ * that can reach here, so there is no answered-by-a-human vs went-to-voicemail
+ * signal to read. Length is the only honest hint, and the rep knows the rest.
+ */
+export function describeOutboundCall(row: { duration_sec?: number | null } | null | undefined): string {
+  const secs = row?.duration_sec;
+  if (typeof secs === "number" && Number.isFinite(secs) && secs > 0) {
+    return `You called them — ${Math.max(1, Math.ceil(secs / 60))} min`;
+  }
+  return "You called them";
+}
 
 // ── Sort priority ──────────────────────────────────────────────────
 
@@ -182,6 +267,8 @@ export interface QueueLeadRow {
   action_reason_code: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
+  /** The clock `send_nurture_N` is scheduled from (syncEngine branch E). */
+  last_nurture_outbound_at: string | null;
   action_dismissed_at: string | null;
   action_permanently_dismissed: boolean;
   action_resurfaced_at: string | null;
@@ -218,10 +305,20 @@ export interface QueueLatestInbound {
   sender_is_lead: boolean | null;
 }
 
+/**
+ * Same row shape, either direction. A follow-up card quotes an OUTBOUND row, so
+ * the "Inbound" in the original name is only true half the time; the alias keeps
+ * the existing exported name (TodoView, tests) working.
+ */
+export type QueueLatestMessage = QueueLatestInbound & {
+  /** Call rows only: `metadata_json.duration_sec`. Undefined for written messages. */
+  duration_sec?: number | null;
+};
+
 const QUEUE_LEAD_COLUMNS = `
   id, name, company, email,
   needs_action, next_action_key, next_action_label, action_reason_code,
-  last_inbound_at, last_outbound_at,
+  last_inbound_at, last_outbound_at, last_nurture_outbound_at,
   action_dismissed_at, action_permanently_dismissed, action_resurfaced_at,
   motion, stage,
   whatsapp_number, phone, wa_opted_in, sms_opted_in, country,
@@ -578,6 +675,306 @@ export async function fetchLatestInbounds(
 }
 
 /**
+ * The same bulk fetch for the rep's OWN latest message per lead — what a
+ * follow-up card is actually about.
+ *
+ * Deliberately a near-copy of `fetchLatestInbounds` rather than one
+ * parameterised query: `src/test/queueInboundClassification.test.ts` (Unit G-A)
+ * pins the literal `.in("event_type", INBOUND_EVENT_TYPES as string[])` line as
+ * its guard that the inbound read stays cross-channel, and folding the two into
+ * a helper would delete the string that guard reads. Same 500-row cap and same
+ * first-per-lead reduction; the AI-signal fields come back null because
+ * classify-inbound only annotates inbound rows.
+ */
+export async function fetchLatestOutbounds(
+  leads: Array<{ id: string; anchorAt?: string | null }>,
+): Promise<Map<string, QueueLatestMessage>> {
+  const leadIds = leads.map((l) => l.id);
+  if (leadIds.length === 0) return new Map();
+  // Leads whose card is scheduled from a SPECIFIC outbound (today: the nurture
+  // clock) want that row, not the newest one. Everything else wants the newest,
+  // which is the same thing for a `last_outbound_at`-anchored card.
+  const anchors = new Map<string, number>();
+  for (const l of leads) {
+    const t = l.anchorAt ? new Date(l.anchorAt).getTime() : NaN;
+    if (Number.isFinite(t)) anchors.set(l.id, t);
+  }
+
+  const { data, error } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, occurred_at, event_type, direction, snippet_text, subject, metadata_json, intent")
+    .in("lead_id", leadIds)
+    .in("event_type", OUTBOUND_PREVIEW_EVENT_TYPES as string[])
+    .order("occurred_at", { ascending: false })
+    .limit(500);
+
+  if (error) {
+    console.warn("[queueQueries] latest outbound fetch failed:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, QueueLatestMessage>();
+  for (const row of (data ?? []) as Array<{
+    lead_id: string;
+    occurred_at: string;
+    event_type: string;
+    direction: string | null;
+    snippet_text: string | null;
+    subject: string | null;
+    metadata_json: Record<string, unknown> | null;
+    intent: string | null;
+  }>) {
+    // An INBOUND call is projected with the same `call_completed` event type.
+    // Taking one of those as "your last outbound" would be the same lie in the
+    // other direction. The three written types are outbound by their own name.
+    if (isOutboundCall(row) && row.direction !== "outbound") continue;
+    if (map.has(row.lead_id)) continue;
+    const anchor = anchors.get(row.lead_id);
+    if (anchor !== undefined) {
+      // Anchored lead: rows arrive newest-first, so skip past anything newer
+      // than the scheduling event and take only the row AT it. If the anchored
+      // row never appears (purged, or outside the window), the lead gets no
+      // entry and the card shows no body — which is the point.
+      const t = new Date(row.occurred_at).getTime();
+      if (!Number.isFinite(t) || Math.abs(t - anchor) > ANCHOR_MATCH_SKEW_MS) continue;
+    }
+    const duration = (row.metadata_json ?? {}).duration_sec;
+    map.set(row.lead_id, {
+      lead_id: row.lead_id,
+      occurred_at: row.occurred_at,
+      event_type: row.event_type,
+      snippet_text: row.snippet_text,
+      subject: row.subject,
+      intent: row.intent,
+      duration_sec: typeof duration === "number" && Number.isFinite(duration) ? duration : null,
+      ...readInboundMetadata(row.metadata_json),
+    });
+  }
+  return map;
+}
+
+/**
+ * The meeting a recap card is actually about — resolved through the OUTSTANDING
+ * meeting pack, not by taking the newest meeting row.
+ *
+ * `gmail-sync` sets `hasMeetingWithoutFollowup` by walking EVERY pack on the
+ * lead, so the pack that caused the card is the one still missing a
+ * `follow_up_email_body` — which may be an older meeting than the most recent
+ * one. Ordering meeting rows newest-first therefore showed the rep the meeting
+ * they had already written up, while telling them to write it up.
+ *
+ * `meeting_packs.source_meeting_summary_id` is the FK to `meeting_summaries`,
+ * which is the `source_id` of the timeline row `process-zoom-summary` projects —
+ * so the correlation is exact where it exists at all.
+ *
+ * Deliberately conservative, per this unit's rule: a lead with TWO outstanding
+ * packs has no identifiable triggering meeting (either could be the one the rep
+ * means), and a pack with no `source_meeting_summary_id` has no row to point at.
+ * Both cases return nothing and the card renders no context. A plausible guess
+ * is worse than a blank.
+ */
+export async function fetchRecapMeetings(
+  leadIds: string[],
+): Promise<Map<string, QueueLatestMessage>> {
+  if (leadIds.length === 0) return new Map();
+
+  const { data: packs, error: packErr } = await supabase
+    .from("meeting_packs")
+    .select("lead_id, follow_up_email_body, source_meeting_summary_id")
+    .in("lead_id", leadIds);
+
+  if (packErr) {
+    console.warn("[queueQueries] meeting pack fetch failed:", packErr.message);
+    return new Map();
+  }
+
+  // lead → the single outstanding pack's summary id, or null once ambiguous.
+  const summaryIdByLead = new Map<string, string | null>();
+  for (const p of (packs ?? []) as Array<{
+    lead_id: string;
+    follow_up_email_body: string | null;
+    source_meeting_summary_id: string | null;
+  }>) {
+    if ((p.follow_up_email_body ?? "").trim() !== "") continue; // already written up
+    summaryIdByLead.set(
+      p.lead_id,
+      summaryIdByLead.has(p.lead_id) ? null : p.source_meeting_summary_id,
+    );
+  }
+
+  const wanted = new Map<string, string>();
+  for (const [leadId, summaryId] of summaryIdByLead) {
+    if (summaryId) wanted.set(summaryId, leadId);
+  }
+  if (wanted.size === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("lead_timeline_items")
+    .select("lead_id, occurred_at, event_type, snippet_text, subject, metadata_json, intent, source_id")
+    .in("lead_id", leadIds)
+    .eq("event_type", MEETING_EVENT_TYPE)
+    .in("source_id", [...wanted.keys()])
+    .limit(500);
+
+  if (error) {
+    console.warn("[queueQueries] recap meeting fetch failed:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, QueueLatestMessage>();
+  for (const row of (data ?? []) as Array<{
+    lead_id: string;
+    occurred_at: string;
+    event_type: string;
+    snippet_text: string | null;
+    subject: string | null;
+    metadata_json: Record<string, unknown> | null;
+    intent: string | null;
+    source_id: string | null;
+  }>) {
+    // Only the row the outstanding pack points at, and only for that pack's lead.
+    if (!row.source_id || wanted.get(row.source_id) !== row.lead_id) continue;
+    if (map.has(row.lead_id)) continue;
+    map.set(row.lead_id, {
+      lead_id: row.lead_id,
+      occurred_at: row.occurred_at,
+      event_type: row.event_type,
+      snippet_text: row.snippet_text,
+      subject: row.subject,
+      intent: row.intent,
+      ...readInboundMetadata(row.metadata_json),
+    });
+  }
+  return map;
+}
+
+// ── Orphaned outbound sends (timeline projection failed) ──────────
+
+/**
+ * How far behind `leads.last_outbound_at` a preview row may sit before we treat
+ * it as the WRONG message. The two timestamps are written by different
+ * statements in the same send, so a second of skew is normal; minutes are not.
+ */
+const OUTBOUND_PREVIEW_SKEW_MS = 60_000;
+
+/**
+ * Is this lead's newest preview row older than the send the card is dated from?
+ *
+ * The senders treat a failed `lead_timeline_items` projection as non-fatal and
+ * carry on: `gmail-send` logs the projection error and still writes
+ * `last_outbound_at`, and the `interactions` row is written either way. A
+ * timeline-only preview therefore quotes the PREVIOUS message while the why-now
+ * line is dated from the new one — every word confident and the pairing wrong,
+ * which is the exact failure this unit exists to remove.
+ *
+ * Pure, so the rule can be checked without a database.
+ */
+export function needsOrphanBackfill(
+  lead: { last_outbound_at: string | null },
+  previewOccurredAt: string | null | undefined,
+): boolean {
+  if (!lead.last_outbound_at) return false;
+  const sent = new Date(lead.last_outbound_at).getTime();
+  if (!Number.isFinite(sent)) return false;
+  if (!previewOccurredAt) return true; // dated from a send with nothing to show
+  const preview = new Date(previewOccurredAt).getTime();
+  if (!Number.isFinite(preview)) return true;
+  return sent - preview > OUTBOUND_PREVIEW_SKEW_MS;
+}
+
+/**
+ * `fetchLatestOutbounds` plus a repair pass for leads whose newest send never
+ * made it into the timeline.
+ *
+ * The repair REUSES `getLeadEmailThread` (src/lib/supabaseQueries.ts), which
+ * already reads the timeline and merges orphaned `interactions` rows with a
+ * dedupe strategy shared with `getLeadActivityFeed`. Writing a bulk merge here
+ * would be a second implementation of that strategy, free to drift from it; a
+ * per-lead call to the existing one cannot. It runs ONLY for the leads the pure
+ * check above flags, which is the rare projection-failure case, so the common
+ * page costs exactly the one bulk query it did before.
+ *
+ * ponytail: one extra round-trip per affected lead. Ceiling: a workspace where
+ * projection is failing wholesale would make this N+1 across a 25-row page.
+ * Upgrade path: a bulk `get_latest_outbound_for_leads` RPC that does the merge
+ * server-side — the same shape as `get_latest_intents_for_leads`.
+ */
+export async function fetchLatestOutboundsWithOrphans(
+  leads: Array<{ id: string; last_outbound_at: string | null; anchorAt?: string | null }>,
+): Promise<Map<string, QueueLatestMessage>> {
+  const map = await fetchLatestOutbounds(
+    leads.map((l) => ({ id: l.id, anchorAt: l.anchorAt })),
+  );
+
+  // Two ways a preview can be missing, and both are repairable because the
+  // ANCHOR is what makes looking safe:
+  //   • un-anchored ("newest outbound"): the newest send never reached the
+  //     timeline — `needsOrphanBackfill` spots the date/preview mismatch.
+  //   • anchored (today: a nurture send): the row AT the anchor is absent. An
+  //     earlier revision excluded these outright, to stop the repair handing the
+  //     card the very row the anchor exists to exclude. That was the right
+  //     instinct and the wrong scope: the recovery below only ever accepts an
+  //     interaction AT the anchor timestamp, so it cannot return the unrelated
+  //     newer touch. Excluding them merely lost the preview permanently for a
+  //     nurture email whose projection failed, while the interaction sat there
+  //     matching the anchor exactly.
+  const stale = leads.filter((l) =>
+    l.anchorAt ? !map.has(l.id) : needsOrphanBackfill(l, map.get(l.id)?.occurred_at),
+  );
+  if (stale.length === 0) return map;
+
+  await Promise.all(
+    stale.map(async (l) => {
+      try {
+        const { emails } = await getLeadEmailThread(l.id, 10);
+        const outbound = emails.filter((e) => e.direction === "outbound");
+        const anchorMs = l.anchorAt ? new Date(l.anchorAt).getTime() : NaN;
+        const newest = Number.isFinite(anchorMs)
+          // Anchored: the send the card was scheduled FROM, or nothing. Never
+          // "the newest", which is what the anchor exists to rule out.
+          ? outbound.find(
+              (e) => Math.abs(new Date(e.occurred_at).getTime() - anchorMs) <= ANCHOR_MATCH_SKEW_MS,
+            )
+          : outbound.sort(
+              (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
+            )[0];
+        if (!newest) return;
+        // Only replace when the recovered row really is newer than what the
+        // timeline gave us — never downgrade a good preview. (An anchored lead
+        // reaches here only with no entry at all, so this is a no-op for it.)
+        const have = map.get(l.id);
+        if (have && new Date(newest.occurred_at).getTime() <= new Date(have.occurred_at).getTime()) return;
+        map.set(l.id, {
+          lead_id: l.id,
+          occurred_at: newest.occurred_at,
+          event_type: "email_outbound",
+          // `interactions.body_text` purges unconditionally at 72h for outbound
+          // rows, so this is often empty — `cleanBodyText` then falls through to
+          // the subject, exactly as it does for a purged timeline row. An empty
+          // quote under a confident caption is the thing to avoid, and both
+          // fields being empty leaves the card's existing no-preview path.
+          snippet_text: newest.body_text?.trim() ? newest.body_text : null,
+          subject: newest.subject,
+          intent: null,
+          ai_summary: newest.ai_summary ?? null,
+          reply_worthy: null,
+          urgency: null,
+          tone: null,
+          questions_extracted: [],
+          language: null,
+          sender_is_lead: null,
+          duration_sec: null,
+        });
+      } catch (err) {
+        // Best-effort repair: the card still renders from the timeline row.
+        console.warn(`[queueQueries] orphan outbound backfill failed for ${l.id}:`, err);
+      }
+    }),
+  );
+  return map;
+}
+
+/**
  * Read the fields `classify-inbound` persists into `metadata_json`.
  *
  * This function used to ignore `metadata_json` entirely apart from
@@ -715,20 +1112,296 @@ export function queueButtonLabel(input: {
   return "Follow up";
 }
 
-// ── Full inbound email body (reply bridge) ────────────────────────
+// ── What is this card actually about? (labels + which message) ────
+//
+// The Follow-up tab covers a dozen different `next_action_key`s and, before
+// Unit Q2, every one of them rendered the identical word "Follow up" over the
+// customer's latest INBOUND message. Two separate lies in one card: the rep
+// couldn't tell "they went quiet after your third email" from "your proposal
+// needs chasing" from "we couldn't send this — you're over your sending limit",
+// and the message quoted underneath was never the one the card was about.
+//
+// One pure table, so the labels can be checked against a table of inputs
+// instead of being read out of JSX. QueueCard renders what this returns and
+// decides nothing itself.
+
+export type QueueBodySource = "inbound" | "outbound" | "meeting";
+
+/**
+ * WHICH CLOCK SCHEDULED THIS CARD.
+ *
+ * The single rule this unit kept re-discovering, stated once: a card must quote
+ * the event that caused it, and `deriveAction` does not always schedule off the
+ * newest thing that happened. `send_nurture_N` is scheduled from
+ * `last_nurture_outbound_at`, so a manual call or an unrelated email sent since
+ * must not be quoted or dated. `generate_post_meeting_recap` is scheduled from a
+ * meeting pack, not from a timestamp on the lead at all.
+ *
+ * A new key inherits the rule by naming its anchor here; the preview then
+ * follows automatically, and where the anchored row cannot be found the card
+ * shows no body rather than a plausible-looking neighbour.
+ */
+export type QueueAnchorField =
+  | "last_inbound_at"
+  | "last_outbound_at"
+  | "last_nurture_outbound_at"
+  /** Not a column: correlated through the outstanding meeting pack. */
+  | "meeting_pack"
+  /** Nothing to correlate to — the card carries no quoted body. */
+  | null;
+
+export interface QueueSituation {
+  /** Plain English, what a rep would say out loud. No enum names, no jargon. */
+  label: string;
+  /** Optional second clause (a date, a cap) — null when the label says it all. */
+  detail: string | null;
+  /** Whose message the card body must quote: theirs, or my unanswered one. */
+  bodySource: QueueBodySource;
+  /**
+   * Whether a "sent 6 days ago" / "2 hours ago" phrase belongs on the why-now
+   * line. False for back-from-away: the timestamp there predates the absence
+   * and reads as though the rep has been ignoring the lead for a fortnight.
+   */
+  showTime: boolean;
+  /** The clock that scheduled this card — see QueueAnchorField. */
+  anchorField: QueueAnchorField;
+}
+
+/** Everything on the rep's own side of the conversation shares this shape. */
+const MINE = (label: string, detail: string | null = null): QueueSituation => ({
+  label,
+  detail,
+  bodySource: "outbound",
+  showTime: true,
+  anchorField: "last_outbound_at",
+});
+
+/**
+ * Fixed situations, keyed by `next_action_key`. `send_nurture_N` is handled
+ * below because N is open-ended. Every key in `QUEUE_ACTION_KEYS`
+ * (`@shared/followupRule`) has an entry — `src/test/queueCardLabels.test.ts`
+ * fails if a new key is added upstream without a label here.
+ */
+const SITUATIONS: Record<string, QueueSituation> = {
+  reply_now: {
+    label: "They replied",
+    detail: null,
+    bodySource: "inbound",
+    showTime: true,
+    anchorField: "last_inbound_at",
+  },
+  ooo_return_followup: {
+    label: "They were away — they're back now",
+    detail: null,
+    bodySource: "outbound",
+    showTime: false,
+    anchorField: "last_outbound_at",
+  },
+  // "email" would be a lie on a cross-channel trigger: `leads.last_outbound_at`
+  // is stamped by sms-send and the WhatsApp path too (executionSettings.ts), and
+  // fetchLatestOutbounds duly returns the sms_outbound row. "message" is always
+  // true and costs nothing.
+  followup_due: MINE("No reply to your last message"),
+  // The card that used to say "Follow up" while nothing had in fact been sent.
+  //
+  // Three things this wording has to get right, all of them previously wrong:
+  //   • the cap is PER LEAD (`max_emails_per_lead_per_7d` / `_30d` are the only
+  //     paths into `rateLimitedAction`, syncEngine.ts). "Your sending limit"
+  //     told the rep their whole account was throttled and would stop them
+  //     emailing everyone else too.
+  //   • `followupRule.ts` states the contract: the cap pauses the AUTOMATIC
+  //     send, the rep can still write to this lead right now — and the label
+  //     must not read as "you may not act until <date>". So it says so.
+  //   • no time phrase (`showTime: false`): the composed line otherwise read
+  //     "Not sent … · sent 3 hours ago", contradicting itself mid-sentence.
+  rate_limited: {
+    label: "Too many emails to this lead recently — nothing was sent; you can still write to them",
+    detail: null,
+    bodySource: "outbound",
+    showTime: false,
+    anchorField: "last_outbound_at",
+  },
+  closing_followup: MINE("Your proposal needs chasing"),
+  // No time phrase, and no OUTBOUND body: this fires on
+  // `hasMeetingWithoutFollowup`, so there IS no outbound after the meeting and
+  // `last_outbound_at` is some pre-meeting email. Dating the card off it read as
+  // the meeting's age (fixed earlier); quoting it put a three-week-old
+  // scheduling email under "Your message" beneath "Send them the recap from your
+  // meeting" — the same defect, one field over. The card shows the MEETING, or
+  // nothing at all.
+  generate_post_meeting_recap: {
+    label: "Send them the recap from your meeting",
+    detail: null,
+    bodySource: "meeting",
+    showTime: false,
+    anchorField: "meeting_pack",
+  },
+  post_meeting_followup: MINE("No word since your meeting"),
+  send_pre_2: MINE("Intro sequence — second email is due"),
+  send_pre_3: MINE("Intro sequence — third email is due"),
+  // syncEngine labels this "Send breakup email" in both places it can emit it.
+  // Which email it is changes what the rep writes, so the label says it.
+  send_pre_4: MINE("Breakup email is due — the last one before you let this go"),
+  reengage: MINE("Gone quiet — worth re-opening"),
+  // NOT a status update. syncEngine writes `auto_nurture_eligible: true` and
+  // that flag is read-only — dashboardUtils / dashboardMetricsService display
+  // it, motionUpdater only CLEARS it when a rep changes motion by hand. Nothing
+  // switches the motion. A present-progressive label ("Moving them to…") reads
+  // as something already happening, so the one card that needs a human decision
+  // is the one the rep scrolls past. It asks.
+  switch_to_nurture: MINE("Three emails, no reply — switch them to the slow track?"),
+};
+
+/**
+ * The moment that scheduled this card, read off the lead through the
+ * situation's anchor. Null when there is nothing on the lead to anchor to
+ * (`meeting_pack`, or a situation with no anchor at all).
+ */
+export function anchorTimestamp(
+  lead: Pick<QueueLeadRow, "last_inbound_at" | "last_outbound_at" | "last_nurture_outbound_at">,
+  situation: Pick<QueueSituation, "anchorField">,
+): string | null {
+  switch (situation.anchorField) {
+    case "last_inbound_at": return lead.last_inbound_at;
+    case "last_outbound_at": return lead.last_outbound_at;
+    case "last_nurture_outbound_at": return lead.last_nurture_outbound_at;
+    default: return null;
+  }
+}
+
+/** Two timestamps written by different statements in one send. */
+const ANCHOR_MATCH_SKEW_MS = 60_000;
+
+/**
+ * Is this preview row the event the card was scheduled from?
+ *
+ * The card may quote a row ONLY if it can establish the correlation. A
+ * `meeting_pack` anchor is correlated upstream (the fetch resolves the
+ * outstanding pack's summary id, so any row it returns is by definition the
+ * right one); a column anchor is checked here against the row's own timestamp.
+ * Anything else renders no body — "I can't tell which one" must never render as
+ * a plausible guess.
+ */
+export function previewMatchesAnchor(
+  lead: Pick<QueueLeadRow, "last_inbound_at" | "last_outbound_at" | "last_nurture_outbound_at">,
+  situation: Pick<QueueSituation, "anchorField">,
+  message: { occurred_at: string } | null | undefined,
+): boolean {
+  if (!message) return false;
+  if (situation.anchorField === "meeting_pack") return true;
+  const anchor = anchorTimestamp(lead, situation);
+  if (!anchor) return false;
+  const a = new Date(anchor).getTime();
+  const m = new Date(message.occurred_at).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(m)) return false;
+  return Math.abs(a - m) <= ANCHOR_MATCH_SKEW_MS;
+}
+
+/**
+ * Which outbound row the preview fetch should bring back for this lead: a
+ * specific timestamp when the card is scheduled off its own clock, or null for
+ * "the newest", which is what a `last_outbound_at`-anchored card wants anyway.
+ *
+ * General by construction — a future outbound key that names a different anchor
+ * inherits this without touching the fetch.
+ */
+export function outboundAnchorFor(lead: QueueLeadRow): string | null {
+  const situation = describeQueueSituation({
+    next_action_key: lead.next_action_key,
+    next_action_label: lead.next_action_label,
+  });
+  if (situation.bodySource !== "outbound") return null;
+  if (situation.anchorField === "last_outbound_at" || situation.anchorField === null) return null;
+  return anchorTimestamp(lead, situation);
+}
+
+/**
+ * Pull the useful tail off a server-written `next_action_label`.
+ *
+ * `rateLimitedAction` writes "Follow up anytime — auto-send paused until Sep 12".
+ * The head is the generic instruction our own label already replaces; the tail
+ * is the one fact the rep can't get anywhere else (when the cap lifts), and it
+ * is rendered in the WORKSPACE's timezone by the writer, so we pass it through
+ * verbatim rather than re-deriving a date here.
+ */
+function labelTail(next_action_label: string | null | undefined): string | null {
+  const parts = (next_action_label ?? "").split(" — ");
+  const tail = (parts.length > 1 ? parts[parts.length - 1] : "").trim();
+  return tail.length > 0 ? tail : null;
+}
+
+/**
+ * What is this card about, in words a salesperson would use, and whose message
+ * belongs under it. Pure — no DB, no clock, no React.
+ */
+export function describeQueueSituation(
+  lead: { next_action_key: string | null; next_action_label: string | null },
+  opts: {
+    /** The rep's newest outbound touch is a completed phone call, not a message. */
+    latestOutboundIsCall?: boolean;
+  } = {},
+): QueueSituation {
+  const key = lead.next_action_key ?? "";
+
+  // `followup_due` fires on "my last touch, unanswered for N days" and
+  // `last_outbound_at` is stamped by the voice webhook too, so that touch may be
+  // a call. "No reply to your last message" over a call recording is the same
+  // class of wrong that "email" was over an SMS. Only this key is adjusted: the
+  // others are about a proposal or a meeting, not about the medium.
+  if (key === FOLLOWUP_DUE_KEY && opts.latestOutboundIsCall) {
+    return MINE("Nothing back since your call");
+  }
+
+  if (key === "rate_limited") {
+    // The tail is the server's own "auto-send paused until <date>", rendered in
+    // the WORKSPACE's timezone by `formatAvailableDate`. Passed through verbatim
+    // — never re-derived here, where the browser's zone would be wrong.
+    return { ...SITUATIONS.rate_limited, detail: labelTail(lead.next_action_label) };
+  }
+
+  const fixed = SITUATIONS[key];
+  if (fixed) return fixed;
+
+  // send_nurture_1 … send_nurture_8 — one line, not eight table rows.
+  // Anchored to the NURTURE clock, not to `last_outbound_at`: syncEngine
+  // schedules this from `metrics.last_nurture_outbound_at`, so a manual call or
+  // an unrelated email sent since is neither what the card is about nor what
+  // dates it — and quoting it put "email 3 is due · sent 2 days ago" over
+  // yesterday's SMS about something else.
+  const nurture = /^send_nurture_(\d+)$/.exec(key);
+  if (nurture) {
+    return {
+      ...MINE(`Nurture sequence — email ${nurture[1]} is due`),
+      anchorField: "last_nurture_outbound_at",
+    };
+  }
+
+  // Unknown key (a new one upstream, or a null). Prefer whatever the server
+  // wrote over inventing a label; "Needs a look" beats a raw enum name.
+  return MINE(lead.next_action_label?.trim() || "Needs a look");
+}
+
+// ── Full message body (reply bridge) ──────────────────────────────
 //
 // Queue cards render a 500-char snippet (or the AI summary). Reps often need
 // the whole email before replying, so this fetches the full stored body of the
-// lead's most recent inbound email on demand. `interactions.body_text` keeps
-// the full text for 30 days (message-cleanup purges it after that, gated on the
-// classifier having written a durable ai_summary) — past that we return null
-// and the card keeps showing the summary.
-export async function fetchLatestInboundBody(leadId: string): Promise<string | null> {
+// lead's most recent message in the given direction. `interactions.body_text`
+// keeps the full text for 30 days (message-cleanup purges it after that, gated
+// on the classifier having written a durable ai_summary) — past that we return
+// null and the card keeps showing the summary.
+//
+// The direction argument is Unit Q2: a follow-up card quotes the rep's own
+// unanswered email, so "Show full email" there has to open THAT message, not
+// the customer's last inbound.
+export async function fetchLatestMessageBody(
+  leadId: string,
+  direction: "inbound" | "outbound" = "inbound",
+): Promise<string | null> {
   const { data, error } = await supabase
     .from("interactions")
     .select("body_text, occurred_at")
     .eq("lead_id", leadId)
-    .eq("direction", "inbound")
+    .eq("direction", direction)
     .not("body_text", "is", null)
     .order("occurred_at", { ascending: false })
     .limit(1);

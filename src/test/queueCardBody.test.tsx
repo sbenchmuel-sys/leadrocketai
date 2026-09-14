@@ -1,0 +1,436 @@
+// ============================================================
+// Unit Q2 — the card quotes the message it is actually about.
+//
+// BEHAVIOURAL: renders the real QueueCard and reads what is on screen.
+// The pure label table is covered in queueCardLabels.test.ts; this file
+// exists because the table being right is worth nothing if the card
+// still passes the customer's inbound row to the body.
+// ============================================================
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanBodyText } from "@/lib/cleanBodyText";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { QueueLeadRow, QueueLatestMessage } from "@/lib/queueQueries";
+
+// Chainable fake PostgREST: awaiting any chain resolves `timelineRows`, and the
+// chain itself is recorded so a test can assert what was asked for.
+let timelineRows: unknown[] = [];
+let packRows: unknown[] = [];
+let lastChain: { fn: string; args: unknown[] }[] = [];
+function builder(table: string, chain: { fn: string; args: unknown[] }[]): unknown {
+  const target = () => undefined;
+  return new Proxy(target, {
+    get(_t, prop) {
+      if (prop === "then") {
+        lastChain = chain;
+        const data = table === "meeting_packs" ? packRows : timelineRows;
+        return (ok: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(ok);
+      }
+      return (...args: unknown[]) => builder(table, [...chain, { fn: String(prop), args }]);
+    },
+  });
+}
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: (table: string) => builder(table, []),
+    auth: { getUser: async () => ({ data: { user: null } }) },
+  },
+}));
+
+// The orphan repair reuses the real merge in supabaseQueries; here we only need
+// to know that it is CALLED and that its result reaches the preview.
+let threadEmails: unknown[] = [];
+const emailThreadCalls: string[] = [];
+vi.mock("@/lib/supabaseQueries", () => ({
+  getLeadEmailThread: async (leadId: string) => {
+    emailThreadCalls.push(leadId);
+    return { emails: threadEmails, threadSummary: "" };
+  },
+}));
+
+const { QueueCard } = await import("@/components/queue/QueueCard");
+const { fetchLatestOutbounds, fetchLatestOutboundsWithOrphans, fetchRecapMeetings, isOutboundCall } =
+  await import("@/lib/queueQueries");
+
+const THEIRS = "Sounds good, what does pricing look like for 40 seats?";
+const MINE = "Following up on the proposal I sent over last week.";
+
+// Fixtures are timed AT the lead's anchors below — a real preview row always is,
+// and a row that is not is exactly what the anchor rule exists to reject.
+const INBOUND_AT = new Date(Date.now() - 9 * 86_400_000).toISOString();
+const OUTBOUND_AT = new Date(Date.now() - 6 * 86_400_000).toISOString();
+
+function msg(snippet: string, event_type: string, occurred_at?: string): QueueLatestMessage {
+  return {
+    lead_id: "lead-1",
+    occurred_at: occurred_at ?? (event_type.endsWith("_inbound") ? INBOUND_AT : OUTBOUND_AT),
+    ai_summary: null,
+    snippet_text: snippet,
+    subject: "Seats",
+    intent: null,
+    event_type,
+    reply_worthy: null,
+    urgency: null,
+    tone: null,
+    questions_extracted: [],
+    language: null,
+    sender_is_lead: null,
+  };
+}
+
+function lead(next_action_key: string): QueueLeadRow {
+  return {
+    id: "lead-1", name: "Dana Okafor", company: "Acme", email: "dana@acme.test",
+    needs_action: true, next_action_key, next_action_label: null, action_reason_code: null,
+    last_inbound_at: INBOUND_AT,
+    last_outbound_at: OUTBOUND_AT,
+    last_nurture_outbound_at: null,
+    action_dismissed_at: null, action_permanently_dismissed: false, action_resurfaced_at: null,
+    motion: null, stage: null, whatsapp_number: null, phone: null,
+    wa_opted_in: null, sms_opted_in: null, country: null, campaign_id: null,
+  };
+}
+
+const renderCard = (
+  key: string,
+  outbound: QueueLatestMessage = msg(MINE, "email_outbound"),
+  meeting?: QueueLatestMessage,
+) =>
+  render(
+    <MemoryRouter>
+      <QueueCard
+        lead={lead(key)}
+        latestInbound={msg(THEIRS, "email_inbound") as never}
+        latestOutbound={outbound}
+        latestMeeting={meeting}
+        onMarkHandled={() => {}}
+        onSnooze={() => {}}
+      />
+    </MemoryRouter>,
+  );
+
+describe("QueueCard body", () => {
+  it("a follow-up card shows the rep's own unanswered message", () => {
+    renderCard("followup_due");
+    expect(screen.getByText(new RegExp(MINE.slice(0, 30)))).toBeTruthy();
+    expect(screen.queryByText(new RegExp(THEIRS.slice(0, 30)))).toBeNull();
+    expect(screen.getByText("Your message")).toBeTruthy();
+    expect(screen.getByText(/No reply to your last message/)).toBeTruthy();
+  });
+
+  it("does not offer 'Show full email' on a card about the rep's own message", () => {
+    // Outbound interactions.body_text purges unconditionally at 72h and a
+    // follow-up card is by definition older than that, so the button could only
+    // ever toast "no longer stored".
+    renderCard("followup_due");
+    expect(screen.queryByRole("button", { name: /Show full email|Show the email you sent/ })).toBeNull();
+  });
+
+  it("a reply card shows the customer's message, and keeps Show full email", () => {
+    renderCard("reply_now");
+    expect(screen.getByText(new RegExp(THEIRS.slice(0, 30)))).toBeTruthy();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+    expect(screen.getByText("Their message")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Show full email/ })).toBeTruthy();
+  });
+
+  it("a rate-limited card does not tell the rep to 'Follow up' as though it sent", () => {
+    renderCard("rate_limited");
+    expect(screen.getByText(/nothing was sent/)).toBeTruthy();
+    // The action button may well still say "Follow up" — the rep CAN write to
+    // this lead. What must not happen is the why-now line claiming a send.
+    expect(screen.getByText(/nothing was sent/).textContent).toMatch(/this lead/);
+  });
+
+  it("keeps Mark as handled, Snooze and the lead link reachable on the card", () => {
+    renderCard("followup_due");
+    expect(screen.getByRole("button", { name: /Mark as handled/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Snooze/ })).toBeTruthy();
+    expect(screen.getAllByRole("link").some((a) => a.getAttribute("href") === "/app/leads/lead-1")).toBe(true);
+  });
+});
+
+describe("a follow-up triggered by a phone call", () => {
+  const call = (): QueueLatestMessage => ({
+    ...msg("Phone call (outbound) — 3 min", "call_completed"),
+    duration_sec: 154,
+  });
+
+  it("renders the call, not an unrelated older email", () => {
+    renderCard("followup_due", call());
+    expect(screen.getByText("Your call")).toBeTruthy();
+    expect(screen.getByText(/You called them — 3 min/)).toBeTruthy();
+    // The bug: the card reached past the call for the next-newest written
+    // message and captioned it "Your message".
+    expect(screen.queryByText("Your message")).toBeNull();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+    expect(screen.getByText(/Nothing back since your call/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Show full email/ })).toBeNull();
+  });
+
+  it("says it called without inventing a duration when the webhook sent none", () => {
+    renderCard("followup_due", { ...call(), duration_sec: null });
+    expect(screen.getByText("You called them")).toBeTruthy();
+  });
+});
+
+describe("fetchLatestOutbounds", () => {
+  it("asks the ledger for completed calls alongside the three written channels", async () => {
+    timelineRows = [];
+    await fetchLatestOutbounds([{ id: "lead-1" }]);
+    const types = lastChain.find((c) => c.fn === "in" && c.args[0] === "event_type")?.args[1] as string[];
+    expect(types).toEqual(
+      expect.arrayContaining(["email_outbound", "sms_outbound", "whatsapp_outbound", "call_completed"]),
+    );
+  });
+
+  it("ignores an INBOUND call — that is not 'your last outbound'", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T10:00:00Z", event_type: "call_completed",
+        direction: "inbound", snippet_text: "they rang us", subject: null, metadata_json: { duration_sec: 60 }, intent: null },
+      { lead_id: "lead-1", occurred_at: "2026-09-01T10:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
+    ];
+    const map = await fetchLatestOutbounds([{ id: "lead-1" }]);
+    const row = map.get("lead-1")!;
+    expect(row.event_type).toBe("email_outbound");
+    expect(isOutboundCall(row)).toBe(false);
+  });
+
+  it("keeps an OUTBOUND call, with its duration", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T10:00:00Z", event_type: "call_completed",
+        direction: "outbound", snippet_text: "Phone call (outbound) — 3 min", subject: null,
+        metadata_json: { duration_sec: 154 }, intent: null },
+    ];
+    const row = (await fetchLatestOutbounds([{ id: "lead-1" }])).get("lead-1")!;
+    expect(isOutboundCall(row)).toBe(true);
+    expect(row.duration_sec).toBe(154);
+  });
+});
+
+describe("a post-meeting recap card", () => {
+  const meeting = (): QueueLatestMessage => ({
+    ...msg("We walked through the security questionnaire and agreed on a pilot scope.", "meeting"),
+    subject: "Acme <> us — pilot scoping",
+  });
+
+  it("shows the meeting, not the pre-meeting email", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), meeting());
+    expect(screen.getByText("The meeting")).toBeTruthy();
+    expect(screen.getByText(/security questionnaire/)).toBeTruthy();
+    // The bug: a scheduling email from before the meeting, captioned "Your
+    // message", under "Send them the recap from your meeting".
+    expect(screen.queryByText("Your message")).toBeNull();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+  });
+
+  it("shows NOTHING rather than an unrelated email when there is no meeting row", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), undefined);
+    expect(screen.getByText(/Send them the recap from your meeting/)).toBeTruthy();
+    expect(screen.queryByText(new RegExp(MINE.slice(0, 30)))).toBeNull();
+    expect(screen.queryByText("Your message")).toBeNull();
+    expect(screen.queryByText("The meeting")).toBeNull();
+    expect(screen.queryByText(/No preview available/)).toBeNull();
+  });
+
+  it("falls back to the meeting title once the summary has purged", () => {
+    renderCard("generate_post_meeting_recap", msg(MINE, "email_outbound"), {
+      ...meeting(),
+      snippet_text: null,
+    });
+    expect(screen.getByText(/Acme <> us — pilot scoping/)).toBeTruthy();
+  });
+});
+
+describe("fetchLatestOutboundsWithOrphans", () => {
+  beforeEach(() => {
+    emailThreadCalls.length = 0;
+    threadEmails = [];
+  });
+
+  it("does not touch the merge path when the timeline preview is current", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
+    ];
+    await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    expect(emailThreadCalls).toEqual([]);
+  });
+
+  it("recovers the newest send from interactions when its projection failed", async () => {
+    // The timeline still holds last week's email; last_outbound_at is today's.
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-03T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Old thread", metadata_json: {}, intent: null },
+    ];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-10T12:00:00Z", body_text: "Revised pricing attached.", subject: "Revised pricing" },
+      { direction: "inbound", occurred_at: "2026-09-09T12:00:00Z", body_text: "theirs", subject: "Re: pricing" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    const row = map.get("lead-1")!;
+    expect(row.occurred_at).toBe("2026-09-10T12:00:00Z");
+    expect(row.snippet_text).toBe("Revised pricing attached.");
+    expect(row.snippet_text).not.toBe(MINE); // the message the card is NOT about
+  });
+
+  it("degrades to the subject when the recovered body has already purged", async () => {
+    // Outbound interactions.body_text purges unconditionally at 72h.
+    timelineRows = [];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-10T12:00:00Z", body_text: "", subject: "Revised pricing" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-10T12:00:00Z" },
+    ]);
+    const row = map.get("lead-1")!;
+    expect(row.snippet_text).toBeNull();
+    expect(row.subject).toBe("Revised pricing");
+    // cleanBodyText's subject fallback is what renders — not an empty quote.
+    expect(cleanBodyText({ ai_summary: row.ai_summary ?? null, snippet_text: row.snippet_text, subject: row.subject }))
+      .toContain("Revised pricing");
+  });
+
+  it("never downgrades a good preview to an older recovered row", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: "2026-09-10T12:00:00Z", event_type: "email_outbound",
+        direction: "outbound", snippet_text: MINE, subject: "Proposal", metadata_json: {}, intent: null },
+    ];
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-08-01T12:00:00Z", body_text: "ancient", subject: "Ancient" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-20T12:00:00Z" }, // stale → repair runs
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe(MINE);
+  });
+});
+
+describe("fetchLatestOutbounds with a scheduling anchor", () => {
+  const NURTURE_AT = "2026-09-01T09:00:00Z";
+  const row = (occurred_at: string, snippet: string) => ({
+    lead_id: "lead-1", occurred_at, event_type: "email_outbound", direction: "outbound",
+    snippet_text: snippet, subject: "s", metadata_json: {}, intent: null,
+  });
+
+  it("returns the anchored send, not the newest unrelated touch", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "unrelated SMS follow-up"), row(NURTURE_AT, "nurture three")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1", anchorAt: NURTURE_AT }]);
+    expect(map.get("lead-1")!.snippet_text).toBe("nurture three");
+  });
+
+  it("returns nothing when the anchored send is not in the window", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "unrelated SMS follow-up")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1", anchorAt: NURTURE_AT }]);
+    expect(map.has("lead-1")).toBe(false); // → the card shows no body
+  });
+
+  it("still takes the newest when no anchor is requested", async () => {
+    timelineRows = [row("2026-09-12T09:00:00Z", "newest"), row(NURTURE_AT, "older")];
+    const map = await fetchLatestOutbounds([{ id: "lead-1" }]);
+    expect(map.get("lead-1")!.snippet_text).toBe("newest");
+  });
+});
+
+describe("fetchRecapMeetings — the meeting that is still unwritten", () => {
+  const OLD = { lead_id: "lead-1", occurred_at: "2026-08-01T10:00:00Z", event_type: "meeting",
+    snippet_text: "the older, unwritten meeting", subject: "Discovery", metadata_json: {}, intent: null, source_id: "sum-old" };
+  const NEW = { lead_id: "lead-1", occurred_at: "2026-09-05T10:00:00Z", event_type: "meeting",
+    snippet_text: "the newer meeting, already written up", subject: "Deep dive", metadata_json: {}, intent: null, source_id: "sum-new" };
+
+  it("picks the OUTSTANDING pack's meeting even when a newer one exists", async () => {
+    packRows = [
+      { lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: "sum-old" },
+      { lead_id: "lead-1", follow_up_email_body: "[Sent via Gmail]", source_meeting_summary_id: "sum-new" },
+    ];
+    timelineRows = [NEW, OLD];
+    const map = await fetchRecapMeetings(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe("the older, unwritten meeting");
+  });
+
+  it("shows nothing when TWO packs are outstanding — either could be the one", async () => {
+    packRows = [
+      { lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: "sum-old" },
+      { lead_id: "lead-1", follow_up_email_body: "  ", source_meeting_summary_id: "sum-new" },
+    ];
+    timelineRows = [NEW, OLD];
+    expect((await fetchRecapMeetings(["lead-1"])).has("lead-1")).toBe(false);
+  });
+
+  it("shows nothing when the outstanding pack has no meeting summary to point at", async () => {
+    packRows = [{ lead_id: "lead-1", follow_up_email_body: null, source_meeting_summary_id: null }];
+    timelineRows = [NEW, OLD];
+    expect((await fetchRecapMeetings(["lead-1"])).has("lead-1")).toBe(false);
+  });
+});
+
+describe("the card refuses an uncorrelated body", () => {
+  it("renders no quote when the nurture send cannot be found", () => {
+    render(
+      <MemoryRouter>
+        <QueueCard
+          lead={{ ...lead("send_nurture_3"), last_nurture_outbound_at: "2026-09-01T09:00:00Z" }}
+          latestInbound={undefined}
+          latestOutbound={msg("unrelated SMS about the invoice", "sms_outbound")}
+          onMarkHandled={() => {}}
+          onSnooze={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/Nurture sequence — email 3 is due/)).toBeTruthy();
+    expect(screen.queryByText(/unrelated SMS about the invoice/)).toBeNull();
+    expect(screen.queryByText("Your message")).toBeNull();
+  });
+});
+
+describe("orphan recovery for an anchored send", () => {
+  const NURTURE_AT = "2026-09-01T09:00:00Z";
+
+  beforeEach(() => {
+    emailThreadCalls.length = 0;
+    threadEmails = [];
+    timelineRows = [];
+  });
+
+  it("recovers the nurture send from interactions when its projection failed", async () => {
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-12T09:00:00Z", body_text: "unrelated later email", subject: "Invoice" },
+      { direction: "outbound", occurred_at: NURTURE_AT, body_text: "nurture three", subject: "Thought you'd like this" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(emailThreadCalls).toEqual(["lead-1"]);
+    expect(map.get("lead-1")!.snippet_text).toBe("nurture three");
+  });
+
+  it("still refuses the newer unrelated send when the anchored one isn't there either", async () => {
+    // The whole reason anchored leads were excluded from the repair. They no
+    // longer are, so this is the check that keeps it safe.
+    threadEmails = [
+      { direction: "outbound", occurred_at: "2026-09-12T09:00:00Z", body_text: "unrelated later email", subject: "Invoice" },
+    ];
+    const map = await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(map.has("lead-1")).toBe(false);
+  });
+
+  it("does not go looking when the anchored row was already found", async () => {
+    timelineRows = [
+      { lead_id: "lead-1", occurred_at: NURTURE_AT, event_type: "email_outbound", direction: "outbound",
+        snippet_text: "nurture three", subject: "s", metadata_json: {}, intent: null },
+    ];
+    await fetchLatestOutboundsWithOrphans([
+      { id: "lead-1", last_outbound_at: "2026-09-12T09:00:00Z", anchorAt: NURTURE_AT },
+    ]);
+    expect(emailThreadCalls).toEqual([]);
+  });
+});
