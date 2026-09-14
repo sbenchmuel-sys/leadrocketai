@@ -157,4 +157,43 @@ DO $$ BEGIN
   THEN RAISE EXCEPTION 'the migration is not idempotent — a second run changed the key'; END IF;
 END $$;
 
+-- ═══════════════════════════════════════════════════════════════════
+-- 7. mail_event_log: the webhook's idempotency claim is per MAILBOX.
+--
+-- Two mailboxes can see the same provider message id. The lookup was scoped to
+-- the mailbox but the constraint was global, so the second mailbox's claim
+-- failed, the failure was ignored, no marker was stored, and every redelivery
+-- re-ran that mailbox's side effects. The migration (already applied above)
+-- re-scopes the constraint; this proves the new shape against real Postgres.
+-- ═══════════════════════════════════════════════════════════════════
+INSERT INTO public.mail_accounts (id, workspace_id, provider, email_address) VALUES
+  ('00000000-0000-0000-0000-00000000a001', '00000000-0000-0000-0000-00000000fff1', 'outlook', 'a@dealer-a.example'),
+  ('00000000-0000-0000-0000-00000000a002', '00000000-0000-0000-0000-00000000fff2', 'outlook', 'b@dealer-b.example');
+
+-- Two different mailboxes, same provider id: BOTH claims must succeed.
+INSERT INTO public.mail_event_log (provider, provider_message_id, mail_account_id) VALUES
+  ('outlook', 'AAMkSHARED', '00000000-0000-0000-0000-00000000a001'),
+  ('outlook', 'AAMkSHARED', '00000000-0000-0000-0000-00000000a002');
+
+DO $$ DECLARE n int; BEGIN
+  SELECT count(*) INTO n FROM public.mail_event_log WHERE provider_message_id = 'AAMkSHARED';
+  IF n <> 2 THEN RAISE EXCEPTION 'expected one idempotency marker per mailbox, got %', n; END IF;
+END $$;
+
+-- Same mailbox, same id: the SECOND claim must still be refused — that is the
+-- concurrent-redelivery race the webhook now stops on.
+DO $$ BEGIN
+  INSERT INTO public.mail_event_log (provider, provider_message_id, mail_account_id)
+  VALUES ('outlook', 'AAMkSHARED', '00000000-0000-0000-0000-00000000a001');
+  RAISE EXCEPTION 'a duplicate claim for the SAME mailbox should have been refused';
+EXCEPTION WHEN unique_violation THEN NULL; END $$;
+
+-- And the old global constraint is gone by name, the new one present by name.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mail_event_log_provider_provider_message_id_key')
+  THEN RAISE EXCEPTION 'the global constraint is still present'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mail_event_log_provider_account_message_key')
+  THEN RAISE EXCEPTION 'the mailbox-scoped constraint is missing'; END IF;
+END $$;
+
 SELECT 'outlook_dedupe_key_scope: all checks passed' AS result;

@@ -14,6 +14,7 @@ import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { detectBounce } from "../_shared/bounceDetection.ts";
 import { bounceDisposition } from "../_shared/bounceDisposition.ts";
 import { isDirectConversation } from "../_shared/directConversation.ts";
+import { gmailDirectDiscoveryQuery, selectThreadsToExpand } from "../_shared/gmailDiscovery.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { deriveAction } from "../_shared/bulkSyncAction.ts";
@@ -454,8 +455,13 @@ async function syncLeadEmails(
   // loop below still handles every genuinely-live signal.
   const BACKFILL_RECENCY_MS = 3 * 24 * 60 * 60 * 1000;
 
-  // Search for emails from/to this lead
-  const query = `from:${leadEmailNorm} OR to:${leadEmailNorm}`;
+  // DIRECT rep↔lead discovery only (Unit G-B P1). `from:X OR to:X` admitted
+  // third-party threads that the direct-conversation gate then rejected without
+  // leaving a trace — so they looked "never synced", sorted to the front of the
+  // expansion queue, and with more than MAX_THREADS_PER_LEAD of them a genuine
+  // older reply was never expanded while the automation kept emailing. The
+  // gate's predicate is now the query itself; see `_shared/gmailDiscovery.ts`.
+  const query = gmailDirectDiscoveryQuery(leadEmailNorm, repEmailNorm);
   const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${DISCOVERY_MAX}`;
 
   const searchResponse = await fetch(searchUrl, {
@@ -757,9 +763,7 @@ async function syncLeadEmails(
   // (backfill) threads over already-synced ones — recent activity in known
   // threads is already covered by the newest-page per-message loop above, so the
   // scarce slots are best spent pulling threads we've never seen.
-  const threadsToExpand = Array.from(lockedThreadIds)
-    .sort((a, b) => (previouslySyncedThreadIds.has(a) ? 1 : 0) - (previouslySyncedThreadIds.has(b) ? 1 : 0))
-    .slice(0, MAX_THREADS_PER_LEAD);
+  const threadsToExpand = selectThreadsToExpand(lockedThreadIds, previouslySyncedThreadIds, MAX_THREADS_PER_LEAD);
   for (const threadId of threadsToExpand) {
     try {
       const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;

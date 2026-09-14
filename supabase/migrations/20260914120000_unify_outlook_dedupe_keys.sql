@@ -163,6 +163,36 @@ BEGIN
   END IF;
 END $$;
 
+-- ── mail_event_log: scope the idempotency constraint to the mailbox ──────────
+--
+-- The Outlook webhook records each processed notification in mail_event_log so
+-- a redelivery is a no-op. Its LOOKUP is scoped to the mailbox (the Graph
+-- message id is per-mailbox), but the CONSTRAINT was UNIQUE (provider,
+-- provider_message_id) — global. When two mailboxes produce the same provider
+-- id, the second mailbox's lookup correctly finds nothing, its INSERT then
+-- violates the global constraint, and that error was ignored: no marker is
+-- ever stored for the second mailbox, so every redelivery re-runs its side
+-- effects — re-pausing automation and re-writing system notes on the lead.
+--
+-- The webhook is the only writer of this table and always sets
+-- mail_account_id, so adding it to the constraint cannot admit NULL-keyed
+-- duplicates. Existing rows: measured 0 with provider = 'outlook'.
+-- Re-runnable: Lovable re-applies migrations under its own filename, and the
+-- SQL test runs this file twice on purpose.
+ALTER TABLE public.mail_event_log
+  DROP CONSTRAINT IF EXISTS mail_event_log_provider_provider_message_id_key;
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'mail_event_log_provider_account_message_key'
+      AND conrelid = 'public.mail_event_log'::regclass
+  ) THEN
+    ALTER TABLE public.mail_event_log
+      ADD CONSTRAINT mail_event_log_provider_account_message_key
+      UNIQUE (provider, mail_account_id, provider_message_id);
+  END IF;
+END $$;
+
 COMMIT;
 
 -- Post-apply check. Expect 0 rows in both: every Outlook key either carries its

@@ -434,7 +434,21 @@ async function processChangeNotification(
   const occurredAt = receivedAt ?? new Date().toISOString();
 
   // --- 5. Record in idempotency log ---
-  await serviceClient.from("mail_event_log").insert({
+  //
+  // This insert IS the claim on this notification, and it runs BEFORE any side
+  // effect below. Its result used to be ignored, which meant two things went
+  // wrong silently: a constraint violation left no marker (so every redelivery
+  // re-ran the pauses and system notes), and any other failure did the same.
+  //
+  //   • Unique violation → another delivery of this same notification for this
+  //     same mailbox already claimed it (concurrent redelivery). STOP: it is
+  //     running the side effects, or already has. The constraint is scoped
+  //     (provider, mail_account_id, provider_message_id) — see the migration —
+  //     so this can no longer fire because a DIFFERENT mailbox saw the same id.
+  //   • Any other error → log loudly and PROCEED. Losing an inbound reply is
+  //     the guardrail failure (the automation keeps sending); a replayed pause
+  //     or a duplicated system note is the lesser harm.
+  const { error: claimErr } = await serviceClient.from("mail_event_log").insert({
     provider: "outlook",
     provider_message_id: providerMessageId,
     mail_account_id: mailAccountId,
@@ -447,6 +461,22 @@ async function processChangeNotification(
     },
     processed_at: new Date().toISOString(),
   });
+  if (claimErr) {
+    const isUniqueViolation = claimErr.code === "23505" ||
+      /duplicate key|unique.?constraint|23505/i.test(claimErr.message ?? "");
+    if (isUniqueViolation) {
+      logger.info("mail.outlook.webhook_duplicate_race_lost", {
+        mail_account_id: mailAccountId,
+        provider_message_id: providerMessageId,
+      });
+      return;
+    }
+    logger.error("mail.outlook.webhook_claim_failed_proceeding", {
+      mail_account_id: mailAccountId,
+      provider_message_id: providerMessageId,
+      error: claimErr.message,
+    });
+  }
 
   if (!senderEmail) {
     logger.info("mail.outlook.webhook_no_sender", { provider_message_id: providerMessageId });

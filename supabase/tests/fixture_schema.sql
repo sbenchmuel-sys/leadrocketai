@@ -203,3 +203,23 @@ CREATE TABLE IF NOT EXISTS public.lead_timeline_items (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_timeline_dedupe
   ON public.lead_timeline_items (lead_id, dedupe_key);
+
+-- Added for outlook_dedupe_key_scope.test.sql (Unit G-B). The webhook's
+-- idempotency log, with production's ORIGINAL global constraint so the
+-- migration's re-scoping of it is exercised for real.
+CREATE TABLE IF NOT EXISTS public.mail_accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  provider text,
+  email_address text
+);
+CREATE TABLE IF NOT EXISTS public.mail_event_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  provider_message_id text NOT NULL,
+  mail_account_id uuid REFERENCES public.mail_accounts(id) ON DELETE CASCADE,
+  event_type text,
+  payload jsonb,
+  processed_at timestamptz,
+  CONSTRAINT mail_event_log_provider_provider_message_id_key UNIQUE (provider, provider_message_id)
+);
