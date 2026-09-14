@@ -497,7 +497,7 @@ async function processChangeNotification(
   // Scoped to the mailbox's workspace — see WORKSPACE ISOLATION above.
   const { data: lead } = await serviceClient
     .from("leads")
-    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id")
+    .select("id, name, owner_user_id, email, stage, ooo_until, unsubscribed, workspace_id, last_inbound_at, last_activity_at")
     .eq("email", senderEmail)
     .eq("workspace_id", mailboxWorkspaceId)
     .order("created_at", { ascending: true })
@@ -521,6 +521,8 @@ async function processChangeNotification(
     ooo_until: string | null;
     unsubscribed: boolean;
     workspace_id: string | null;
+    last_inbound_at: string | null;
+    last_activity_at: string | null;
   };
 
   // --- 8. Direct conversation filter ---
@@ -684,11 +686,23 @@ async function processChangeNotification(
   });
 
   // --- 12. Update lead state ---
+  //
+  // MONOTONIC RECENCY. `occurred_at` on the timeline row is the message's real
+  // received time — that is what makes the timeline order right. But these two
+  // LEAD columns mean "how recently did something happen", and Graph fires a
+  // change notification when a message is MOVED INTO the watched folder, not
+  // only when it arrives. Rescuing a six-month-old mail out of Junk would
+  // otherwise rewind `last_inbound_at` over a genuine recent reply — and
+  // `last_inbound_at` feeds the re-arm / dismissal-clearing decision in
+  // `syncEngine.buildLeadUpdate`. So: never move them backwards.
+  const newestOf = (a: string | null, b: string): string =>
+    a && new Date(a).getTime() > new Date(b).getTime() ? a : b;
+
   await serviceClient
     .from("leads")
     .update({
-      last_inbound_at: occurredAt,
-      last_activity_at: occurredAt,
+      last_inbound_at: newestOf(leadRow.last_inbound_at, occurredAt),
+      last_activity_at: newestOf(leadRow.last_activity_at, occurredAt),
       ...(leadRow.stage === "new" || leadRow.stage === "contacted" ? { stage: "engaged" } : {}),
     })
     .eq("id", leadRow.id);

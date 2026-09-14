@@ -25,7 +25,7 @@ import { projectTimelineItem, outlookEmailDedupeKey } from "../_shared/timelineP
 import { isDirectConversation } from "../_shared/directConversation.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripQuotedReply } from "../_shared/unsubscribeDetection.ts";
-import { classifyBounce } from "../_shared/bounceDetection.ts";
+import { bounceDisposition } from "../_shared/bounceDisposition.ts";
 import {
   type LeadMetrics,
   type LeadUpdate,
@@ -411,51 +411,48 @@ serve(async (req) => {
           hasClosingKeywords = true;
         }
 
-        // BOUNCE detection
-        const fromLower = fromEmail;
-        const subjectLower = subject.toLowerCase();
-        const isBounce = (
-          fromLower.includes("postmaster") ||
-          fromLower.includes("mailer-daemon") ||
-          fromLower.includes("mail delivery") ||
-          subjectLower.includes("delivery status notification") ||
-          subjectLower.includes("undeliverable") ||
-          subjectLower.includes("mail delivery failed") ||
-          subjectLower.includes("returned mail") ||
-          subjectLower.includes("failure notice") ||
-          subjectLower.includes("delivery failure")
-        );
+        // BOUNCE DISPOSITION — one shared decision with gmail-bulk-sync
+        // (`_shared/bounceDisposition.ts`). It folds in three things this
+        // inline block used to get wrong:
+        //   • a HUMAN forwarding a bounce ("Fwd: Undeliverable…", quoted
+        //     5.1.1 in the body) was classified as a hard bounce and the
+        //     lead permanently unsubscribed — and, because the branch
+        //     `continue`s, their message never reached the timeline;
+        //   • attribution used a SUBSTRING (`body.includes(leadEmail)`), so a
+        //     DSN naming only `joann@acme.com` stopped lead `ann@acme.com`;
+        //   • soft vs hard, which this file already did correctly.
+        //
+        // Exchange NDRs inline the diagnostic ("Remote Server returned
+        // '550 5.1.1 …'") and the recipient/Status fields directly in the body
+        // that getGraphMessageBody returns, so there is no separate
+        // delivery-status part to fetch (unlike Gmail) — hence the empty
+        // `deliveryStatusText`.
+        const verdict = bounceDisposition({
+          fromEmail,
+          subject,
+          bodyText,
+          deliveryStatusText: "",
+          leadEmail: leadEmailNorm,
+          headersInvolveLead: isDirect,
+          isDirectConversation: isDirect,
+        });
+        const isBounce = verdict.disposition !== "not_a_bounce";
 
         if (isBounce) {
-          // Attribute a bounce to THIS lead only if it's actually named in it —
-          // a direct message, or the DSN body contains the failed address. The
-          // broadened search can return DSNs; this prevents mis-attribution.
-          const aboutThisLead = isDirect || bodyText.toLowerCase().includes(leadEmailNorm);
-          if (!aboutThisLead) {
+          if (verdict.disposition === "not_about_lead") {
             console.log(`[outlook-sync] Bounce ${msg.id} is not about lead ${leadEmailNorm} — skipping`);
             continue;
           }
 
-          // Soft (transient) vs hard (permanent) bounce — mirror of gmail-sync.
-          // A 4.x.x DSN (mailbox full, greylisting, temporary defer) must NOT
-          // permanently kill a good lead: leave unsubscribed/enrollment untouched
-          // and let the cadence retry. Only hard (5.x.x / clearly-permanent)
-          // bounces suppress the lead and feed the bounce circuit breaker.
-          // Unclassifiable → transient (fail-safe: don't burn a good lead).
-          // Exchange NDRs inline the diagnostic ("Remote Server returned
-          // '550 5.1.1 …'") and the recipient/Status fields directly in the body
-          // that getGraphMessageBody returns, so the RFC 3463 code is already
-          // present here (no separate delivery-status part to fetch, unlike Gmail).
-          const bounceClass = classifyBounce({ fromEmail, subject, body: bodyText, recipientEmail: leadEmailNorm });
-          if (bounceClass.severity !== "hard") {
+          if (verdict.disposition === "transient") {
             console.log(
-              `[outlook-sync] Lead ${leadId}: transient bounce (code: ${bounceClass.statusCode ?? "none"}, basis: ${bounceClass.basis}) — leaving cadence to retry`,
+              `[outlook-sync] Lead ${leadId}: transient bounce (code: ${verdict.statusCode ?? "none"}, basis: ${verdict.basis}) — leaving cadence to retry`,
             );
             existingMessageIds.add(messageId);
             continue;
           }
 
-          console.log(`[outlook-sync] Lead ${leadId}: Hard bounce detected (code: ${bounceClass.statusCode ?? "keyword/none"}) — stopping automation`);
+          console.log(`[outlook-sync] Lead ${leadId}: Hard bounce detected (code: ${verdict.statusCode ?? "keyword/none"}) — stopping automation`);
           await serviceSupabase.from("leads").update({
             unsubscribed: true, needs_action: false, eligible_at: null,
             next_action_key: null, next_action_label: null, action_reason_code: null,

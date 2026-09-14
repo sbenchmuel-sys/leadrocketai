@@ -12,7 +12,7 @@ import { isHumanUnsubscribeRequest } from "../_shared/unsubscribeDetection.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { detectBounce } from "../_shared/bounceDetection.ts";
-import { bounceDisposition } from "./bounceDisposition.ts";
+import { bounceDisposition } from "../_shared/bounceDisposition.ts";
 import { isDirectConversation } from "../_shared/directConversation.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
@@ -568,17 +568,18 @@ async function syncLeadEmails(
       // lead's timeline and counted in its inbound/outbound metrics. gmail-sync
       // and outlook-sync have always required a direct rep↔lead exchange; this
       // is the same rule, from the same shared function.
-      if (!bounce.isBounce && !isDirectConversation({
+      //
+      // Computed for EVERY message, including DSN-looking ones, because
+      // `bounceDisposition` needs it: passing this gate proves the message is
+      // human conversation and therefore not a machine bounce, however DSN-ish
+      // its subject reads. The skip itself is applied further down, only to
+      // messages the bounce path did not claim.
+      const isDirect = isDirectConversation({
         fromEmails: extractEmailAddresses(from),
         recipientEmails: toEmailsArr,
         leadEmail: leadEmailNorm,
         repEmail: repEmailNorm,
-      })) {
-        console.log(
-          `[gmail-bulk-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
-        );
-        continue;
-      }
+      });
 
       // Exact-address direction test. A substring test ("does From contain the
       // lead's address") called "joann@acme.com" a message from "ann@acme.com".
@@ -604,16 +605,24 @@ async function syncLeadEmails(
       //      `email_outbound` — a fake "sent email" that corrupted
       //      last_outbound_at and every outbound counter. Both branches now
       //      `continue`.
-      if (bounce.isBounce) {
-        const verdict = bounceDisposition({
+      const verdict = bounce.isBounce
+        ? bounceDisposition({
           fromEmail: from,
           subject,
           bodyText,
           deliveryStatusText: getDeliveryStatusText(message),
           leadEmail: leadEmailNorm,
           headersInvolveLead: messageInvolvesLead(headers, leadEmailNorm),
-        });
+          isDirectConversation: isDirect,
+        })
+        : { disposition: "not_a_bounce" as const, statusCode: null, basis: null };
 
+      if (verdict.disposition !== "not_a_bounce") {
+        // Only a MACHINE DSN reaches here — `bounceDisposition` returns
+        // "not_a_bounce" for anything that passed the rep↔lead gate or came
+        // from the lead's own mailbox, so no human message is dropped by these
+        // branches. A machine DSN fails the gate anyway, so skipping it here
+        // stores nothing that the gate below would have stored.
         if (verdict.disposition === "not_about_lead") {
           console.log(`[gmail-bulk-sync] Bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
           continue;
@@ -631,8 +640,15 @@ async function syncLeadEmails(
         existingMessageIds.add(gmailMessageId);
         continue;
       }
-      // Past this point the message is NOT a bounce — every bounce branch above
-      // ends in `continue` — so the inbound handlers no longer test for one.
+
+      // Not a bounce (or a human message wearing DSN wording). Now apply the
+      // direct-conversation skip.
+      if (!isDirect) {
+        console.log(
+          `[gmail-bulk-sync] Skipping 3rd-party message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
+        );
+        continue;
+      }
       // Set when applyOOOPause paused the lead but deliberately KEPT it
       // actionable (auto-reply carrying a live commercial question). The
       // defer branch below must not then clear needs_action again.
@@ -793,17 +809,14 @@ async function syncLeadEmails(
         // Same direct-conversation gate as the per-message loop above. Thread
         // expansion pulls EVERY message in a locked thread, so without it a
         // third party joining the thread had their mail stored on the lead.
-        if (!bounceT.isBounce && !isDirectConversation({
+        // Computed for every message (see the per-message loop for why the
+        // bounce decision needs it); the skip is applied after the bounce path.
+        const isDirectT = isDirectConversation({
           fromEmails: extractEmailAddresses(from),
           recipientEmails: toEmailsArr,
           leadEmail: leadEmailNorm,
           repEmail: repEmailNorm,
-        })) {
-          console.log(
-            `[gmail-bulk-sync] Skipping 3rd-party thread message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
-          );
-          continue;
-        }
+        });
 
         const isFromLead = extractEmailAddresses(from).includes(leadEmailNorm);
         const direction = isFromLead ? "inbound" : "outbound";
@@ -818,21 +831,24 @@ async function syncLeadEmails(
         // Bounce handling — same two fixes as the per-message loop: classify
         // soft vs hard before suppressing anyone, and never fall through to
         // store a DSN as a fake outbound email.
-        if (bounceT.isBounce) {
-          // A stale (old) bounce must not fire the destructive unsubscribe/stop.
-          if (isStaleForActions) {
-            existingMessageIds.add(gmailMessageId);
-            continue;
-          }
-
-          const verdictT = bounceDisposition({
+        const verdictT = bounceT.isBounce
+          ? bounceDisposition({
             fromEmail: from,
             subject,
             bodyText,
             deliveryStatusText: getDeliveryStatusText(message),
             leadEmail: leadEmailNorm,
             headersInvolveLead: messageInvolvesLead(headers, leadEmailNorm),
-          });
+            isDirectConversation: isDirectT,
+          })
+          : { disposition: "not_a_bounce" as const, statusCode: null, basis: null };
+
+        if (verdictT.disposition !== "not_a_bounce") {
+          // A stale (old) bounce must not fire the destructive unsubscribe/stop.
+          if (isStaleForActions) {
+            existingMessageIds.add(gmailMessageId);
+            continue;
+          }
 
           if (verdictT.disposition === "not_about_lead") {
             console.log(`[gmail-bulk-sync] Thread bounce ${gmailMessageId} is not about lead ${leadEmailNorm} — skipping`);
@@ -851,7 +867,15 @@ async function syncLeadEmails(
           existingMessageIds.add(gmailMessageId);
           continue;
         }
-        // Past this point the thread message is NOT a bounce.
+
+        // Not a bounce (or a human message wearing DSN wording). Now apply the
+        // direct-conversation skip.
+        if (!isDirectT) {
+          console.log(
+            `[gmail-bulk-sync] Skipping 3rd-party thread message ${gmailMessageId} (not direct rep↔lead email, from: "${from}", to: "${to}")`
+          );
+          continue;
+        }
 
         // Set when applyOOOPause paused the lead but deliberately KEPT it
         // actionable (auto-reply carrying a live commercial question). The
@@ -1265,6 +1289,9 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
 
   let connectionsProcessed = 0;
   let connectionsSkipped = 0;
+  // Subset of connectionsSkipped: skipped because we do not know the rep's own
+  // mailbox address. Surfaced separately so it cannot hide inside a generic skip.
+  let connectionsMissingAddress = 0;
   let connectionsDeferred = 0;
   let leadsProcessed = 0;
   let leadsDeferred = 0;
@@ -1296,6 +1323,26 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     if (workspaceIds.length === 0) {
       connectionsSkipped++;
       console.log(`[gmail-bulk-sync] cron: user=${conn.user_id} skipped (no_workspace)`);
+      continue;
+    }
+
+    // NO SILENT NO-OP. The rep↔lead gate needs this mailbox's own address and
+    // fails closed without it — which, if we carried on, would walk every lead,
+    // store nothing, and report a perfectly healthy `synced: 0`. A rep's history
+    // would just never fill and nothing would say why. Skip loudly instead, and
+    // count it, so `cron_run_log` shows a non-zero connections_missing_address.
+    // ponytail: we do NOT fall back to `mail_accounts.email_address` the way the
+    // interactive path's resolveGmailConnection does — that is the real fix and
+    // it belongs with the wider gmail_connections → mail_accounts migration, not
+    // in a bug-fix unit. Until then this is visible rather than silent.
+    if (!conn.gmail_email) {
+      connectionsSkipped++;
+      connectionsMissingAddress++;
+      console.error(
+        `[gmail-bulk-sync] cron: user=${conn.user_id} SKIPPED — gmail_connections.gmail_email is empty, ` +
+          `so the direct-conversation gate would reject every message and this sweep would store nothing. ` +
+          `The rep must reconnect Gmail (or the row needs backfilling from mail_accounts.email_address).`,
+      );
       continue;
     }
 
@@ -1405,7 +1452,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         .eq("user_id", conn.user_id);
 
       try {
-        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes, conn.gmail_email ?? "");
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes, conn.gmail_email);
         totalSynced += result.synced;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1457,6 +1504,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     budget_exhausted: budgetExhausted,
     connectionsProcessed,
     connectionsSkipped,
+    connectionsMissingAddress,
     connectionsDeferred,
     leadsProcessed,
     leadsDeferred,
