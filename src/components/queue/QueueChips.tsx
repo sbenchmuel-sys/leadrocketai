@@ -22,11 +22,16 @@ export type QueueTab = "replied" | "followup" | "outreach";
 
 interface QueueChipsProps {
   active: QueueTab | null;
-  counts: { replied: number; followup: number; outreach: number };
+  /** null for a count = unknown (a read failed). Rendered "—", never 0. */
+  counts: { replied: number; followup: number; outreach: number | null };
   onSelect: (next: QueueTab | null) => void;
 }
 
-const CHIPS: { id: QueueTab; label: string }[] = [
+/** "All" is the no-tab-selected state, which until now had no name on screen —
+ *  the rep could land in it and have no way back to it except by clicking the
+ *  selected tab again. It is a chip like the others, and it is the default. */
+const CHIPS: { id: QueueTab | null; label: string }[] = [
+  { id: null, label: "All" },
   { id: "replied", label: "Replied" },
   { id: "followup", label: "Follow up" },
   { id: "outreach", label: "Outreach" },
@@ -37,10 +42,12 @@ export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Queue list tabs">
       {CHIPS.map((chip) => {
         const isActive = active === chip.id;
-        const count = counts[chip.id];
+        // "All" = the two reactive lists. Outreach is a separate source with its
+        // own tab, so it is deliberately not added in here.
+        const count = chip.id === null ? counts.replied + counts.followup : counts[chip.id];
         return (
           <Button
-            key={chip.id}
+            key={chip.id ?? "all"}
             type="button"
             variant={isActive ? "default" : "outline"}
             size="sm"
@@ -59,7 +66,7 @@ export function QueueChips({ active, counts, onSelect }: QueueChipsProps) {
                 isActive ? "bg-primary-foreground/20 text-primary-foreground" : "",
               )}
             >
-              {count}
+              {count ?? "—"}
             </Badge>
           </Button>
         );
