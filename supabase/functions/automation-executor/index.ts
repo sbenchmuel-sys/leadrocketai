@@ -58,6 +58,26 @@ const INTER_SEND_STAGGER_MS = 8_000;
 // pilot. Override with the VOLUME_ALERT_THRESHOLD secret.
 const EXECUTOR_CRON_INTERVAL_MIN = 15; // `*/15` in cron.job — keep in sync
 
+// ── Send cap normalisation (Codex P1) ────────────────────────────────────────
+// MAX_SENDS_PER_RUN used to be `parseInt(env, 10)` with no finiteness check, so a
+// whitespace or mistyped secret produced NaN — and NaN loses EVERY comparison.
+// `processed >= NaN` is false on every iteration, so the per-run cap silently
+// stopped existing and the batch ran to the end of the page; and because the
+// volume tripwire's default threshold is derived from the same value, it was NaN
+// too, so `count > threshold` was false and the alarm that exists to catch an
+// uncapped blast could not fire. A one-character typo in a secret therefore gave
+// an uncapped production sender with its own alarm disabled.
+//
+// Normalised ONCE here so every consumer inherits a sane value; the comparison
+// sites are deliberately left alone. Note `Math.max(1, NaN)` is NaN, so a
+// Math.max floor is NOT a guard — only an explicit finiteness test is.
+const MAX_SENDS_PER_RUN_DEFAULT = 5;
+
+/** A finite, positive, integral send cap. Anything malformed falls back. */
+function normalizeSendCap(raw: number): number {
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : MAX_SENDS_PER_RUN_DEFAULT;
+}
+
 // ── Deferral for a row this run refuses to send (Codex P1, all instances) ────
 // Used by EVERY refusal branch whose blocker clears only with time or with a
 // human changing a setting. Both scans are capped pages (20 legacy / 200 cold)
@@ -130,7 +150,9 @@ const VOLUME_ALERT_MAX_BATCHES_IN_WINDOW =
  * ceiling (cap × batches) or the alarm can never sound.
  */
 function volumeAlertDefaultThreshold(maxSendsPerRun: number): number {
-  const cap = Math.max(1, maxSendsPerRun);
+  // normalizeSendCap, not Math.max: Math.max(1, NaN) is NaN, which would make
+  // the derived threshold NaN and silence the alarm (Codex P1).
+  const cap = normalizeSendCap(maxSendsPerRun);
   const reachableCeiling = cap * VOLUME_ALERT_MAX_BATCHES_IN_WINDOW;
   return Math.max(1, Math.min(cap, reachableCeiling - 1));
 }
@@ -469,8 +491,8 @@ serve(async (req) => {
     // ── MAX_SENDS_PER_RUN cap ───────────────────────────────
     // Default to 5 per run to stay within the dispatcher's 55s wait
     // (5 sends × INTER_SEND_STAGGER_MS gaps ≈ 32s of stagger).
-    const maxSendsEnv = Deno.env.get("MAX_SENDS_PER_RUN");
-    const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : 5;
+    // Malformed (whitespace, typo, negative, 0) → the documented default, never NaN.
+    const maxSendsPerRun = normalizeSendCap(parseInt(Deno.env.get("MAX_SENDS_PER_RUN") ?? "", 10));
 
     // ── DAILY SEND CAP PER MAILBOX ──────────────────────────
     // Counts emails already sent today (UTC) from automation_log for each owner.

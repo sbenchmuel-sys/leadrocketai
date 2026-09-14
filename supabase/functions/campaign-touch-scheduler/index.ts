@@ -244,7 +244,10 @@ Deno.serve(async (req) => {
         continue;
       }
       if (unmet) {
-        const exec = await getExec(lead.owner_user_id);
+        // camp.workspace_id is REQUIRED: without it loadExecutionSettings returns
+        // timezone:null and advanceColdEnrollment schedules the next touch from
+        // the raw delay, unsnapped to the workspace send window / business days.
+        const exec = await getExec(lead.owner_user_id, camp.workspace_id);
         await advanceColdEnrollment(supabase, exec, t, "auto_skipped", { skipReason: unmet });
         counters.auto_skipped++;
         console.log(`[campaign-touch-scheduler] auto-skipped touch ${t.id} (${t.channel}) — condition not met`);

@@ -415,7 +415,7 @@ describe("skipLogging", () => {
     // old hardcoded 15 was (ceiling 2 x 5 = 10).
     const interval = Number(src.match(/const EXECUTOR_CRON_INTERVAL_MIN = (\d+);/)![1]);
     const windowMin = Number(src.match(/const VOLUME_ALERT_WINDOW_MIN = (\d+);/)![1]);
-    const cap = Number(src.match(/const maxSendsPerRun = maxSendsEnv \? parseInt\(maxSendsEnv, 10\) : (\d+);/)![1]);
+    const cap = Number(src.match(/const MAX_SENDS_PER_RUN_DEFAULT = (\d+);/)![1]);
     const batches = Math.floor(windowMin / interval) + 1;
     const ceiling = cap * batches;
 
@@ -602,6 +602,69 @@ describe("executionSettingsWorkspaceScope", () => {
       }
     }
     expect(calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("WRAPPERS around the loader are audited too — a caller must not be able to omit the workspace", () => {
+    // The direct-call audit above missed campaign-touch-scheduler's `getExec`
+    // wrapper, so a #136 call site passed only the owner id and silently got
+    // timezone:null. Nothing type-checks supabase/functions (tsconfig.app.json
+    // includes only `src`, and `deno test` only checks modules a test imports),
+    // so a required parameter is NOT enforced by the toolchain here — this audit
+    // is the enforcement. Wrappers are found by their return type, so a new one
+    // is picked up without editing this test.
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const name of readdirSync(path.join(ROOT, dir))) {
+        const rel = path.posix.join(dir, name);
+        if (statSync(path.join(ROOT, rel)).isDirectory()) out.push(...walk(rel));
+        else if (name.endsWith(".ts")) out.push(rel);
+      }
+      return out;
+    };
+    const topLevelArgs = (text: string, open: number): string[] => {
+      let depth = 0;
+      const args: string[] = [];
+      let cur = "";
+      for (let i = open; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === "(" || ch === "[" || ch === "{") { depth++; if (depth === 1) continue; }
+        else if (ch === ")" || ch === "]" || ch === "}") { depth--; if (depth === 0) { args.push(cur); return args; } }
+        else if (ch === "," && depth === 1) { args.push(cur); cur = ""; continue; }
+        cur += ch;
+      }
+      return args;
+    };
+
+    let wrappersFound = 0;
+    let wrapperCalls = 0;
+    for (const rel of walk("supabase/functions")) {
+      const text = readFileSync(path.join(ROOT, rel), "utf8");
+      if (!text.includes("loadExecutionSettings(")) continue;
+      // Any local helper that RETURNS ExecutionSettings is a wrapper for it.
+      const names = new Set<string>();
+      for (const m of text.matchAll(/(?:const|let)\s+(\w+)\s*=\s*async\s*\([^)]*\)\s*:\s*Promise<ExecutionSettings>/g)) names.add(m[1]);
+      for (const m of text.matchAll(/async\s+function\s+(\w+)\s*\([^)]*\)\s*:\s*Promise<ExecutionSettings>/g)) names.add(m[1]);
+      names.delete("loadExecutionSettings"); // the loader itself, audited above
+      for (const name of names) {
+        wrappersFound++;
+        // The wrapper itself must require a workspace id.
+        const declAt = text.search(new RegExp(`(?:const|let)\\s+${name}\\s*=\\s*async\\s*\\(|async\\s+function\\s+${name}\\s*\\(`));
+        const declArgs = topLevelArgs(text, text.indexOf("(", declAt)).map((a) => a.trim());
+        expect(declArgs.length, `${rel}: wrapper ${name} must take (ownerId, workspaceId)`).toBe(2);
+        expect(declArgs[1], `${rel}: wrapper ${name}'s 2nd param must be the workspace id`).toMatch(/workspaceId/);
+        // ...and every call must supply it.
+        for (const m of text.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+          const at = m.index! + name.length;
+          if (at === text.indexOf("(", declAt)) continue; // the declaration
+          const args = topLevelArgs(text, at).map((a) => a.trim()).filter(Boolean);
+          if (args.some((a) => /: (string|ReturnType)/.test(a))) continue; // declaration form
+          wrapperCalls++;
+          expect(args.length, `${rel} → ${name}(${args.join(", ")}) omits the workspace id`).toBe(2);
+        }
+      }
+    }
+    expect(wrappersFound, "guard went vacuous — no wrappers discovered").toBeGreaterThanOrEqual(1);
+    expect(wrapperCalls, "guard went vacuous — no wrapper call sites discovered").toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -1058,5 +1121,60 @@ describe("smsPreconditionRunsBeforeAnySpending", () => {
       expect(e.why, `bad justification: ${e.match}`).not.toMatch(/parks the lead|claim row.*parks/i);
     }
     expect(LEAVE_IN_PLACE_LEGACY.some((e) => e.match.includes("No phone number for SMS"))).toBe(false);
+  });
+});
+
+// ── Codex P1: a malformed send cap must not disable the cap AND its alarm ────
+// `parseInt(" ", 10)` is NaN, and NaN loses every comparison: `processed >= NaN`
+// is false so the per-run cap stops existing, and the tripwire threshold derived
+// from the same value is NaN so `count > threshold` is false too. A one-character
+// typo in a secret gave an uncapped sender with its own alarm silenced.
+describe("sendCapNormalisation", () => {
+  it("the cap is normalised at the PARSE, not at the comparison sites", () => {
+    // The raw `env ? parseInt(env) : 5` form is the bug — it must be gone.
+    expect(src).not.toMatch(/maxSendsEnv\s*\?\s*parseInt\(/);
+    expect(src).toContain('const maxSendsPerRun = normalizeSendCap(parseInt(Deno.env.get("MAX_SENDS_PER_RUN") ?? "", 10));');
+    // Exactly one place decides what a valid cap is.
+    expect([...src.matchAll(/const maxSendsPerRun = /g)].length).toBe(1);
+  });
+
+  it("normalizeSendCap tests finiteness explicitly — a Math.max floor is not a guard", () => {
+    const fn = src.slice(src.indexOf("function normalizeSendCap("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    expect(body).toContain("Number.isFinite(raw)");
+    expect(body).toContain("raw >= 1");
+    expect(body).toContain("MAX_SENDS_PER_RUN_DEFAULT");
+    // Math.max(1, NaN) === NaN, so a floor would silently pass NaN through.
+    expect(body).not.toMatch(/Math\.max\(1,/);
+  });
+
+  it("the tripwire's derived threshold goes through the same normaliser", () => {
+    const fn = src.slice(src.indexOf("function volumeAlertDefaultThreshold("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    expect(body).toContain("normalizeSendCap(maxSendsPerRun)");
+    // The old `Math.max(1, maxSendsPerRun)` was false comfort for exactly this.
+    expect(body).not.toMatch(/Math\.max\(1, maxSendsPerRun\)/);
+  });
+
+  it("the documented default is a finite positive integer and is the single source", () => {
+    const m = src.match(/const MAX_SENDS_PER_RUN_DEFAULT = (\d+);/);
+    expect(m).not.toBeNull();
+    const d = Number(m![1]);
+    expect(Number.isInteger(d)).toBe(true);
+    expect(d).toBeGreaterThan(0);
+    // No stray literal fallback left behind next to the env read.
+    expect(src).not.toMatch(/Deno\.env\.get\("MAX_SENDS_PER_RUN"\)[^;]*:\s*\d+;/);
+  });
+
+  it("NaN really does defeat both guards — the arithmetic this test protects", () => {
+    // Documents WHY the normaliser matters, using the same expressions the
+    // executor uses. If either of these ever becomes true, the reasoning above
+    // is wrong and the guards need revisiting.
+    const nan = parseInt(" ", 10);
+    expect(Number.isNaN(nan)).toBe(true);
+    expect(7 >= nan).toBe(false);            // processed >= maxSendsPerRun
+    expect(Number.isNaN(Math.max(1, nan))).toBe(true); // the false-comfort floor
+    const ceiling = Math.max(1, nan) * 2;
+    expect(999 > Math.max(1, Math.min(Math.max(1, nan), ceiling - 1))).toBe(false); // count > threshold
   });
 });
