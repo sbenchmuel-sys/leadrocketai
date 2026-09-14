@@ -14,6 +14,8 @@ import {
   stepScheduleFingerprint,
   planRelaunch,
   planEnrollment,
+  deferLinkedinTouchesPendingLookup,
+  LINKEDIN_ENRICH_GRACE_MS,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -415,5 +417,58 @@ describe("planEnrollment — the one payload enroll_campaign_leads writes atomic
     expect(enroll.map((p) => p.started_at)).toEqual(relaunch.starts.map((s) => s.startedAt));
     expect(enroll.flatMap((p) => p.touches.map((t) => t.eligible_at)))
       .toEqual(relaunch.touchRows.map((t) => t.eligible_at));
+  });
+});
+
+describe("deferLinkedinTouchesPendingLookup — a LinkedIn touch never comes due mid-lookup", () => {
+  // Thursday: a business day, so step 1 is eligible immediately.
+  const now = new Date("2026-09-10T10:00:00Z");
+  const steps: CadenceStep[] = [
+    { step_number: 1, channel: "linkedin", delay_days: 0 },
+    { step_number: 2, channel: "email", delay_days: 2 },
+  ];
+  const plan = () => planEnrollment(["lead-a", "lead-b"], steps, 50, {}, now);
+
+  it("pushes an immediately-due LinkedIn touch past the lookup window, for that lead only", () => {
+    const before = plan();
+    expect(new Date(before[0].touches[0].eligible_at).getTime()).toBeLessThanOrEqual(now.getTime());
+
+    const after = deferLinkedinTouchesPendingLookup(before, new Set(["lead-a"]), now);
+    const deferred = new Date(after[0].touches[0].eligible_at).getTime();
+    expect(deferred).toBe(now.getTime() + LINKEDIN_ENRICH_GRACE_MS);
+    // A scheduler tick during the search no longer sees it as due.
+    expect(deferred).toBeGreaterThan(now.getTime());
+    // lead-b already had a URL → untouched, and the object is reused.
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("leaves non-LinkedIn touches and later LinkedIn touches alone", () => {
+    const after = deferLinkedinTouchesPendingLookup(plan(), new Set(["lead-a", "lead-b"]), now);
+    const emailTouch = after[0].touches.find((t) => t.channel === "email")!;
+    expect(emailTouch.eligible_at).toBe(plan()[0].touches.find((t) => t.channel === "email")!.eligible_at);
+
+    // A LinkedIn touch already scheduled beyond the grace window keeps its date.
+    const later: CadenceStep[] = [
+      { step_number: 1, channel: "email", delay_days: 0 },
+      { step_number: 2, channel: "linkedin", delay_days: 3 },
+    ];
+    const p = planEnrollment(["lead-a"], later, 50, {}, now);
+    expect(deferLinkedinTouchesPendingLookup(p, new Set(["lead-a"]), now)).toEqual(p);
+  });
+
+  it("never pushes a touch past its own auto-skip horizon (born-expired is worse)", () => {
+    const p = plan();
+    // Squeeze max_age_at to inside the grace window.
+    p[0].touches[0] = {
+      ...p[0].touches[0],
+      max_age_at: new Date(now.getTime() + 60_000).toISOString(),
+    };
+    const after = deferLinkedinTouchesPendingLookup(p, new Set(["lead-a"]), now);
+    expect(after[0].touches[0].eligible_at).toBe(p[0].touches[0].eligible_at);
+  });
+
+  it("is a no-op when no lead needs a lookup", () => {
+    const p = plan();
+    expect(deferLinkedinTouchesPendingLookup(p, new Set(), now)).toBe(p);
   });
 });

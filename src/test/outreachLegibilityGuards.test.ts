@@ -113,3 +113,37 @@ describe("a conditional step reads as conditional outside edit mode (P2)", () =>
     expect(readOnly).toMatch(/condition:\s*s\.condition/);
   });
 });
+
+describe("an immediately-due LinkedIn touch is not exposed mid-enrichment (P2)", () => {
+  // The pure deferral is unit-tested in campaignEnrollment.test.ts. What a unit
+  // test can't see is whether enrollLeadsInCampaign still APPLIES it, and applies
+  // it to the plan BEFORE the enrollment RPC commits the touches — afterwards
+  // would leave a window for the 5-minute scheduler to auto-skip the step for
+  // good.
+  it("the deferral is applied to the plan before enroll_campaign_leads is called", () => {
+    const src = read("src/lib/campaignEnrollment.ts");
+    const deferAt = src.indexOf("deferLinkedinTouchesPendingLookup(\n");
+    const rpcAt = src.indexOf('rpc("enroll_campaign_leads"');
+    expect(deferAt).toBeGreaterThan(-1);
+    expect(rpcAt).toBeGreaterThan(-1);
+    expect(deferAt).toBeLessThan(rpcAt);
+  });
+});
+
+describe("concurrent enrollment of one lead can't abort the batch (P2)", () => {
+  // Two calls racing on the same lead used to both pass the already-enrolled
+  // check; the loser's insert tripped a unique constraint and rolled back every
+  // unrelated lead in its batch. The lead rows must be locked BEFORE that check.
+  // Behaviour is covered by supabase/tests/enrollment_rpcs.test.sql (CI).
+  it("the enrollment RPC locks the payload's leads before checking for an enrollment", () => {
+    const sql = read("supabase/migrations/20260907000000_transactional_enrollment_rpcs.sql");
+    const fn = sql.slice(sql.indexOf("FUNCTION public.enroll_campaign_leads"), sql.indexOf("FUNCTION public.launch_campaign_with_schedule"));
+    const lockAt = fn.indexOf("FOR UPDATE");
+    const checkAt = fn.indexOf("campaign_id = _campaign_id AND e.lead_id = v_lead_id");
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeLessThan(checkAt);
+    // Deterministic lock order, or two overlapping batches deadlock instead.
+    expect(fn).toMatch(/ORDER BY id\s*\n\s*FOR UPDATE/);
+  });
+});

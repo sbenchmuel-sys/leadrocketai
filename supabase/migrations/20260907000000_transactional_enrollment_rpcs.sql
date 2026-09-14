@@ -31,6 +31,11 @@
 --   match (a concurrent draft step-edit), so touches are never written against
 --   a stale numbering.
 --
+-- Each lead in the payload is row-locked up front (in id order), so two calls
+-- racing on the same lead queue instead of both passing the checks below — the
+-- loser reports it as SKIPPED rather than tripping a unique constraint and
+-- aborting the whole batch.
+--
 -- Per lead, fail-closed and SKIPPED (not aborted) when it: is unsubscribed; is
 -- on the workspace do-not-contact list (email or domain); already has a row in
 -- this campaign; has a live enrollment anywhere else; belongs to a different
@@ -101,6 +106,32 @@ BEGIN
   IF v_count = 0 THEN
     RETURN jsonb_build_object('enrolled', '[]'::jsonb, 'skipped', '[]'::jsonb);
   END IF;
+
+  -- ── Serialize concurrent enrollment of the SAME lead ──
+  -- Without this, two calls covering one lead could BOTH pass the "already
+  -- enrolled" checks below (neither has inserted yet). The loser's guarded claim
+  -- UPDATE then still succeeds after waiting — the winner stamped THIS
+  -- campaign_id, which the predicate deliberately accepts — and its
+  -- campaign_enrollment insert trips UNIQUE (campaign_id, lead_id) (or the
+  -- one-live-per-lead partial index when the two calls are different campaigns).
+  -- That exception aborts the WHOLE call, so one double-clicked lead would lose
+  -- every unrelated lead in the same batch.
+  --
+  -- Locking the lead rows HERE, before any check, makes the loser wait and then
+  -- (READ COMMITTED takes a fresh snapshot per statement) SEE the winner's
+  -- committed enrollment, so it takes the documented SKIPPED path instead and the
+  -- rest of the batch is unaffected.
+  --
+  -- ORDER BY id: two overlapping batches lock in the same order, so they queue
+  -- instead of deadlocking. Scoped to the campaign's workspace so a caller can
+  -- never lock rows outside it; a cross-workspace lead_id simply isn't locked and
+  -- falls through to the claim UPDATE, which already skips it.
+  PERFORM 1
+  FROM public.leads
+  WHERE id IN (SELECT (e->>'lead_id')::uuid FROM jsonb_array_elements(_enrollments) e)
+    AND workspace_id = v_workspace
+  ORDER BY id
+  FOR UPDATE;
 
   FOR v_elem IN SELECT * FROM jsonb_array_elements(_enrollments) LOOP
     v_lead_id    := (v_elem->>'lead_id')::uuid;

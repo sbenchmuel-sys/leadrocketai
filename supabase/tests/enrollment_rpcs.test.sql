@@ -116,6 +116,51 @@ BEGIN
   IF (SELECT count(*) FROM public.campaign_touch WHERE lead_id = '00000000-0000-0000-0000-00000000d001') <> 3 THEN RAISE EXCEPTION 'duplicate touches'; END IF;
 END $$;
 
+-- 4b. An already-enrolled lead in a MIXED batch is reported skipped and does NOT
+--     take the unrelated leads down with it (the concurrent-enrollment blast
+--     radius: a unique-constraint abort here would roll back the whole call).
+DO $$
+DECLARE r jsonb;
+BEGIN
+  INSERT INTO public.leads (id, workspace_id, owner_user_id, name, email) VALUES
+    ('00000000-0000-0000-0000-00000000d00a', '00000000-0000-0000-0000-00000000aaaa', '00000000-0000-0000-0000-000000000101', 'Fresh A', 'ten@ok.example'),
+    ('00000000-0000-0000-0000-00000000d00b', '00000000-0000-0000-0000-00000000aaaa', '00000000-0000-0000-0000-000000000101', 'Fresh B', 'eleven@ok.example');
+  r := public.enroll_campaign_leads('00000000-0000-0000-0000-0000000c0001', '1:email:0|2:linkedin:1|4:email:2',
+    jsonb_build_array(
+      test_entry('00000000-0000-0000-0000-00000000d00a', now()),
+      test_entry('00000000-0000-0000-0000-00000000d001', now()),  -- already enrolled by test 3
+      test_entry('00000000-0000-0000-0000-00000000d00b', now())));
+  IF jsonb_array_length(r->'enrolled') <> 2 OR jsonb_array_length(r->'skipped') <> 1 THEN
+    RAISE EXCEPTION 'a duplicate lead took the batch down instead of being skipped: %', r;
+  END IF;
+  IF (SELECT count(*) FROM public.campaign_enrollment
+       WHERE lead_id IN ('00000000-0000-0000-0000-00000000d00a', '00000000-0000-0000-0000-00000000d00b')) <> 2 THEN
+    RAISE EXCEPTION 'unrelated leads in the batch were rolled back';
+  END IF;
+  -- Leave the fixture as it was: the launch tests below assert on the exact set
+  -- of not-started enrollments in this campaign.
+  DELETE FROM public.campaign_enrollment
+   WHERE lead_id IN ('00000000-0000-0000-0000-00000000d00a', '00000000-0000-0000-0000-00000000d00b');
+  DELETE FROM public.leads
+   WHERE id IN ('00000000-0000-0000-0000-00000000d00a', '00000000-0000-0000-0000-00000000d00b');
+END $$;
+
+-- 4c. The lead rows are LOCKED before the already-enrolled check, in id order.
+--     This is what turns a concurrent duplicate into the skipped path above
+--     rather than a unique-constraint abort; asserted against the definition
+--     actually installed in the database, not the migration text.
+DO $$
+DECLARE def text; lock_pos int; check_pos int;
+BEGIN
+  SELECT pg_get_functiondef('public.enroll_campaign_leads(uuid, text, jsonb)'::regprocedure) INTO def;
+  lock_pos  := position('FOR UPDATE' in def);
+  check_pos := position('campaign_id = _campaign_id AND e.lead_id = v_lead_id' in def);
+  IF lock_pos = 0 THEN RAISE EXCEPTION 'enroll_campaign_leads takes no row lock on the leads it enrolls'; END IF;
+  IF check_pos = 0 THEN RAISE EXCEPTION 'could not locate the already-enrolled check'; END IF;
+  IF lock_pos > check_pos THEN RAISE EXCEPTION 'the lead lock is taken AFTER the already-enrolled check — the race is still open'; END IF;
+  IF position('ORDER BY id' in def) = 0 THEN RAISE EXCEPTION 'lead locks are not taken in a deterministic order (deadlock risk)'; END IF;
+END $$;
+
 -- 5. An admin CAN enroll a colleague's lead.
 SET test.uid = '00000000-0000-0000-0000-000000000102';
 DO $$
