@@ -80,3 +80,118 @@ describe("campaign cadence status never truncates a lead mid-cadence (#13 paging
     expect(stepOrderIdx).toBeGreaterThan(leadOrderIdx);
   });
 });
+
+// ── Codex review round on PR #136 ──
+
+describe("recording 'they accepted my invite' is never single-homed (P1)", () => {
+  // The signal conditional LinkedIn steps branch on (leads.linkedin_connected_at)
+  // is rep-entered. It used to live ONLY on the LinkedIn Outreach card, which
+  // vanishes the moment that step is completed — acceptance almost always lands
+  // after that, so the next LinkedIn touch auto-skipped forever with no way back.
+  // It must stay reachable from a surface that outlives the card.
+  it("a persistent surface besides the Outreach card can write it", () => {
+    const callers = [
+      "src/components/queue/OutreachCard.tsx",
+      "src/components/queue/UpcomingTouchesStrip.tsx",
+    ].filter((rel) => /setLinkedinAccepted\s*\(/.test(read(rel)));
+    expect(callers).toContain("src/components/queue/UpcomingTouchesStrip.tsx");
+    expect(callers.length).toBeGreaterThan(1);
+  });
+
+  it("the strip carries the lead's current accepted state, so the toggle isn't blind", () => {
+    expect(read("src/lib/upcomingTouchesQueries.ts")).toMatch(/linkedin_connected_at/);
+  });
+});
+
+describe("a conditional step reads as conditional outside edit mode (P2)", () => {
+  // CampaignScript renders the branch badge from step.condition. The read-only
+  // projection on the campaign page used to drop the field, so "only if they
+  // accepted the invite" silently rendered as an unconditional touch.
+  it("CampaignDetail's read-only projection passes condition through", () => {
+    const src = read("src/pages/CampaignDetail.tsx");
+    const readOnly = src.slice(src.lastIndexOf("<CampaignScript"));
+    expect(readOnly).toMatch(/condition:\s*s\.condition/);
+  });
+});
+
+describe("an immediately-due LinkedIn touch is not exposed mid-enrichment (P2)", () => {
+  // The hold itself is unit-tested through both planners in
+  // campaignEnrollment.test.ts. What a unit test can't see is a THIRD path that
+  // lays out touches without passing the hold through — the shape that already
+  // bit us once, when Launch's planRelaunch discarded the hold that "add people"
+  // applied. buildTouchSchedule is the one function every touch row is built by,
+  // so every call inside it must decide about the hold explicitly.
+  const src = read("src/lib/campaignEnrollment.ts");
+
+  it("every planner builds its touches through buildTouchSchedule with the hold", () => {
+    // Each call's argument list, up to the line end — the declaration itself is
+    // the one whose first argument is the parameter name.
+    const calls = [...src.matchAll(/buildTouchSchedule\((.*)$/gm)]
+      .map((m) => m[1])
+      // Drop the declaration, whose "(" ends the line.
+      .filter((args) => args.trim().length > 0 && !args.includes("startDate"));
+    expect(calls.length).toBeGreaterThanOrEqual(2); // planEnrollment + planRelaunch
+    for (const args of calls) {
+      // Every builder must decide about the hold, not silently omit it.
+      expect(args).toMatch(/linkedinLookupPending/);
+    }
+  });
+
+  it("both planners take the pending set, and both call sites supply it", () => {
+    for (const planner of ["export function planEnrollment", "export function planRelaunch"]) {
+      const sig = src.slice(src.indexOf(planner), src.indexOf(planner) + 600);
+      expect(sig).toMatch(/linkedinLookupPending/);
+    }
+    // The RPC call sites: "add people" and Launch.
+    const enrollAt = src.indexOf('rpc("enroll_campaign_leads"');
+    const launchAt = src.indexOf('rpc("launch_campaign_with_schedule"');
+    expect(src.slice(0, enrollAt)).toMatch(/planEnrollment\([\s\S]{0,400}leadsAwaitingLinkedinLookup/);
+    expect(src.slice(enrollAt, launchAt)).toMatch(/planRelaunch\([^)]*lookupPending\)/);
+  });
+});
+
+describe("concurrent enrollment of one lead can't abort the batch (P2)", () => {
+  // Two calls racing on the same lead used to both pass the already-enrolled
+  // check; the loser's insert tripped a unique constraint and rolled back every
+  // unrelated lead in its batch. The lead rows must be locked BEFORE that check.
+  // Behaviour is covered by supabase/tests/enrollment_rpcs.test.sql (CI).
+  it("the enrollment RPC locks the payload's leads before checking for an enrollment", () => {
+    const sql = read("supabase/migrations/20260907000000_transactional_enrollment_rpcs.sql");
+    const fn = sql.slice(sql.indexOf("FUNCTION public.enroll_campaign_leads"), sql.indexOf("FUNCTION public.launch_campaign_with_schedule"));
+    const lockAt = fn.indexOf("FOR UPDATE");
+    const checkAt = fn.indexOf("campaign_id = _campaign_id AND e.lead_id = v_lead_id");
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeLessThan(checkAt);
+    // Deterministic lock order, or two overlapping batches deadlock instead.
+    expect(fn).toMatch(/ORDER BY id\s*\n\s*FOR UPDATE/);
+  });
+});
+
+describe("the shared web-search helper owns the provider name (P1)", () => {
+  // enrich-company-search referenced a bare `provider` that the extraction into
+  // _shared/webSearch.ts had removed: every UNCACHED enrichment ran its three
+  // searches, threw ReferenceError while building the row, and returned 500 with
+  // nothing stored. Cached lookups kept working, which is why it shipped.
+  it("no caller re-derives the provider or uses a bare, undeclared one", () => {
+    for (const rel of [
+      "supabase/functions/enrich-company-search/index.ts",
+      "supabase/functions/enrich-lead-linkedin/index.ts",
+    ]) {
+      const src = read(rel);
+      if (!/webSearch\.ts/.test(src)) continue;
+      // No local re-read of the env var — the helper is the single source.
+      expect(src).not.toMatch(/ENRICHMENT_PROVIDER/);
+      // No `provider` shorthand property / bare reference: that is exactly the
+      // dangling identifier the extraction left behind.
+      expect(src).not.toMatch(/(?<![.\w])provider\s*(?:,|\}|\))/);
+    }
+  });
+
+  it("webSearch exports the provider it actually branches on", () => {
+    const src = read("supabase/functions/_shared/webSearch.ts");
+    expect(src).toMatch(/export const SEARCH_PROVIDER\s*=/);
+    // The dispatch reads the exported binding, so the two can't drift.
+    expect(src).toMatch(/if \(SEARCH_PROVIDER === "serpapi"\)/);
+  });
+});

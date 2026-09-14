@@ -104,7 +104,11 @@ export function AddLeadsDialog({
       if (result.enrolled === 0) {
         toast.info("No one new was enrolled — everyone selected was skipped.");
       } else {
-        toast.success(`Enrolled ${result.enrolled} ${result.enrolled === 1 ? "person" : "people"}`);
+        toast.success(`Enrolled ${result.enrolled} ${result.enrolled === 1 ? "person" : "people"}`, {
+          description: result.linkedinLookups > 0
+            ? `Looking up LinkedIn profiles for ${result.linkedinLookups} of them in the background.`
+            : undefined,
+        });
       }
       onAdded();
       onOpenChange(false);

@@ -23,6 +23,11 @@ export interface UpcomingLead {
   readyAt: string; // ISO
   /** Inferred reason the previous step was auto-skipped, if any. */
   previousSkipReason: string | null;
+  /** leads.linkedin_connected_at — the rep-marked "they accepted my invite"
+   *  signal that conditional LinkedIn steps branch on. Carried here so the
+   *  strip can offer the toggle for the whole wait between LinkedIn touches
+   *  (the Outreach card that owned it is gone once the invite step is done). */
+  linkedinConnectedAt: string | null;
 }
 
 export interface UpcomingCampaignGroup {
@@ -63,7 +68,7 @@ export async function fetchUpcomingTouches(): Promise<UpcomingCampaignGroup[]> {
     .from("campaign_touch" as any)
     .select(
       "id, campaign_id, lead_id, step_number, channel, eligible_at, enrollment_id, " +
-        "leads!inner(id, name, company), " +
+        "leads!inner(id, name, company, linkedin_connected_at), " +
         "campaign_enrollment!inner(id, status)",
     )
     .eq("status", "scheduled")
@@ -107,6 +112,7 @@ export async function fetchUpcomingTouches(): Promise<UpcomingCampaignGroup[]> {
       stepNumber: t.step_number,
       readyAt: t.eligible_at,
       previousSkipReason: skipChan ? reasonForChannel(skipChan) : null,
+      linkedinConnectedAt: lead.linkedin_connected_at ?? null,
     };
     const list = byCamp.get(t.campaign_id) || [];
     list.push(upcoming);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   nextBusinessDay,
   addBusinessDays,
@@ -13,6 +13,10 @@ import {
   isLiveRelationship,
   stepScheduleFingerprint,
   planRelaunch,
+  planEnrollment,
+  leadsAwaitingLinkedinLookup,
+  launchCampaignWithSchedule,
+  LINKEDIN_ENRICH_GRACE_MS,
   type CadenceStep,
   type LeadContactInfo,
 } from "./campaignEnrollment";
@@ -380,5 +384,181 @@ describe("planRelaunch — Launch re-dates a draft's schedule from now (BUG-011)
       if (t.channel === "email") expect(t.max_age_at).toBeNull();
       else expect(new Date(t.max_age_at!).getTime()).toBeGreaterThan(new Date(t.eligible_at).getTime());
     }
+  });
+});
+
+describe("planEnrollment — the one payload enroll_campaign_leads writes atomically (#8)", () => {
+  const anchor = new Date(2026, 8, 2, 9, 0, 0); // Wednesday
+  const leadIds = ["l0", "l1", "l2", "l3", "l4"];
+
+  it("one entry per lead, every touch of the cadence, in step order", () => {
+    const plan = planEnrollment(leadIds, STEPS, 40, {}, anchor);
+    expect(plan.map((p) => p.lead_id)).toEqual(leadIds);
+    for (const p of plan) {
+      expect(p.touches.map((t) => t.step_number)).toEqual(STEPS.map((s) => s.step_number));
+      // Touch 1 lands on the start day; later touches never run backwards.
+      expect(new Date(p.touches[0].eligible_at).toDateString()).toBe(new Date(p.started_at).toDateString());
+      for (let i = 1; i < p.touches.length; i++) {
+        expect(new Date(p.touches[i].eligible_at).getTime())
+          .toBeGreaterThanOrEqual(new Date(p.touches[i - 1].eligible_at).getTime());
+      }
+    }
+  });
+
+  it("staggers start days under a tight cap, seeded with already-booked load", () => {
+    const plan = planEnrollment(leadIds, STEPS, 3, { 0: 2 }, anchor);
+    const days = plan.map((p) => new Date(p.started_at).getTime());
+    for (let i = 1; i < days.length; i++) expect(days[i]).toBeGreaterThanOrEqual(days[i - 1]);
+    expect(new Set(days).size).toBeGreaterThan(1);
+  });
+
+  it("matches what planRelaunch would produce for the same leads (Launch = 'add people' at launch time)", () => {
+    const enroll = planEnrollment(leadIds, STEPS, 3, { 0: 2 }, anchor);
+    const relaunch = planRelaunch("c1", leadIds.map((id) => ({ id: `e-${id}`, lead_id: id })), STEPS, 3, { 0: 2 }, anchor);
+    expect(enroll.map((p) => p.started_at)).toEqual(relaunch.starts.map((s) => s.startedAt));
+    expect(enroll.flatMap((p) => p.touches.map((t) => t.eligible_at)))
+      .toEqual(relaunch.touchRows.map((t) => t.eligible_at));
+  });
+});
+
+describe("a LinkedIn touch never comes due while its profile lookup is running", () => {
+  // Thursday: a business day, so step 1 is eligible immediately.
+  const now = new Date("2026-09-10T10:00:00Z");
+  const linkedinFirst: CadenceStep[] = [
+    { step_number: 1, channel: "linkedin", delay_days: 0 },
+    { step_number: 2, channel: "email", delay_days: 2 },
+  ];
+  const held = now.getTime() + LINKEDIN_ENRICH_GRACE_MS;
+  const leads = [
+    { id: "lead-a", linkedin_url: null },
+    { id: "lead-b", linkedin_url: "https://www.linkedin.com/in/b" },
+  ];
+  const pending = () => leadsAwaitingLinkedinLookup(linkedinFirst, leads);
+
+  it("only picks the leads with no URL, and only when the cadence has a LinkedIn step", () => {
+    expect([...pending()]).toEqual(["lead-a"]);
+    const noLinkedin: CadenceStep[] = [{ step_number: 1, channel: "email", delay_days: 0 }];
+    expect(leadsAwaitingLinkedinLookup(noLinkedin, leads).size).toBe(0);
+  });
+
+  // Path 1: "add people" into an already-active campaign.
+  it("planEnrollment holds the immediately-due LinkedIn touch, for that lead only", () => {
+    const undeferred = planEnrollment(["lead-a", "lead-b"], linkedinFirst, 50, {}, now);
+    // The race was real: without the hold this touch is due now or earlier.
+    expect(new Date(undeferred[0].touches[0].eligible_at).getTime()).toBeLessThanOrEqual(now.getTime());
+
+    const plan = planEnrollment(["lead-a", "lead-b"], linkedinFirst, 50, {}, now, pending());
+    expect(new Date(plan[0].touches[0].eligible_at).getTime()).toBe(held);
+    // lead-b has a URL → unchanged.
+    expect(plan[1].touches[0].eligible_at).toBe(undeferred[1].touches[0].eligible_at);
+    // The email step still spaces off the UNDEFERRED date — the cadence is intact.
+    expect(plan[0].touches[1].eligible_at).toBe(undeferred[0].touches[1].eligible_at);
+  });
+
+  // Path 2: launching a draft before the lookups kicked off at enrollment finish.
+  it("planRelaunch holds it too — re-anchoring must not discard the hold", () => {
+    const enrollments = [{ id: "enr-a", lead_id: "lead-a" }, { id: "enr-b", lead_id: "lead-b" }];
+    const undeferred = planRelaunch("camp", enrollments, linkedinFirst, 50, {}, now);
+    const rowA = (p: typeof undeferred) => p.touchRows.find((t) => t.lead_id === "lead-a" && t.channel === "linkedin")!;
+    expect(new Date(rowA(undeferred).eligible_at).getTime()).toBeLessThanOrEqual(now.getTime());
+
+    const plan = planRelaunch("camp", enrollments, linkedinFirst, 50, {}, now, pending());
+    expect(new Date(rowA(plan).eligible_at).getTime()).toBe(held);
+    expect(plan.touchRows.find((t) => t.lead_id === "lead-b" && t.channel === "linkedin")!.eligible_at)
+      .toBe(undeferred.touchRows.find((t) => t.lead_id === "lead-b" && t.channel === "linkedin")!.eligible_at);
+  });
+
+  it("leaves a LinkedIn touch already scheduled beyond the window alone", () => {
+    const later: CadenceStep[] = [
+      { step_number: 1, channel: "email", delay_days: 0 },
+      { step_number: 2, channel: "linkedin", delay_days: 3 },
+    ];
+    const pendingLater = leadsAwaitingLinkedinLookup(later, leads);
+    expect(planEnrollment(["lead-a"], later, 50, {}, now, pendingLater))
+      .toEqual(planEnrollment(["lead-a"], later, 50, {}, now));
+  });
+
+  it("never holds a touch to or past its own auto-skip horizon", () => {
+    // A same-day follow-up clamps max_age_at to 1 business day, so use a hold
+    // window wider than that by calling buildTouchSchedule directly.
+    const far = new Date(now.getTime() + 40 * 24 * 60 * 60 * 1000);
+    const touches = buildTouchSchedule(now, linkedinFirst, far);
+    const plain = buildTouchSchedule(now, linkedinFirst);
+    expect(touches[0].eligible_at).toBe(plain[0].eligible_at);
+    expect(new Date(touches[0].max_age_at!).getTime()).toBeLessThan(far.getTime());
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Launch path, with a fake PostgREST client. Only this block uses the mock; the
+// pure planner tests above never touch supabase.
+// ─────────────────────────────────────────────────────────────────────────────
+const tableResult: Record<string, { data: unknown; error: unknown }> = {};
+let rpcPayload: any = null;
+
+function fakeBuilder(table: string): unknown {
+  const target = () => undefined;
+  return new Proxy(target, {
+    get(_t, prop) {
+      if (prop === "then") {
+        const res = tableResult[table] ?? { data: [], error: null };
+        return (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) =>
+          Promise.resolve(res).then(ok, bad);
+      }
+      return () => fakeBuilder(table);
+    },
+  });
+}
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: (table: string) => fakeBuilder(table),
+    auth: { getUser: () => Promise.resolve({ data: { user: null } }) },
+    rpc: (_name: string, args: unknown) => {
+      rpcPayload = args;
+      return Promise.resolve({ data: { reanchored: 1 }, error: null });
+    },
+    functions: { invoke: () => Promise.resolve({ data: null, error: null }) },
+  },
+}));
+
+describe("launchCampaignWithSchedule fails CLOSED when it can't read LinkedIn URLs", () => {
+  beforeEach(() => {
+    rpcPayload = null;
+    for (const k of Object.keys(tableResult)) delete tableResult[k];
+    // A cadence whose FIRST touch is LinkedIn, and one not-started enrollment.
+    tableResult.campaign_steps = {
+      data: [
+        { step_number: 1, channel: "linkedin", delay_days: 0, active: true },
+        { step_number: 2, channel: "email", delay_days: 2, active: true },
+      ],
+      error: null,
+    };
+    tableResult.campaign_enrollment = { data: [{ id: "enr-a", lead_id: "lead-a" }], error: null };
+    tableResult.campaign_touch = { data: [], error: null };
+  });
+
+  const firstLinkedinEligible = () => {
+    const touches = rpcPayload._plan[0].touches as { channel: string; eligible_at: string }[];
+    return new Date(touches.find((t) => t.channel === "linkedin")!.eligible_at).getTime();
+  };
+
+  it("holds the first LinkedIn touch when the leads read ERRORS", async () => {
+    tableResult.leads = { data: null, error: { message: "statement timeout" } };
+    await launchCampaignWithSchedule("camp-1");
+    // Held roughly a grace period out, not due now — the scheduler can't reach it
+    // and auto-skip the step while a lookup may still be running.
+    expect(firstLinkedinEligible()).toBeGreaterThan(Date.now() + LINKEDIN_ENRICH_GRACE_MS - 60_000);
+  });
+
+  it("holds a lead the read silently omitted (RLS, deleted since)", async () => {
+    tableResult.leads = { data: [], error: null };
+    await launchCampaignWithSchedule("camp-1");
+    expect(firstLinkedinEligible()).toBeGreaterThan(Date.now() + LINKEDIN_ENRICH_GRACE_MS - 60_000);
+  });
+
+  it("does NOT hold a lead that positively has a URL", async () => {
+    tableResult.leads = { data: [{ id: "lead-a", linkedin_url: "https://www.linkedin.com/in/a" }], error: null };
+    await launchCampaignWithSchedule("camp-1");
+    expect(firstLinkedinEligible()).toBeLessThanOrEqual(Date.now());
   });
 });

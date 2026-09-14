@@ -6,18 +6,70 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Mail, Phone, MessageSquare, Linkedin, MessageCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Mail, Phone, MessageSquare, Linkedin, MessageCircle } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { setLinkedinAccepted } from "@/lib/outreachQueue";
 import {
   fetchUpcomingTouches,
   type UpcomingCampaignGroup,
   type UpcomingChannel,
+  type UpcomingLead,
 } from "@/lib/upcomingTouchesQueries";
 import { formatDueAt } from "@/lib/eligibleAtFormat";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 const VISIBLE_CAP = 50;
+
+/**
+ * "They accepted my invite" — the one signal the app cannot observe for itself,
+ * and the thing conditional LinkedIn steps branch on (leads.linkedin_connected_at).
+ *
+ * It also lives on a LinkedIn Outreach card, but that card disappears the moment
+ * the invite step is completed — and acceptance almost always arrives AFTER that.
+ * Without a second home the rep has no way to record it, so the next LinkedIn
+ * touch auto-skips forever. This strip is the persistent surface: a lead shows
+ * here for the whole wait before each of its scheduled LinkedIn touches.
+ */
+function AcceptedToggle({
+  leadId,
+  accepted,
+  onChange,
+}: {
+  leadId: string;
+  accepted: boolean;
+  onChange: (leadId: string, accepted: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const toggle = async () => {
+    const next = !accepted;
+    setBusy(true);
+    onChange(leadId, next); // optimistic; the row is the source of truth
+    try {
+      await setLinkedinAccepted(leadId, next);
+      toast.success(next ? "Marked — they accepted your invite." : "Unmarked.");
+    } catch (err) {
+      onChange(leadId, !next);
+      toast.error(err instanceof Error ? err.message : "Couldn't save that");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button
+      size="sm"
+      variant={accepted ? "secondary" : "outline"}
+      className="h-6 shrink-0 gap-1 px-1.5 text-[10px]"
+      disabled={busy}
+      aria-pressed={accepted}
+      onClick={toggle}
+      title={accepted ? "Click to unmark" : "Mark that they accepted your connection request"}
+    >
+      <Check className="h-3 w-3" /> {accepted ? "Accepted" : "Accepted?"}
+    </Button>
+  );
+}
 
 function ChannelIcon({ channel }: { channel: UpcomingChannel }) {
   const cls = "h-3.5 w-3.5 text-muted-foreground shrink-0";
@@ -42,6 +94,12 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<UpcomingCampaignGroup | null>(null);
+  // Per-lead override of linkedinConnectedAt, so toggling one row updates every
+  // row for the same lead (a lead can have several LinkedIn touches pending).
+  const [acceptedBy, setAcceptedBy] = useState<Record<string, boolean>>({});
+  const isAccepted = (l: UpcomingLead) => acceptedBy[l.leadId] ?? !!l.linkedinConnectedAt;
+  const markAccepted = (leadId: string, accepted: boolean) =>
+    setAcceptedBy((prev) => ({ ...prev, [leadId]: accepted }));
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +167,9 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
                           {l.company && <span className="text-muted-foreground"> · {l.company}</span>}
                         </span>
                         <span className="text-muted-foreground whitespace-nowrap">{due(l.readyAt)}</span>
+                        {l.channel === "linkedin" && (
+                          <AcceptedToggle leadId={l.leadId} accepted={isAccepted(l)} onChange={markAccepted} />
+                        )}
                         {l.previousSkipReason && (
                           <span className="text-[10px] text-muted-foreground italic whitespace-nowrap">
                             skipped: {l.previousSkipReason}
@@ -153,6 +214,9 @@ export function UpcomingTouchesStrip({ refreshKey = 0 }: Props) {
                       {l.company && <span className="text-muted-foreground"> · {l.company}</span>}
                     </span>
                     <span className="text-muted-foreground whitespace-nowrap">{due(l.readyAt)}</span>
+                    {l.channel === "linkedin" && (
+                      <AcceptedToggle leadId={l.leadId} accepted={isAccepted(l)} onChange={markAccepted} />
+                    )}
                   </li>
                 ))}
               </ul>
