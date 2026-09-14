@@ -9,7 +9,7 @@ import { loadDealMemory, updateFromOutboundLite, saveDealMemory } from "../_shar
 import {
   loadExecutionSettings,
   clearSettingsCache,
-  checkMinGap,
+  checkEmailMinGap,
   checkPerLeadCaps,
   checkSendWindow,
   checkStopConditions,
@@ -27,6 +27,7 @@ import {
   endColdEnrollment,
   buildUnsubscribeUrl,
   repliedSinceEnrollment,
+  requirePostalAddress,
 } from "../_shared/coldOutreach.ts";
 import { signUnsubscribeToken, getUnsubscribeSecret } from "../_shared/outreachUnsubscribeToken.ts";
 import { coldTouchClaimKey, coldTouchClaimAcquired } from "../_shared/coldTouchClaim.ts";
@@ -34,6 +35,134 @@ import { stepConditionUnmetReason } from "../_shared/coldConditions.ts";
 import { resolveLeadTimezone } from "../_shared/leadTimezone.ts";
 import { createCanonicalInteraction } from "../_shared/canonicalInteraction.ts";
 import { stripAISignOff } from "../_shared/signoff.ts";
+import { buildColdEmailFooter } from "../_shared/coldEmailFooter.ts";
+
+// ── Safety constants (Unit G-C) ──────────────────────────────────────────────
+// Pause between consecutive legacy sends. The cron-dispatcher abandons its wait
+// at 55s, so the old 30–90s sleep could eat the whole tick and starve the cold
+// pass that runs after the legacy loop. The 15-minute cron already spaces
+// sends; this is only a small anti-burst gap.
+const INTER_SEND_STAGGER_MS = 8_000;
+// ── Volume tripwire (Unit 0) — the default must be REACHABLE (Codex P2) ──────
+// The tripwire alerts when one mailbox (or workspace) exceeds the threshold in a
+// trailing VOLUME_ALERT_WINDOW_MIN minutes. The old fixed default of 15 sat
+// ABOVE the maximum the cron path can physically produce, so it was decorative:
+// the executor runs every EXECUTOR_CRON_INTERVAL_MIN minutes and sends at most
+// MAX_SENDS_PER_RUN per run, so a trailing 15-minute window holds at most
+// VOLUME_ALERT_MAX_BATCHES_IN_WINDOW batches — 2 × 5 = 10 sends today, never 16.
+//
+// The default is therefore DERIVED from the run cap instead of hardcoded, so
+// raising MAX_SENDS_PER_RUN or changing the cron interval can't silently put the
+// alarm out of reach again. One full batch landing on a single mailbox inside one
+// window is already twice that mailbox's per-tick share — worth a look during the
+// pilot. Override with the VOLUME_ALERT_THRESHOLD secret.
+const EXECUTOR_CRON_INTERVAL_MIN = 15; // `*/15` in cron.job — keep in sync
+
+// ── Send cap normalisation (Codex P1) ────────────────────────────────────────
+// MAX_SENDS_PER_RUN used to be `parseInt(env, 10)` with no finiteness check, so a
+// whitespace or mistyped secret produced NaN — and NaN loses EVERY comparison.
+// `processed >= NaN` is false on every iteration, so the per-run cap silently
+// stopped existing and the batch ran to the end of the page; and because the
+// volume tripwire's default threshold is derived from the same value, it was NaN
+// too, so `count > threshold` was false and the alarm that exists to catch an
+// uncapped blast could not fire. A one-character typo in a secret therefore gave
+// an uncapped production sender with its own alarm disabled.
+//
+// Normalised ONCE here so every consumer inherits a sane value; the comparison
+// sites are deliberately left alone. Note `Math.max(1, NaN)` is NaN, so a
+// Math.max floor is NOT a guard — only an explicit finiteness test is.
+const MAX_SENDS_PER_RUN_DEFAULT = 5;
+
+/** A finite, positive, integral send cap. Anything malformed falls back. */
+function normalizeSendCap(raw: number): number {
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : MAX_SENDS_PER_RUN_DEFAULT;
+}
+
+// ── Deferral for a row this run refuses to send (Codex P1, all instances) ────
+// Used by EVERY refusal branch whose blocker clears only with time or with a
+// human changing a setting. Both scans are capped pages (20 legacy / 200 cold)
+// and the cold one is ordered eligible_at ASC, so a refused row that keeps its
+// old eligible_at sits at the FRONT of the next page forever and starves every
+// owner behind it. Moving the row is what makes a refusal safe; the ledger row
+// is what makes it explicable. Refusals must do both.
+//
+// (Originally added for the paused-owner fallback only — the prefilter remains
+// the main path for that one, and never defers, so an un-pause still resumes on
+// the very next tick.)
+//
+// THE ARITHMETIC, because the previous value was one cron interval and that WAS
+// the bug: a row deferred by exactly one interval is due again on the very next
+// tick, so the paused set just rotates through the page forever.
+//
+// Let L = page limit, T = cron interval, D = this deferral, P = paused rows that
+// are simultaneously due. Rows come back at a steady rate of P x (T / D) per
+// tick, so paused rows can fill the page indefinitely only while
+//     P >= L x (D / T)
+//   old (D = T, 1 tick):   P >= 20 legacy  /  P >= 200 cold      <- the bug
+//   now (D = 6h, 24 ticks): P >= 480 legacy /  P >= 4,800 cold
+// There is also a one-off drain of ceil(P / L) ticks before the deferrals spread
+// out; at the new threshold that is the same 24 ticks, i.e. ~6h of degraded
+// service, not permanent starvation.
+//
+// Why 480 / 4,800 is out of reach in practice — this is a margin argument, not a
+// proof, and the prefilter (not this) is what actually removes the category:
+//   1. This path only runs when the prefilter failed. If it failed because
+//      workspace_profiles is unreadable, then every per-lead settings read fails
+//      too, so EVERY owner is paused (fail-closed, see executionSettings.ts) and
+//      nothing sends at all — there is no one left to starve.
+//   2. The residual case is >200 paused owners, who must between them also own
+//      480 (or 4,800) consented, action-due rows at the same moment.
+//   3. The cold scan is ordered by eligible_at ASC, so a deferred touch sorts
+//      BEHIND every currently-due touch; for cold, deferring at all — by any
+//      amount — already prevents the rotation. The 4,800 above is the
+//      order-blind worst case.
+// 6h also matches the deferral this file already uses for "needs a human to fix
+// it" refusals (no connected mailbox, no generated content).
+const BLOCKED_ROW_DEFER_MIN = 6 * 60;
+
+/** When a row refused for time/config reasons should be looked at again. */
+function blockedRowRetryAt(): Date {
+  return new Date(Date.now() + BLOCKED_ROW_DEFER_MIN * 60 * 1000);
+}
+
+/**
+ * The exact instant the per-OWNER daily send counter resets (Codex P2).
+ * getDailySendCount counts from `todayStart`, which is today's UTC midnight — so
+ * a capped lead must come back at the NEXT UTC midnight. Deferring to "tomorrow
+ * 09:30" woke it ~9.5h after the counter had already reset (too late); waking it
+ * any earlier just burns a page slot on a refusal that is still guaranteed.
+ * Waking exactly at the reset is correct: the send-window check then moves it to
+ * the workspace's window start in the normal way.
+ */
+function nextDailyCapResetAt(): Date {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  return d;
+}
+const VOLUME_ALERT_WINDOW_MIN = 15;
+// A trailing window of W minutes can straddle floor(W / interval) + 1 batches.
+const VOLUME_ALERT_MAX_BATCHES_IN_WINDOW =
+  Math.floor(VOLUME_ALERT_WINDOW_MIN / EXECUTOR_CRON_INTERVAL_MIN) + 1;
+
+/**
+ * Default alert threshold for a given per-run send cap. The tripwire fires on
+ * `count > threshold`, so the threshold MUST be strictly below the reachable
+ * ceiling (cap × batches) or the alarm can never sound.
+ */
+function volumeAlertDefaultThreshold(maxSendsPerRun: number): number {
+  // normalizeSendCap, not Math.max: Math.max(1, NaN) is NaN, which would make
+  // the derived threshold NaN and silence the alarm (Codex P1).
+  const cap = normalizeSendCap(maxSendsPerRun);
+  const reachableCeiling = cap * VOLUME_ALERT_MAX_BATCHES_IN_WINDOW;
+  return Math.max(1, Math.min(cap, reachableCeiling - 1));
+}
+// Global kill switch: set the AUTOMATION_PAUSED secret to "1" or "true" to stop
+// every AUTOMATIC send (legacy + cold) before any claim is written. Manual /
+// review sends (outreach-touch-action) are a different function and unaffected.
+function killSwitchEngaged(): boolean {
+  const v = (Deno.env.get("AUTOMATION_PAUSED") ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
 
 /** @deprecated — Use resolveCampaignInstruction() instead for new code.
  *  Kept temporarily for any edge case not yet migrated to the resolver. */
@@ -111,12 +240,36 @@ serve(async (req) => {
       ownerFilter = user.id;
     }
 
+    // ── KILL SWITCH ─────────────────────────────────────────────────────
+    // Checked before the service client, stale-claim recovery, OOO/WA
+    // surfacing and every claim: when engaged this tick does nothing at all.
+    if (killSwitchEngaged()) {
+      console.warn("[automation-executor] paused by kill switch (AUTOMATION_PAUSED) — no sends this tick");
+      return new Response(JSON.stringify({ ok: true, paused: true, processed: 0, sent: 0, skipped: 0, sentLeads: [] }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Clear per-invocation caches
     clearSettingsCache();
 
     const now = new Date().toISOString();
+    // Signed one-click unsubscribe secret — used by BOTH the legacy email path and
+    // the cold pass. Blank → every email send fails closed (no footer, no send).
+    const unsubSecret = getUnsubscribeSecret();
+    // Workspace postal address for the CAN-SPAM footer, cached per workspace per tick.
+    const postalCache = new Map<string, string>();
+    async function getPostalAddress(workspaceId: string): Promise<string> {
+      const cached = postalCache.get(workspaceId);
+      if (cached !== undefined) return cached;
+      const { data: ws } = await supabase.from("workspaces")
+        .select("cold_outreach_postal_address").eq("id", workspaceId).maybeSingle();
+      const postal = String((ws as any)?.cold_outreach_postal_address || "").trim();
+      postalCache.set(workspaceId, postal);
+      return postal;
+    }
 
     // -------------------------------------------------------
     // STEP -1: STALE CLAIM RECOVERY
@@ -211,12 +364,24 @@ serve(async (req) => {
     // Safety: skip leads already flagged, OOO leads, unsubscribed.
     // -------------------------------------------------------
     const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    // STARVATION BOUND (Codex P1 sweep — third capped scan). The loop below
+    // skips a lead whose rep already replied (`lastOut >= lastIn`) WITHOUT
+    // touching it, and such a lead keeps matching every filter here forever. A
+    // workspace with 30 already-answered WhatsApp threads therefore filled this
+    // 30-row page permanently and no genuinely unanswered lead was ever flagged
+    // again. Bounding the lookback lets answered rows age out of the page on
+    // their own. It also matches intent: this surfaces "they messaged 6h ago and
+    // nobody replied", and a three-month-old unanswered thread is not something
+    // to nudge about today.
+    const WA_NO_REPLY_LOOKBACK_DAYS = 7;
+    const waLookbackStart = new Date(Date.now() - WA_NO_REPLY_LOOKBACK_DAYS * 86_400_000).toISOString();
 
     let waCheckQuery = supabase
       .from("leads")
       .select("id, name, phone, last_inbound_at, last_outbound_at, needs_action, next_action_key, ooo_until")
       .not("last_inbound_at", "is", null)
       .lte("last_inbound_at", sixHoursAgo)   // inbound was >6h ago
+      .gte("last_inbound_at", waLookbackStart) // ...but still recent enough to matter
       .eq("needs_action", false)              // not already actioned
       .eq("unsubscribed", false)
       .in("status", ["active", "new"])
@@ -249,6 +414,55 @@ serve(async (req) => {
       }
     }
 
+    // ── PAUSED-OWNER EXCLUSION (Codex P1) ───────────────────────────────
+    // The in-loop pause check leaves the lead exactly as it is — still
+    // needs_action, still eligible — so that un-pausing resumes on the very next
+    // tick with nothing to un-defer. That is right for the owner and wrong for
+    // everyone else: the candidate query below is capped at 20 rows, so ONE
+    // paused owner with 20 due leads filled every page on every tick and no
+    // other owner's lead ever reached the loop again — silently, while each run
+    // reported success.
+    //
+    // Of the three fixes available, dropping paused owners BEFORE the limit is
+    // the only one that removes the category instead of raising the number of
+    // blocked rows needed to re-create it (over-fetching just moves the cliff,
+    // and is the wrong tool here anyway: unlike a cold skip, a legacy skip costs
+    // several round trips, so a bigger page is a direct threat to the
+    // dispatcher's 55s budget). Un-pause still resumes on the next tick, because
+    // nothing about the leads themselves is touched.
+    //
+    // The predicate is the SAME `=== true` the settings loader uses, applied in
+    // JS rather than in SQL: `cadence_settings->>automation_paused` renders both
+    // boolean true and the STRING "true" as 'true', and the loader deliberately
+    // does not pause on the string. Excluding an owner the loader would not
+    // pause would silently stop a working account.
+    const pausedOwnerIds: string[] = [];
+    let pausedOwnerFilterApplied = false;
+    try {
+      const { data: pausedRows, error: pausedErr } = await supabase
+        .from("workspace_profiles")
+        .select("user_id, cadence_settings")
+        .not("cadence_settings->>automation_paused", "is", null);
+      if (pausedErr) throw pausedErr;
+      for (const r of (pausedRows || [])) {
+        if (((r as any).cadence_settings as any)?.automation_paused === true) {
+          pausedOwnerIds.push((r as any).user_id as string);
+        }
+      }
+      // A `not.in` list this long would be a URL-length hazard; fall back rather
+      // than send a request that may be truncated or rejected.
+      if (pausedOwnerIds.length > 200) {
+        console.error(`[automation-executor] ${pausedOwnerIds.length} paused owners — too many to exclude in one query; using the in-loop check + deferral`);
+      } else {
+        pausedOwnerFilterApplied = true;
+      }
+    } catch (pausedLookupErr) {
+      // Cannot build the exclusion this tick. The in-loop check still refuses
+      // every send (it is defense in depth, not an optimisation); it also starts
+      // deferring, so a paused owner still cannot hold the page.
+      console.error("[automation-executor] paused-owner lookup failed — falling back to the in-loop pause check + deferral:", pausedLookupErr);
+    }
+
     // Find eligible leads (existing automation email flow)
     // CRITICAL: Exclude nurture leads — they are handled separately by the nurture pre-generate pipeline.
     // Nurture leads in "review" mode need manual approval; "automatic" mode is handled by its own flow.
@@ -260,7 +474,10 @@ serve(async (req) => {
     // BulkAutomationDialog / AutomationPreviewCard which sets automation_mode.
     let query = supabase
       .from("leads")
-      .select("id, name, email, company, workspace_id, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode, campaign_id, created_at")
+      // `phone` is REQUIRED here: the SMS branch below reads lead.phone; without it
+      // every SMS step claimed, skipped as "no phone", and the claim blocked retries
+      // for the rest of the day.
+      .select("id, name, email, phone, company, workspace_id, motion, source_type, stage, next_action_key, next_action_label, owner_user_id, last_inbound_at, has_future_meeting, nurture_mode, nurture_cadence, nurture_theme, nurture_outbound_count, eligible_at, unsubscribed, action_instructions, initial_message, website, linkedin_url, company_linkedin_url, city, state, country, industry, job_title, outbound_tone, manual_mode, automation_mode, campaign_id, created_at")
       .eq("needs_action", true)
       .not("eligible_at", "is", null)
       .not("automation_mode", "is", null) // ← explicit consent required
@@ -272,10 +489,10 @@ serve(async (req) => {
       .limit(20);
 
     // ── MAX_SENDS_PER_RUN cap ───────────────────────────────
-    // Default to 5 per run to stay within Edge Function time limits
-    // when inter-send stagger is active (5 × ~60s avg = ~5 min).
-    const maxSendsEnv = Deno.env.get("MAX_SENDS_PER_RUN");
-    const maxSendsPerRun = maxSendsEnv ? parseInt(maxSendsEnv, 10) : 5;
+    // Default to 5 per run to stay within the dispatcher's 55s wait
+    // (5 sends × INTER_SEND_STAGGER_MS gaps ≈ 32s of stagger).
+    // Malformed (whitespace, typo, negative, 0) → the documented default, never NaN.
+    const maxSendsPerRun = normalizeSendCap(parseInt(Deno.env.get("MAX_SENDS_PER_RUN") ?? "", 10));
 
     // ── DAILY SEND CAP PER MAILBOX ──────────────────────────
     // Counts emails already sent today (UTC) from automation_log for each owner.
@@ -284,16 +501,20 @@ serve(async (req) => {
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
 
-    // Pre-load daily cap from workspace cadence settings (per-owner, loaded lazily)
+    // Pre-load daily cap from the owner's cadence settings (loaded lazily).
+    // Keyed by owner+workspace to match loadExecutionSettings' own cache key —
+    // the cap itself is owner-level, but the loader needs the lead's workspace
+    // for the timezone, so the two caches must agree on the key.
     const dailyCapCache = new Map<string, number>();
 
-    async function getDailyCapForOwner(ownerId: string): Promise<number> {
-      const cached = dailyCapCache.get(ownerId);
+    async function getDailyCapForOwner(ownerId: string, workspaceId: string): Promise<number> {
+      const key = `${ownerId}|${workspaceId}`;
+      const cached = dailyCapCache.get(key);
       if (cached !== undefined) return cached;
 
-      const execSettings = await loadExecutionSettings(ownerId, supabase);
+      const execSettings = await loadExecutionSettings(ownerId, supabase, workspaceId);
       const cap = execSettings.guardrails.max_sends_per_day_per_mailbox;
-      dailyCapCache.set(ownerId, cap);
+      dailyCapCache.set(key, cap);
       return cap;
     }
 
@@ -315,6 +536,12 @@ serve(async (req) => {
 
     if (ownerFilter) {
       query = query.eq("owner_user_id", ownerFilter);
+    }
+
+    // Applied BEFORE the row limit — that is the whole point (Codex P1).
+    if (pausedOwnerFilterApplied && pausedOwnerIds.length > 0) {
+      query = query.not("owner_user_id", "in", `(${pausedOwnerIds.join(",")})`);
+      console.log(`[automation-executor] excluding ${pausedOwnerIds.length} paused owner(s) from the candidate scan`);
     }
 
     const { data: eligibleLeads, error: queryErr } = await query;
@@ -410,7 +637,7 @@ serve(async (req) => {
         const createdAtMs = new Date(lead.created_at).getTime();
         const cooldownMs = 24 * 60 * 60 * 1000;
         if (Date.now() - createdAtMs < cooldownMs) {
-          const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase);
+          const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase, lead.workspace_id);
           const remainingDays = Math.max(0, (createdAtMs + cooldownMs - Date.now()) / 86_400_000);
           const nextEligible = computeNextEligibleAt(
             remainingDays,
@@ -434,15 +661,6 @@ serve(async (req) => {
         }
       }
 
-      // Enforce daily send cap per mailbox/owner
-      const dailyCap = await getDailyCapForOwner(lead.owner_user_id);
-      const dailyCount = await getDailySendCount(lead.owner_user_id);
-      if (dailyCount >= dailyCap) {
-        console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap}`);
-        skipped++;
-        continue;
-      }
-
       const logEntry: Record<string, unknown> = {
         lead_id: lead.id,
         owner_user_id: lead.owner_user_id,
@@ -453,7 +671,48 @@ serve(async (req) => {
 
       try {
         // ── Load execution settings for this owner ──────────────────
-        const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase);
+        const execSettings = await loadExecutionSettings(lead.owner_user_id, supabase, lead.workspace_id);
+
+        // ── OWNER PAUSE ─────────────────────────────────────────────
+        // cadence_settings.automation_paused (see executionSettings.ts). It is
+        // stored on workspace_profiles, which is UNIQUE(user_id), so it pauses
+        // this OWNER everywhere — not one workspace. The lead is left exactly
+        // as-is (still eligible) so un-pausing resumes on the next tick; only
+        // the ledger row records why nothing went out.
+        if (execSettings.owner_automation_paused) {
+          console.log(`[automation-executor] Lead ${lead.id}: automation paused for this owner (all workspaces) — skipping`);
+          logEntry.status = "skipped";
+          // settings_read_failed distinguishes "the owner paused" from "we could
+          // not read the setting and refused to guess" — both refuse, but the
+          // ledger must not tell a rep they paused something they didn't.
+          logEntry.error_message = execSettings.settings_read_failed
+            ? "Could not read this account's automation settings — paused for safety, will retry next tick"
+            : "Automation paused for this account — applies to all of this owner's workspaces (cadence_settings.automation_paused)";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          // Normally the lead is left untouched so un-pausing resumes instantly —
+          // paused owners were already dropped from the scan above. Two cases
+          // break that and must defer instead:
+          //   a) the exclusion could not be built this tick, so nothing else
+          //      stands between a paused owner and a monopolised page;
+          //   b) settings_read_failed (Codex P2). This owner was NOT in
+          //      pausedOwnerIds — the bulk prefilter read their stored flag as
+          //      absent or could not see them — and the pause was discovered
+          //      per-lead when loadExecutionSettings failed. So the prefilter
+          //      SUCCEEDING is exactly what used to stop these rows being
+          //      deferred, and a persistently failing per-owner read refilled the
+          //      capped scan every tick. The condition must key on why THIS row
+          //      is paused, not on whether the bulk query worked.
+          // BLOCKED_ROW_DEFER_MIN, not one cron interval: one interval puts
+          // the row back in the very next scan, which is a rotation, not a fix.
+          if (!pausedOwnerFilterApplied || execSettings.settings_read_failed) {
+            await supabase.from("leads")
+              .update({ eligible_at: new Date(Date.now() + BLOCKED_ROW_DEFER_MIN * 60 * 1000).toISOString() })
+              .eq("id", lead.id);
+          }
+          skipped++;
+          continue;
+        }
 
         // ── SEND WINDOW CHECK ───────────────────────────────────────
         // If we're outside the configured send window or on a weekend,
@@ -580,15 +839,117 @@ serve(async (req) => {
           }
         }
 
-        // ── MIN GAP CHECK ───────────────────────────────────────────
-        const gapCheck = checkMinGap(
-          freshLead.last_outbound_at,
-          execSettings.guardrails.min_gap_hours_between_emails,
-        );
+        // ── CHANNEL RESOLUTION (moved up — Codex P1) ────────────────
+        // The step's channel MUST be known before any email-specific gate runs.
+        // It used to be resolved ~340 lines lower, after the mailbox lookup and
+        // after the email min-gap / per-lead-email-cap checks — so a due SMS step
+        // for an owner with Twilio but no connected mailbox exited at "No mail
+        // connection" and sms-send was never called, and an owner who had merely
+        // EMAILED a lead recently had that lead's SMS step throttled by a rule
+        // about a different channel.
+        //
+        // Cost of moving it: getRepContext (cached per owner) plus one
+        // loadCampaignForLead read now also run for leads that go on to be
+        // blocked by min-gap / caps / hard-status. The legacy loop is capped at
+        // 20 leads per run, so that is at most ~20 extra reads — cheap next to
+        // the dispatcher's 55s budget, and it buys a single source of truth for
+        // the channel (resolving it twice would be the real hazard).
+        //
+        // NOTHING about WHO may be contacted moved. Opt-out, the unsubscribe
+        // keyword scan, OOO, dedup, stop-on-reply / instant-pause-on-inbound,
+        // consent and the per-lead daily cap are all about the PERSON and still
+        // run for BOTH channels, in their original order.
+        const isInboundLead = lead.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(lead.source_type || "");
+        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
+
+        // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
+        // Uses the canonical resolver instead of ad-hoc text parsing.
+        // Prefers structured campaign steps from DB when available,
+        // falls back to legacy text parsing from action_instructions.
+        // Resolved HERE (before the draft lookup) so the step's CHANNEL is known
+        // before the email-only preconditions / floor below run.
+        let structuredCampaign = null;
+        try {
+          structuredCampaign = await loadCampaignForLead(lead.id, supabase);
+          if (structuredCampaign) {
+            console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
+          }
+        } catch (err) {
+          console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
+        }
+        const campaignInput: CampaignResolverInput = {
+          lead_id: lead.id,
+          action_key: lead.next_action_key,
+          motion: isInboundLead ? "inbound_response" : lead.motion,
+          outbound_tone: (lead as any).outbound_tone || "direct",
+          action_instructions: lead.action_instructions,
+          structured_campaign: structuredCampaign,
+          prior_steps_sent: undefined,
+          has_reply: !!freshLead.last_inbound_at,
+          meeting_booked: freshLead.has_future_meeting,
+          include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
+          calendar_link: repProfile?.calendar_link || null,
+          playbook_id: undefined,
+        };
+        const resolvedInstruction = resolveCampaignInstruction(campaignInput);
+        const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
+        // The step's channel — applies to cached AND generated drafts.
+        const resolvedChannel: string = resolvedInstruction?.channel || "email";
+
+        // ── DAILY SEND CAP PER OWNER ────────────────────────────────
+        // Moved here (Codex P2) so it is evaluated with the channel KNOWN. It
+        // used to run before resolvedChannel existed, which made it impossible
+        // to reason about per channel.
+        //
+        // It stays applied to BOTH channels on purpose, and that is the whole
+        // finding: the stored value is named max_sends_per_day_per_mailbox, but
+        // getDailySendCount counts EVERY automation_log 'sent' row for the
+        // owner, SMS included — so it is a per-OWNER daily ceiling, not a
+        // mailbox-existence check like the three gates that did become
+        // email-only. Exempting SMS would leave texts with no daily ceiling at
+        // all (5 per run x 96 ticks = up to 480/day/owner instead of 40).
+        //
+        // It now also DEFERS instead of leaving the lead in place: an over-cap
+        // owner with 20 due leads refilled the 20-row candidate page on every
+        // tick until midnight UTC — the same starvation shape as the paused
+        // owner — and wrote no ledger row at all, so a rep got no answer to
+        // "why didn't this send?".
+        const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);
+        const dailyCount = await getDailySendCount(lead.owner_user_id);
+        if (dailyCount >= dailyCap) {
+          console.log(`[automation-executor] Daily send cap reached for owner ${lead.owner_user_id}: ${dailyCount}/${dailyCap} (${resolvedChannel})`);
+          // Wake at the exact reset instant (Codex P2) — see nextDailyCapResetAt.
+          const capResetAt = nextDailyCapResetAt();
+          await supabase.from("leads").update({ eligible_at: capResetAt.toISOString() }).eq("id", lead.id);
+          logEntry.status = "skipped";
+          logEntry.error_message = `Daily send cap reached for this account: ${dailyCount}/${dailyCap} — retries after ${capResetAt.toISOString()}`;
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          skipped++;
+          continue;
+        }
+
+        // ── MIN GAP CHECK (email steps only — Codex P1/P2) ──────────
+        // Two-sided fix. (1) min_gap_hours_between_emails must not gate an SMS
+        // step at all — that let "I emailed them this morning" suppress a due
+        // text. (2) For email steps it must not count a TEXT as an email:
+        // leads.last_outbound_at is cross-channel (sms-send stamps it too), so
+        // checkEmailMinGap re-anchors on the last email_outbound timeline row
+        // when — and only when — the cheap cross-channel check would block.
+        const gapCheck = resolvedChannel === "sms"
+          ? { allowed: true, anchorAt: null } as const
+          : await checkEmailMinGap(
+              lead.id,
+              freshLead.last_outbound_at,
+              execSettings.guardrails.min_gap_hours_between_emails,
+              supabase,
+            );
         if (!gapCheck.allowed) {
           console.log(`[automation-executor] Lead ${lead.id}: ${gapCheck.reason} — deferring`);
           const deferMs = execSettings.guardrails.min_gap_hours_between_emails * 3_600_000;
-          const deferAt = new Date(new Date(freshLead.last_outbound_at!).getTime() + deferMs);
+          // Anchor on the blocking EMAIL, not on whatever was last sent.
+          const gapAnchor = gapCheck.anchorAt ?? freshLead.last_outbound_at!;
+          const deferAt = new Date(new Date(gapAnchor).getTime() + deferMs);
           await supabase.from("leads").update({ eligible_at: deferAt.toISOString() }).eq("id", lead.id);
           logEntry.status = "skipped";
           logEntry.error_message = gapCheck.reason!;
@@ -598,8 +959,20 @@ serve(async (req) => {
           continue;
         }
 
-        // ── PER-LEAD CAPS CHECK (7d / 30d) ──────────────────────────
-        const capCheck = await checkPerLeadCaps(lead.id, execSettings.guardrails, supabase);
+        // ── PER-LEAD CAPS CHECK (7d / 30d — email steps only, Codex P1) ──
+        // These are max_emails_per_lead_per_7d / _30d: an EMAIL budget. Spending
+        // it on an SMS step meant a lead who had received their allowed emails
+        // could never be texted. SMS is still bounded per lead by the guards that
+        // apply to BOTH channels below: GUARD 0 (nothing sent/pending in the last
+        // hour), GUARD 1 (at most one automated message per lead per day) and
+        // GUARD 2 (the same step never repeats within 7 days).
+        // ponytail: known asymmetry left alone — checkPerLeadCaps counts ALL
+        // automation_log sends, so an SMS send still consumes email budget. That
+        // direction is over-restrictive (fail-safe); fixing it needs a channel
+        // column on automation_log.
+        const capCheck = resolvedChannel === "sms"
+          ? { allowed: true } as const
+          : await checkPerLeadCaps(lead.id, execSettings.guardrails, supabase);
         if (!capCheck.allowed) {
           console.log(`[automation-executor] Lead ${lead.id}: ${capCheck.reason} — pausing automation`);
           await supabase.from("leads").update({
@@ -655,6 +1028,13 @@ serve(async (req) => {
             logEntry.completed_at = new Date().toISOString();
             await supabase.from("automation_log").insert(logEntry);
             console.log(`[automation-executor] WA auto-send blocked for lead ${lead.id}: wa_automation=${waEnabled}, opted_in=${leadOptedIn}`);
+            // Same starvation shape as the paused owner (Codex P1): this refusal
+            // clears only when a human changes a setting, so a bare continue left
+            // the lead at the front of the 20-row page every tick forever. Defer
+            // like the cold pass already does for its equivalents.
+            await supabase.from("leads")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", lead.id);
             skipped++;
             continue;
           }
@@ -712,95 +1092,117 @@ serve(async (req) => {
         let mailProvider: "gmail" | "outlook" = "gmail";
         let mailAccountId: string | null = null;
 
-        // Check mail_accounts table first (unified multi-mailbox)
-        const { data: wsMember } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", lead.owner_user_id)
-          .limit(1)
-          .maybeSingle();
-
-        if (wsMember?.workspace_id) {
-          const { data: mailAcct } = await supabase
-            .from("mail_accounts")
-            .select("id, provider, email_address")
-            .eq("workspace_id", wsMember.workspace_id)
-            .eq("status", "connected")
-            .order("is_default", { ascending: false })
+        // MAILBOX EXISTENCE / SENDER IDENTITY — EMAIL STEPS ONLY (Codex P1).
+        // Everything in this block is about which mailbox an EMAIL leaves from.
+        // It used to run unconditionally, so a due SMS step for an owner with a
+        // working Twilio setup but no connected Gmail/Outlook exited at "No mail
+        // connection (Gmail or Outlook)" and sms-send was never reached. An SMS
+        // step needs no mailbox; it keeps mailAccountId null and is routed by the
+        // `resolvedChannel === "sms"` branch at the provider call, which enforces
+        // its own precondition (a phone number on the lead).
+        if (resolvedChannel !== "sms") {
+          // Check mail_accounts table first (unified multi-mailbox)
+          const { data: wsMember } = await supabase
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", lead.owner_user_id)
             .limit(1)
             .maybeSingle();
 
-          if (mailAcct) {
-            mailProvider = mailAcct.provider as "gmail" | "outlook";
-            mailAccountId = mailAcct.id;
+          if (wsMember?.workspace_id) {
+            const { data: mailAcct } = await supabase
+              .from("mail_accounts")
+              .select("id, provider, email_address")
+              .eq("workspace_id", wsMember.workspace_id)
+              .eq("status", "connected")
+              .order("is_default", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (mailAcct) {
+              mailProvider = mailAcct.provider as "gmail" | "outlook";
+              mailAccountId = mailAcct.id;
+            }
           }
-        }
 
-        // Fall back to legacy gmail_connections if no mail_account found
-        let resolvedSenderEmail: string | null = null;
+          // Fall back to legacy gmail_connections if no mail_account found
+          let resolvedSenderEmail: string | null = null;
 
-        if (!mailAccountId) {
-          const { data: gmailConn } = await supabase
-            .from("gmail_connections")
-            .select("user_id, gmail_email")
-            .eq("user_id", lead.owner_user_id)
-            .maybeSingle();
+          if (!mailAccountId) {
+            const { data: gmailConn } = await supabase
+              .from("gmail_connections")
+              .select("user_id, gmail_email")
+              .eq("user_id", lead.owner_user_id)
+              .maybeSingle();
 
-          if (!gmailConn) {
+            if (!gmailConn) {
+              logEntry.status = "skipped";
+              logEntry.error_message = "No mail connection (Gmail or Outlook)";
+              logEntry.completed_at = new Date().toISOString();
+              await supabase.from("automation_log").insert(logEntry);
+              // Starvation guard (Codex P1) — clears only when the owner connects
+              // a mailbox, so don't let it hold the page. Mirrors the cold pass's
+              // "Lead owner has no connected mailbox — deferred 6h".
+              await supabase.from("leads")
+                .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+                .eq("id", lead.id);
+              skipped++;
+              continue;
+            }
+            mailProvider = "gmail";
+            resolvedSenderEmail = gmailConn.gmail_email;
+
+            // ── SENDER MISMATCH GUARD ──────────────────────────────────
+            // No mail_accounts entry found — sending would use the legacy
+            // gmail_connections fallback. This is the exact scenario that
+            // caused emails from the wrong address. Block the send.
+            console.warn(
+              `[automation-executor] SENDER MISMATCH: lead ${lead.id} — ` +
+              `no mail_accounts entry, fallback would send from ${resolvedSenderEmail}. ` +
+              `Blocking send. Configure a mail_accounts row for this workspace.`
+            );
             logEntry.status = "skipped";
-            logEntry.error_message = "No mail connection (Gmail or Outlook)";
+            logEntry.error_message = `Sender mismatch: no mail_accounts configured, would fallback to ${resolvedSenderEmail}`;
             logEntry.completed_at = new Date().toISOString();
             await supabase.from("automation_log").insert(logEntry);
+            // Starvation guard (Codex P1) — needs a human to configure a mailbox.
+            await supabase.from("leads")
+              .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
+              .eq("id", lead.id);
             skipped++;
             continue;
+          } else {
+            // Verify the resolved mail_account email matches expectations
+            const { data: resolvedAcct } = await supabase
+              .from("mail_accounts")
+              .select("email_address")
+              .eq("id", mailAccountId)
+              .single();
+
+            resolvedSenderEmail = resolvedAcct?.email_address ?? null;
+
+            // Cross-check: if the workspace has a gmail_connection with a
+            // different email than the mail_account, warn but allow the
+            // mail_account (authoritative) to proceed.
+            const { data: gmailCheck } = await supabase
+              .from("gmail_connections")
+              .select("gmail_email")
+              .eq("user_id", lead.owner_user_id)
+              .maybeSingle();
+
+            if (gmailCheck?.gmail_email && resolvedSenderEmail
+                && gmailCheck.gmail_email !== resolvedSenderEmail) {
+              console.warn(
+                `[automation-executor] SENDER INFO: lead ${lead.id} — ` +
+                `gmail_connections has ${gmailCheck.gmail_email} but mail_accounts ` +
+                `will send from ${resolvedSenderEmail} (authoritative). OK to proceed.`
+              );
+            }
           }
-          mailProvider = "gmail";
-          resolvedSenderEmail = gmailConn.gmail_email;
+        } // end email-only mailbox block
 
-          // ── SENDER MISMATCH GUARD ──────────────────────────────────
-          // No mail_accounts entry found — sending would use the legacy
-          // gmail_connections fallback. This is the exact scenario that
-          // caused emails from the wrong address. Block the send.
-          console.warn(
-            `[automation-executor] SENDER MISMATCH: lead ${lead.id} — ` +
-            `no mail_accounts entry, fallback would send from ${resolvedSenderEmail}. ` +
-            `Blocking send. Configure a mail_accounts row for this workspace.`
-          );
-          logEntry.status = "skipped";
-          logEntry.error_message = `Sender mismatch: no mail_accounts configured, would fallback to ${resolvedSenderEmail}`;
-          logEntry.completed_at = new Date().toISOString();
-          await supabase.from("automation_log").insert(logEntry);
-          skipped++;
-          continue;
-        } else {
-          // Verify the resolved mail_account email matches expectations
-          const { data: resolvedAcct } = await supabase
-            .from("mail_accounts")
-            .select("email_address")
-            .eq("id", mailAccountId)
-            .single();
-
-          resolvedSenderEmail = resolvedAcct?.email_address ?? null;
-
-          // Cross-check: if the workspace has a gmail_connection with a
-          // different email than the mail_account, warn but allow the
-          // mail_account (authoritative) to proceed.
-          const { data: gmailCheck } = await supabase
-            .from("gmail_connections")
-            .select("gmail_email")
-            .eq("user_id", lead.owner_user_id)
-            .maybeSingle();
-
-          if (gmailCheck?.gmail_email && resolvedSenderEmail
-              && gmailCheck.gmail_email !== resolvedSenderEmail) {
-            console.warn(
-              `[automation-executor] SENDER INFO: lead ${lead.id} — ` +
-              `gmail_connections has ${gmailCheck.gmail_email} but mail_accounts ` +
-              `will send from ${resolvedSenderEmail} (authoritative). OK to proceed.`
-            );
-          }
-        }
-
+        // Null for an SMS step — automation_log.mail_account_id is nullable and
+        // "no mailbox" is the truthful record for a text message.
         logEntry.mail_account_id = mailAccountId;
 
         const actionKey = lead.next_action_key;
@@ -814,13 +1216,17 @@ serve(async (req) => {
           logEntry.error_message = "Nurture lead in review mode — manual approval required";
           logEntry.completed_at = new Date().toISOString();
           await supabase.from("automation_log").insert(logEntry);
+          // STARVATION GUARD (Codex P1): this refusal clears only when a human
+          // changes a setting, so a bare continue kept the lead at the front of
+          // the 20-row page every tick. The ledger row above is still written, so
+          // the rep can see WHY — see the report on CAN-SPAM visibility.
+          await supabase.from("leads").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", lead.id);
           skipped++;
           continue;
         }
 
         let aiTask: string;
-        // Re-engagement leads always use re_engagement_intro task
-        const isInboundLead = lead.motion === "inbound_response" || ["contact_form", "gmail_inbound", "referral", "whatsapp_inbound"].includes(lead.source_type || "");
+        // isInboundLead is resolved with the channel, further up.
 
         if (lead.motion === "re_engagement") {
           aiTask = "re_engagement_intro";
@@ -915,6 +1321,94 @@ serve(async (req) => {
           continue;
         }
 
+
+        // ── CAN-SPAM PRECONDITIONS (email only; fail closed, BEFORE spending anything) ──
+        // Checked here — ahead of the approved-draft consumption and the ai_task
+        // call — so a misconfigured environment neither re-spends AI credits every
+        // tick nor marks a rep-approved draft "sent" without sending it.
+        if (resolvedChannel !== "sms" && !unsubSecret) {
+          console.error(`[automation-executor] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send email for lead ${lead.id} (fail closed)`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "UNSUBSCRIBE_TOKEN_SECRET unset — cannot add unsubscribe link (fail closed)";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          // STARVATION GUARD (Codex P1): this refusal clears only when a human
+          // changes a setting, so a bare continue kept the lead at the front of
+          // the 20-row page every tick. The ledger row above is still written, so
+          // the rep can see WHY — see the report on CAN-SPAM visibility.
+          await supabase.from("leads").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", lead.id);
+          skipped++;
+          continue;
+        }
+        const postalAddress = resolvedChannel !== "sms" ? await getPostalAddress(lead.workspace_id) : "";
+        if (resolvedChannel !== "sms" && !postalAddress && requirePostalAddress()) {
+          logEntry.status = "skipped";
+          logEntry.error_message = "No company postal address (CAN-SPAM) — set it in Settings → Cold Outreach Safety";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          // STARVATION GUARD (Codex P1): this refusal clears only when a human
+          // changes a setting, so a bare continue kept the lead at the front of
+          // the 20-row page every tick. The ledger row above is still written, so
+          // the rep can see WHY — see the report on CAN-SPAM visibility.
+          await supabase.from("leads").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", lead.id);
+          skipped++;
+          continue;
+        }
+
+        // ── SMS PRECONDITION (sms only; BEFORE spending anything) ──────
+        // Codex P1. This used to live inside the SMS send branch, ~400 lines
+        // below — AFTER the approved draft had been flipped to "sent", after the
+        // ai_task call, after the audit drafts row, and after the claim. Three
+        // things were wrong with that:
+        //   1. The rep's approved SMS copy was consumed and never given back, so
+        //      it was destroyed for a lead that could never be texted.
+        //   2. Every tick re-ran the whole chain and inserted another audit
+        //      drafts row.
+        //   3. It marked the CLAIM row 'skipped' and left the lead untouched —
+        //      and automation_log_claim_unique is partial
+        //      (WHERE status IN ('claiming','sent')), so a 'skipped' claim frees
+        //      the slot. Nothing stopped the lead being re-selected and
+        //      re-claimed on the very next tick, so 20 phoneless SMS leads
+        //      refilled the capped scan forever. (This is the branch whose
+        //      allow-list exemption claimed the claim row parked it. It did not.)
+        // `lead.phone` comes from the candidate query and is not re-read in
+        // between, so checking it here is identical — just before the spending.
+        if (resolvedChannel === "sms" && !lead.phone) {
+          console.warn(`[automation-executor] Lead ${lead.id}: SMS step but no phone number — deferring`);
+          logEntry.status = "skipped";
+          logEntry.error_message = "No phone number for SMS — add a mobile number to text this lead";
+          logEntry.completed_at = new Date().toISOString();
+          await supabase.from("automation_log").insert(logEntry);
+          // Same treatment as the other "can't receive on this channel" cases: a
+          // number can be added, so defer rather than park.
+          await supabase.from("leads").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", lead.id);
+          skipped++;
+          continue;
+        }
+
+        // ── EARLY SEND FLOOR (email only) — SAME helper as the cold path ──
+        // Runs BEFORE the cached draft is consumed / the AI call, so a permanent
+        // block (unsubscribed, invalid email, do-not-contact list) never spends
+        // credits or a rep-approved draft, and a transient read error leaves the
+        // approved draft untouched for the retry. The LATE floor immediately
+        // before the provider call (below) is the race closer.
+        if (resolvedChannel !== "sms") {
+          const earlyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!earlyFloor.ok) {
+            const transient = earlyFloor.reason === "suppression check failed" || earlyFloor.reason === "lead lookup failed";
+            console.warn(`[automation-executor] Lead ${lead.id}: send floor blocked (${earlyFloor.reason}) — ${transient ? "retry next tick" : "pausing automation"}`);
+            logEntry.status = "skipped";
+            logEntry.error_message = `Send floor: ${earlyFloor.reason}`.slice(0, 200);
+            logEntry.completed_at = new Date().toISOString();
+            await supabase.from("automation_log").insert(logEntry);
+            if (!transient) {
+              await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            }
+            skipped++;
+            continue;
+          }
+        }
+
         // --- STRATEGY 1: Draft Caching ---
         // Priority 1: Check for user-approved drafts (no time limit — user explicitly saved these)
         const { data: approvedDraft } = await supabase
@@ -945,18 +1439,31 @@ serve(async (req) => {
 
         let draftBody: string;
         let subject: string;
-        let resolvedChannel: string = "email"; // default, overridden by campaign resolver
-        const { profile: repProfile, signature: repSignature } = await getRepContext(lead.owner_user_id);
 
         if (cachedDraft?.body_text) {
           const draftType = approvedDraft?.body_text ? "approved" : "pending";
           console.log(`[automation-executor] ♻️ Reusing ${draftType} draft for lead ${lead.id}, step ${actionKey}`);
           draftBody = cachedDraft.body_text;
           subject = cachedDraft.subject || `Following up - ${lead.name.split(" ")[0]}`;
-          // Mark the draft as sent
-          if (cachedDraft.id) {
-            await supabase.from("drafts").update({ status: "sent" }).eq("id", cachedDraft.id);
-          }
+          // CONSUME-AFTER-SUCCESS (Codex P2). This used to flip the draft to
+          // "sent" right here, BEFORE the provider call — so every path that
+          // refused or failed between here and the send destroyed the copy, and
+          // each such path needed its own restore. Three paths needed one, one of
+          // them (an ordinary retryable Twilio failure — the likeliest of the
+          // three) never got it, and a rep's approved text was silently replaced
+          // by machine copy on a retry they never saw.
+          //
+          // The draft is now marked sent in exactly ONE place, after the provider
+          // confirms (search: CONSUME THE CACHED DRAFT). That makes a missed
+          // restore impossible rather than rare: there is nothing to restore,
+          // because nothing was consumed. A fourth refusal path added later
+          // inherits the correct behaviour for free.
+          //
+          // Safe against double-send: the per-(lead, action_key, claim_date) claim
+          // is taken BEFORE the provider call, so a concurrent run that read the
+          // same draft loses the claim and never sends. If the post-send flip
+          // itself fails, GUARD 0/1/2 (1h dedup, one per lead per day, same step
+          // not repeated within 7d) still block a resend.
         } else {
           // --- Fetch last outbound body for follow-up context ---
           let lastOutboundBody = "";
@@ -991,19 +1498,8 @@ serve(async (req) => {
             }
           }
 
-          // ── STRUCTURED CAMPAIGN RESOLVER ──────────────────────────
-          // Uses the canonical resolver instead of ad-hoc text parsing.
-          // Prefers structured campaign steps from DB when available,
-          // falls back to legacy text parsing from action_instructions.
-          let structuredCampaign = null;
-          try {
-            structuredCampaign = await loadCampaignForLead(lead.id, supabase);
-            if (structuredCampaign) {
-              console.log(`[automation-executor] ✅ Loaded structured campaign ${structuredCampaign.id} for lead ${lead.id}`);
-            }
-          } catch (err) {
-            console.warn(`[automation-executor] Failed to load structured campaign for lead ${lead.id}:`, err);
-          }
+          // (Structured campaign + channel were resolved BEFORE the draft lookup —
+          // see STRUCTURED CAMPAIGN RESOLVER above.)
 
           // Campaign KB document for the LIVE send: when the (active) campaign has
           // a validated uploaded knowledge document, scope the draft's KB
@@ -1028,23 +1524,6 @@ serve(async (req) => {
               console.warn(`[automation-executor] Campaign KB doc validation failed for lead ${lead.id} — falling back to standard KB:`, err);
             }
           }
-
-          const campaignInput: CampaignResolverInput = {
-            lead_id: lead.id,
-            action_key: lead.next_action_key,
-            motion: isInboundLead ? "inbound_response" : lead.motion,
-            outbound_tone: (lead as any).outbound_tone || "direct",
-            action_instructions: lead.action_instructions,
-            structured_campaign: structuredCampaign,
-            prior_steps_sent: undefined,
-            has_reply: !!freshLead.last_inbound_at,
-            meeting_booked: freshLead.has_future_meeting,
-            include_meeting_cta: structuredCampaign?.include_meeting_cta ?? false,
-            calendar_link: repProfile?.calendar_link || null,
-            playbook_id: undefined,
-          };
-          const resolvedInstruction = resolveCampaignInstruction(campaignInput);
-          const structuredInstructionBlock = formatInstructionForPrompt(resolvedInstruction);
 
           // Legacy fallback: still pass custom_instructions for backward compat
           // with the existing ai_task prompt injection pipeline
@@ -1156,9 +1635,6 @@ serve(async (req) => {
             .replace(/\{First\s*Name\}/gi, repFirstName)
             .replace(/\[First\s*Name\]/gi, repFirstName);
 
-          // Determine resolved channel for this step
-          resolvedChannel = resolvedInstruction?.channel || "email";
-
           // Append signature + footer only for email channel
           if (resolvedChannel === "email") {
             draftBody = stripAISignOff(draftBody);
@@ -1172,9 +1648,8 @@ serve(async (req) => {
               if (repProfile.email) sigParts.push(repProfile.email);
               draftBody += `\n\n${sigParts.join("\n")}`;
             }
-
-            // Unsubscribe footer
-            draftBody += `\n\n---\nIf you'd prefer not to receive these emails, simply reply with "unsubscribe" and we'll remove you from our list.`;
+            // The unsubscribe footer is appended below (CAN-SPAM block) for BOTH
+            // generated and cached drafts, using the cold path's footer helper.
           }
 
           // Subject line (only for email)
@@ -1201,6 +1676,25 @@ serve(async (req) => {
             subject = "";
           }
         } // end else (no cached draft)
+
+        // ── CAN-SPAM FOOTER (email only) ──────────────────────────────
+        // SAME helpers as the cold path (signUnsubscribeToken +
+        // buildUnsubscribeUrl + buildColdEmailFooter): signed one-click
+        // unsubscribe link in the body, List-Unsubscribe headers for Gmail,
+        // postal address when the workspace has one. Applied to cached AND
+        // generated drafts, before the audit draft row so it matches the send.
+        let emailFooterHeaders: Record<string, string> = {};
+        if (resolvedChannel !== "sms") {
+          // unsubSecret / postal preconditions were verified BEFORE the draft
+          // lookup (see CAN-SPAM PRECONDITIONS above), so nothing fails here.
+          const unsubToken = await signUnsubscribeToken(
+            { lid: lead.id, wid: lead.workspace_id, cid: lead.campaign_id ?? null, iat: Math.floor(Date.now() / 1000) },
+            unsubSecret,
+          );
+          const footer = buildColdEmailFooter({ unsubscribeUrl: buildUnsubscribeUrl(supabaseUrl, unsubToken), postalAddress });
+          draftBody = draftBody.trimEnd() + footer.footerText;
+          emailFooterHeaders = footer.headers;
+        }
 
         logEntry.subject = subject;
 
@@ -1294,15 +1788,70 @@ serve(async (req) => {
           continue;
         }
 
+        // ── SEND FLOOR (email only) — SAME helper as the cold path ────────
+        // coldSendFloor = leads.unsubscribed re-read + email validity + the
+        // workspace do-not-contact list (exact email and domain). Runs
+        // immediately before the provider call so the race window is one
+        // network hop. PERMANENT blocks park the lead (needs_action=false,
+        // eligible_at=null — same shape as the stop-conditions branch) so we
+        // don't burn an ai_task call re-discovering it every tick; TRANSIENT
+        // read errors just skip this tick and retry.
+        if (resolvedChannel !== "sms") {
+          const legacyFloor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
+          if (!legacyFloor.ok) {
+            const transient = legacyFloor.reason === "suppression check failed" || legacyFloor.reason === "lead lookup failed";
+            console.warn(`[automation-executor] Lead ${lead.id}: send floor blocked (${legacyFloor.reason}) — ${transient ? "retry next tick" : "pausing automation"}`);
+            await supabase.from("automation_log")
+              .update({ status: "skipped", error_message: `Send floor: ${legacyFloor.reason}`.slice(0, 200), completed_at: new Date().toISOString() })
+              .eq("id", claimId);
+            if (!transient) {
+              await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            }
+            // No draft restore needed: the draft is not consumed until the
+            // provider confirms (CONSUME-AFTER-SUCCESS), so it is still approved.
+            skipped++;
+            continue;
+          }
+        }
+
         // Send via appropriate channel + provider
         let sendResponse: Response;
         if (resolvedChannel === "sms") {
           // ── SMS SEND ──────────────────────────────────────────
-          if (!lead.phone) {
-            console.warn(`[automation-executor] Lead ${lead.id}: SMS channel but no phone number — skipping`);
+          // The no-phone precondition ran far above, before the draft lookup, the
+          // AI call and the claim (see "SMS PRECONDITION"). lead.phone is not
+          // re-read between there and here, so there is nothing left to check.
+          // LATE OPT-OUT GUARD for SMS — the counterpart of the email late floor
+          // above. Opt-out is about the PERSON, not the channel: a recipient can
+          // unsubscribe (form, keyword, bounce, admin) during the claim/draft/AI
+          // awaits between the earlier checks and this call. The email path closes
+          // that race with coldSendFloor; SMS skipped it because it was never
+          // reachable. It is now, so re-read the flag one hop before the send.
+          // (coldSendFloor itself is email-shaped — email validity plus the
+          // email/domain do-not-contact list — so only the flag applies here.)
+          // FAILS CLOSED (Codex P2): an error, a vanished lead, or the flag set
+          // all refuse. Reading `data?.unsubscribed` alone meant a transient
+          // PostgREST failure on the one query that closes the unsubscribe race
+          // fell straight through to sms-send — i.e. we text someone who may
+          // have just opted out. Same posture as the email late floor.
+          const { data: smsOptOut, error: smsOptOutErr } = await supabase
+            .from("leads").select("unsubscribed").eq("id", lead.id).maybeSingle();
+          const smsOptOutUnreadable = !!smsOptOutErr || !smsOptOut;
+          if (smsOptOutUnreadable || smsOptOut.unsubscribed) {
+            const reason = smsOptOutUnreadable
+              ? "Could not confirm opt-out status before SMS — refused (fail closed), will retry"
+              : "Lead opted out before send (late SMS opt-out guard)";
+            console.warn(`[automation-executor] Lead ${lead.id}: ${reason}`);
             await supabase.from("automation_log")
-              .update({ status: "skipped", error_message: "No phone number for SMS", completed_at: new Date().toISOString() })
+              .update({ status: "skipped", error_message: reason, completed_at: new Date().toISOString() })
               .eq("id", claimId);
+            // Unreadable is TRANSIENT — leave the lead eligible so the next tick
+            // retries. A confirmed opt-out is PERMANENT — park it, like the
+            // email floor's terminal branch.
+            if (!smsOptOutUnreadable) {
+              await supabase.from("leads").update({ needs_action: false, eligible_at: null }).eq("id", lead.id);
+            }
+            // No draft restore needed — see CONSUME-AFTER-SUCCESS at the reuse site.
             skipped++;
             continue;
           }
@@ -1352,6 +1901,7 @@ serve(async (req) => {
               to: lead.email,
               subject,
               body: draftBody,
+              headers: emailFooterHeaders, // List-Unsubscribe (+ One-Click), same as the cold path
               leadId: lead.id,
               ownerUserId: lead.owner_user_id,
               skipStateUpdate: true,
@@ -1393,6 +1943,21 @@ serve(async (req) => {
         const gmailMessageId = sendResult.messageId || sendResult.messageSid || null;
         const sendChannelLabel = resolvedChannel === "sms" ? "SMS" : "Email";
         console.log(`[automation-executor] ${sendChannelLabel} sent for lead ${lead.id}: ${gmailMessageId}`);
+
+        // ── CONSUME THE CACHED DRAFT ────────────────────────────
+        // The ONLY place a reused draft is marked sent, and it is past the point
+        // of no return: the provider has accepted the message. Every refusal or
+        // retryable failure above therefore leaves a rep-approved draft exactly
+        // as the rep left it. See the reuse site for why this is here.
+        if (cachedDraft?.id) {
+          const { error: consumeErr } = await supabase.from("drafts")
+            .update({ status: "sent" }).eq("id", cachedDraft.id);
+          if (consumeErr) {
+            // Non-fatal: the message is already out. GUARD 0/1/2 prevent a
+            // resend, so the worst case is a stale draft the rep can delete.
+            console.warn(`[automation-executor] draft ${cachedDraft.id} sent but not marked consumed:`, consumeErr);
+          }
+        }
 
         // ── UPGRADE CLAIM TO SENT ───────────────────────────────
         // The interaction + timeline records are created by gmail-send / outlook-send
@@ -1554,12 +2119,11 @@ serve(async (req) => {
         }
 
         // ── INTER-SEND STAGGER ──────────────────────────────
-        // Delay 30–90 seconds between sends to avoid mailbox
-        // flagging from rapid-fire outbound bursts.
+        // Short fixed gap between sends (see INTER_SEND_STAGGER_MS): keeps
+        // the whole tick inside the dispatcher's 55s wait.
         if (processed < eligibleLeads.length) {
-          const staggerMs = 30_000 + Math.floor(Math.random() * 60_000); // 30–90s
-          console.log(`[automation-executor] Stagger delay: ${Math.round(staggerMs / 1000)}s before next send`);
-          await new Promise(r => setTimeout(r, staggerMs));
+          console.log(`[automation-executor] Stagger delay: ${INTER_SEND_STAGGER_MS / 1000}s before next send`);
+          await new Promise(r => setTimeout(r, INTER_SEND_STAGGER_MS));
         }
       } catch (leadErr) {
         console.error(`[automation-executor] Error processing lead ${lead.id}:`, leadErr);
@@ -1602,7 +2166,6 @@ serve(async (req) => {
     // ════════════════════════════════════════════════════════════════════════
     if (privileged) try {
       const internalSecret = Deno.env.get("INTERNAL_API_SECRET") ?? "";
-      const unsubSecret = getUnsubscribeSecret();
       // CONSTRAIN the cold due query to genuinely AUTO-SENDABLE campaigns: active +
       // send_mode='automatic' + workspace gate fully on (cold_auto_send_enabled +
       // timezone + postal). Without the gate filter, email touches from automatic
@@ -1639,15 +2202,120 @@ serve(async (req) => {
       // sends regardless of how many rows were scanned. (Read cost grows only when many
       // rows are blocked — exactly the starvation case this is meant to drain.)
       const COLD_DUE_SCAN_LIMIT = 200;
-      const coldDue = sendableCampIds.length === 0 ? [] : (await supabase
+      // PAUSED-OWNER EXCLUSION for the cold scan (Codex P1, second instance).
+      // The legacy candidate query drops paused owners before its limit; this is
+      // a SEPARATE query with its own 200-row cap, and the same shape survived
+      // here: the in-loop pause check leaves every touch 'scheduled' with its
+      // original eligible_at, so one paused owner with 200 due touches refilled
+      // this oldest-due page on every tick and cold outreach stopped for
+      // everyone else — silently, with the run still reporting success.
+      // Filtering on the embedded `leads!inner` resource is the same technique
+      // the volume tripwire below uses (`leads.workspace_id`).
+      let coldDueQuery = sendableCampIds.length === 0 ? null : supabase
         .from("campaign_touch")
-        .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at")
+        // leads!inner(owner_user_id): the skip ledger below needs the owner (NOT NULL
+        // on automation_log) even for branches that bail before the lead is loaded.
+        .select("id, enrollment_id, campaign_id, lead_id, step_number, eligible_at, leads!inner(owner_user_id)")
         .eq("channel", "email")
         .eq("status", "scheduled")
         .in("campaign_id", sendableCampIds)
         .lte("eligible_at", new Date().toISOString())
-        .order("eligible_at", { ascending: true })
-        .limit(COLD_DUE_SCAN_LIMIT)).data;
+        .order("eligible_at", { ascending: true });
+      if (coldDueQuery && pausedOwnerFilterApplied && pausedOwnerIds.length > 0) {
+        coldDueQuery = coldDueQuery.not("leads.owner_user_id", "in", `(${pausedOwnerIds.join(",")})`);
+      }
+      // Limit applied LAST, after the exclusion — that is the whole point.
+      const coldDue = coldDueQuery === null ? [] : (await coldDueQuery.limit(COLD_DUE_SCAN_LIMIT)).data;
+
+      // ── Skip ledger for the cold pass (Unit G-C) ─────────────────────────
+      // Every branch below that decides NOT to send calls logColdSkip once, with
+      // a plain-English reason, so "why didn't this send" is answerable from
+      // automation_log (status 'skipped', action_key cold_touch_<id>). It never
+      // changes a decision and never throws.
+      //
+      // OFF THE SCAN PATH (Codex P2): the first cut did a SELECT + INSERT per
+      // skip, awaited inline. Production logs ~8k skips / 14d, so a scan of 200
+      // touches that are mostly blocked meant up to ~400 serial round trips —
+      // and cron-dispatcher aborts the forwarded request at 55s
+      // (FORWARD_TIMEOUT_MS), so the ledger could burn the run before the loop
+      // reached a touch that WOULD have sent. Now:
+      //   • the 6h dedupe set is PREFETCHED once for the whole scanned batch
+      //     (ceil(n/50) reads, so ≤4 for a 200-row scan),
+      //   • logColdSkip is SYNCHRONOUS — it only checks the in-memory set and
+      //     appends a row, zero network,
+      //   • rows are INSERTED in batches of COLD_SKIP_FLUSH_AT (one round trip
+      //     per 25 skips) plus a final flush when the loop ends.
+      // Worst case for a 200-touch all-skipped scan: ~4 + 8 = 12 round trips,
+      // down from ~400. Entries therefore appear in automation_log up to 24
+      // skips late — still within the same run, and created_at is stamped at the
+      // moment of the skip, so the rep's "why didn't this send" answer and its
+      // timestamp are unchanged.
+      // ponytail: one row per (touch, reason) per 6h — a blocker that persists
+      // all night (send window, min gap) writes one row, not one per 15-min
+      // tick. Keep reasons STATIC strings so the dedupe match works. Ceiling: if
+      // the dispatcher kills the run mid-scan, up to COLD_SKIP_FLUSH_AT-1
+      // pending rows are lost; they are re-derived on the next tick because the
+      // dedupe set won't contain them.
+      const COLD_SKIP_DEDUPE_MS = 6 * 60 * 60 * 1000;
+      const COLD_SKIP_FLUSH_AT = 25;
+      const COLD_SKIP_PREFETCH_CHUNK = 50;
+      const coldSkipSeen = new Set<string>();
+      const coldSkipPending: Record<string, unknown>[] = [];
+      const coldSkipKey = (leadId: string, actionKey: string, msg: string) => `${leadId}\u0000${actionKey}\u0000${msg}`;
+
+      // Prefetch the last 6h of skip rows for exactly the touches we are about to
+      // scan. action_key embeds the globally-unique touch id, so this is an exact
+      // match on the same (lead_id, action_key, error_message) tuple the per-skip
+      // SELECT used to check. A failure here only costs duplicate rows, never a
+      // wrong decision — so it is swallowed.
+      try {
+        const skipSince = new Date(Date.now() - COLD_SKIP_DEDUPE_MS).toISOString();
+        const allKeys = (coldDue || []).map((t: any) => coldTouchClaimKey(t.id));
+        for (let i = 0; i < allKeys.length; i += COLD_SKIP_PREFETCH_CHUNK) {
+          const { data: priorRows } = await supabase.from("automation_log")
+            .select("lead_id, action_key, error_message")
+            .in("action_key", allKeys.slice(i, i + COLD_SKIP_PREFETCH_CHUNK))
+            .eq("status", "skipped")
+            .gte("created_at", skipSince);
+          for (const r of (priorRows || [])) {
+            coldSkipSeen.add(coldSkipKey((r as any).lead_id, (r as any).action_key, (r as any).error_message ?? ""));
+          }
+        }
+      } catch (preErr) {
+        console.warn("[automation-executor:cold] skip-ledger prefetch failed (non-blocking):", preErr);
+      }
+
+      /** Write the queued ledger rows in ONE insert. Never throws. */
+      async function flushColdSkips(): Promise<void> {
+        if (coldSkipPending.length === 0) return;
+        const rows = coldSkipPending.splice(0, coldSkipPending.length);
+        try {
+          const { error: insErr } = await supabase.from("automation_log").insert(rows);
+          if (insErr) console.warn("[automation-executor:cold] skip ledger insert error (non-blocking):", insErr);
+        } catch (logErr) {
+          console.warn("[automation-executor:cold] skip ledger flush failed (non-blocking):", logErr);
+        }
+      }
+
+      /** Queue one skip reason. SYNCHRONOUS — no network on the scan path. */
+      function logColdSkip(
+        touch: { id: string; lead_id: string; leads?: { owner_user_id: string } | null },
+        reason: string,
+      ): void {
+        const msg = reason.slice(0, 200);
+        const actionKey = coldTouchClaimKey(touch.id);
+        console.log(`[automation-executor:cold] skip touch ${touch.id} (lead ${touch.lead_id}): ${msg}`);
+        const owner = (touch as any).leads?.owner_user_id as string | undefined;
+        if (!owner) return;
+        const key = coldSkipKey(touch.lead_id, actionKey, msg);
+        if (coldSkipSeen.has(key)) return;
+        coldSkipSeen.add(key);
+        const nowIso = new Date().toISOString();
+        coldSkipPending.push({
+          lead_id: touch.lead_id, owner_user_id: owner, action_key: actionKey, status: "skipped",
+          error_message: msg, created_at: nowIso, completed_at: nowIso,
+        });
+      }
 
       for (const touch of (coldDue || [])) {
         // Honor the SAME per-run send cap as the legacy loop — cold sends count
@@ -1656,6 +2324,9 @@ serve(async (req) => {
           console.log(`[automation-executor:cold] MAX_SENDS_PER_RUN reached (${maxSendsPerRun}), stopping cold pass`);
           break;
         }
+        // Batched ledger write — one round trip per COLD_SKIP_FLUSH_AT skips,
+        // never once per skip.
+        if (coldSkipPending.length >= COLD_SKIP_FLUSH_AT) await flushColdSkips();
         try {
           // Re-check the touch FRESH (the batch snapshot can go stale within this
           // run: sending an earlier step re-anchors the next step's eligible_at to
@@ -1663,17 +2334,25 @@ serve(async (req) => {
           // one run, and against a touch a concurrent run already advanced).
           const { data: freshTouch } = await supabase.from("campaign_touch")
             .select("status, eligible_at").eq("id", touch.id).maybeSingle();
-          if (!freshTouch || freshTouch.status !== "scheduled") continue;
-          if (!freshTouch.eligible_at || new Date(freshTouch.eligible_at) > new Date()) continue;
+          if (!freshTouch || freshTouch.status !== "scheduled") { logColdSkip(touch, "Touch is no longer scheduled (already sent, skipped or cancelled by another run)"); continue; }
+          if (!freshTouch.eligible_at || new Date(freshTouch.eligible_at) > new Date()) { logColdSkip(touch, "Touch is not due yet (eligible_at moved into the future by an earlier step)"); continue; }
 
           const { data: enr } = await supabase.from("campaign_enrollment")
             .select("id, status, current_step_number, started_at, enrolled_at").eq("id", touch.enrollment_id).maybeSingle();
-          if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
-          if (touch.step_number !== (enr.current_step_number ?? 0) + 1) continue; // not next-in-line
+          if (!enr || !["scheduled", "active"].includes(enr.status)) {
+            logColdSkip(touch, "Enrollment is not active (stopped, replied, completed or missing)");
+            // STARVATION GUARD (Codex P1): the enrollment is dead but this touch
+            // is still 'scheduled' with a past eligible_at, so it matches the
+            // oldest-due scan forever. Mark it skipped — it can never send, and
+            // endColdEnrollment would have done the same had it run.
+            await supabase.from("campaign_touch").update({ status: "skipped" }).eq("id", touch.id);
+            continue;
+          }
+          if (touch.step_number !== (enr.current_step_number ?? 0) + 1) { logColdSkip(touch, "Not the next step in line — an earlier step has not been sent yet"); continue; } // not next-in-line
 
           const { data: camp } = await supabase.from("campaigns")
             .select("id, status, send_mode, workspace_id").eq("id", touch.campaign_id).maybeSingle();
-          if (!camp || camp.status !== "active" || camp.send_mode !== "automatic") continue;
+          if (!camp || camp.status !== "active" || camp.send_mode !== "automatic") { logColdSkip(touch, "Campaign is not active or not in automatic send mode"); continue; }
 
           // Gate: cold auto-send on + timezone set + postal address present. Else
           // it's not auto-sendable — the scheduler surfaces it for review instead.
@@ -1682,23 +2361,49 @@ serve(async (req) => {
           const { data: autoSet } = await supabase.from("workspace_automation_settings")
             .select("cold_auto_send_enabled").eq("workspace_id", camp.workspace_id).maybeSingle();
           const postal = (ws?.cold_outreach_postal_address || "").trim();
-          if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) continue;
+          if (!autoSet?.cold_auto_send_enabled || !ws?.timezone || !postal) { logColdSkip(touch, "Workspace cold auto-send gate is off (auto-send switch, timezone or postal address missing)"); continue; }
 
           const { data: lead } = await supabase.from("leads")
-            .select("id, name, email, owner_user_id, workspace_id, industry, company, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting, city, state, country")
+            .select("id, name, email, owner_user_id, workspace_id, industry, company, unsubscribed, last_inbound_at, last_outbound_at, created_at, status, has_future_meeting, city, state, country, ooo_until")
             .eq("id", touch.lead_id).maybeSingle();
-          if (!lead) continue;
+          if (!lead) { logColdSkip(touch, "Lead no longer exists"); continue; }
           // Unsubscribed (via the unsubscribe endpoint, a bounce, or an admin/keyword
           // path) → STOP the enrollment, don't just skip. A bare continue would leave
           // the touch 'scheduled' and the enrollment live, so the cold query
           // (oldest-first, 50-row cap) would re-select and skip it on every run forever,
           // eventually crowding out legitimate due touches.
           if (lead.unsubscribed) {
+            logColdSkip(touch, "Lead is unsubscribed — enrollment stopped");
             await endColdEnrollment(supabase, enr.id, "stopped");
             continue;
           }
-          if (!lead.email) continue;
-          if (!["active", "new"].includes(lead.status)) continue;
+          // STARVATION GUARD (Codex P1 class): both of these persist until a human
+          // edits the lead, and this scan is oldest-due-first, so a bare continue
+          // parked them at the front of the page forever. Defer rather than end
+          // the enrollment — an address can be added and a status can go back to
+          // active, and stopping a live cadence on a temporary status would be a
+          // worse failure than waiting 6h.
+          if (!lead.email) {
+            logColdSkip(touch, "Lead has no email address");
+            await supabase.from("campaign_touch").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
+          if (!["active", "new"].includes(lead.status)) {
+            logColdSkip(touch, "Lead status is not active/new");
+            await supabase.from("campaign_touch").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
+
+          // OOO (Unit G-C): gmail-sync/outlook-sync stamp leads.ooo_until from an
+          // auto-reply. Legacy leads are parked via needs_action/eligible_at, but a
+          // cold touch has its own schedule, so honour the flag here: defer the touch
+          // to the return date (plus the same 15-min cron slack) instead of a bare
+          // continue, so it doesn't sit at the front of the due page every tick.
+          if (lead.ooo_until && new Date(lead.ooo_until).getTime() > Date.now()) {
+            logColdSkip(touch, "Lead is out of office — deferred until their return date");
+            await supabase.from("campaign_touch").update({ eligible_at: new Date(lead.ooo_until).toISOString() }).eq("id", touch.id);
+            continue;
+          }
 
           // Reply bridge: a reply since being committed to the cadence (enrolled_at, NOT
           // the possibly-future staggered started_at) pulls the lead out of the cold
@@ -1706,6 +2411,7 @@ serve(async (req) => {
           // query). Anchoring to started_at let a reply during the pre-start staggered
           // wait slip through and still get the first cold touch.
           if (repliedSinceEnrollment(lead.last_inbound_at, enr.enrolled_at)) {
+            logColdSkip(touch, "Lead replied since enrolling — cold cadence ended");
             await endColdEnrollment(supabase, enr.id, "replied");
             continue;
           }
@@ -1718,12 +2424,34 @@ serve(async (req) => {
             try {
               unmet = await stepConditionUnmetReason(supabase, touch);
             } catch (err) {
-              // Unverified condition → do NOT send; the touch stays scheduled for next tick.
-              console.warn(`[automation-executor:cold] condition check failed for touch ${touch.id}, leaving pending:`, err instanceof Error ? err.message : String(err));
+              // Unverified condition → do NOT send (correct: never send on a
+              // condition we could not evaluate). But the touch must still MOVE.
+              // STARVATION GUARD (Unit G-C class): the cold scan is ordered
+              // eligible_at ASC and capped at COLD_DUE_SCAN_LIMIT, so a touch
+              // that keeps its original past eligible_at sorts to the FRONT of
+              // every page. A condition check that throws persistently — a
+              // malformed condition on one campaign, a schema or permission
+              // problem — does exactly that for every touch of that campaign, so
+              // 200 of them monopolise the scan on every tick, forever. It also
+              // wrote no ledger row, so the rep had no way to see why.
+              console.warn(`[automation-executor:cold] condition check failed for touch ${touch.id}, deferring:`, err instanceof Error ? err.message : String(err));
+              logColdSkip(touch, "Could not check this step's send condition — will retry");
+              await supabase.from("campaign_touch")
+                .update({ eligible_at: blockedRowRetryAt().toISOString() })
+                .eq("id", touch.id);
               continue;
             }
             if (unmet) {
-              await advanceColdEnrollment(supabase, await loadExecutionSettings(lead.owner_user_id, supabase), touch, "auto_skipped", { skipReason: unmet });
+              // lead.workspace_id is REQUIRED (Unit G-C): without it the loader
+              // short-circuits the workspaces read and returns timezone:null, so
+              // computeNextEligibleAt cannot snap the NEXT touch into business
+              // hours and schedules it at the raw delayed time. Not a cross-tenant
+              // read — workspace_profiles is keyed by user_id — but the next touch
+              // lands outside the send window and costs an extra deferral cycle.
+              // tsc does not cover supabase/functions (tsconfig.app.json includes
+              // only `src`), so a missing required argument here compiles clean.
+              const skipExec = await loadExecutionSettings(lead.owner_user_id, supabase, lead.workspace_id);
+              await advanceColdEnrollment(supabase, skipExec, touch, "auto_skipped", { skipReason: unmet });
               console.log(`[automation-executor:cold] auto-skipped touch ${touch.id} — condition not met`);
               continue;
             }
@@ -1735,11 +2463,34 @@ serve(async (req) => {
             // of >50 new cold leads would otherwise keep re-filling the oldest-due 50-row
             // page every tick and starve sendable touches until the cooldown lapses.
             const readyAt = new Date(new Date(lead.created_at).getTime() + 24 * 60 * 60 * 1000);
+            logColdSkip(touch, "New-lead 24h cooldown — deferred until the lead is a day old");
             await supabase.from("campaign_touch").update({ eligible_at: readyAt.toISOString() }).eq("id", touch.id);
             continue;
           }
 
-          const exec = await loadExecutionSettings(lead.owner_user_id, supabase);
+          const exec = await loadExecutionSettings(lead.owner_user_id, supabase, lead.workspace_id);
+          // Owner pause (cadence_settings.automation_paused) — see legacy loop.
+          // Owner-level, NOT workspace-level: workspace_profiles is UNIQUE(user_id).
+          if (exec.owner_automation_paused) {
+            logColdSkip(touch, exec.settings_read_failed
+              ? "Could not read this account's automation settings — paused for safety, will retry next tick"
+              : "Automation paused for this account — applies to all of this owner's workspaces (cadence_settings.automation_paused)");
+            // Normally the touch is left alone so un-pausing resumes on the next
+            // tick — paused owners were already excluded from the scan above.
+            // Defer when that is not true: either the exclusion could not be
+            // built, or this owner is paused only because their per-owner
+            // settings read FAILED (Codex P2) — in which case they were never in
+            // pausedOwnerIds, so a successful prefilter is precisely what left
+            // these touches at the front of the oldest-due page every tick.
+            // BLOCKED_ROW_DEFER_MIN, not one cron interval (see the constant for
+            // the arithmetic; one interval just rotates the same rows back in).
+            if (!pausedOwnerFilterApplied || exec.settings_read_failed) {
+              await supabase.from("campaign_touch")
+                .update({ eligible_at: new Date(Date.now() + BLOCKED_ROW_DEFER_MIN * 60 * 1000).toISOString() })
+                .eq("id", touch.id);
+            }
+            continue;
+          }
           // Recipient-timezone sending (Unit C, PR 4): when the workspace opts into
           // timezone_mode:"lead", land the email in the PROSPECT's local morning by
           // running the send-window + next-eligible math in the lead's timezone
@@ -1753,16 +2504,62 @@ serve(async (req) => {
           // booked meeting) before every send; the cold guardrail block reused only
           // window/gap/caps, so without this a cold-enrolled lead with a future meeting
           // would still get auto-blasted. Honor pause_when_meeting_scheduled here too.
-          if (exec.stop_pause_rules.pause_when_meeting_scheduled && lead.has_future_meeting) continue;
+          if (exec.stop_pause_rules.pause_when_meeting_scheduled && lead.has_future_meeting) {
+            logColdSkip(touch, "Meeting already booked — paused (pause_when_meeting_scheduled)");
+            // Clears when the meeting passes; until then it must not hold the page.
+            await supabase.from("campaign_touch").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
 
           // Reuse the SAME guardrail engine as the legacy path.
-          if (!checkSendWindow(execForLead).allowed) continue;                            // send window / business hours (recipient tz)
-          if (!checkMinGap(lead.last_outbound_at, exec.guardrails.min_gap_hours_between_emails).allowed) continue;
-          if (!(await checkPerLeadCaps(lead.id, exec.guardrails, supabase)).allowed) continue;
+          // Send window / business hours (recipient tz). STARVATION GUARD: this is
+          // the sharpest instance of the class. Every touch outside its window
+          // kept its old eligible_at, and the scan is oldest-due-first — so a
+          // workspace whose night it is pinned the front of the page while a
+          // workspace whose morning it is never got scanned. Snap the touch to
+          // its own next window opening instead, exactly as the legacy loop does.
+          if (!checkSendWindow(execForLead).allowed) {
+            logColdSkip(touch, "Outside the send window / business hours — will retry");
+            const windowOpensAt = computeNextEligibleAt(0, lead.id, coldTouchClaimKey(touch.id), execForLead);
+            await supabase.from("campaign_touch").update({ eligible_at: windowOpensAt.toISOString() }).eq("id", touch.id);
+            continue;
+          }
+          // Cold touches are email-only, but the LEAD's last_outbound_at is still
+          // cross-channel — a text from the legacy path would otherwise hold up a
+          // cold email. Same helper as the legacy loop (Codex P2).
+          // STARVATION GUARD (Codex P1). These three refusals clear only with
+          // TIME, and this scan is ordered eligible_at ASC — so a touch that kept
+          // its old eligible_at sat at the FRONT of the 200-row page on every
+          // tick and starved every other owner behind it. Defer as well as log:
+          // the ledger row still explains the refusal, the touch just stops
+          // holding the page. (Deferring is safe for all three — the blocker is a
+          // waiting period, so there is nothing to lose by looking again later.)
+          const gapCheck = await checkEmailMinGap(lead.id, lead.last_outbound_at, exec.guardrails.min_gap_hours_between_emails, supabase);
+          if (!gapCheck.allowed) {
+            logColdSkip(touch, "Minimum gap since the last email not met — will retry");
+            // Anchor on the blocking email so it wakes exactly when the gap lapses.
+            const gapClearsAt = gapCheck.anchorAt
+              ? new Date(new Date(gapCheck.anchorAt).getTime() + exec.guardrails.min_gap_hours_between_emails * 3_600_000)
+              : blockedRowRetryAt();
+            await supabase.from("campaign_touch").update({ eligible_at: gapClearsAt.toISOString() }).eq("id", touch.id);
+            continue;
+          }
+          if (!(await checkPerLeadCaps(lead.id, exec.guardrails, supabase)).allowed) {
+            logColdSkip(touch, "Per-lead 7-day / 30-day email cap reached — will retry");
+            // The 7d/30d windows roll continuously; poll rather than compute an
+            // exact lapse, which would need the oldest send in the window.
+            await supabase.from("campaign_touch").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
 
-          // Per-mailbox daily cap (shared across ALL automation — oldest-due first).
-          const dailyCap = await getDailyCapForOwner(lead.owner_user_id);
-          if ((await getDailySendCount(lead.owner_user_id)) >= dailyCap) continue;
+          // Per-owner daily cap (shared across ALL automation — oldest-due first).
+          const dailyCap = await getDailyCapForOwner(lead.owner_user_id, lead.workspace_id);
+          if ((await getDailySendCount(lead.owner_user_id)) >= dailyCap) {
+            logColdSkip(touch, "Mailbox daily send cap reached — will retry after the daily reset");
+            // Wake at the reset instant, not "tomorrow" (Codex P2).
+            await supabase.from("campaign_touch").update({ eligible_at: nextDailyCapResetAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
 
           // Fail-closed floor: unsubscribed + workspace do-not-contact list.
           const floor = await coldSendFloor(supabase, lead.id, lead.workspace_id);
@@ -1772,6 +2569,7 @@ serve(async (req) => {
             // that errored) must NOT — that would kill a live cadence on a blip; just
             // skip this run and let the still-scheduled touch retry next tick.
             const transient = floor.reason === "suppression check failed" || floor.reason === "lead lookup failed";
+            logColdSkip(touch, transient ? "Send floor check could not run (transient read error) — will retry" : `Send floor blocked: ${floor.reason} — enrollment stopped`);
             if (!transient) await endColdEnrollment(supabase, enr.id, "stopped");
             continue;
           }
@@ -1795,6 +2593,7 @@ serve(async (req) => {
             // the front of the oldest-due 50-row page and starves sendable cold touches
             // behind it every run. Push eligible_at out so the page can drain; it retries
             // once the owner connects a mailbox.
+            logColdSkip(touch, "Lead owner has no connected mailbox — deferred 6h");
             await supabase.from("campaign_touch")
               .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
               .eq("id", touch.id);
@@ -1829,6 +2628,7 @@ serve(async (req) => {
             // no-content touches keeps re-filling the oldest-due 50-row page and starves
             // sendable touches. Deferring (vs marking skipped) lets it send once content
             // exists; if it never does, it just keeps deferring harmlessly.
+            logColdSkip(touch, "No generated content for this step yet — deferred 6h");
             await supabase.from("campaign_touch")
               .update({ eligible_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString() })
               .eq("id", touch.id);
@@ -1840,7 +2640,13 @@ serve(async (req) => {
             : content.body;
 
           // Unsubscribe link (signed token). Fail closed if the secret is unset.
-          if (!unsubSecret) { console.error("[automation-executor:cold] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send (fail closed)"); continue; }
+          if (!unsubSecret) {
+            console.error("[automation-executor:cold] UNSUBSCRIBE_TOKEN_SECRET unset — cannot send (fail closed)");
+            logColdSkip(touch, "UNSUBSCRIBE_TOKEN_SECRET unset — cannot add unsubscribe link (fail closed)");
+            // Env misconfig — needs a human. Don't let it hold the page meanwhile.
+            await supabase.from("campaign_touch").update({ eligible_at: blockedRowRetryAt().toISOString() }).eq("id", touch.id);
+            continue;
+          }
           const token = await signUnsubscribeToken(
             { lid: lead.id, wid: lead.workspace_id, cid: camp.id, iat: Math.floor(Date.now() / 1000) }, unsubSecret);
           const unsubscribeUrl = buildUnsubscribeUrl(supabaseUrl, token);
@@ -1863,6 +2669,7 @@ serve(async (req) => {
             // Use execForLead (recipient timezone) to anchor the next touch, matching the
             // normal send-success advance below — otherwise a recovered re-advance would
             // schedule the next touch in the workspace timezone instead of the prospect's.
+            logColdSkip(touch, "Already sent on an earlier day — re-ran the cadence advance instead of resending");
             await advanceColdEnrollment(supabase, execForLead, touch, "sent", { automationLogId: priorSent.id });
             continue;
           }
@@ -1880,7 +2687,15 @@ serve(async (req) => {
             mail_account_id: mailAcct.id,
           };
           const { data: claim, error: claimErr } = await supabase.from("automation_log").insert(claimRow).select("id").single();
-          if (!coldTouchClaimAcquired(claimErr, claim)) continue; // 23505 → already claimed by a concurrent run; no double-send
+          if (!coldTouchClaimAcquired(claimErr, claim)) {
+            // 23505 → already claimed by a concurrent run (no double-send). Anything
+            // else is a real insert failure and must be logged as such.
+            const dup = (claimErr as any)?.code === "23505";
+            logColdSkip(touch, dup
+              ? "Another executor run already claimed this touch"
+              : `claim failed: ${String((claimErr as any)?.message || "no claim row returned")}`);
+            continue;
+          }
 
           // LATE opt-out guard (closes the unsubscribe race). A recipient can POST the
           // unsubscribe form — or a bounce / admin / keyword path can set unsubscribed —
@@ -1934,6 +2749,8 @@ serve(async (req) => {
           console.error(`[automation-executor:cold] error on touch ${touch.id}:`, touchErr);
         }
       }
+      // Final flush: everything the scan queued after the last batch.
+      await flushColdSkips();
     } catch (coldErr) {
       console.error("[automation-executor:cold] section error:", coldErr);
     }
@@ -1942,20 +2759,22 @@ serve(async (req) => {
     // Non-blocking signal: if a mailbox OR its workspace exceeds the
     // threshold of sends in a trailing 15-minute window, log a
     // volume_alert row to cron_run_log. It NEVER blocks a send and is
-    // fully wrapped so it can never throw and abort the run.
+    // fully wrapped so it can never throw and abort the run. The default
+    // threshold is derived from MAX_SENDS_PER_RUN so it stays reachable — see
+    // volumeAlertDefaultThreshold.
     //
     // BOTH scopes are emitted on purpose: a per-mailbox check alone would
     // miss a blast spread across several mailboxes in one workspace, so we
     // also aggregate per workspace. Threshold is env-configurable
-    // (VOLUME_ALERT_THRESHOLD, default 50).
+    // (VOLUME_ALERT_THRESHOLD, default volumeAlertDefaultThreshold(cap)).
     try {
       if (sentOwnerIds.size > 0) {
         // Fall back to the default if the env var is missing OR malformed:
         // a non-numeric value would parse to NaN, making every `c > threshold`
         // false and silently disabling this safety tripwire.
         const parsedThreshold = parseInt(Deno.env.get("VOLUME_ALERT_THRESHOLD") ?? "", 10);
-        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 50;
-        const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : volumeAlertDefaultThreshold(maxSendsPerRun);
+        const windowStart = new Date(Date.now() - VOLUME_ALERT_WINDOW_MIN * 60 * 1000).toISOString();
         const alerts: Record<string, unknown>[] = [];
 
         // Counts are computed DB-SIDE (count: 'exact', head: true) so they are
@@ -1992,7 +2811,7 @@ serve(async (req) => {
                 workspace_id: wsSet && wsSet.size === 1 ? [...wsSet][0] : null,
                 sends_in_window: c,
                 threshold,
-                window_minutes: 15,
+                window_minutes: VOLUME_ALERT_WINDOW_MIN,
               },
             });
           }
@@ -2023,7 +2842,7 @@ serve(async (req) => {
                 workspace_id: ws,
                 sends_in_window: c,
                 threshold,
-                window_minutes: 15,
+                window_minutes: VOLUME_ALERT_WINDOW_MIN,
               },
             });
           }
@@ -2031,7 +2850,7 @@ serve(async (req) => {
 
         if (alerts.length > 0) {
           await supabase.from("cron_run_log").insert(alerts);
-          console.warn(`[automation-executor] Volume tripwire: ${alerts.length} volume_alert row(s) logged (threshold ${threshold}/15min).`);
+          console.warn(`[automation-executor] Volume tripwire: ${alerts.length} volume_alert row(s) logged (threshold ${threshold}/${VOLUME_ALERT_WINDOW_MIN}min).`);
         }
       }
     } catch (tripErr) {
@@ -2042,6 +2861,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({
       ok: true,
       processed,
+      sent: processed, // alias for QA/ops readability
       skipped,
       sentLeads,
       errors: errors.length > 0 ? errors : undefined,

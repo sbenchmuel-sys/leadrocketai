@@ -1,6 +1,7 @@
 // ============================================
 // EXECUTION SETTINGS LOADER
-// Loads workspace cadence/automation settings for the executor.
+// Loads an owner's cadence/automation settings, scoped to ONE workspace for
+// everything the schema actually stores per workspace (currently: timezone).
 // Single source of truth for all "when/whether to send" rules.
 // ============================================
 
@@ -43,12 +44,42 @@ export interface ExecutionSettings {
   stop_pause_rules: StopPauseRules;
   whatsapp: WhatsAppExecutionSettings;
   /**
-   * IANA timezone for this workspace (e.g. "America/New_York"). Loaded from
-   * workspaces.timezone via workspace_members join. NULL means the workspace
-   * has not configured a timezone — checkSendWindow will fail-closed in that
-   * case. Set in loadExecutionSettings, never derived from cadence_settings.
+   * IANA timezone for THE workspace passed to loadExecutionSettings (e.g.
+   * "America/New_York"), read from workspaces.timezone by id. NULL means that
+   * workspace has not configured a timezone (or the id was unknown) —
+   * checkSendWindow fails CLOSED in that case. Set in loadExecutionSettings,
+   * never derived from cadence_settings.
    */
   timezone: string | null;
+  /**
+   * OWNER-level pause for ALL automatic sends (legacy + cold). Read from
+   * cadence_settings.automation_paused (boolean, default false). The executor
+   * skips and logs every due send for this owner while it is true; nothing is
+   * deferred, so un-pausing resumes on the next tick. No UI toggle yet — set the
+   * key in workspace_profiles.cadence_settings (see CadenceSettingsCard for the
+   * natural home of the switch).
+   *
+   * SCOPE — read this before calling it a "workspace pause": cadence_settings
+   * lives on workspace_profiles, which is UNIQUE(user_id) and has NO
+   * workspace_id column. One owner has exactly ONE row, so this flag pauses
+   * that owner's automatic sends in EVERY workspace they belong to, and there
+   * is no way to pause only one workspace. The field is named
+   * `owner_automation_paused` so no call site can mistake its blast radius.
+   * ponytail: per-workspace scoping needs a schema change (workspace_id on
+   * workspace_profiles, or a cadence row keyed by (user_id, workspace_id)) plus
+   * a UI toggle — out of scope for Unit G-C; tracked in CLEANUP.md.
+   *
+   * FAILS CLOSED: if the workspace_profiles read ERRORS we cannot know whether
+   * the owner pressed pause, so this is true. "No row" / "no key" is a
+   * different thing — that is a genuine "not paused" and stays false.
+   */
+  owner_automation_paused: boolean;
+  /**
+   * True when owner_automation_paused is set because the settings read FAILED,
+   * not because the owner actually paused. Callers use it only to tell the rep
+   * the truth in the skip ledger — both values refuse the send either way.
+   */
+  settings_read_failed: boolean;
 }
 
 // ── Defaults (match DEFAULT_CADENCE_SETTINGS) ──────────────────────
@@ -80,43 +111,142 @@ const DEFAULT_EXECUTION_SETTINGS: ExecutionSettings = {
     max_messages_before_pause: 3,
   },
   timezone: null,
+  owner_automation_paused: false,
+  settings_read_failed: false,
 };
 
-// ── Loader (cached per-owner within a single executor run) ─────────
+// ── Guardrail coercion (Codex P1 sibling) ──────────────────────────────────
+// cadence_settings is workspace JSON spread over the typed defaults with no
+// coercion, so a non-numeric value (hand-edited row, schema change, a string
+// that isn't a number) landed straight on a guardrail. Every one of these feeds
+// a `>=` or `<` comparison, and NaN loses EVERY comparison — so the per-lead 7d
+// and 30d caps and the per-mailbox daily cap would silently stop capping. Same
+// shape as the MAX_SENDS_PER_RUN bug, different input path, larger blast radius:
+// these are the caps standing between a customer and a pile of automated email.
+//
+// Coerced ONCE here, where the JSON meets the defaults, so every consumer
+// inherits a sane value — never at the comparison sites.
+const NUMERIC_GUARDRAILS = [
+  "min_gap_hours_between_emails",
+  "max_emails_per_lead_per_7d",
+  "max_emails_per_lead_per_30d",
+  "jitter_percent",
+  "max_sends_per_day_per_mailbox",
+] as const;
+
+/**
+ * A guardrail value is READABLE only if it is a number, or a non-blank string
+ * that parses as one. null / "" / [] / booleans are NOT read as 0 — `Number(null)`
+ * is 0, and silently turning "unset" into a zero cap would mean "never send".
+ */
+function readGuardrailNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") return Number(value);
+  return NaN;
+}
+
+/**
+ * ZERO IS PRESERVED, deliberately, for every one of these:
+ *   - min_gap_hours_between_emails: 0 is a legitimate setting — no minimum gap.
+ *   - the caps: 0 means "never send" (`count >= 0` is always true). That is
+ *     STRICTER than the default, and a coercion that raised it to the default
+ *     would WEAKEN a guardrail an operator deliberately set. This unit does not
+ *     weaken guardrails, so 0 stands.
+ * Anything not finite-and->=-0 (NaN, Infinity, negative, null, "", true, {}) is
+ * unreadable AS A LIMIT and falls back to the documented default — never to
+ * "no limit" — and says so in the log so an operator who mistypes a guardrail
+ * finds out from the ledger rather than from a customer.
+ */
+function coerceGuardrails(
+  rawGuardrails: Record<string, unknown> | undefined,
+  ownerUserId: string,
+): Guardrails {
+  const merged: Record<string, unknown> = {
+    ...DEFAULT_EXECUTION_SETTINGS.guardrails,
+    ...(rawGuardrails || {}),
+  };
+  for (const key of NUMERIC_GUARDRAILS) {
+    const raw = merged[key];
+    const n = readGuardrailNumber(raw);
+    if (Number.isFinite(n) && n >= 0) {
+      merged[key] = n;
+      continue;
+    }
+    const fallback = DEFAULT_EXECUTION_SETTINGS.guardrails[key];
+    console.warn(
+      `[executionSettings] guardrail ${key} is not a finite number >= 0 for owner ` +
+      `${ownerUserId} (got ${JSON.stringify(raw)}) — falling back to the documented ` +
+      `default ${fallback}. A limit that cannot be read must not become "no limit".`,
+    );
+    merged[key] = fallback;
+  }
+  return merged as unknown as Guardrails;
+}
+
+// ── Loader (cached per owner+workspace within a single executor run) ─
 
 const cache = new Map<string, ExecutionSettings>();
 
+/**
+ * Load the send rules for one owner acting in ONE workspace.
+ *
+ * `workspaceId` is REQUIRED and must be the workspace of the lead being sent to
+ * (leads.workspace_id / campaigns.workspace_id). It decides the timezone every
+ * send-window and next-eligible calculation runs in. Before Unit G-C this was
+ * read from an arbitrary `workspace_members` row, so an owner who belongs to two
+ * workspaces had their send window evaluated in whichever timezone happened to
+ * come back first — a 9–5 window could fire at 5am for the recipient. An unknown
+ * or empty workspaceId yields timezone=null, which checkSendWindow fails CLOSED
+ * on, so a bad id refuses the send rather than guessing.
+ *
+ * Everything else (guardrails, stop rules, the pause) comes from
+ * workspace_profiles, which is UNIQUE(user_id) — those values are OWNER-level and
+ * identical across the owner's workspaces. See `owner_automation_paused`.
+ */
 export async function loadExecutionSettings(
   ownerUserId: string,
   serviceClient: ReturnType<typeof createClient>,
+  workspaceId: string,
 ): Promise<ExecutionSettings> {
-  const cached = cache.get(ownerUserId);
+  const cacheKey = `${ownerUserId}\u0000${workspaceId ?? ""}`;
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  // Load cadence settings + workspace timezone in parallel.
-  // Timezone lives on workspaces (NOT workspace_profiles) so we join via
-  // workspace_members. A user may belong to multiple workspaces; we take
-  // the first match — automation runs per-owner, so a single owner's
-  // sends are gated by whichever workspace they happen to belong to.
+  // Load owner cadence settings + THIS workspace's timezone in parallel.
   const [profileRes, wsRes] = await Promise.all([
     serviceClient
       .from("workspace_profiles")
       .select("cadence_settings")
       .eq("user_id", ownerUserId)
       .maybeSingle(),
-    serviceClient
-      .from("workspace_members")
-      .select("workspace_id, workspaces:workspace_id (timezone)")
-      .eq("user_id", ownerUserId)
-      .limit(1)
-      .maybeSingle(),
+    workspaceId
+      ? serviceClient
+          .from("workspaces")
+          .select("timezone")
+          .eq("id", workspaceId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
+
+  // FAIL CLOSED on a profile READ ERROR (Codex P2). maybeSingle() reports "no
+  // such row" as data=null with NO error — that is a real, unpaused owner who
+  // has simply never saved cadence settings. An `error` is different: the flag
+  // may well be true and we just cannot see it. Defaulting to false there let a
+  // transient Postgres/PostgREST blip silently re-arm a paused account, because
+  // the timezone read is independent and could still succeed, carrying the run
+  // on through the send window. A pause switch must fail toward NOT sending.
+  const profileReadFailed = !!(profileRes as any).error;
+  if (profileReadFailed) {
+    console.error(
+      `[executionSettings] workspace_profiles read failed for owner ${ownerUserId} — ` +
+      `treating automation as PAUSED (fail closed): ${JSON.stringify((profileRes as any).error)}`,
+    );
+  }
 
   // `as any`: workspace_profiles isn't in the Deno-side generated types, so the
   // query builder infers `data` as `never`. Same pattern as the wsRes access below.
   const raw = ((profileRes.data as any)?.cadence_settings as Record<string, unknown>) ?? {};
-  const timezone =
-    ((wsRes.data as any)?.workspaces?.timezone as string | null | undefined) ?? null;
+  const timezone = ((wsRes.data as any)?.timezone as string | null | undefined) ?? null;
 
   const settings: ExecutionSettings = {
     time_rules: {
@@ -127,10 +257,7 @@ export async function loadExecutionSettings(
         ...((raw.time_rules as any)?.send_window_local || {}),
       },
     },
-    guardrails: {
-      ...DEFAULT_EXECUTION_SETTINGS.guardrails,
-      ...(raw.guardrails as Record<string, unknown> || {}),
-    },
+    guardrails: coerceGuardrails(raw.guardrails as Record<string, unknown> | undefined, ownerUserId),
     stop_pause_rules: {
       ...DEFAULT_EXECUTION_SETTINGS.stop_pause_rules,
       ...(raw.stop_pause_rules as Record<string, unknown> || {}),
@@ -140,9 +267,18 @@ export async function loadExecutionSettings(
       ...(raw.whatsapp as Record<string, unknown> || {}),
     },
     timezone: timezone && timezone.trim() ? timezone.trim() : null,
+    // Stored JSON key stays `automation_paused` (production rows already use it);
+    // only the in-code name says what it really scopes to. Only a literal boolean
+    // true pauses — a string "true" or 1 does not, so a malformed value can never
+    // silently stop an owner's sends.
+    owner_automation_paused: profileReadFailed || raw.automation_paused === true,
+    settings_read_failed: profileReadFailed,
   };
 
-  cache.set(ownerUserId, settings);
+  // A failed read is NOT cached: the blip may be over by the next lead, and
+  // caching it would hold a whole run paused on one bad round trip. A real
+  // (successful) read is cached for the run as before.
+  if (!profileReadFailed) cache.set(cacheKey, settings);
   return settings;
 }
 
@@ -372,6 +508,115 @@ export function checkMinGap(
     };
   }
   return { allowed: true };
+}
+
+/**
+ * Email min-gap, measured against the last EMAIL only (Codex P2).
+ *
+ * `leads.last_outbound_at` is CROSS-CHANNEL: sms-send stamps it (see
+ * sms-send/index.ts, the skipStateUpdate branch) and so does the executor's own
+ * post-send update, for every channel. Comparing it to
+ * `min_gap_hours_between_emails` therefore deferred the next EMAIL as though a
+ * text had been an email — which only started happening in the wild once the
+ * automatic SMS path became reachable.
+ *
+ * Cheap by construction: nothing can be more recent than `last_outbound_at`, so
+ * when the cross-channel check already ALLOWS the send we return immediately and
+ * touch the database not at all. Only when it blocks do we spend one read to ask
+ * whether the blocking touch was actually an email.
+ *
+ * FAILS CLOSED on BOTH unknowns:
+ *   - a read ERROR keeps the conservative (blocked) answer;
+ *   - an ABSENT mirror row is not evidence of anything, so it is resolved
+ *     against the authoritative record rather than assumed to mean "no email".
+ * lead_timeline_items is a PROJECTION and a missing mirror row is a supported
+ * failure mode in this codebase; `interactions` is the source of truth for
+ * outbound email (gmail-send / outlook-send are its sole writers — see the
+ * discriminator note below, which is derived from what they actually insert). Treating an
+ * absent projection row as "never emailed" let a second email go out inside the
+ * minimum gap. Treating it as "blocked" would have been just as wrong the other
+ * way — it would hold a lead who really has only ever been texted, which is the
+ * cross-channel over-blocking this helper exists to remove. So the two cases are
+ * separated by asking the authoritative record, and only when the projection
+ * comes back empty.
+ *
+ * `anchorAt` is the timestamp the decision was made against, so the caller can
+ * compute the deferral without re-deriving it.
+ */
+export async function checkEmailMinGap(
+  leadId: string,
+  lastOutboundAt: string | null,
+  minGapHours: number,
+  serviceClient: ReturnType<typeof createClient>,
+): Promise<GuardCheckResult & { anchorAt: string | null }> {
+  const crossChannel = checkMinGap(lastOutboundAt, minGapHours);
+  if (crossChannel.allowed) return { ...crossChannel, anchorAt: lastOutboundAt };
+
+  const { data, error } = await serviceClient
+    .from("lead_timeline_items")
+    .select("occurred_at")
+    .eq("lead_id", leadId)
+    .eq("event_type", "email_outbound")
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(
+      `[executionSettings] last-email lookup failed for lead ${leadId} — keeping the ` +
+      `cross-channel min-gap block (fail closed): ${JSON.stringify(error)}`,
+    );
+    return { ...crossChannel, anchorAt: lastOutboundAt };
+  }
+
+  const mirroredAt = ((data as any)?.occurred_at as string | null | undefined) ?? null;
+  if (mirroredAt) return { ...checkMinGap(mirroredAt, minGapHours), anchorAt: mirroredAt };
+
+  // No mirror row. That is TWO different facts wearing one shape: this lead has
+  // never been emailed, or the projection is simply missing the row. Only the
+  // first may send. Ask the authoritative record — one extra read, and only on
+  // this already-narrow path (the cross-channel check has already blocked AND the
+  // projection came back empty).
+  //
+  // Discriminator — taken from the WRITERS, not from other readers:
+  //   gmail-send/index.ts  inserts { type: "email_outbound", ... } and NO direction
+  //   outlook-send/index.ts inserts { type: "email_outbound", direction: "outbound" }
+  // `direction` is a bare nullable text column (20260106223153_*.sql,
+  // `ADD COLUMN IF NOT EXISTS direction text;`) with no default and no backfill,
+  // so every row Gmail has ever written has direction NULL. Requiring
+  // direction='outbound' therefore matched NONE of them — under SQL's
+  // three-valued logic NULL = 'outbound' is NULL, not false — and this lookup
+  // silently returned "no email ever", allowing a second email inside the gap.
+  // That is the bug this read exists to close, so the predicate must not depend
+  // on the column at all for the modern spelling:
+  //     type = 'email_outbound'  OR  (type = 'email' AND direction = 'outbound')
+  // The value 'email_outbound' already carries the direction. The bare 'email'
+  // spelling (older rows) is the only one that needs `direction` to tell an
+  // inbound from an outbound, and a NULL there is genuinely ambiguous, so it is
+  // correctly excluded rather than guessed at.
+  // occurred_at is metadata and survives the 72h body purge, so old rows answer.
+  const { data: authoritative, error: authError } = await serviceClient
+    .from("interactions")
+    .select("occurred_at")
+    .eq("lead_id", leadId)
+    .or("type.eq.email_outbound,and(type.eq.email,direction.eq.outbound)")
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (authError) {
+    console.warn(
+      `[executionSettings] authoritative last-email lookup failed for lead ${leadId} — ` +
+      `keeping the cross-channel min-gap block (fail closed): ${JSON.stringify(authError)}`,
+    );
+    return { ...crossChannel, anchorAt: lastOutboundAt };
+  }
+
+  // Now the answer is a fact either way: a timestamp means the gap applies from
+  // it; null means no outbound email exists in the source of truth, so the lead
+  // genuinely has never been emailed and the EMAIL gap is not in play.
+  const lastEmailAt = ((authoritative as any)?.occurred_at as string | null | undefined) ?? null;
+  return { ...checkMinGap(lastEmailAt, minGapHours), anchorAt: lastEmailAt };
 }
 
 /**

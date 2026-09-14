@@ -161,10 +161,13 @@ Deno.serve(async (req) => {
   const autoSendMap = new Map((autoSettings || []).map((s: any) => [s.workspace_id, !!s.cold_auto_send_enabled]));
 
   // Per-owner execution settings (for advance/re-anchor), cached.
+  // Keyed by owner+workspace: the timezone is per-workspace (Unit G-C), so an
+  // owner with leads in two workspaces must not reuse the first one's settings.
   const execCache = new Map<string, ExecutionSettings>();
-  const getExec = async (ownerId: string): Promise<ExecutionSettings> => {
-    if (!execCache.has(ownerId)) execCache.set(ownerId, await loadExecutionSettings(ownerId, supabase));
-    return execCache.get(ownerId)!;
+  const getExec = async (ownerId: string, workspaceId: string): Promise<ExecutionSettings> => {
+    const key = `${ownerId}|${workspaceId}`;
+    if (!execCache.has(key)) execCache.set(key, await loadExecutionSettings(ownerId, supabase, workspaceId));
+    return execCache.get(key)!;
   };
 
   const markEnrollmentReplied = new Set<string>();
@@ -241,7 +244,10 @@ Deno.serve(async (req) => {
         continue;
       }
       if (unmet) {
-        const exec = await getExec(lead.owner_user_id);
+        // camp.workspace_id is REQUIRED: without it loadExecutionSettings returns
+        // timezone:null and advanceColdEnrollment schedules the next touch from
+        // the raw delay, unsnapped to the workspace send window / business days.
+        const exec = await getExec(lead.owner_user_id, camp.workspace_id);
         await advanceColdEnrollment(supabase, exec, t, "auto_skipped", { skipReason: unmet });
         counters.auto_skipped++;
         console.log(`[campaign-touch-scheduler] auto-skipped touch ${t.id} (${t.channel}) — condition not met`);
@@ -267,7 +273,7 @@ Deno.serve(async (req) => {
     const pastMaxAge = maxAgeAt && new Date(maxAgeAt) < now;
     const unreachable = !canReceive(t.channel, lead);
     if (pastMaxAge || unreachable) {
-      const exec = await getExec(lead.owner_user_id);
+      const exec = await getExec(lead.owner_user_id, camp.workspace_id);
       const reason = pastMaxAge
         ? "the step's window passed before anyone acted on it"
         : `this lead has no ${CHANNEL_HANDLE[t.channel] ?? "contact handle"} on file`;
@@ -307,7 +313,7 @@ Deno.serve(async (req) => {
     if (!enr || !["scheduled", "active"].includes(enr.status)) continue;
     if (t.step_number !== (enr.current_step_number ?? 0) + 1) continue; // only the live touch
     const { data: ld } = await supabase.from("leads")
-      .select("owner_user_id, last_inbound_at, unsubscribed").eq("id", t.lead_id).maybeSingle();
+      .select("owner_user_id, workspace_id, last_inbound_at, unsubscribed").eq("id", t.lead_id).maybeSingle();
     if (!ld) continue;
 
     // REPLY BRIDGE for already-QUEUED manual touches. The main loop's reply bridge only
@@ -326,7 +332,7 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    const exec = await getExec(ld.owner_user_id);
+    const exec = await getExec(ld.owner_user_id, ld.workspace_id);
     await advanceColdEnrollment(supabase, exec, t, "auto_skipped", {
       skipReason: "the step's window passed while the card sat in the Queue",
     });
