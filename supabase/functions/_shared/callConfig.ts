@@ -285,3 +285,62 @@ export async function authorizeCallJobCaller(
   }
   return null;
 }
+
+// ============================================================
+// Restored — PR #145 (C1) rewrote this file and dropped these two exports
+// while twilio-voice-webhook, call-ingest-recording and call-transcribe
+// still import them. In Deno an import of a missing named export is a
+// link-time SyntaxError, so all three functions returned 503 BOOT_ERROR in
+// production: no call-status updates, no recordings, no transcripts, no
+// analysis. Verbatim from the pre-#145 file (05ef1e7).
+// ============================================================
+
+// Map Twilio status → our internal status
+export function mapTwilioStatus(twStatus: string): string {
+  const map: Record<string, string> = {
+    "initiated": "initiated",
+    "ringing": "ringing",
+    "in-progress": "answered",
+    "completed": "completed",
+    "failed": "failed",
+    "busy": "busy",
+    "no-answer": "no-answer",
+    "canceled": "canceled",
+  };
+  return map[twStatus] ?? twStatus;
+}
+
+// ---- Job interface ----
+export interface CallJob {
+  type: "ingest_recording" | "transcribe_call" | "analyze_call";
+  callSessionId: string;
+  recordingId?: string;
+}
+
+export async function enqueueCallJob(job: CallJob): Promise<void> {
+  const fnMap: Record<CallJob["type"], string> = {
+    ingest_recording: "call-ingest-recording",
+    transcribe_call: "call-transcribe",
+    analyze_call: "call-analyze",
+  };
+
+  const fnName = fnMap[job.type];
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  const resp = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(job),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.error(`[enqueueCallJob] Failed to invoke ${fnName}: ${resp.status} ${text}`);
+  } else {
+    await resp.text(); // consume body
+  }
+}

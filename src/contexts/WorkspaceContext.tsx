@@ -67,7 +67,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const { data: memberships } = await supabase
         .from("workspace_members")
         .select("workspace_id, role")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        // Oldest membership first, so the `allWs[0]` fallback below is deterministic.
+        .order("created_at", { ascending: true });
 
       if (memberships && memberships.length > 0) {
         // Fetch workspace names + timezones

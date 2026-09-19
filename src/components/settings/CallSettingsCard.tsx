@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import { Save, Info, Phone } from "lucide-react";
 
 interface CallSettings {
-  id: string;
   transcribe_min_duration_sec: number;
   analyze_min_duration_sec: number;
   default_language: string;
@@ -20,7 +19,7 @@ interface CallSettings {
   default_twilio_number: string | null;
 }
 
-const DEFAULTS: Omit<CallSettings, "id"> = {
+const DEFAULTS: CallSettings = {
   transcribe_min_duration_sec: 10,
   analyze_min_duration_sec: 30,
   default_language: "en-US",
@@ -30,6 +29,8 @@ const DEFAULTS: Omit<CallSettings, "id"> = {
   audio_retention_days: 90,
   default_twilio_number: null,
 };
+
+const E164 = /^\+\d{8,15}$/;
 
 interface CallSettingsCardProps {
   workspaceId?: string;
@@ -42,56 +43,80 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
   const [langInput, setLangInput] = useState("");
 
   useEffect(() => {
-    if (workspaceId) loadSettings(workspaceId);
+    if (!workspaceId) return;
+    // Workspace switched while the card is mounted: drop the previous workspace's
+    // values BEFORE loading, so Save can never upsert workspace A's caller ID /
+    // retention / languages under workspace B's id (Codex P1 on PR #152). A load
+    // that resolves after the switch is ignored via `stale`.
+    let stale = false;
+    setSettings(null);
+    setIsLoading(true);
+    loadSettings(workspaceId, () => stale);
+    return () => {
+      stale = true;
+    };
   }, [workspaceId]);
 
-  const loadSettings = async (wsId: string) => {
+  const loadSettings = async (wsId: string, isStale: () => boolean) => {
     try {
-      const { data: existing } = await supabase
+      const { data: existing, error } = await supabase
         .from("call_settings")
         .select("*")
         .eq("workspace_id", wsId)
         .maybeSingle();
 
-      if (existing) {
-        setSettings(existing as unknown as CallSettings);
-      } else {
-        const { data: created } = await supabase
-          .from("call_settings")
-          .insert({ workspace_id: wsId, ...DEFAULTS })
-          .select("*")
-          .single();
-        if (created) setSettings(created as unknown as CallSettings);
+      if (isStale()) return;
+      if (error) {
+        toast.error("Couldn't load call settings", { description: error.message });
+        return;
       }
+      // No row yet: show the defaults in memory and let Save create it.
+      // (A load-time insert used to fail silently and leave the card dead.)
+      setSettings((existing as unknown as CallSettings | null) ?? DEFAULTS);
     } catch (err) {
       console.error("Failed to load call settings", err);
     } finally {
-      setIsLoading(false);
+      if (!isStale()) setIsLoading(false);
     }
   };
 
   const handleSave = async () => {
-    if (!settings) return;
+    if (!settings || !workspaceId) return;
+    const callerId = settings.default_twilio_number?.trim() || "";
+    if (callerId && !E164.test(callerId)) {
+      toast.error("Enter the number in international format, starting with +");
+      return;
+    }
     setIsSaving(true);
     try {
+      // Upsert on the UNIQUE(workspace_id) constraint so Save creates the row if it's missing.
       const { error } = await supabase
         .from("call_settings")
-        .update({
-          transcribe_min_duration_sec: Math.max(0, settings.transcribe_min_duration_sec),
-          analyze_min_duration_sec: Math.max(0, settings.analyze_min_duration_sec),
-          default_language: settings.default_language,
-          supported_languages: settings.supported_languages,
-          recording_notice_enabled: settings.recording_notice_enabled,
-          recording_require_dtmf_consent: settings.recording_require_dtmf_consent,
-          audio_retention_days: Math.max(1, settings.audio_retention_days),
-          default_twilio_number: settings.default_twilio_number?.trim() || null,
-        })
-        .eq("id", settings.id);
+        .upsert(
+          {
+            workspace_id: workspaceId,
+            transcribe_min_duration_sec: Math.max(0, settings.transcribe_min_duration_sec),
+            analyze_min_duration_sec: Math.max(0, settings.analyze_min_duration_sec),
+            default_language: settings.default_language,
+            supported_languages: settings.supported_languages,
+            recording_notice_enabled: settings.recording_notice_enabled,
+            recording_require_dtmf_consent: settings.recording_require_dtmf_consent,
+            audio_retention_days: Math.max(1, settings.audio_retention_days),
+            default_twilio_number: callerId || null,
+          },
+          { onConflict: "workspace_id" },
+        );
 
       if (error) throw error;
       toast.success("Call settings saved");
-    } catch {
-      toast.error("Failed to save settings");
+    } catch (err) {
+      // RLS rejects non-admins here; the raw Postgres text means nothing to a rep.
+      const message = (err as { message?: string })?.message;
+      toast.error("Failed to save settings", {
+        description: message?.includes("row-level security")
+          ? "Only workspace admins can change call settings."
+          : message,
+      });
     } finally {
       setIsSaving(false);
     }
