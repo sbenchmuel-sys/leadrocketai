@@ -30,6 +30,8 @@ const DEFAULTS: CallSettings = {
   default_twilio_number: null,
 };
 
+const E164 = /^\+\d{8,15}$/;
+
 interface CallSettingsCardProps {
   workspaceId?: string;
 }
@@ -80,6 +82,11 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
 
   const handleSave = async () => {
     if (!settings || !workspaceId) return;
+    const callerId = settings.default_twilio_number?.trim() || "";
+    if (callerId && !E164.test(callerId)) {
+      toast.error("Enter the number in international format, starting with +");
+      return;
+    }
     setIsSaving(true);
     try {
       // Upsert on the UNIQUE(workspace_id) constraint so Save creates the row if it's missing.
@@ -95,7 +102,7 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
             recording_notice_enabled: settings.recording_notice_enabled,
             recording_require_dtmf_consent: settings.recording_require_dtmf_consent,
             audio_retention_days: Math.max(1, settings.audio_retention_days),
-            default_twilio_number: settings.default_twilio_number?.trim() || null,
+            default_twilio_number: callerId || null,
           },
           { onConflict: "workspace_id" },
         );
@@ -103,7 +110,13 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
       if (error) throw error;
       toast.success("Call settings saved");
     } catch (err) {
-      toast.error("Failed to save settings", { description: (err as { message?: string })?.message });
+      // RLS rejects non-admins here; the raw Postgres text means nothing to a rep.
+      const message = (err as { message?: string })?.message;
+      toast.error("Failed to save settings", {
+        description: message?.includes("row-level security")
+          ? "Only workspace admins can change call settings."
+          : message,
+      });
     } finally {
       setIsSaving(false);
     }

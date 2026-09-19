@@ -96,7 +96,7 @@ describe("CallSettingsCard", () => {
   it("a failed write is shown to the user with the database's message, not swallowed", async () => {
     resolve = (chain) =>
       has(chain, "upsert")
-        ? { data: null, error: { message: "new row violates row-level security policy" } }
+        ? { data: null, error: { message: "could not serialize access due to concurrent update" } }
         : { data: null, error: null };
     render(<CallSettingsCard workspaceId={WS} />);
 
@@ -104,9 +104,42 @@ describe("CallSettingsCard", () => {
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(
         "Failed to save settings",
-        expect.objectContaining({ description: expect.stringContaining("row-level security") }),
+        expect.objectContaining({ description: expect.stringContaining("concurrent update") }),
       ),
     );
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  // A rep (non-admin) hitting Save gets an RLS rejection. "new row violates
+  // row-level security policy" tells them nothing about what to do next.
+  it("an RLS rejection is translated into something a rep can act on", async () => {
+    resolve = (chain) =>
+      has(chain, "upsert")
+        ? { data: null, error: { message: "new row violates row-level security policy for table \"call_settings\"" } }
+        : { data: null, error: null };
+    render(<CallSettingsCard workspaceId={WS} />);
+
+    await typeNumberAndSave("+15551234567");
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "Failed to save settings",
+        { description: "Only workspace admins can change call settings." },
+      ),
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  // A caller ID Twilio cannot dial from must be caught here, not silently stored
+  // and then discovered as a failed call days later.
+  it("a malformed caller ID is rejected before anything is written", async () => {
+    resolve = () => ({ data: null, error: null });
+    render(<CallSettingsCard workspaceId={WS} />);
+
+    await typeNumberAndSave("0555 123 4567"); // no +, spaces
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Enter the number in international format, starting with +"),
+    );
+    expect(writes()).toHaveLength(0);
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 

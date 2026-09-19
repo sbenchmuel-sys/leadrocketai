@@ -316,14 +316,16 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       const name = (err as { name?: string } | null)?.name;
       if (name === "NotAllowedError") {
         toast.error("Microphone is blocked", {
-          description: "Chrome is blocking the microphone for this site. Click the icon left of the address bar, allow Microphone, then reload.",
+          description: "Allow the microphone for DrivePilot in your browser's site settings, then reload the page.",
         });
       } else if (name === "NotFoundError") {
         toast.error("No microphone found", {
           description: "Plug in or switch on a microphone, then try again.",
         });
       } else {
-        toast.error("Couldn't use the microphone", { description: (err as { message?: string } | null)?.message });
+        toast.error("Couldn't use the microphone", {
+          description: "Close other apps that may be using the microphone, then try again.",
+        });
       }
       return;
     }
@@ -360,8 +362,8 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       timedOut = true;
       try { deviceRef.current?.disconnectAll(); } catch { /* ignore */ }
       setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
-      toast.error("Couldn't connect the call", {
-        description: "Twilio didn't answer in 25 seconds. Check your microphone permission and network, then try again.",
+      toast.error("The call didn't go through", {
+        description: "We couldn't connect in 25 seconds. Check your internet connection and try again.",
       });
     }, CONNECT_TIMEOUT_MS);
 
@@ -465,10 +467,19 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
   }, [initDevice]);
 
   const hangUp = useCallback(() => {
+    // Disarm the connect watchdog first: hanging up during "Connecting…" used to
+    // leave it armed, so 25s later it fired an error toast about a call the rep
+    // had already cancelled.
+    if (connectTimerRef.current) {
+      clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    }
     if (state.activeCall) {
       state.activeCall.disconnect();
     } else {
-      // Force reset if call object is already gone (e.g. after error)
+      // No Call object yet (connect() still pending) or it is already gone after an
+      // error — tell the Device to drop anything it is holding, then force the reset.
+      try { deviceRef.current?.disconnectAll(); } catch { /* ignore */ }
       setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
     }
   }, [state.activeCall]);

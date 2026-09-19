@@ -85,7 +85,7 @@ describe("BrowserCallProvider.makeCall", () => {
     expect(ctx.status).toBe("ready"); // never flipped to "connecting"
     expect(toastError).toHaveBeenCalledWith(
       "Microphone is blocked",
-      expect.objectContaining({ description: expect.stringContaining("allow Microphone") }),
+      expect.objectContaining({ description: expect.stringContaining("site settings") }),
     );
   });
 
@@ -120,9 +120,30 @@ describe("BrowserCallProvider.makeCall", () => {
     expect(ctx.activeCall).toBeNull();
     expect(disconnectAll).toHaveBeenCalledTimes(1);
     expect(toastError).toHaveBeenCalledWith(
-      "Couldn't connect the call",
+      "The call didn't go through",
       expect.objectContaining({ description: expect.stringContaining("25 seconds") }),
     );
+  });
+
+  // The rep gives up on "Connecting…" and hits Hang up. The watchdog was left
+  // armed, so 25s later it fired an error toast about a call they had cancelled.
+  it("hang up while connect() is still pending → the watchdog is disarmed, not fired later", async () => {
+    getUserMedia.mockResolvedValue({ getTracks: () => [] });
+    connect.mockReturnValue(new Promise(() => undefined)); // connect() never settles
+    await renderReady();
+
+    vi.useFakeTimers();
+    void ctx.makeCall(CALL);
+    await act(() => vi.advanceTimersByTimeAsync(1)); // let the mic probe resolve and connect() start
+    expect(ctx.status).toBe("connecting");
+
+    act(() => ctx.hangUp());
+    expect(ctx.status).toBe("ready");
+    expect(disconnectAll).toHaveBeenCalledTimes(1); // nothing left dialling behind the UI
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(toastError).not.toHaveBeenCalled();
+    expect(ctx.status).toBe("ready");
   });
 
   it("the call is answered → the watchdog stands down", async () => {
