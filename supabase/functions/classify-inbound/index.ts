@@ -618,12 +618,22 @@ Deno.serve(async (req) => {
     // and starves every row behind it — which is exactly what happened
     // when ai_task started returning 402 on every call.
     const nowIso = new Date().toISOString();
+    // ponytail: hard age floor. Connecting a mailbox back-fills YEARS of
+    // historical inbound (this workspace: rows back to 2022), and every one
+    // of them was an AI call at 15/min, forever — the single biggest line on
+    // the gateway bill. Intent only ever drives queue/reply decisions on
+    // RECENT mail; an inbound from 2024 is never getting replied to. Older
+    // rows stay intent NULL and every reader already tolerates that.
+    // Ceiling: leads dormant longer than this window never get intent — if
+    // that ever matters, backfill them once from a one-shot job, not a cron.
+    const classifyFloorIso = new Date(Date.now() - CLASSIFY_MAX_AGE_DAYS * 86_400_000).toISOString();
     const candidates = (withBackoffFilter: boolean) => {
       const q = admin
         .from("lead_timeline_items")
         .select("id, lead_id, subject, snippet_text, metadata_json, updated_at")
         .eq("event_type", "email_inbound")
-        .is("intent", null);
+        .is("intent", null)
+        .gte("occurred_at", classifyFloorIso);
       if (withBackoffFilter) q.or(classifyEligibilityFilter(nowIso));
       return q
         .order("expires_at", { ascending: true, nullsFirst: false })
