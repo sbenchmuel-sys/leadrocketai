@@ -9,6 +9,9 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const MAX_REFRESH_ATTEMPTS = 4;
 const SAFETY_REFRESH_MS = 50 * 60 * 1000; // proactively refresh well before the ~1h token TTL
 
+// A call that hasn't produced any Twilio event after this long is not going to.
+const CONNECT_TIMEOUT_MS = 25_000;
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface BrowserCallState {
@@ -52,6 +55,8 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
   const refreshFailedToastShownRef = useRef(false);
   // Removes the per-device timer + window listeners; set in initDevice, called on teardown
   const connectionCleanupRef = useRef<(() => void) | null>(null);
+  // Connect watchdog: armed when a call starts "connecting", cleared by the first call event
+  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [state, setState] = useState<BrowserCallState>({
     status: "idle",
     activeCall: null,
@@ -270,6 +275,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
+      if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
       subscription.unsubscribe();
       connectionCleanupRef.current?.();
       deviceRef.current?.destroy();
@@ -301,6 +307,27 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // Ask for the microphone up front. Without it the Twilio SDK waits on the same
+    // permission inside connect() and the UI sat on "Connecting…" forever, silently.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop()); // only needed the permission
+    } catch (err) {
+      const name = (err as { name?: string } | null)?.name;
+      if (name === "NotAllowedError") {
+        toast.error("Microphone is blocked", {
+          description: "Chrome is blocking the microphone for this site. Click the icon left of the address bar, allow Microphone, then reload.",
+        });
+      } else if (name === "NotFoundError") {
+        toast.error("No microphone found", {
+          description: "Plug in or switch on a microphone, then try again.",
+        });
+      } else {
+        toast.error("Couldn't use the microphone", { description: (err as { message?: string } | null)?.message });
+      }
+      return;
+    }
+
     if (!deviceRef.current) {
       await initDevice();
     }
@@ -320,6 +347,24 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       startedAt: null,
     }));
 
+    // Watchdog: if no call event (accept / ringing / disconnect / cancel / error) arrives
+    // in time, give up loudly instead of showing "Connecting…" forever.
+    let timedOut = false;
+    const clearConnectTimer = () => {
+      if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    };
+    clearConnectTimer();
+    connectTimerRef.current = setTimeout(() => {
+      connectTimerRef.current = null;
+      timedOut = true;
+      try { deviceRef.current?.disconnectAll(); } catch { /* ignore */ }
+      setState((s) => ({ ...s, status: "ready", activeCall: null, leadId: null, leadName: null, fromNumber: null, toNumber: null, isMuted: false, startedAt: null }));
+      toast.error("Couldn't connect the call", {
+        description: "Twilio didn't answer in 25 seconds. Check your microphone permission and network, then try again.",
+      });
+    }, CONNECT_TIMEOUT_MS);
+
     try {
       // === DIAGNOSTIC: Log pre-connect state ===
       console.log("[BrowserCall] PRE-CONNECT", {
@@ -338,11 +383,22 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
         },
       });
 
+      // connect() itself resolved only after the watchdog gave up — don't let a
+      // call run behind a UI that already says it failed.
+      if (timedOut) {
+        call.disconnect();
+        return;
+      }
+
+      call.on("ringing", clearConnectTimer);
+
       call.on("accept", () => {
+        clearConnectTimer();
         setState((s) => ({ ...s, status: "on-call", activeCall: call, startedAt: new Date() }));
       });
 
       call.on("disconnect", () => {
+        clearConnectTimer();
         setState((s) => ({
           ...s,
           status: "ready",
@@ -357,6 +413,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       });
 
       call.on("cancel", () => {
+        clearConnectTimer();
         setState((s) => ({
           ...s,
           status: "ready",
@@ -369,6 +426,7 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       });
 
       call.on("error", (err: any) => {
+        clearConnectTimer();
         console.error("Call error:", err);
         const code = err?.originalError?.code ?? err?.code;
         let title = "Call failed";
@@ -399,6 +457,8 @@ export function BrowserCallProvider({ children }: { children: ReactNode }) {
       // Set connecting state with call reference
       setState((s) => ({ ...s, activeCall: call }));
     } catch (err: any) {
+      clearConnectTimer();
+      if (timedOut) return; // the watchdog already told the user
       toast.error("Failed to connect call", { description: err.message });
       setState((s) => ({ ...s, status: "ready" }));
     }
