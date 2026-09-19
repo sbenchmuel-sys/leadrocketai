@@ -13,7 +13,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 type Call = { fn: string; args: unknown[] };
 let chains: Call[][] = [];
-let resolve: (chain: Call[]) => { data: unknown; error: unknown };
+type Result = { data: unknown; error: unknown };
+let resolve: (chain: Call[]) => Result | Promise<Result>;
 
 function builder(chain: Call[]): unknown {
   return new Proxy(() => undefined, {
@@ -40,6 +41,9 @@ vi.mock("sonner", () => ({
 const { CallSettingsCard } = await import("@/components/settings/CallSettingsCard");
 
 const WS = "9c92f7ce-0000-4000-8000-000000000001";
+const WS_B = "9c92f7ce-0000-4000-8000-000000000002";
+const ROW_A = { id: "row-a", workspace_id: WS, transcribe_min_duration_sec: 10, analyze_min_duration_sec: 30, default_language: "he-IL", supported_languages: ["he-IL"], recording_notice_enabled: true, recording_require_dtmf_consent: false, audio_retention_days: 30, default_twilio_number: "+15550000000" };
+const wsOf = (chain: Call[]) => chain.find((c) => c.fn === "eq")?.args[1];
 const has = (chain: Call[], fn: string) => chain.some((c) => c.fn === fn);
 const writes = () => chains.filter((c) => has(c, "upsert") || has(c, "insert") || has(c, "update"));
 
@@ -116,5 +120,42 @@ describe("CallSettingsCard", () => {
         expect.objectContaining({ description: "permission denied for table call_settings" }),
       ),
     );
+  });
+
+  // Codex P1 on PR #152: the card stays mounted while WorkspaceSwitcher changes
+  // workspaceId. Workspace A's values must never be saveable under workspace B.
+  it("workspace switch + failed load → A's values are gone and there is nothing to Save", async () => {
+    resolve = (chain) =>
+      wsOf(chain) === WS ? { data: ROW_A, error: null } : { data: null, error: { message: "boom" } };
+    const { rerender } = render(<CallSettingsCard workspaceId={WS} />);
+    expect(await screen.findByDisplayValue("+15550000000")).toBeInTheDocument();
+
+    rerender(<CallSettingsCard workspaceId={WS_B} />);
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+
+    expect(screen.queryByDisplayValue("+15550000000")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save Settings/i })).toBeNull();
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("a slow load for workspace A that lands after switching to B is ignored", async () => {
+    let releaseA!: () => void;
+    resolve = (chain) => {
+      if (!has(chain, "select")) return { data: null, error: null };
+      if (wsOf(chain) === WS) return new Promise<Result>((r) => (releaseA = () => r({ data: ROW_A, error: null })));
+      return { data: null, error: null }; // B has no row yet → defaults
+    };
+    const { rerender } = render(<CallSettingsCard workspaceId={WS} />);
+    rerender(<CallSettingsCard workspaceId={WS_B} />);
+    expect(await screen.findByDisplayValue("en-US")).toBeInTheDocument();
+
+    releaseA();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByDisplayValue("+15550000000")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    const upsert = writes()[0].find((c) => c.fn === "upsert")!;
+    expect(upsert.args[0]).toMatchObject({ workspace_id: WS_B, default_twilio_number: null, default_language: "en-US" });
   });
 });

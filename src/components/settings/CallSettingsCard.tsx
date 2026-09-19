@@ -41,10 +41,21 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
   const [langInput, setLangInput] = useState("");
 
   useEffect(() => {
-    if (workspaceId) loadSettings(workspaceId);
+    if (!workspaceId) return;
+    // Workspace switched while the card is mounted: drop the previous workspace's
+    // values BEFORE loading, so Save can never upsert workspace A's caller ID /
+    // retention / languages under workspace B's id (Codex P1 on PR #152). A load
+    // that resolves after the switch is ignored via `stale`.
+    let stale = false;
+    setSettings(null);
+    setIsLoading(true);
+    loadSettings(workspaceId, () => stale);
+    return () => {
+      stale = true;
+    };
   }, [workspaceId]);
 
-  const loadSettings = async (wsId: string) => {
+  const loadSettings = async (wsId: string, isStale: () => boolean) => {
     try {
       const { data: existing, error } = await supabase
         .from("call_settings")
@@ -52,6 +63,7 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
         .eq("workspace_id", wsId)
         .maybeSingle();
 
+      if (isStale()) return;
       if (error) {
         toast.error("Couldn't load call settings", { description: error.message });
         return;
@@ -62,7 +74,7 @@ export function CallSettingsCard({ workspaceId }: CallSettingsCardProps) {
     } catch (err) {
       console.error("Failed to load call settings", err);
     } finally {
-      setIsLoading(false);
+      if (!isStale()) setIsLoading(false);
     }
   };
 
