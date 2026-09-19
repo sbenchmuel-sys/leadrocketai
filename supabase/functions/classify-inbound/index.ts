@@ -135,6 +135,9 @@ const corsHeaders = {
 // 1,346 backlogged rows ÷ 15 = ~90 minutes regardless of email mix.
 const BATCH_SIZE = 15;
 
+// Only inbound newer than this is worth an AI call (see the fetch query).
+const CLASSIFY_MAX_AGE_DAYS = 45;
+
 // Rows are over-fetched so that a row parked by retry backoff can never
 // consume one of the working slots. `classifyEligibilityFilter` is
 // what actually keeps parked rows out, SERVER-SIDE; this headroom plus
