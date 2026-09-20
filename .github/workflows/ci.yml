@@ -1,16 +1,22 @@
 name: CI
 
 # Runs the test suite, type-check, and build on every pull request and on every
-# push to a non-main branch, so pass/fail shows up on the PR with no manual step.
+# push — main included — so pass/fail shows up with no manual step.
 #
-# main is deliberately EXCLUDED from the push trigger: Lovable Cloud pushes directly
-# to main, and this workflow must not gate or interfere with that flow. It only
-# *reports* status — it does not enable branch protection (which would break Lovable).
+# main IS in the push trigger, on purpose. Lovable Cloud pushes directly to main and
+# a push-triggered run cannot gate or interfere with that: the run starts after the
+# commit has already landed, so all it can do is *report*. Branch protection stays
+# off (it would break Lovable). This is detection, not enforcement.
+#
+# Why it is worth the minutes: #145 (14 Sep) dropped two exports from
+# _shared/callConfig.ts and three edge functions returned 503 BOOT_ERROR in
+# production for five days before anyone noticed. That change reached main without a
+# pull request, so no CI run ever saw it. The guard that catches exactly this
+# (supabase/functions/_shared/callConfigExports.test.ts) is only worth having if it
+# also runs on the pushes Lovable makes.
 on:
   pull_request:
   push:
-    branches-ignore:
-      - main
 
 # A newer push to the same ref cancels the in-flight run for that ref.
 concurrency:
