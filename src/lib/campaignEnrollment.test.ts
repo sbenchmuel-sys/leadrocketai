@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   nextBusinessDay,
   addBusinessDays,
@@ -522,7 +522,13 @@ vi.mock("@/integrations/supabase/client", () => ({
 }));
 
 describe("launchCampaignWithSchedule fails CLOSED when it can't read LinkedIn URLs", () => {
+  // The schedule runs through nextBusinessDay(), so a run on a Sat/Sun pushes the
+  // first touch to Monday and "not held" stops looking like "due now". Pin a
+  // weekday (midday UTC, so it is a weekday in every timezone) and fake only Date
+  // — faking setTimeout too would stall the awaits below.
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-16T12:00:00Z")); // Wednesday
     rpcPayload = null;
     for (const k of Object.keys(tableResult)) delete tableResult[k];
     // A cadence whose FIRST touch is LinkedIn, and one not-started enrollment.
@@ -560,5 +566,9 @@ describe("launchCampaignWithSchedule fails CLOSED when it can't read LinkedIn UR
     tableResult.leads = { data: [{ id: "lead-a", linkedin_url: "https://www.linkedin.com/in/a" }], error: null };
     await launchCampaignWithSchedule("camp-1");
     expect(firstLinkedinEligible()).toBeLessThanOrEqual(Date.now());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 });
