@@ -7,6 +7,7 @@
 // ============================================================
 
 import { logger } from "./logger.ts";
+import { outlookRefreshScope } from "./outlookScopes.ts";
 
 export class MicrosoftCredentialsMissingError extends Error {
   constructor() {
@@ -141,6 +142,30 @@ export class OutlookGraphClient {
     }
 
     return resp.json();
+  }
+
+  /**
+   * Refresh asking for every granted scope (see outlookRefreshScope), so the
+   * shared stored token never narrows. If Microsoft refuses the wider set
+   * (e.g. an admin later revoked one permission), retry once with the
+   * caller's own scopes rather than failing — a failure here marks the
+   * account expired and stops mail sync.
+   */
+  static async refreshTokenWithGrantedScopes(
+    refreshToken: string,
+    grantedScopes: string[] | null | undefined,
+    fallbackScope: string,
+  ): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
+    const wide = outlookRefreshScope(grantedScopes, fallbackScope);
+    try {
+      return await OutlookGraphClient.refreshToken(refreshToken, wide);
+    } catch (err) {
+      if (wide === fallbackScope || err instanceof MicrosoftCredentialsMissingError) throw err;
+      logger.warn("mail.outlook.token_refresh_wide_scope_failed", {
+        error: err instanceof Error ? err.message.slice(0, 300) : String(err),
+      });
+      return await OutlookGraphClient.refreshToken(refreshToken, fallbackScope);
+    }
   }
 
   /** Exchange refresh_token for new tokens. Requires credentials. */
