@@ -204,3 +204,6 @@ verify_jwt = false
 
 [functions.intelligence-queue-drain]
 verify_jwt = false
+
+[functions.request-login-code]
+verify_jwt = false
