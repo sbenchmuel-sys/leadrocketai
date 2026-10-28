@@ -23,6 +23,10 @@ import {
   OUTLOOK_CALENDAR_SCOPE,
   OUTLOOK_CALENDAR_SCOPES_STRING,
 } from "../_shared/outlookScopes.ts";
+import {
+  MEETING_LOOKBACK_MS,
+  OUTLOOK_MEETING_SYNC_STATUSES,
+} from "../_shared/meetingSync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -168,7 +172,9 @@ function detectGooglePlatform(ev: GoogleEvent): { platform: CalendarPlatform; me
 }
 
 async function fetchGoogleEvents(accessToken: string): Promise<GoogleEvent[]> {
-  const timeMin = new Date().toISOString();
+  // Look back too, so meetings missed while an account was disconnected get
+  // picked up (and their transcripts fetched) once it reconnects.
+  const timeMin = new Date(Date.now() - MEETING_LOOKBACK_MS).toISOString();
   const timeMax = new Date(Date.now() + WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
   url.searchParams.set("timeMin", timeMin);
@@ -305,7 +311,7 @@ function detectOutlookPlatform(ev: OutlookEvent): { platform: CalendarPlatform; 
 }
 
 async function fetchOutlookEvents(accessToken: string): Promise<OutlookEvent[]> {
-  const startDateTime = new Date().toISOString();
+  const startDateTime = new Date(Date.now() - MEETING_LOOKBACK_MS).toISOString(); // see fetchGoogleEvents
   const endDateTime = new Date(Date.now() + WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const url = new URL("https://graph.microsoft.com/v1.0/me/calendarview");
   url.searchParams.set("startDateTime", startDateTime);
@@ -580,7 +586,7 @@ serve(async (req) => {
     .from("mail_accounts")
     .select("id, workspace_id, user_id, email_address, access_token, refresh_token, token_expires_at, granted_scopes, needs_reconnect")
     .eq("provider", "outlook")
-    .eq("status", "connected");
+    .in("status", OUTLOOK_MEETING_SYNC_STATUSES);
   if (outlookErr) {
     console.error("[calendar-sync] Failed to load mail_accounts:", outlookErr.message);
   } else {

@@ -3,7 +3,7 @@
 //
 // Mounted in DashboardLayout. Reads mail_accounts for the active
 // workspace and surfaces any row with needs_reconnect=true or
-// status='error' as a top-of-app banner with a one-click reconnect.
+// status='error'/'expired' as a top-of-app banner with a one-click reconnect.
 // Dismissable per browser session.
 // ============================================================
 
@@ -52,7 +52,9 @@ export function MailConnectionBanner() {
       .from("mail_accounts")
       .select("id, provider, email_address, status, needs_reconnect, error_reason")
       .eq("workspace_id", workspaceId)
-      .or("needs_reconnect.eq.true,status.eq.error");
+      // 'expired' = token refresh failed (outlookTokens / automation-executor);
+      // without it a dead login never showed a banner and sync stopped silently.
+      .or("needs_reconnect.eq.true,status.eq.error,status.eq.expired");
     setAccounts((data ?? []) as DisconnectedAccount[]);
   }, [workspaceId]);
 
