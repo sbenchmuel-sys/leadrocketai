@@ -19,7 +19,12 @@ export default function Auth() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [showMergeDialog, setShowMergeDialog] = useState(false);
   const [mergeEmail, setMergeEmail] = useState("");
-  const [view, setView] = useState<"auth" | "forgot">("auth");
+  const [view, setView] = useState<"auth" | "forgot" | "code">("auth");
+  const [codeEmail, setCodeEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [isCodeSubmitting, setIsCodeSubmitting] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSent, setForgotSent] = useState(false);
   const [isForgotSubmitting, setIsForgotSubmitting] = useState(false);
@@ -111,6 +116,48 @@ export default function Auth() {
     setForgotSent(true);
   };
 
+  // Supabase Auth allows one code email per address per ~60s; mirror that so
+  // "Send again" never silently does nothing.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  const handleSendCode = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setIsCodeSubmitting(true);
+    const { data, error } = await supabase.functions.invoke("request-login-code", {
+      body: { email: codeEmail, redirectTo: `${getSiteUrl()}/` },
+    });
+    setIsCodeSubmitting(false);
+    if (error || !data?.ok) {
+      toast.error(authErrorMessage(data?.error ?? error, "Couldn't send a code. Please try again."));
+      return;
+    }
+    setCode("");
+    setCodeSent(true);
+    setResendIn(60);
+  };
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCodeSubmitting(true);
+    const { error } = await supabase.auth.verifyOtp({
+      email: codeEmail.trim().toLowerCase(),
+      token: code.trim(),
+      type: "email",
+    });
+    setIsCodeSubmitting(false);
+    if (error) {
+      toast.error(/expired|invalid/i.test(error.message)
+        ? "That code is wrong or has expired. Check the latest email or send a new code."
+        : authErrorMessage(error, "Sign-in failed. Please try again."));
+      return;
+    }
+    toast.success("Welcome back!");
+  };
+
   const googleButton = (
     <>
       <Button
@@ -136,6 +183,85 @@ export default function Auth() {
       </div>
     </>
   );
+
+  if (view === "code") {
+    const backToSignIn = () => { setView("auth"); setCodeSent(false); setCode(""); };
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl font-bold">Sign in with a code</CardTitle>
+            <CardDescription>
+              {codeSent
+                ? <>We sent a sign-in email to <span className="font-medium text-foreground">{codeEmail}</span>. Enter the code from it, or just click the link in the email.</>
+                : "No password needed. We'll email you a one-time code."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {codeSent ? (
+              <form onSubmit={handleVerifyCode} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="login-code">Code</Label>
+                  <Input
+                    id="login-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6,10}"
+                    maxLength={10}
+                    placeholder="123456"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    required
+                    autoFocus
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Didn't get it? Check spam. Codes only go to invited addresses.
+                  </p>
+                </div>
+                <Button type="submit" className="w-full" disabled={isCodeSubmitting || code.length < 6}>
+                  {isCodeSubmitting ? "Signing in..." : "Sign In"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  disabled={isCodeSubmitting || resendIn > 0}
+                  onClick={() => handleSendCode()}
+                >
+                  {resendIn > 0 ? `Send a new code in ${resendIn}s` : "Send a new code"}
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={backToSignIn}>
+                  Back to Sign In
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleSendCode} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="code-email">Email</Label>
+                  <Input
+                    id="code-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@company.com"
+                    value={codeEmail}
+                    onChange={(e) => setCodeEmail(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={isCodeSubmitting}>
+                  {isCodeSubmitting ? "Sending..." : "Email me a code"}
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={backToSignIn}>
+                  Back to Sign In
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (view === "forgot") {
     return (
@@ -237,6 +363,14 @@ export default function Auth() {
                     {isSubmitting ? "Signing in..." : "Sign In"}
                   </Button>
                 </form>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => { setCodeEmail(email); setCodeSent(false); setView("code"); }}
+                >
+                  Email me a code instead
+                </Button>
               </div>
             </TabsContent>
             <TabsContent value="signup">
