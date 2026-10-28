@@ -23,6 +23,7 @@ import {
   TeamsGraphClient,
   type TeamsTranscriptResult,
 } from "../_shared/teamsTranscript.ts";
+import { OUTLOOK_MEETING_SYNC_STATUSES } from "../_shared/meetingSync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -256,7 +257,7 @@ serve(async (req) => {
         .select("id, granted_scopes, email_address")
         .eq("workspace_id", ev.workspace_id)
         .eq("provider", "outlook")
-        .eq("status", "connected")
+        .in("status", OUTLOOK_MEETING_SYNC_STATUSES)
         .ilike("email_address", organizerEmail)
         .limit(1);
       if (orgErr) {
@@ -274,7 +275,11 @@ serve(async (req) => {
         .select("id, granted_scopes")
         .eq("user_id", ev.user_id)
         .eq("provider", "outlook")
-        .eq("status", "connected")
+        .in("status", OUTLOOK_MEETING_SYNC_STATUSES)
+        // 'connected' sorts before 'error'; limit(1) so a second row can't
+        // make maybeSingle() throw now that 'error' rows are eligible.
+        .order("status", { ascending: true })
+        .limit(1)
         .maybeSingle();
       if (accountErr) {
         throw new Error(`mail_accounts lookup failed: ${accountErr.message}`);

@@ -4,7 +4,7 @@
 // Cron-driven scanner that finds recently-ended meetings missing
 // a ready transcript and dispatches per-meeting fetcher calls.
 // Also expires meeting_transcripts rows whose calendar_event
-// ended more than 24h ago — those are surfaced via the Meetings
+// ended more than MEETING_LOOKBACK_DAYS (3) ago — those are surfaced via the Meetings
 // Inbox tab (step 7), not the lead timeline.
 //
 // AUTH: scheduled-caller gate only — INTERNAL_API_SECRET or
@@ -16,6 +16,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { MEETING_LOOKBACK_MS } from "../_shared/meetingSync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,7 +34,6 @@ const PROVIDER_TO_FETCH_FN: Record<string, string> = {
 const DEFAULT_PROVIDERS = ["google_meet", "teams"];
 const STUCK_FETCHING_MS = 5 * 60 * 1000;
 const MAX_BACKOFF_MIN = 60;
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const MAX_ANALYZE_PER_RUN = 5;
 
 interface TranscriptEmbed {
@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
     // ── Phase 1: load candidates ──────────────────────────────────────
     stage = "load_candidates";
     const now = Date.now();
-    const windowStart = new Date(now - TWENTY_FOUR_HOURS_MS).toISOString();
+    const windowStart = new Date(now - MEETING_LOOKBACK_MS).toISOString();
     const windowEnd = new Date(now).toISOString();
 
     const { data: rawEvents, error: eventsErr } = await supabase
@@ -212,10 +212,10 @@ Deno.serve(async (req) => {
     // Ready transcripts that don't yet have a meeting_ai_summaries row
     // (UNIQUE on meeting_transcript_id) get dispatched to the analyzer.
     // Window mirrors Phase 1: only recent transcripts (ready in the last
-    // 24h) — older ones gracefully time out instead of retrying forever.
+    // lookback window) — older ones time out instead of retrying forever.
     // The analyzer is idempotent, so a duplicate dispatch is cheap.
     stage = "analyze_sweep";
-    const analyzeWindowStart = new Date(now - TWENTY_FOUR_HOURS_MS).toISOString();
+    const analyzeWindowStart = new Date(now - MEETING_LOOKBACK_MS).toISOString();
     const { data: readyRaw, error: readyErr } = await supabase
       .from("meeting_transcripts")
       .select("id, meeting_ai_summaries(id)")
@@ -276,9 +276,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Phase 2: 24h-timeout sweep ────────────────────────────────────
+    // ── Phase 2: lookback-timeout sweep ───────────────────────────────
     stage = "expired_sweep";
-    const expiredCutoff = new Date(now - TWENTY_FOUR_HOURS_MS).toISOString();
+    const expiredCutoff = new Date(now - MEETING_LOOKBACK_MS).toISOString();
     const { data: stuckRaw, error: stuckErr } = await supabase
       .from("meeting_transcripts")
       .select("id, calendar_events!inner(end_time)")
@@ -291,6 +291,7 @@ Deno.serve(async (req) => {
     if (stuckIds.length > 0) {
       const { data: updated, error: updateErr } = await supabase
         .from("meeting_transcripts")
+        // ponytail: reason string kept as EXPIRED_24H (stored value) though the window is now 3 days.
         .update({ status: "unavailable", status_reason: "EXPIRED_24H" })
         .in("id", stuckIds)
         .in("status", ["pending", "fetching"])

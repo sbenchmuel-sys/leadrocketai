@@ -18,7 +18,7 @@
 // poller keeps the auth boundary intact.
 //
 // Caveat: transcript-poller only scans meetings whose end_time
-// is within the last 24h. For transcripts on older meetings, the
+// is within the last MEETING_LOOKBACK_DAYS. For transcripts on older meetings, the
 // reset will leave the row eligible but the poller window won't
 // include it. We disclose this in the toast.
 // ============================================================
@@ -28,6 +28,7 @@ import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { MEETING_LOOKBACK_DAYS, MEETING_LOOKBACK_MS } from "@shared/meetingSync";
 import { toast } from "sonner";
 
 interface StuckTranscriptBannerProps {
@@ -46,7 +47,7 @@ interface StuckTranscript {
 }
 
 const STUCK_AGE_MS = 24 * 60 * 60 * 1000;
-const POLLER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const POLLER_WINDOW_MS = MEETING_LOOKBACK_MS;
 
 export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
   const [rows, setRows] = useState<StuckTranscript[]>([]);
@@ -67,7 +68,7 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
 
     // Look up end_time for each underlying calendar event so the toast can
     // tell the user honestly whether the poller will actually re-pick the
-    // row up (its window is 24h from end_time).
+    // row up (its window is MEETING_LOOKBACK_DAYS from end_time).
     const eventIds = [...new Set(stuck.map(r => r.calendar_event_id).filter(Boolean))];
     if (eventIds.length === 0) {
       setEventEndById(new Map());
@@ -118,7 +119,7 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
       if (error) throw new Error(error.message);
 
       // Honest signal to the user: the poller only scans meetings whose
-      // end_time is within the last 24h. Older meetings won't be picked
+      // end_time is within the lookback window. Older meetings won't be picked
       // up even after this reset — the reset just unblocks them if a
       // future backfill widens the window.
       const endTime = eventEndById.get(row.calendar_event_id) ?? null;
@@ -127,7 +128,7 @@ export function StuckTranscriptBanner({ leadId }: StuckTranscriptBannerProps) {
 
       if (outsidePollerWindow) {
         toast.warning("Retry reset — meeting is outside the 15-min poller window", {
-          description: "Row marked pending, but the meeting ended >24h ago so transcript-poller won't auto-pick it up. Contact support to backfill.",
+          description: `Row marked pending, but the meeting ended more than ${MEETING_LOOKBACK_DAYS} days ago so transcript-poller won't auto-pick it up. Contact support to backfill.`,
         });
       } else {
         toast.success("Retry queued", {
