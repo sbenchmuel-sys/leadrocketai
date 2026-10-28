@@ -3,8 +3,8 @@
 //
 // This file is intentionally tiny.
 //
-// Microsoft Graph's subscription validation handshake is a GET
-// with ?validationToken=... and a strict ~10s timeout. If our
+// Microsoft Graph's subscription validation handshake is a POST
+// (empty body) with ?validationToken=... and a strict ~10s timeout. If our
 // Edge Function cold-starts beyond that, Graph returns a
 // BadGateway error and the subscription create/update fails.
 //
@@ -13,25 +13,19 @@
 // (createClient, OOO/meeting/unsubscribe detection, token
 // refresh, canonical interactions, etc.) live in ./processor.ts
 // and are loaded via dynamic import() inside the POST handler.
-// The validation GET path therefore never pays for them.
+// The validation path therefore never pays for them.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { graphValidationResponse } from "../_shared/graphValidation.ts";
 
 serve(async (req) => {
-  // ── 1. Validation handshake (GET ?validationToken=...) ──
-  // Must respond 200 OK with the token as plain text body.
-  // No imports beyond `serve` happen on this path.
-  if (req.method === "GET") {
-    const validationToken = new URL(req.url).searchParams.get("validationToken");
-    if (validationToken) {
-      return new Response(validationToken, {
-        status: 200,
-        headers: { "Content-Type": "text/plain" },
-      });
-    }
-    return new Response("OK", { status: 200 });
-  }
+  // ── 1. Validation handshake (POST or GET ?validationToken=...) ──
+  // Must be checked before any body parsing: Graph's POST has an empty
+  // body, so the notification path below would swallow it and reply "OK".
+  const validation = graphValidationResponse(req);
+  if (validation) return validation;
+  if (req.method === "GET") return new Response("OK", { status: 200 });
 
   // ── 2. Notification POST — always returns 200 to Graph ──
   // Errors must never surface as HTTP failures, or Graph will
