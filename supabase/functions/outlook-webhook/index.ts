@@ -17,7 +17,7 @@
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { graphValidationResponse } from "./graphValidation.ts";
+import { graphValidationResponse } from "../_shared/graphValidation.ts";
 
 serve(async (req) => {
   // ── 1. Validation handshake (POST or GET ?validationToken=...) ──
