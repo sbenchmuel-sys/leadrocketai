@@ -43,6 +43,26 @@ export const OUTLOOK_MAIL_SCOPES_STRING = OUTLOOK_MAIL_SCOPES.join(" ");
 export const OUTLOOK_CALENDAR_SCOPES_STRING = OUTLOOK_CALENDAR_SCOPES.join(" ");
 export const OUTLOOK_FULL_OAUTH_SCOPES_STRING = OUTLOOK_FULL_OAUTH_SCOPES.join(" ");
 
+/**
+ * Scope string to send when refreshing an Outlook token: everything the
+ * account was actually granted (mail_accounts.granted_scopes) + offline_access.
+ *
+ * Why: every function shares ONE stored access token per account, and
+ * Microsoft issues a refreshed token for the requested scopes only. When a
+ * mail-only caller refreshed, the stored token lost Calendars.Read and
+ * OnlineMeetingTranscript.Read.All, so calendar-sync / teams-transcript-fetch
+ * reusing it got 403s (Oct 2026: a transcript recorded as NOT_ORGANIZER for
+ * the actual organizer). Falls back to `fallback` when grants are unknown.
+ */
+export function outlookRefreshScope(
+  grantedScopes: string[] | null | undefined,
+  fallback: string,
+): string {
+  const granted = (grantedScopes ?? []).filter((s) => typeof s === "string" && s.trim().length > 0);
+  if (granted.length === 0) return fallback;
+  return [...new Set([...granted, "offline_access"])].join(" ");
+}
+
 // Microsoft's consumer (personal-account) tenant. Tokens issued for
 // outlook.com / hotmail.com / live.com sign-ins always carry this as
 // their `tid` claim. `OnlineMeetingTranscript.Read.All` is a work/school

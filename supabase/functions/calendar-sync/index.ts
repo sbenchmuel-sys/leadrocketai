@@ -19,6 +19,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { encryptToken, safeDecryptToken } from "../_shared/encryption.ts";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
+import { OutlookGraphClient } from "../_shared/outlookGraphClient.ts";
 import {
   OUTLOOK_CALENDAR_SCOPE,
   OUTLOOK_CALENDAR_SCOPES_STRING,
@@ -232,28 +233,23 @@ async function refreshOutlookToken(
   }
 
   const decryptedRefresh = await safeDecryptToken(account.refresh_token ?? "");
-  const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
-  const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET");
-  if (!clientId || !clientSecret || !decryptedRefresh) {
+  if (!decryptedRefresh) {
     console.error("[calendar-sync] Microsoft refresh prerequisites missing");
     return null;
   }
 
-  const resp = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: decryptedRefresh,
-      client_id: clientId,
-      client_secret: clientSecret,
-      scope: OUTLOOK_CALENDAR_SCOPES_STRING,
-    }),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    console.error(`[calendar-sync] Outlook refresh failed for account=${account.id}: ${resp.status} ${body}`);
+  // Shared refresh: asks for every granted scope so the stored token keeps
+  // mail + calendar + transcript access for all functions that reuse it.
+  let tokens: { access_token: string; refresh_token?: string; expires_in: number };
+  try {
+    tokens = await OutlookGraphClient.refreshTokenWithGrantedScopes(
+      decryptedRefresh,
+      account.granted_scopes,
+      OUTLOOK_CALENDAR_SCOPES_STRING,
+    );
+  } catch (err) {
+    const body = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar-sync] Outlook refresh failed for account=${account.id}: ${body}`);
     if (body.includes("invalid_grant")) {
       await supabase
         .from("mail_accounts")
@@ -262,8 +258,6 @@ async function refreshOutlookToken(
     }
     return null;
   }
-
-  const tokens = await resp.json();
   const newAccess: string = tokens.access_token;
   const newRefresh: string = tokens.refresh_token ?? decryptedRefresh;
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();

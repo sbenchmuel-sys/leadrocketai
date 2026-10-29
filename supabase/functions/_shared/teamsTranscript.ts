@@ -41,7 +41,7 @@ export type TeamsTranscriptResult =
       transcriptId: string;
       vtt: string;
     }
-  | { status: "unavailable"; reason: TeamsUnavailableReason }
+  | { status: "unavailable"; reason: TeamsUnavailableReason; detail?: string }
   | { status: "failed"; reason: TeamsFailedReason; detail?: string };
 
 type GraphOnlineMeeting = {
@@ -233,7 +233,14 @@ function pickClosestTranscript(
 function mapHttpError(err: TeamsHttpError): TeamsTranscriptResult {
   const snippet = err.body.slice(0, 300);
   if (err.status === 403) {
-    return { status: "unavailable", reason: "NOT_ORGANIZER" };
+    // A 403 is not always "not the organizer" — a token missing the
+    // transcript scope also 403s. Keep Graph's own message so the real cause
+    // is visible in meeting_transcripts.provider_error_detail.
+    return {
+      status: "unavailable",
+      reason: "NOT_ORGANIZER",
+      detail: `${err.stage} HTTP 403: ${snippet}`,
+    };
   }
   if (err.status === 404 && err.stage === "resolve_meeting") {
     return { status: "unavailable", reason: "MEETING_NOT_FOUND" };

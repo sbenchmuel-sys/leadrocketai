@@ -29,11 +29,10 @@ export interface OutlookTokens {
  * Refreshes automatically if within 5-minute expiry window.
  * Throws if refresh fails (and marks account as expired).
  *
- * `scopes` is the space-delimited scope string sent on refresh.
- * Defaults to `OUTLOOK_MAIL_SCOPES_STRING` (back-compat with all
- * pre-existing callers). Override with a wider bundle (e.g.
- * `OUTLOOK_FULL_OAUTH_SCOPES_STRING`) when the caller needs a
- * non-mail scope such as `OnlineMeetingTranscript.Read.All`.
+ * Refresh requests the account's granted_scopes (see
+ * `outlookRefreshScope`). `scopes` is the fallback used when grants are
+ * unknown or Microsoft refuses the wider set. Defaults to
+ * `OUTLOOK_MAIL_SCOPES_STRING`.
  *
  * Microsoft's refresh endpoint rejects scopes outside the user's
  * original grant — so the override must still be a subset of what
@@ -46,7 +45,7 @@ export async function getFreshOutlookToken(
 ): Promise<string> {
   const { data: account, error } = await serviceSupabase
     .from("mail_accounts")
-    .select("id, email_address, access_token, refresh_token, token_expires_at, status, tenant_id")
+    .select("id, email_address, access_token, refresh_token, token_expires_at, status, tenant_id, granted_scopes")
     .eq("id", mailAccountId)
     .eq("provider", "outlook")
     .single();
@@ -79,8 +78,12 @@ export async function getFreshOutlookToken(
     const refreshTokenValue = await safeDecryptToken(account.refresh_token ?? "");
 
     // Throws MicrosoftCredentialsMissingError if env vars absent — bubbles up safely
-    const tokens = await OutlookGraphClient.refreshToken(
+    // `scopes` is now only the fallback: the refresh asks for everything the
+    // account granted so the shared stored token keeps calendar/transcript
+    // access no matter which caller refreshed it.
+    const tokens = await OutlookGraphClient.refreshTokenWithGrantedScopes(
       refreshTokenValue,
+      (account as { granted_scopes?: string[] | null }).granted_scopes,
       scopes
     );
 
