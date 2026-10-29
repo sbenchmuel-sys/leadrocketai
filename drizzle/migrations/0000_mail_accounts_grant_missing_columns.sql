@@ -1,0 +1,2 @@
+-- Column-level only; access_token / refresh_token stay revoked.
+GRANT SELECT (needs_reconnect, granted_scopes, tenant_id, user_id, lookback_seed_completed_at) ON public.mail_accounts TO authenticated;
