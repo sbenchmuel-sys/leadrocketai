@@ -16,7 +16,7 @@
 // The same scenarios run under Deno end-to-end in
 // `supabase/functions/_shared/followupDue.test.ts` (npm run test:edge).
 // ============================================================
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -52,6 +52,11 @@ const SYNC_ENGINE = "supabase/functions/_shared/syncEngine.ts";
 const syncEngineSrc = readFileSync(path.join(ROOT, SYNC_ENGINE), "utf8");
 
 const NOW = Date.parse("2026-09-08T12:00:00.000Z");
+// ponytail: the code under test reads the real clock (Date.now()), but the
+// fixtures are dated relative to NOW. Freeze Date at NOW so the suite gives the
+// same answer on any day (it started failing in late Oct 2026 as time passed).
+beforeAll(() => vi.useFakeTimers({ now: NOW, toFake: ["Date"] }));
+afterAll(() => vi.useRealTimers());
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 const hoursAgo = (n: number) => new Date(NOW - n * 3_600_000).toISOString();
 const minutesAgo = (n: number) => new Date(NOW - n * 60_000).toISOString();
