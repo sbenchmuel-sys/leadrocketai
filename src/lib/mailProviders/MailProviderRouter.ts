@@ -11,6 +11,10 @@ import { GmailProvider } from "./GmailProvider";
 import { OutlookProvider } from "./OutlookProvider";
 import type { IMailProvider, MailAccount } from "./types";
 
+// Explicit list: token columns are column-revoked for authenticated, so select("*") fails.
+const MAIL_ACCOUNT_COLUMNS =
+  "id, workspace_id, provider, email_address, display_name, external_user_id, status, is_default, created_at, updated_at";
+
 // ============================================================
 // getDefaultMailAccount
 // Priority:
@@ -24,7 +28,7 @@ export async function getDefaultMailAccount(
   // Try explicit default first
   const { data: defaultAccount } = await supabase
     .from("mail_accounts")
-    .select("*")
+    .select(MAIL_ACCOUNT_COLUMNS)
     .eq("workspace_id", workspaceId)
     .eq("is_default", true)
     .eq("status", "connected")
@@ -35,7 +39,7 @@ export async function getDefaultMailAccount(
   // Fallback: first connected Gmail account for workspace
   const { data: fallback } = await supabase
     .from("mail_accounts")
-    .select("*")
+    .select(MAIL_ACCOUNT_COLUMNS)
     .eq("workspace_id", workspaceId)
     .eq("provider", "gmail")
     .eq("status", "connected")
@@ -58,7 +62,7 @@ export async function getProvider(
 ): Promise<IMailProvider> {
   const { data: account, error } = await supabase
     .from("mail_accounts")
-    .select("*")
+    .select(MAIL_ACCOUNT_COLUMNS)
     .eq("id", mailAccountId)
     .single();
 

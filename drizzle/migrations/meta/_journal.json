@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793263615415,
+      "tag": "0000_mail_accounts_grant_missing_columns",
+      "breakpoints": true
+    }
+  ]
+}
