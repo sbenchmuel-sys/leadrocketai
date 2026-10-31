@@ -42,6 +42,7 @@ const ALLOWED_TARGETS = new Set([
   "classify-outbound",
   "intelligence-queue-drain",
   "campaign-touch-scheduler",
+  "pilot-reports",
 ]) as ReadonlySet<string>;
 
 // Timeout for forwarded fetch calls (prevents hanging)

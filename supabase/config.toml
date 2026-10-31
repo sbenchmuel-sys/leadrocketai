@@ -207,3 +207,8 @@ verify_jwt = false
 
 [functions.request-login-code]
 verify_jwt = false
+
+# Client pilot reports (Monday recap + hot-reply alerts). Reached only via
+# cron-dispatcher (X-Internal-Secret / service-role through requireScheduledCaller).
+[functions.pilot-reports]
+verify_jwt = false
