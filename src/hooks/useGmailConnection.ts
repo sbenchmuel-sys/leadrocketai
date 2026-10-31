@@ -125,16 +125,8 @@ export function useGmailConnection() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not logged in");
 
-      const { error: deleteError } = await supabase
-        .from("gmail_connections")
-        .delete()
-        .eq("user_id", user.id);
-
-      if (deleteError) {
-        throw deleteError;
-      }
-
-      // The legacy row above is not what the app reads: mail_accounts is.
+      // The legacy gmail_connections row is not what the app reads: mail_accounts
+      // is (done first so a failure leaves nothing half-disconnected).
       // Without this the Gmail row stayed status='error' + is_default=true,
       // so the "Reconnect Gmail" flag never cleared and the composer kept
       // picking the dead Gmail over a connected Outlook. Mirrors the
@@ -142,14 +134,27 @@ export function useGmailConnection() {
       // ponytail: RLS lets only workspace admins update mail_accounts, so for a
       // non-admin rep this is a silent no-op (same as Outlook disconnect today).
       // Upgrade path: a SECURITY DEFINER disconnect RPC scoped to user_id.
-      const { error: accountError } = await supabase
-        .from("mail_accounts")
-        .update({ status: "disconnected", is_default: false, needs_reconnect: false })
-        .eq("user_id", user.id)
-        .eq("provider", "gmail");
+      // Filter on email_address, not user_id: migrations grant authenticated
+      // column-level SELECT without user_id, and UPDATE predicates need it.
+      if (connection?.gmail_email) {
+        const { error: accountError } = await supabase
+          .from("mail_accounts")
+          .update({ status: "disconnected", is_default: false, needs_reconnect: false })
+          .eq("provider", "gmail")
+          .eq("email_address", connection.gmail_email);
 
-      if (accountError) {
-        throw accountError;
+        if (accountError) {
+          throw accountError;
+        }
+      }
+
+      const { error: deleteError } = await supabase
+        .from("gmail_connections")
+        .delete()
+        .eq("user_id", user.id);
+
+      if (deleteError) {
+        throw deleteError;
       }
 
       setConnection(null);
