@@ -26,6 +26,7 @@ import Knowledge from "./pages/Knowledge";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import ManagerAnalytics from "./pages/ManagerAnalytics";
+import Pilot from "./pages/Pilot";
 import CallDetail from "./pages/CallDetail";
 import NotFound from "./pages/NotFound";
 import Privacy from "./pages/Privacy";
@@ -92,6 +93,7 @@ const App = () => (
                 <Route path="knowledge" element={<Knowledge />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="analytics" element={<ManagerAnalytics />} />
+                <Route path="pilot" element={<Pilot />} />
                 <Route path="calls/:callSessionId" element={<CallDetail />} />
                 {flags.dev_smoke && (
                   <Route path="dev-smoke" element={<Suspense fallback={null}><DevSmokeTests /></Suspense>} />
