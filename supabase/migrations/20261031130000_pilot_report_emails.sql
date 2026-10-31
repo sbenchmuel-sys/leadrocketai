@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS public.pilot_report_settings (
   -- The mailbox the reports are sent FROM (an Outlook mail_accounts row) and its owner.
   sender_mail_account_id uuid NOT NULL REFERENCES public.mail_accounts(id) ON DELETE RESTRICT,
   sender_user_id uuid NOT NULL,
+  -- The pilot rep(s). Reports, alerts and "coming up" count ONLY their leads and
+  -- calls, so a client admin's own pipeline in the same workspace never shows up.
+  -- Empty = nothing is reported yet (fill it in once the rep has signed in).
+  rep_user_ids uuid[] NOT NULL DEFAULT '{}',
   pilot_start date NOT NULL,
   pilot_weeks integer NOT NULL DEFAULT 12,
   meetings_target integer,

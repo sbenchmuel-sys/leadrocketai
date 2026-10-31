@@ -2,6 +2,8 @@
 // pilot-reports — client pilot emails (cron every 15 min via cron-dispatcher).
 //
 // For each enabled pilot_report_settings row:
+// Everything is scoped to rep_user_ids (the pilot rep's own leads and calls); a
+// row with no reps yet is skipped.
 //   1. Hot-reply alerts: inbound emails whose AI intent is a buying signal and
 //      that haven't been alerted yet → one email listing them. "Alerted" is
 //      recorded in pilot_report_alerts_sent BEFORE sending (insert-wins), so two
@@ -63,13 +65,16 @@ Deno.serve(async (req) => {
 
   for (const s of settings ?? []) {
     const result: Record<string, unknown> = { workspace_id: s.workspace_id };
+    const reps: string[] = s.rep_user_ids ?? [];
+    if (!reps.length) { out.push({ ...result, skipped: "no rep_user_ids yet" }); continue; }
     try {
       // ── 1. Hot-reply alerts ──
       if (s.alerts_enabled) {
         const { data: hot } = await db
           .from("lead_timeline_items")
-          .select("id, lead_id, intent, metadata_json, leads(name, company)")
+          .select("id, lead_id, intent, metadata_json, leads!inner(name, company, owner_user_id)")
           .eq("workspace_id", s.workspace_id)
+          .in("leads.owner_user_id", reps)
           .eq("event_type", "email_inbound")
           .in("intent", POSITIVE)
           .gte("occurred_at", new Date(Math.max(now.getTime() - 7 * DAY, new Date(s.pilot_start).getTime())).toISOString())
@@ -103,11 +108,12 @@ Deno.serve(async (req) => {
       if (s.weekly_enabled && weeklyDue(now, tz, s.last_weekly_sent_at ? new Date(s.last_weekly_sent_at) : null)) {
         const weekFrom = new Date(now.getTime() - 7 * DAY);
         const [{ data: week, error: e1 }, { data: total, error: e2 }, upcoming] = await Promise.all([
-          db.rpc("pilot_report", { _workspace_id: s.workspace_id, _from: weekFrom.toISOString(), _to: now.toISOString() }),
-          db.rpc("pilot_report", { _workspace_id: s.workspace_id, _from: new Date(s.pilot_start).toISOString(), _to: now.toISOString() }),
+          db.rpc("pilot_report", { _workspace_id: s.workspace_id, _from: weekFrom.toISOString(), _to: now.toISOString(), _owner_ids: reps }),
+          db.rpc("pilot_report", { _workspace_id: s.workspace_id, _from: new Date(s.pilot_start).toISOString(), _to: now.toISOString(), _owner_ids: reps }),
           db.from("campaign_touch")
-            .select("channel, campaigns!inner(workspace_id, status)")
+            .select("channel, campaigns!inner(workspace_id, status), leads!inner(owner_user_id)")
             .eq("campaigns.workspace_id", s.workspace_id)
+            .in("leads.owner_user_id", reps)
             .eq("campaigns.status", "active")
             .in("status", ["scheduled", "queued"])
             .lt("eligible_at", new Date(now.getTime() + 7 * DAY).toISOString()),
