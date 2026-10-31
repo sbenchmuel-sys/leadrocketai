@@ -3544,6 +3544,114 @@ export type Database = {
           },
         ]
       }
+      pilot_report_alerts_sent: {
+        Row: {
+          sent_at: string
+          timeline_item_id: string
+          workspace_id: string
+        }
+        Insert: {
+          sent_at?: string
+          timeline_item_id: string
+          workspace_id: string
+        }
+        Update: {
+          sent_at?: string
+          timeline_item_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pilot_report_alerts_sent_timeline_item_id_fkey"
+            columns: ["timeline_item_id"]
+            isOneToOne: true
+            referencedRelation: "lead_timeline_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pilot_report_alerts_sent_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pilot_report_settings: {
+        Row: {
+          alerts_enabled: boolean
+          client_name: string
+          created_at: string
+          enabled: boolean
+          last_weekly_sent_at: string | null
+          meetings_target: number | null
+          pilot_start: string
+          pilot_weeks: number
+          preview_only: boolean
+          preview_recipients: string[]
+          recipients: string[]
+          rep_user_ids: string[]
+          sender_mail_account_id: string
+          sender_user_id: string
+          updated_at: string
+          weekly_enabled: boolean
+          workspace_id: string
+        }
+        Insert: {
+          alerts_enabled?: boolean
+          client_name: string
+          created_at?: string
+          enabled?: boolean
+          last_weekly_sent_at?: string | null
+          meetings_target?: number | null
+          pilot_start: string
+          pilot_weeks?: number
+          preview_only?: boolean
+          preview_recipients?: string[]
+          recipients?: string[]
+          rep_user_ids?: string[]
+          sender_mail_account_id: string
+          sender_user_id: string
+          updated_at?: string
+          weekly_enabled?: boolean
+          workspace_id: string
+        }
+        Update: {
+          alerts_enabled?: boolean
+          client_name?: string
+          created_at?: string
+          enabled?: boolean
+          last_weekly_sent_at?: string | null
+          meetings_target?: number | null
+          pilot_start?: string
+          pilot_weeks?: number
+          preview_only?: boolean
+          preview_recipients?: string[]
+          recipients?: string[]
+          rep_user_ids?: string[]
+          sender_mail_account_id?: string
+          sender_user_id?: string
+          updated_at?: string
+          weekly_enabled?: boolean
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pilot_report_settings_sender_mail_account_id_fkey"
+            columns: ["sender_mail_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pilot_report_settings_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: true
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
