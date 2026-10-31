@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { CalendarReconsentModal } from "@/components/calendar/CalendarReconsentModal";
 import { MailConnectionBanner } from "@/components/MailConnectionBanner";
 import { DraftCacheInvalidator } from "@/components/DraftCacheInvalidator";
@@ -28,6 +29,7 @@ type NavItem = {
   icon: typeof LayoutDashboard;
   label: string;
   managerOnly?: boolean;
+  pilotOnly?: boolean;
 };
 
 // PR D — Queue is the new default landing page (`/app` redirects to
@@ -37,6 +39,7 @@ type NavItem = {
 // into Leads, so it no longer has its own sidebar item — /app/dashboard
 // redirects to /app/leads.
 const navItems: NavItem[] = [
+{ to: "/app/pilot", icon: BarChart3, label: "Pilot", pilotOnly: true },
 { to: "/app/queue", icon: ListChecks, label: "Queue" },
 { to: "/app/leads", icon: Users, label: "Leads" },
 { to: "/app/automations", icon: Megaphone, label: "Outreach" },
@@ -51,6 +54,18 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const [isManagerOrAdmin, setIsManagerOrAdmin] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const { workspaceId } = useWorkspace();
+  const [hasPilot, setHasPilot] = useState(false);
+
+  // The Pilot page only exists for workspaces running a client pilot; RLS returns
+  // the settings row to workspace admins only, so reps never see the item.
+  useEffect(() => {
+    if (!workspaceId) { setHasPilot(false); return; }
+    // ponytail: table not in generated types until the migration is applied.
+    (supabase as unknown as { from: (t: string) => any })
+      .from("pilot_report_settings").select("workspace_id").eq("workspace_id", workspaceId).maybeSingle()
+      .then(({ data }: { data: unknown }) => setHasPilot(!!data));
+  }, [workspaceId]);
 
   // Gmail sync is now server-side via pg_cron. Manual sync available from Settings.
   // useGmailAutoSync() removed — no longer auto-polls from browser.
@@ -87,7 +102,7 @@ export default function DashboardLayout() {
   };
 
   const visibleNavItems = navItems.filter(
-    (item) => !item.managerOnly || isManagerOrAdmin
+    (item) => (!item.managerOnly || isManagerOrAdmin) && (!item.pilotOnly || hasPilot)
   );
 
   return (
