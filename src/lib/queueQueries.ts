@@ -444,9 +444,15 @@ export async function fetchQueueLeads(opts?: {
   // exceeds that (well into the thousands of simultaneously-actionable
   // leads), surfacing the error is the right call, not silently
   // dropping the highest-priority rows.
+  // The Queue is the signed-in user's OWN work: RLS would also hand a workspace
+  // admin every teammate's leads (see fetchOutreachQueue for the same rule).
+  const { data: sessionData } = await supabase.auth.getSession();
+  const meId = sessionData?.session?.user?.id;
+  if (!meId) return { leads: [], hiddenCount: 0 };
   const { data: leadRows, error: leadsErr } = await supabase
     .from("leads")
     .select(QUEUE_LEAD_COLUMNS)
+    .eq("owner_user_id", meId)
     .eq("needs_action", true)
     .eq("action_permanently_dismissed", false)
     .or(`action_dismissed_at.is.null,action_dismissed_at.lt.${nowIso}`);
