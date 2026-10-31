@@ -244,3 +244,27 @@ CREATE TABLE IF NOT EXISTS public.mail_event_log (
   processed_at timestamptz,
   CONSTRAINT mail_event_log_provider_provider_message_id_key UNIQUE (provider, provider_message_id)
 );
+
+-- Added for pilot_report.test.sql: the columns/tables the client pilot report reads.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+END $$;
+ALTER TABLE public.lead_timeline_items
+  ADD COLUMN IF NOT EXISTS intent text,
+  ADD COLUMN IF NOT EXISTS metadata_json jsonb;
+ALTER TABLE public.campaign_enrollment ADD COLUMN IF NOT EXISTS bounced_at timestamptz;
+CREATE TABLE IF NOT EXISTS public.call_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES public.leads(id) ON DELETE SET NULL,
+  direction text,
+  status text,
+  duration_sec integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.call_analyses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  call_session_id uuid NOT NULL REFERENCES public.call_sessions(id) ON DELETE CASCADE,
+  summary_short text
+);
