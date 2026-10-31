@@ -44,6 +44,9 @@ DROP TRIGGER IF EXISTS update_pilot_report_settings_updated_at ON public.pilot_r
 CREATE TRIGGER update_pilot_report_settings_updated_at
   BEFORE UPDATE ON public.pilot_report_settings
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+-- Admins read (RLS above); only the server writes.
+GRANT SELECT ON public.pilot_report_settings TO authenticated;
+GRANT ALL ON public.pilot_report_settings TO service_role;
 
 -- One row per timeline item already alerted, so a later update to the same item
 -- (e.g. the 72h snippet purge bumping updated_at) can never re-send the alert.
@@ -53,7 +56,8 @@ CREATE TABLE IF NOT EXISTS public.pilot_report_alerts_sent (
   sent_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.pilot_report_alerts_sent ENABLE ROW LEVEL SECURITY;
--- No policies: service role only.
+-- No policies and no authenticated grant: service role only.
+GRANT ALL ON public.pilot_report_alerts_sent TO service_role;
 
 -- Every 15 minutes: the function itself decides whether the Monday recap is due
 -- (Monday from 08:00 in the workspace time zone, once a week) and sends any new
