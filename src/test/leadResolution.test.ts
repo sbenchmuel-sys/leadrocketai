@@ -12,7 +12,7 @@
 // Measured on production 2026-09-14: 6 duplicate groups inside a single
 // workspace, 14 rows — 4 groups with NO armed row, 1 with exactly one, 1 with
 // SEVERAL. The no-match / one / many / many-armed cases below are all real.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   type LeadLikeRow,
   orderLeadsByLiveness,
@@ -21,6 +21,11 @@ import {
 
 const DAY = 86_400_000;
 const ago = (d: number) => new Date(Date.now() - d * DAY).toISOString();
+// ponytail: freeze Date so every ago(n) in a test reads the same instant —
+// otherwise a millisecond tick between calls makes "identical" rows differ and
+// the tie-break tests flip (seen in CI on main, Oct 2026).
+beforeAll(() => vi.useFakeTimers({ now: Date.parse("2026-09-08T12:00:00.000Z"), toFake: ["Date"] }));
+afterAll(() => vi.useRealTimers());
 
 function lead(over: Partial<LeadLikeRow> & { id: string }): LeadLikeRow {
   return {
