@@ -24,11 +24,12 @@ describe("Pilot page", () => {
   beforeEach(() => { rpcCalls.length = 0; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-11-20T12:00:00Z")); });
 
   it("loads the pilot total plus one report per week so far, newest week first", async () => {
-    settingsRow = { client_name: "Paythings", pilot_start: "2026-11-04", pilot_weeks: 12, meetings_target: 12 };
+    settingsRow = { client_name: "Paythings", pilot_start: "2026-11-04", pilot_weeks: 12, meetings_target: 12, rep_user_ids: ["rep1"] };
     render(<Pilot />);
     await waitFor(() => expect(screen.getByText("Paythings pilot")).toBeTruthy());
     expect(rpcCalls).toHaveLength(1 + 3); // total + weeks 1..3
     expect(rpcCalls[0]._from).toBe(new Date("2026-11-04").toISOString());
+    expect(rpcCalls.every((c) => JSON.stringify(c._owner_ids) === '["rep1"]')).toBe(true); // rep only, never the whole workspace
     const rows = screen.getAllByText(/^Week \d$/).map((e) => e.textContent?.split(" (")[0]);
     expect(rows).toEqual(["Week 3", "Week 2", "Week 1"]);
     expect(screen.getByText(/Wants a demo/)).toBeTruthy();

@@ -14,7 +14,7 @@ const db = supabase as unknown as {
   rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>;
 };
 
-interface Settings { client_name: string; pilot_start: string; pilot_weeks: number; meetings_target: number | null }
+interface Settings { client_name: string; pilot_start: string; pilot_weeks: number; meetings_target: number | null; rep_user_ids: string[] }
 interface Week { n: number; from: Date; report: PilotReport }
 
 const DAY = 24 * 3600 * 1000;
@@ -32,7 +32,7 @@ export default function Pilot() {
     (async () => {
       // RLS returns the row to workspace admins only.
       const { data: s } = await db.from("pilot_report_settings")
-        .select("client_name, pilot_start, pilot_weeks, meetings_target")
+        .select("client_name, pilot_start, pilot_weeks, meetings_target, rep_user_ids")
         .eq("workspace_id", workspaceId).maybeSingle();
       if (!live) return;
       setSettings(s ?? null);
@@ -46,7 +46,8 @@ export default function Pilot() {
         to: new Date(Math.min(start.getTime() + (i + 1) * 7 * DAY, now.getTime())),
       }));
       const call = (from: Date, to: Date) =>
-        db.rpc("pilot_report", { _workspace_id: workspaceId, _from: from.toISOString(), _to: to.toISOString() });
+        // Only the pilot rep's leads and calls, never the admin's own pipeline.
+        db.rpc("pilot_report", { _workspace_id: workspaceId, _from: from.toISOString(), _to: to.toISOString(), _owner_ids: s.rep_user_ids });
       const [t, ...ws] = await Promise.all([call(start, now), ...ranges.map((r) => call(r.from, r.to))]);
       if (!live) return;
       const failed = [t, ...ws].find((r) => r.error);
