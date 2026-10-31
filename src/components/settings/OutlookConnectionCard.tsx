@@ -198,7 +198,7 @@ export function OutlookConnectionCard() {
     try {
       const { error } = await supabase
         .from("mail_accounts")
-        .update({ status: "disconnected" })
+        .update({ status: "disconnected", is_default: false })
         .eq("email_address", email)
         .eq("provider", "outlook")
         .eq("workspace_id", workspaceId);

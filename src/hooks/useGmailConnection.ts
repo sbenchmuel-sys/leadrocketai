@@ -134,6 +134,24 @@ export function useGmailConnection() {
         throw deleteError;
       }
 
+      // The legacy row above is not what the app reads: mail_accounts is.
+      // Without this the Gmail row stayed status='error' + is_default=true,
+      // so the "Reconnect Gmail" flag never cleared and the composer kept
+      // picking the dead Gmail over a connected Outlook. Mirrors the
+      // Outlook disconnect (status='disconnected').
+      // ponytail: RLS lets only workspace admins update mail_accounts, so for a
+      // non-admin rep this is a silent no-op (same as Outlook disconnect today).
+      // Upgrade path: a SECURITY DEFINER disconnect RPC scoped to user_id.
+      const { error: accountError } = await supabase
+        .from("mail_accounts")
+        .update({ status: "disconnected", is_default: false, needs_reconnect: false })
+        .eq("user_id", user.id)
+        .eq("provider", "gmail");
+
+      if (accountError) {
+        throw accountError;
+      }
+
       setConnection(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to disconnect Gmail");
