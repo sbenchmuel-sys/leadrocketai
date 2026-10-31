@@ -230,13 +230,21 @@ export async function fetchOutreachQueue(
   // `count: "exact"` rides along on the SAME request — PostgREST reports how many
   // rows matched BEFORE the limit, so the badge and "Show more" get the real total
   // without a second round-trip.
+  // Only touches on leads the signed-in user OWNS. RLS alone lets a workspace admin
+  // see everyone's leads, which put a teammate's approve / call cards in the admin's
+  // own Queue (a client CRO watching a pilot rep). Admins oversee the team from
+  // Leads and the Pilot page; the Queue is each person's own work.
+  const { data: authData } = await supabase.auth.getUser();
+  const meId = authData?.user?.id ?? null;
+  if (!meId) return { touches: [], total: 0, byChannel: emptyByChannel(), countsError: null };
   const dueBase = (select: string, options?: { count: "exact"; head?: boolean }) =>
     supabase
       .from("campaign_touch" as any)
       .select(select, options)
       .eq("status", "queued")
       .in("campaign_id", activeIds)
-      .lte("eligible_at", nowIso);
+      .lte("eligible_at", nowIso)
+      .eq("leads.owner_user_id", meId);
   let pageQ = dueBase(
     "id, campaign_id, lead_id, step_number, channel, eligible_at, " +
       "leads!inner(id, name, company, email, phone, linkedin_url, whatsapp_number, linkedin_connected_at, industry, owner_user_id)",
@@ -250,7 +258,7 @@ export async function fetchOutreachQueue(
   const [pageRes, ...countRes] = await Promise.all([
     pageQ.order("eligible_at", { ascending: true }).limit(limit),
     ...OUTREACH_CHANNELS.map((ch) =>
-      dueBase("id, leads!inner(id)", { count: "exact", head: true }).eq("channel", ch),
+      dueBase("id, leads!inner(id, owner_user_id)", { count: "exact", head: true }).eq("channel", ch),
     ),
   ]);
   // Same rule for the page itself: `{ data: null, error }` would otherwise
@@ -317,8 +325,6 @@ export async function fetchOutreachQueue(
     }
   }
 
-  const { data: authData } = await supabase.auth.getUser();
-  const meId = authData?.user?.id ?? null;
   let myCalLink: string | null = null;
   if (meId) {
     const { data: prof } = await supabase
