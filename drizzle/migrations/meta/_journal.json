@@ -8,6 +8,13 @@
       "when": 1793263615415,
       "tag": "0000_mail_accounts_grant_missing_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793467555092,
+      "tag": "0001_pilot_report",
+      "breakpoints": true
     }
   ]
 }

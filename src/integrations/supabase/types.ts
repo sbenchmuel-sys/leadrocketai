@@ -4522,6 +4522,15 @@ export type Database = {
         }
         Returns: number
       }
+      pilot_report: {
+        Args: {
+          _from: string
+          _owner_ids?: string[]
+          _to: string
+          _workspace_id: string
+        }
+        Returns: Json
+      }
       purge_call_media: {
         Args: never
         Returns: {
