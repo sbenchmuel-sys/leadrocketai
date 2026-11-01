@@ -1,4 +1,4 @@
-- [ ] Verify sign-in timeout cause against current database health and sync limits.
-- [ ] Verify and optimize email classification fetch queries if still unindexed.
-- [ ] Verify expired Gmail reconnect handling; fix and test only if missing.
-- [ ] Deploy changed functions and record monitoring outcomes after verification.
+- [x] Verify sign-in timeout cause: historical incident not reproduced; hosted user lookup and signed-in leads work. Password login and refresh remain unverified with the minted session.
+- [x] Apply and verify three classifier indexes; representative fetches use indexes and are faster.
+- [x] Flag both Gmail connection stores on invalid_grant and skip flagged connections; four regression checks pass.
+- [x] Deploy detect-lead-candidates and verify handler/auth guard; record all monitoring outcomes. No instance or cron schedule changes.
