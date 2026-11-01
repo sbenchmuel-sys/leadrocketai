@@ -225,7 +225,7 @@ serve(async (req) => {
     // --- Validate mailbox access ---
     const { data: accountData, error: accountErr } = await serviceClient
       .from("mail_accounts")
-      .select("email_address, workspace_id")
+      .select("email_address, workspace_id, user_id")
       .eq("id", mail_account_id)
       .single();
 
@@ -252,6 +252,17 @@ serve(async (req) => {
       });
       return new Response(
         JSON.stringify({ ok: false, error: "Unauthorized mail account" }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // A signed-in user may only send from their OWN mailbox; workspace membership alone
+    // let a teammate (e.g. an admin) send as someone else. Internal callers (the
+    // executor) already resolve the lead owner's own mailbox.
+    if (!isInternal && accountData.user_id && accountData.user_id !== userId) {
+      logger.error("mail.outlook.mailbox_owner_mismatch", { mail_account_id, userId });
+      return new Response(
+        JSON.stringify({ ok: false, error: "You can only send from your own mailbox" }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
