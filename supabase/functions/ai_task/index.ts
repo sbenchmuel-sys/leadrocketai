@@ -47,6 +47,7 @@ import {
   substitutePlaceholders, normalizeCampaignTemplatePlaceholders, stripLeakedReasoningForTask,
 } from "../_shared/draftPostprocess.ts";
 import { aiGatewayFetch } from "../_shared/aiGateway.ts";
+import { isScoutTask, runScoutTask } from "../_shared/scoutPrompts.ts";
 
 // ============================================
 // MESSAGE DIVERSITY CONTROL
@@ -1069,6 +1070,14 @@ serve(async (req) => {
           status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+    }
+
+    // Lead Scout tasks (service-role callers only): prompts + parsing in _shared/scoutPrompts.ts.
+    if (isServiceRole && isScoutTask(task)) {
+      const result = await runScoutTask(Deno.env.get("LOVABLE_API_KEY"), task, payload);
+      return new Response(JSON.stringify(result ? { ok: true, result } : { ok: false, error: "AI scout task failed" }), {
+        status: result ? 200 : 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const taskPrompt = PROMPTS[task];
