@@ -4639,6 +4639,7 @@ export type Database = {
         }
         Returns: Json
       }
+      prune_job_logs: { Args: { _batch?: number }; Returns: Json }
       purge_call_media: {
         Args: never
         Returns: {
