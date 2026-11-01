@@ -195,7 +195,7 @@ export interface CreateLeadInput {
   name: string;
   company: string;
   email: string;
-  source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry' | 'whatsapp_inbound';
+  source_type?: 'outbound_prospecting' | 'contact_form' | 'gmail_inbound' | 'event_lead' | 'referral' | 'csv_import' | 'manual_entry' | 'whatsapp_inbound' | 'ai_scout';
   motion?: string;
   workspace_id?: string;
 }

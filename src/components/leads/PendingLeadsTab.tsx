@@ -36,6 +36,7 @@ import { Check, X, Link2, Inbox, Loader2, Settings2, Ban } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { cn } from "@/lib/utils";
 import DismissedListsDialog from "./DismissedListsDialog";
+import { SCOUT_CANDIDATE_COLS, ScoutBatches, type ScoutCandidate } from "./scout/ScoutReview";
 
 type Candidate = {
   id: string;
@@ -284,9 +285,19 @@ async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extr
 }
 
 
-export default function PendingLeadsTab({ onApproved }: { onApproved?: () => void }) {
+export default function PendingLeadsTab({
+  onApproved,
+  scoutEnabled = false,
+}: {
+  onApproved?: () => void;
+  /** Lead Scout master switch (useLeadScout().enabled). Off = scout rows never shown. */
+  scoutEnabled?: boolean;
+}) {
   const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  // Lead Scout rows (source 'ai_scout') render as weekly batches and approve via
+  // scout-enrich; every other source keeps the original cards below.
+  const [scoutRows, setScoutRows] = useState<ScoutCandidate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -304,6 +315,7 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       .select("id, contact_email, contact_name, company_domain, source, ai_score, ai_reason, subject_snippet, body_snippet, email_count, last_email_at, owner_user_id, workspace_id")
       .eq("workspace_id", workspaceId)
       .eq("status", "pending")
+      .neq("source", "ai_scout")
       .order("ai_score", { ascending: false, nullsFirst: false })
       .order("last_email_at", { ascending: false });
     if (error) {
@@ -312,6 +324,7 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       return;
     }
     setCandidates((data ?? []) as Candidate[]);
+    setScoutRows(scoutEnabled ? await loadScoutRows(workspaceId) : []);
     setIsLoading(false);
   };
 
@@ -331,7 +344,7 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
+  }, [workspaceId, scoutEnabled]);
 
   // Drop stale selections when list changes
   useEffect(() => {
@@ -612,7 +625,18 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
     </div>
   );
 
-  if (candidates.length === 0) {
+  const scoutSection = scoutEnabled && scoutRows.length > 0 && workspaceId && (
+    <ScoutBatches
+      rows={scoutRows}
+      workspaceId={workspaceId}
+      onChanged={(approved) => {
+        void load();
+        if (approved) onApproved?.();
+      }}
+    />
+  );
+
+  if (candidates.length === 0 && !scoutSection) {
     return (
       <div className="space-y-4">
         {headerBar}
@@ -657,7 +681,8 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
   return (
     <>
       <div className="space-y-4">
-        {headerBar}
+        {scoutSection}
+        {candidates.length > 0 && headerBar}
         {selectionBar}
 
         {grouped ? (
@@ -760,6 +785,25 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       </AlertDialog>
     </>
   );
+}
+
+// ponytail: scout columns aren't in the generated types.ts yet — untyped read
+// until Lovable regenerates. Any error (e.g. a DB without the Scout migration) = no rows.
+async function loadScoutRows(workspaceId: string): Promise<ScoutCandidate[]> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("lead_candidates")
+      .select(SCOUT_CANDIDATE_COLS)
+      .eq("workspace_id", workspaceId)
+      .eq("source", "ai_scout")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(500);
+    return error ? [] : ((data ?? []) as ScoutCandidate[]);
+  } catch {
+    return [];
+  }
 }
 
 function CandidateCard({
