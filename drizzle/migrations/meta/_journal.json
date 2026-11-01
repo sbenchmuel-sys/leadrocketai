@@ -29,6 +29,13 @@
       "when": 1793560273808,
       "tag": "0003_mail_accounts_own_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793565072704,
+      "tag": "0004_classifier_queue_indexes",
+      "breakpoints": true
     }
   ]
 }
