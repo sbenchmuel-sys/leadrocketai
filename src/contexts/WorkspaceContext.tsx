@@ -13,6 +13,39 @@ export interface WorkspaceMembership {
   workspace_timezone: string | null;
 }
 
+/**
+ * Join every workspace this user has a PENDING invitation to (matched on their
+ * email) and return the joined workspace ids.
+ *
+ * Two bugs this replaces: (1) the check only ran for users with NO workspace, so
+ * anyone who already had one (e.g. a client admin's old sandbox) was never added;
+ * (2) it inserted the membership from the browser, which RLS refuses ("admins or
+ * the first member of an empty workspace" only), so even brand-new invitees were
+ * silently auto-provisioned an empty workspace instead — no invitation has ever
+ * been accepted. The accept-workspace-invite edge function does the insert with
+ * server rights after checking the invitation's email matches the signed-in user.
+ */
+export async function acceptPendingInvitations(
+  email: string | null | undefined,
+  existingWorkspaceIds: string[],
+): Promise<string[]> {
+  if (!email) return [];
+  const { data: invitations } = await supabase
+    .from("workspace_invitations")
+    .select("id, workspace_id")
+    .eq("email", email.toLowerCase())
+    .eq("status", "pending");
+  const joined: string[] = [];
+  for (const inv of invitations ?? []) {
+    const { data, error } = await supabase.functions.invoke("accept-workspace-invite", {
+      body: { invitation_id: inv.id },
+    });
+    // Failure leaves the invitation pending; the next load retries.
+    if (!error && data?.ok && !existingWorkspaceIds.includes(inv.workspace_id)) joined.push(inv.workspace_id);
+  }
+  return joined;
+}
+
 interface WorkspaceContextType {
   workspaceId: string | null;
   workspaceRole: string | null;
@@ -63,13 +96,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
 
-      // 1. Fetch ALL memberships for this user
-      const { data: memberships } = await supabase
+      // 1. Fetch ALL memberships for this user — after joining any workspace they
+      //    were invited to (existing users included; see acceptPendingInvitations).
+      const fetchMemberships = () => supabase
         .from("workspace_members")
         .select("workspace_id, role")
         .eq("user_id", user.id)
         // Oldest membership first, so the `allWs[0]` fallback below is deterministic.
         .order("created_at", { ascending: true });
+      let { data: memberships } = await fetchMemberships();
+      const justJoined = await acceptPendingInvitations(
+        user.email, (memberships ?? []).map(m => m.workspace_id),
+      );
+      if (justJoined.length > 0) ({ data: memberships } = await fetchMemberships());
 
       if (memberships && memberships.length > 0) {
         // Fetch workspace names + timezones
@@ -93,9 +132,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         });
         setWorkspaces(allWs);
 
-        // Pick active: saved preference → first
+        // Pick active: a workspace they were just invited into → saved preference → first
         const savedId = localStorage.getItem(STORAGE_KEY);
-        const active = allWs.find(w => w.workspace_id === savedId) ?? allWs[0];
+        const active =
+          allWs.find(w => w.workspace_id === justJoined[0]) ??
+          allWs.find(w => w.workspace_id === savedId) ??
+          allWs[0];
+        if (justJoined.length > 0) localStorage.setItem(STORAGE_KEY, active.workspace_id);
         setWorkspaceId(active.workspace_id);
         setWorkspaceRole(active.role);
         setWorkspaceName(active.workspace_name);
@@ -104,58 +147,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // 2. Check pending invitations for user's email
-      const userEmail = user.email;
-      if (userEmail) {
-        const { data: invitation } = await supabase
-          .from("workspace_invitations")
-          .select("id, workspace_id, role")
-          .eq("email", userEmail.toLowerCase())
-          .eq("status", "pending")
-          .limit(1)
-          .maybeSingle();
-
-        if (invitation) {
-          const { error: memberErr } = await supabase
-            .from("workspace_members")
-            .insert({
-              workspace_id: invitation.workspace_id,
-              user_id: user.id,
-              role: invitation.role,
-            });
-
-          if (!memberErr) {
-            await supabase
-              .from("workspace_invitations")
-              .update({ status: "accepted", accepted_at: new Date().toISOString() })
-              .eq("id", invitation.id);
-
-            const { data: ws } = await supabase
-              .from("workspaces")
-              .select("name, timezone")
-              .eq("id", invitation.workspace_id)
-              .maybeSingle();
-
-            const name = ws?.name ?? "Workspace";
-            const tz = (ws as { timezone?: string | null } | null)?.timezone ?? null;
-            const membership: WorkspaceMembership = {
-              workspace_id: invitation.workspace_id,
-              role: invitation.role,
-              workspace_name: name,
-              workspace_timezone: tz,
-            };
-            setWorkspaces([membership]);
-            setWorkspaceId(invitation.workspace_id);
-            setWorkspaceRole(invitation.role);
-            setWorkspaceName(name);
-            setWorkspaceTimezone(tz);
-            setIsLoading(false);
-            return;
-          }
-        }
-      }
-
-      // 3. Auto-provision a new workspace
+      // 2. No workspace and no invitation → auto-provision a new one.
       const { error: wsErr } = await supabase
         .from("workspaces")
         .insert({ name: "My Workspace", plan: "free" } as any);
