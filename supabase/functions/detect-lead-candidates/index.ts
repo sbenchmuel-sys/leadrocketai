@@ -56,6 +56,7 @@ function gmailGetHeader(
 // deno-lint-ignore no-explicit-any
 async function gmailRefreshToken(serviceSupabase: any, conn: {
   user_id: string;
+  gmail_email: string;
   access_token_encrypted: string | null;
   refresh_token_encrypted: string | null;
   token_expires_at: string;
@@ -84,6 +85,22 @@ async function gmailRefreshToken(serviceSupabase: any, conn: {
 
   if (!resp.ok) {
     const body = await resp.text();
+    if (resp.status === 400 && body.includes("invalid_grant")) {
+      const { error: legacyError } = await serviceSupabase
+        .from("gmail_connections")
+        .update({ needs_reconnect: true })
+        .eq("user_id", conn.user_id);
+      // The reconnect banner reads mail_accounts, not the legacy connection.
+      const { error: accountError } = await serviceSupabase
+        .from("mail_accounts")
+        .update({ needs_reconnect: true, status: "expired", error_reason: "Gmail permission expired. Reconnect Gmail." })
+        .eq("provider", "gmail")
+        .eq("user_id", conn.user_id)
+        .eq("email_address", conn.gmail_email);
+      if (legacyError || accountError) {
+        throw new Error(`Gmail reconnect flag failed: ${(legacyError ?? accountError).message}`);
+      }
+    }
     throw new Error(`Gmail token refresh failed (${resp.status}): ${body.slice(0, 200)}`);
   }
 
@@ -621,7 +638,8 @@ serve(async (req) => {
   // ── Gmail connections ────────────────────────────────────
   const { data: gmailConns, error: gmailConnErr } = await serviceSupabase
     .from("gmail_connections")
-    .select("user_id, gmail_email, access_token_encrypted, refresh_token_encrypted, token_expires_at");
+    .select("user_id, gmail_email, access_token_encrypted, refresh_token_encrypted, token_expires_at")
+    .or("needs_reconnect.is.null,needs_reconnect.eq.false");
 
   if (gmailConnErr) {
     errors.push(`Failed to load gmail_connections: ${gmailConnErr.message}`);

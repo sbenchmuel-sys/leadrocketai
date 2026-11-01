@@ -1,0 +1,3 @@
+CREATE INDEX IF NOT EXISTS idx_lti_inbound_classify_queue ON public.lead_timeline_items (expires_at ASC NULLS LAST, occurred_at ASC) WHERE event_type = 'email_inbound' AND intent IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lti_inbound_classify_retry ON public.lead_timeline_items ((metadata_json->>'classify_next_at')) WHERE event_type = 'email_inbound' AND intent IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lti_outbound_summary_queue ON public.lead_timeline_items (occurred_at ASC) WHERE event_type = 'email_outbound' AND snippet_text IS NOT NULL;
