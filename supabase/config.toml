@@ -212,3 +212,9 @@ verify_jwt = false
 # cron-dispatcher (X-Internal-Secret / service-role through requireScheduledCaller).
 [functions.pilot-reports]
 verify_jwt = false
+
+# Lead Scout weekly batch. Reached only via cron-dispatcher (X-Internal-Secret
+# through requireScheduledCaller); scout-enrich keeps verify_jwt (user JWT or
+# the service-role key).
+[functions.scout-weekly-run]
+verify_jwt = false
