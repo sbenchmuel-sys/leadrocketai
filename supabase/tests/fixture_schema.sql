@@ -269,3 +269,16 @@ CREATE TABLE IF NOT EXISTS public.call_analyses (
   call_session_id uuid NOT NULL REFERENCES public.call_sessions(id) ON DELETE CASCADE,
   summary_short text
 );
+
+-- Added for mail_accounts_own_rows.test.sql: production's admin-only policy shape,
+-- so the migration's member policies are exercised under real RLS.
+ALTER TABLE public.mail_accounts
+  ADD COLUMN IF NOT EXISTS user_id uuid,
+  ADD COLUMN IF NOT EXISTS status text,
+  ADD COLUMN IF NOT EXISTS needs_reconnect boolean NOT NULL DEFAULT false;
+ALTER TABLE public.mail_accounts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Workspace admins can manage mail accounts" ON public.mail_accounts
+  FOR ALL USING (public.is_workspace_admin(workspace_id, auth.uid()));
+GRANT SELECT, UPDATE ON public.mail_accounts TO authenticated;
+GRANT USAGE ON SCHEMA public, auth TO authenticated;
+GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;

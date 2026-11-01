@@ -1101,19 +1101,17 @@ serve(async (req) => {
         // `resolvedChannel === "sms"` branch at the provider call, which enforces
         // its own precondition (a phone number on the lead).
         if (resolvedChannel !== "sms") {
-          // Check mail_accounts table first (unified multi-mailbox)
-          const { data: wsMember } = await supabase
-            .from("workspace_members")
-            .select("workspace_id")
-            .eq("user_id", lead.owner_user_id)
-            .limit(1)
-            .maybeSingle();
-
-          if (wsMember?.workspace_id) {
+          // The lead OWNER's own mailbox in the LEAD's workspace — same rule as the cold
+          // path below. Picking the owner's "first" workspace membership (an owner can be
+          // in several) or the workspace default mailbox (a teammate's) sent from the
+          // wrong identity in shared workspaces. No own mailbox → falls through to the
+          // fail-closed "no mail connection" skip below.
+          if (lead.workspace_id && lead.owner_user_id) {
             const { data: mailAcct } = await supabase
               .from("mail_accounts")
               .select("id, provider, email_address")
-              .eq("workspace_id", wsMember.workspace_id)
+              .eq("workspace_id", lead.workspace_id)
+              .eq("user_id", lead.owner_user_id)
               .eq("status", "connected")
               .order("is_default", { ascending: false })
               .limit(1)

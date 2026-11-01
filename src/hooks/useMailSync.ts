@@ -122,6 +122,7 @@ export function useMailSync(workspaceId?: string | null) {
         let defaultQuery = supabase
           .from("mail_accounts")
           .select("id, provider, email_address, status, is_default, last_sync_at")
+          .eq("user_id", user.id) // MY mailbox — never a teammate's default in a shared workspace
           .eq("status", "connected")
           .eq("is_default", true);
         if (workspaceId) defaultQuery = defaultQuery.eq("workspace_id", workspaceId);
@@ -134,6 +135,7 @@ export function useMailSync(workspaceId?: string | null) {
           let anyQuery = supabase
             .from("mail_accounts")
             .select("id, provider, email_address, status, is_default, last_sync_at")
+            .eq("user_id", user.id)
             .eq("status", "connected");
           if (workspaceId) anyQuery = anyQuery.eq("workspace_id", workspaceId);
           const { data: anyAccount } = await anyQuery
