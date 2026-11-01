@@ -1,0 +1,4 @@
+- [ ] Verify sign-in timeout cause against current database health and sync limits.
+- [ ] Verify and optimize email classification fetch queries if still unindexed.
+- [ ] Verify expired Gmail reconnect handling; fix and test only if missing.
+- [ ] Deploy changed functions and record monitoring outcomes after verification.
