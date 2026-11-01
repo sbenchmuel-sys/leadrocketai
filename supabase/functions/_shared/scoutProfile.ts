@@ -272,7 +272,8 @@ const FALLBACK_REASON = "Matches the people and companies you're looking for.";
 /**
  * AI `{ picks: [{ id, reason }] }` → up to `max` stubs that really came back from
  * the search (unknown ids dropped, duplicates dropped). If the AI returned
- * nothing usable, falls back to the first `max` stubs with a generic reason.
+ * no `picks` array at all (failed/malformed), falls back to the first `max`
+ * stubs with a generic reason; a valid empty array stays empty.
  */
 export function parseSamplePicks<T extends { provider_person_id: string }>(
   raw: unknown,
@@ -295,7 +296,13 @@ export function parseSamplePicks<T extends { provider_person_id: string }>(
     out.push({ stub, reason: reason || FALLBACK_REASON });
     if (out.length >= max) break;
   }
-  if (out.length === 0) return stubs.slice(0, max).map((stub) => ({ stub, reason: FALLBACK_REASON }));
+  // A well-formed `picks` array is the AI's answer, even when empty (everyone hit
+  // an exclusion) — keywords/exclusions are enforced only here. Fall back to the
+  // first stubs only when the AI output was missing or malformed.
+  // deno-lint-ignore no-explicit-any
+  if (out.length === 0 && !Array.isArray((raw as any)?.picks)) {
+    return stubs.slice(0, max).map((stub) => ({ stub, reason: FALLBACK_REASON }));
+  }
   return out;
 }
 

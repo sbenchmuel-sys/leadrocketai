@@ -104,7 +104,6 @@ Deno.test("parseSamplePicks: keeps only real ids, dedupes, max 5, trims reasons"
 
 Deno.test("parseSamplePicks: unusable AI output falls back to the first 5", () => {
   assertEquals(parseSamplePicks(null, STUBS).map((p) => p.stub.provider_person_id), ["a", "b", "c", "d", "e"]);
-  assertEquals(parseSamplePicks({ picks: [{ id: "nope" }] }, STUBS.slice(0, 2)).length, 2);
   assertEquals(parseSamplePicks({}, []), []);
 });
 
@@ -137,4 +136,9 @@ Deno.test("profileSentence reads naturally", () => {
     profileSentence(p, { [A1]: "Acme Pay" }),
     "I'll look for VP Sales or directors at fintech companies, 51–200 employees, in United States, similar to Acme Pay. Skipping banks.",
   );
+});
+
+Deno.test("parseSamplePicks: a valid empty or all-unknown picks list stays empty (exclusions hold)", () => {
+  assertEquals(parseSamplePicks({ picks: [] }, STUBS), []);
+  assertEquals(parseSamplePicks({ picks: [{ id: "nope" }] }, STUBS.slice(0, 2)), []);
 });

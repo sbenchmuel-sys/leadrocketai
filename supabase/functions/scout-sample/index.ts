@@ -20,6 +20,7 @@ async function recentSampleRuns(r: ScoutRequest): Promise<number> {
   const { count } = await r.admin
     .from("scout_runs").select("id", { count: "exact", head: true })
     .eq("kind", "sample").in("profile_id", ids)
+    .or("error.is.null,error.neq.rate_limited") // refused attempts don't extend the lockout
     .gte("started_at", new Date(Date.now() - 60 * 60 * 1000).toISOString());
   return count ?? 0;
 }
@@ -63,15 +64,21 @@ Deno.serve(async (req) => {
       return scoutJson({ ok: false, reason: "no_provider_key" });
     }
 
-    const limit = sampleRateLimit(await recentSampleRuns(r));
-    if (!limit.allowed) return scoutJson({ ok: false, reason: "rate_limited" });
-
-    // Log first so concurrent calls count against the limit.
-    const { data: run } = await r.admin
+    // Reserve-then-count: log this run FIRST, then count runs in the last hour
+    // including it. Two concurrent calls both see each other's row, so neither
+    // can slip past the limit (worst case both are refused — fail closed).
+    const { data: run, error: runErr } = await r.admin
       .from("scout_runs").insert({ workspace_id: r.workspaceId, profile_id: profileId, kind: "sample" })
       .select("id").single();
+    if (runErr || !run?.id) return scoutJson({ ok: false, reason: "provider_error" });
     const finish = (patch: Record<string, unknown>) =>
-      run?.id ? r.admin.from("scout_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", run.id) : null;
+      r.admin.from("scout_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", run.id);
+
+    const limit = sampleRateLimit((await recentSampleRuns(r)) - 1);
+    if (!limit.allowed) {
+      await finish({ error: "rate_limited" });
+      return scoutJson({ ok: false, reason: "rate_limited" });
+    }
 
     const profile = clampProfile(r.body.profile);
     const page = Math.min(5, Math.max(1, Math.floor(Number(r.body.page) || 1)));

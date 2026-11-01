@@ -298,7 +298,7 @@ function ScoutWizard({ scout, onDone }: { scout: LeadScoutState; onDone: () => v
           sentence={profileSentence(profile, names)}
           note={note}
           refining={loading}
-          onRefine={(votes) => void refine({ votes })}
+          onRefine={(votes) => refine({ votes })}
           onBack={() => setStep(1)}
           onNext={() => setStep(3)}
         />
@@ -414,7 +414,7 @@ function StepSamples(props: {
   sentence: string;
   note: string | null;
   refining: boolean;
-  onRefine: (votes: unknown[]) => void;
+  onRefine: (votes: unknown[]) => Promise<unknown>;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -428,15 +428,17 @@ function StepSamples(props: {
   const [votes, setVotes] = useState<Record<string, VoteState>>({});
   const [refinedPage, setRefinedPage] = useState(0);
 
-  // Samples are fetched with the profile as it was when this step opened / when
-  // "Show me 5 more" is pressed — a refine mid-step doesn't reload the cards.
-  const [searchProfile, setSearchProfile] = useState(props.profile);
+  // Samples are fetched with the profile as it is when the page loads (this step
+  // opening, or "Show me 5 more" after pending votes were refined) — a refine
+  // mid-page doesn't reload the cards.
+  const profileRef = useRef(props.profile);
+  profileRef.current = props.profile;
   useEffect(() => {
     let live = true;
     setLoading(true);
     setMessage(null);
     void callScout<{ samples: Sample[] }>("scout-sample", {
-      workspace_id: props.workspaceId, profile_id: props.profileId, profile: searchProfile, page,
+      workspace_id: props.workspaceId, profile_id: props.profileId, profile: profileRef.current, page,
     }).then((res) => {
       if (!live) return;
       setLoading(false);
@@ -447,19 +449,27 @@ function StepSamples(props: {
       if (res.samples.length === 0) setMessage(SAMPLE_COPY.empty);
     });
     return () => { live = false; };
-  }, [page, searchProfile, props.workspaceId, props.profileId]);
+  }, [page, props.workspaceId, props.profileId]);
+
+  // Send this page's votes once (any that exist). Also called before leaving the
+  // step / loading more, so a quick click never drops the rep's feedback.
+  const flush = () => {
+    const voted = samples.filter((s) => votes[s.id]);
+    if (voted.length === 0 || refinedPage === page) return Promise.resolve();
+    setRefinedPage(page);
+    return onRefine.current(voted.map((s) => ({
+      vote: votes[s.id].vote, reason: votes[s.id].reason,
+      title: s.title, company: s.company, company_size: s.company_size, location: s.location,
+    })));
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
 
   // Refine automatically once every card has a vote (short pause so an optional 👎 reason can be picked).
   const allVoted = samples.length > 0 && samples.every((s) => votes[s.id]);
   useEffect(() => {
     if (!allVoted || refinedPage === page) return;
-    const t = setTimeout(() => {
-      setRefinedPage(page);
-      onRefine.current(samples.map((s) => ({
-        vote: votes[s.id].vote, reason: votes[s.id].reason,
-        title: s.title, company: s.company, company_size: s.company_size, location: s.location,
-      })));
-    }, 1500);
+    const t = setTimeout(() => void flushRef.current(), 1500);
     return () => clearTimeout(t);
   }, [allVoted, votes, samples, page, refinedPage]);
 
@@ -512,13 +522,14 @@ function StepSamples(props: {
         );
       })}
       {!loading && samples.length > 0 && page < 5 && (
-        <Button variant="link" className="px-0" onClick={() => { setSearchProfile(props.profile); setPage(page + 1); }}>
+        <Button variant="link" className="px-0" disabled={props.refining}
+          onClick={async () => { await flush(); setPage(page + 1); }}>
           Show me 5 more
         </Button>
       )}
       <div className="flex justify-between">
         <Button variant="ghost" onClick={props.onBack}>Back</Button>
-        <Button onClick={props.onNext}>Next</Button>
+        <Button disabled={props.refining} onClick={async () => { await flush(); props.onNext(); }}>Next</Button>
       </div>
     </div>
   );
