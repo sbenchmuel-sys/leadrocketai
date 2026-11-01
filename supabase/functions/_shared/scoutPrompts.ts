@@ -38,6 +38,12 @@ Use only candidate ids exactly as given. Return JSON: { "picks": [ { "id": strin
 "instruction": the rep's own words (e.g. "skip banks, add ISOs") — follow it.
 Keep anchor_lead_ids unchanged unless the instruction says to drop one. Change only what the feedback supports.
 Return JSON: { "profile": ${PROFILE_SCHEMA}, "note": string }  // note = one short plain sentence about what changed, e.g. "Got it, fewer banks."`,
+
+  scout_rank_batch: `Rank the candidates for this week's prospect list against the target profile. Skip anyone matching an exclusion or clearly outside the titles, industries or company size.
+For each pick write one short, plain-English reason a sales rep would understand (max 15 words, no scores, no numbers about fit).
+"fit_label": "high" only for a clear match on role AND company; otherwise "good".
+"anchor_lead_id": the id of the anchor lead this person most resembles, ONLY from the "anchors" list given to you, or null.
+Use only candidate ids exactly as given. Return JSON: { "picks": [ { "id": string, "reason": string, "fit_label": "high" | "good", "anchor_lead_id": string | null } ] } with at most "max" picks, best first.`,
 } as const;
 
 export type ScoutTask = keyof typeof SCOUT_PROMPTS;

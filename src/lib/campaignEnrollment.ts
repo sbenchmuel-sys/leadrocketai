@@ -28,7 +28,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { CanonicalChannel } from "@/lib/channels";
-import { isValidEmail } from "@/lib/emailValidation";
+import { isValidEmail } from "@shared/emailValidation";
 
 // A touch's auto-skip horizon for MANUAL touches when the campaign has no later
 // touch to bound it (a stuck manual touch must never stall the cadence forever).

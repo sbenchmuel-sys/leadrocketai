@@ -15,7 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { SOURCE_PRESETS, SOURCE_TYPE_COLORS } from "@/lib/dashboardUtils";
 import { parseLeadFile, extractLeadContextItems, type ParsedLead } from "@/lib/parseLeadFile";
-import { summarizeEmailQuality } from "@/lib/emailValidation";
+import { summarizeEmailQuality } from "@shared/emailValidation";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type ImportStep = "upload" | "source" | "confirm";
