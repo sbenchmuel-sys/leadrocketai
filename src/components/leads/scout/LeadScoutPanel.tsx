@@ -166,6 +166,11 @@ function ScoutSummary({ scout, onEdit }: { scout: LeadScoutState; onEdit: () => 
   const toggle = async () => {
     setBusy(true);
     const next = p.status === "active" ? "paused" : "active";
+    // ponytail: client-side check only; the weekly run (Unit 3) enforces the workspace cap server-side.
+    if (next === "active" && p.weekly_target > scout.available) {
+      setBusy(false);
+      return toast.error("Other reps are using this week's allowance. Tap \"Change who I look for\" to pick a smaller number.");
+    }
     const { error } = await db.from("scout_profiles").update({ status: next }).eq("id", p.id);
     setBusy(false);
     if (error) toast.error("Couldn't change that. Please try again.");
@@ -456,11 +461,11 @@ function StepSamples(props: {
   const flush = () => {
     const voted = samples.filter((s) => votes[s.id]);
     if (voted.length === 0 || refinedPage === page) return Promise.resolve();
-    setRefinedPage(page);
+    setRefinedPage(page); // blocks a double-send while in flight
     return onRefine.current(voted.map((s) => ({
       vote: votes[s.id].vote, reason: votes[s.id].reason,
       title: s.title, company: s.company, company_size: s.company_size, location: s.location,
-    })));
+    }))).then((ok) => { if (ok !== true) setRefinedPage(0); }); // failed: keep the votes for a retry
   };
   const flushRef = useRef(flush);
   flushRef.current = flush;
