@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     const votes = clampVotes(r.body.votes);
     const instruction = typeof r.body.instruction === "string" ? r.body.instruction.trim().slice(0, 500) : "";
     if (votes.length === 0 && !instruction) {
-      return scoutJson({ ok: true, profile: current, profile_sentence: profileSentence(current, names), note: null });
+      return scoutJson({ ok: true, profile: current, profile_sentence: profileSentence(current, names), anchor_names: names, note: null });
     }
 
     const result = await callScoutAi("scout_refine_profile", { profile: current, votes, instruction });

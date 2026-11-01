@@ -71,6 +71,7 @@ import { ShowMoreFooter } from "@/components/leads/ShowMoreFooter";
 import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useMailSync } from "@/hooks/useMailSync";
+import { LeadScoutEntryCard, LeadScoutSheet, useLeadScout } from "@/components/leads/scout/LeadScoutPanel";
 
 type ViewMode = "todo" | "all";
 type Chip = "all" | "new" | "automation";
@@ -89,6 +90,7 @@ export default function Leads() {
   const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
   const { enqueue, getStatus, consume } = useBackgroundDraftQueue();
+  const scout = useLeadScout();
 
   const [view, setView] = useState<ViewMode>("all");
   const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
@@ -413,7 +415,7 @@ export default function Leads() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-foreground">Leads</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {/* Refresh — quiet outline action, left of Import/Add so "Add Lead"
               stays the loud primary. Hidden entirely when no mailbox is
               connected. The muted "Updated …" line is desktop-only to keep the
@@ -441,6 +443,9 @@ export default function Leads() {
                 )}
               </Button>
             </>
+          )}
+          {scout.enabled && scout.profile && (
+            <Button variant="outline" onClick={() => scout.setOpen(true)}>Lead Scout</Button>
           )}
           <LeadImportDialog onImportComplete={loadLeads} />
           <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
@@ -516,6 +521,9 @@ export default function Leads() {
           </Dialog>
         </div>
       </div>
+
+      <LeadScoutEntryCard scout={scout} />
+      <LeadScoutSheet scout={scout} />
 
       {/* View toggle — white pill on a light gray track */}
       <div className="inline-flex rounded-lg bg-muted p-0.5">
