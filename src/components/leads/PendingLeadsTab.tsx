@@ -39,7 +39,8 @@ import DismissedListsDialog from "./DismissedListsDialog";
 
 type Candidate = {
   id: string;
-  contact_email: string;
+  // Null only for ai_scout rows awaiting enrichment (20261101120000).
+  contact_email: string | null;
   contact_name: string | null;
   company_domain: string | null;
   source: string;
@@ -88,12 +89,13 @@ function scorePill(score: number | null) {
 
 function deriveName(c: Candidate) {
   if (c.contact_name?.trim()) return c.contact_name.trim();
-  const local = c.contact_email.split("@")[0] || c.contact_email;
+  const email = c.contact_email ?? "";
+  const local = email.split("@")[0] || email;
   return local.replace(/[._-]+/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function domainOf(c: Candidate) {
-  return (c.company_domain || c.contact_email.split("@")[1] || "unknown").toLowerCase();
+  return (c.company_domain || c.contact_email?.split("@")[1] || "unknown").toLowerCase();
 }
 
 export function usePendingCandidatesCount() {
@@ -247,6 +249,8 @@ async function reconcileLookbackMotion(leadId: string) {
 }
 
 async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extraNotes?: string) {
+  // leads.email is NOT NULL: an un-enriched scout row can't become a lead yet.
+  if (!c.contact_email) throw new Error("This suggestion has no email yet");
   const ownerUserId = c.owner_user_id || ownerFallback;
   const company = c.company_domain || c.contact_email.split("@")[1] || "Unknown";
   const defaults = deriveLeadDefaults(c);
@@ -560,7 +564,7 @@ export default function PendingLeadsTab({ onApproved }: { onApproved?: () => voi
       const uid = await getCurrentUserId();
       const note =
         rest.length > 0
-          ? `Other contacts at ${domainOf(primary)}: ${rest.map((r) => r.contact_email).join(", ")}`
+          ? `Other contacts at ${domainOf(primary)}: ${rest.map((r) => r.contact_email).filter(Boolean).join(", ")}`
           : undefined;
       const leadId = await createLeadFromCandidate(primary, uid, note);
       const ids = items.map((c) => c.id);

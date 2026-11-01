@@ -80,3 +80,7 @@ Deno.test("a lone name match with NO company on the lead is not enough — stays
   // search corroborates it, so it is saved.
   assertEquals(pickLinkedinProfile(results, "Dana Cohen", "Acme Motors"), "https://www.linkedin.com/in/dana-cohen-1");
 });
+
+Deno.test("normalizeProfileUrl never throws on a malformed %-escape", () => {
+  assertEquals(normalizeProfileUrl("https://www.linkedin.com/in/bad%profile"), "https://www.linkedin.com/in/bad%profile");
+});

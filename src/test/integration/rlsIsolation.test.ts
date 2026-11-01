@@ -39,6 +39,7 @@ const WS_A = crypto.randomUUID();
 const WS_B = crypto.randomUUID();
 const LEAD_A = crypto.randomUUID();
 const LEAD_B = crypto.randomUUID();
+const SCOUT_A = crypto.randomUUID();
 
 const admin = createClient(URL, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
 let clientA: SupabaseClient;
@@ -71,6 +72,7 @@ async function cleanup() {
   const wsIds = (ws ?? []).map((w) => (w as { id: string }).id);
   if (wsIds.length > 0) {
     await admin.from("leads").delete().in("workspace_id", wsIds);
+    await admin.from("workspace_automation_settings").delete().in("workspace_id", wsIds);
     await admin.from("workspace_members").delete().in("workspace_id", wsIds);
   }
   await admin.from("workspaces").delete().in("name", [WS_NAME_A, WS_NAME_B]);
@@ -103,6 +105,8 @@ beforeAll(async () => {
   await createWorkspace(clientB, WS_B, WS_NAME_B);
   await createLead(clientA, LEAD_A, WS_A, A.id, "A");
   await createLead(clientB, LEAD_B, WS_B, B.id, "B");
+  const { error } = await clientA.from("scout_profiles").insert({ id: SCOUT_A, workspace_id: WS_A, owner_user_id: A.id });
+  if (error) throw new Error(`create scout profile A: ${error.message}`);
 }, 60_000);
 
 afterAll(async () => {
@@ -146,5 +150,31 @@ describe("workspace / RLS isolation (staging)", () => {
     const res = await clientB.from("workspaces").select("id").eq("id", WS_A);
     expect(res.error).toBeNull();
     expect(res.data).toEqual([]);
+  });
+
+  it("Rep B cannot read or create a Lead Scout profile in Rep A's workspace", async () => {
+    const read = await clientB.from("scout_profiles").select("id").eq("id", SCOUT_A);
+    expect(read.error).toBeNull();
+    expect(read.data).toEqual([]);
+
+    const write = await clientB.from("scout_profiles").insert({ workspace_id: WS_A, owner_user_id: B.id });
+    expect(write.error).not.toBeNull();
+  });
+
+  it("a workspace admin cannot switch Lead Scout on (spends DrivePilot credits)", async () => {
+    const ins = await clientA.from("workspace_automation_settings")
+      .insert({ workspace_id: WS_A, scout_enabled: true, scout_weekly_cap: 1000 });
+    expect(ins.error).toBeNull();
+    await clientA.from("workspace_automation_settings")
+      .update({ scout_enabled: true, scout_weekly_cap: 1000 }).eq("workspace_id", WS_A);
+    const { data } = await admin.from("workspace_automation_settings")
+      .select("scout_enabled, scout_weekly_cap").eq("workspace_id", WS_A).single();
+    expect(data).toEqual({ scout_enabled: false, scout_weekly_cap: 50 });
+  });
+
+  it("an admin cannot move the automation-settings row to another workspace", async () => {
+    const res = await clientA.from("workspace_automation_settings")
+      .update({ workspace_id: crypto.randomUUID() }).eq("workspace_id", WS_A);
+    expect(res.error).not.toBeNull();
   });
 });

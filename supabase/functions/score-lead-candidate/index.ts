@@ -43,7 +43,7 @@ Output STRICT JSON only — no markdown fences, no commentary, no extra keys:
 
 interface CandidateRow {
   id: string;
-  contact_email: string;
+  contact_email: string | null;
   contact_name: string | null;
   company_domain: string | null;
   source: string;
@@ -69,7 +69,7 @@ function buildUserPrompt(c: CandidateRow): string {
   };
 
   return [
-    `Contact: ${name} <${c.contact_email}>`,
+    `Contact: ${name} <${c.contact_email ?? "no email"}>`,
     `Company domain: ${c.company_domain || "(unknown)"}`,
     `Source: ${sourceLabel[c.source] || c.source}`,
     `Email count: ${c.email_count ?? 1}`,
@@ -153,6 +153,8 @@ serve(async (req) => {
     .select("id, contact_email, contact_name, company_domain, source, email_count, subject_snippet, body_snippet")
     .eq("status", "pending")
     .is("ai_score", null)
+    // Scout rows carry fit_label, not an email-thread ai_score.
+    .neq("source", "ai_scout")
     .order("first_seen_at", { ascending: true })
     .limit(MAX_PER_RUN);
 
