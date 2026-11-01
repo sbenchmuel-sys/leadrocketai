@@ -99,7 +99,7 @@ Deno.test("normalizeDomain strips scheme, www and path", () => {
 
 Deno.test("apolloSearchPeople hits api_search with x-api-key and normalizes stubs, 0 credits", async () => {
   const { d, calls } = deps([json(APOLLO_SEARCH_FIXTURE)]);
-  const r = await apolloSearchPeople(d, { titles: ["Head of Sales"], notLocations: ["Germany"], perPage: 500 }, 2);
+  const r = await apolloSearchPeople(d, { titles: ["Head of Sales"], notLocations: ["Germany"], industries: ["financial services"], perPage: 500 }, 2);
   assertEquals(r.error, null);
   assertEquals(r.credits, 0);
   assertEquals(r.data.length, 1, "row without id is dropped");
@@ -120,6 +120,7 @@ Deno.test("apolloSearchPeople hits api_search with x-api-key and normalizes stub
   assertEquals(url.origin + url.pathname, "https://api.apollo.io/api/v1/mixed_people/api_search");
   assertEquals(url.searchParams.getAll("person_titles[]"), ["Head of Sales"]);
   assertEquals(url.searchParams.getAll("person_not_locations[]"), ["Germany"]);
+  assertEquals(url.searchParams.getAll("organization_industries[]"), ["financial services"]);
   assertEquals(url.searchParams.get("page"), "2");
   assertEquals(url.searchParams.get("per_page"), "100", "clamped to Apollo max");
   assertEquals((calls[0].init?.headers as Record<string, string>)["x-api-key"], "test-key");

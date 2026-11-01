@@ -68,6 +68,8 @@ export interface ApolloSearchFilters {
   notLocations?: string[];
   /** Apollo format "min,max", e.g. "11,50". */
   employeeRanges?: string[];
+  /** Apollo's own industry names (organization_industries[]). */
+  industries?: string[];
   organizationDomains?: string[];
   keywords?: string;
   perPage?: number;
@@ -202,6 +204,7 @@ export async function apolloSearchPeople(
   many("person_locations", filters.locations);
   many("person_not_locations", filters.notLocations);
   many("organization_num_employees_ranges", filters.employeeRanges);
+  many("organization_industries", filters.industries);
   many("q_organization_domains_list", filters.organizationDomains);
   if (filters.keywords) q.set("q_keywords", filters.keywords);
   q.set("page", String(Math.max(1, Math.floor(page))));
