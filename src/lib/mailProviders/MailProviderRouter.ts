@@ -19,7 +19,8 @@ const MAIL_ACCOUNT_COLUMNS =
 // getDefaultMailAccount
 // Priority:
 //   1. mail_accounts row where is_default = true for workspace
-//   2. First Gmail account for workspace if no default set
+//   2. Otherwise the oldest CONNECTED account of any provider — a broken
+//      default Gmail must not hide a working Outlook (Oct 2026).
 // ============================================================
 
 export async function getDefaultMailAccount(
@@ -36,12 +37,11 @@ export async function getDefaultMailAccount(
 
   if (defaultAccount) return defaultAccount as MailAccount;
 
-  // Fallback: first connected Gmail account for workspace
+  // Fallback: first connected account for workspace, any provider
   const { data: fallback } = await supabase
     .from("mail_accounts")
     .select(MAIL_ACCOUNT_COLUMNS)
     .eq("workspace_id", workspaceId)
-    .eq("provider", "gmail")
     .eq("status", "connected")
     .order("created_at", { ascending: true })
     .limit(1)
