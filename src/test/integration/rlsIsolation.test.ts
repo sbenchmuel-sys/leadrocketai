@@ -171,4 +171,10 @@ describe("workspace / RLS isolation (staging)", () => {
       .select("scout_enabled, scout_weekly_cap").eq("workspace_id", WS_A).single();
     expect(data).toEqual({ scout_enabled: false, scout_weekly_cap: 50 });
   });
+
+  it("an admin cannot move the automation-settings row to another workspace", async () => {
+    const res = await clientA.from("workspace_automation_settings")
+      .update({ workspace_id: crypto.randomUUID() }).eq("workspace_id", WS_A);
+    expect(res.error).not.toBeNull();
+  });
 });

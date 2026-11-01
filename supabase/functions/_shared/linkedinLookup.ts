@@ -26,7 +26,12 @@ const PROFILE_RE = /^https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/in\/([^/?#]+)/i;
 export function normalizeProfileUrl(link: string): string | null {
   const m = PROFILE_RE.exec(link.trim());
   if (!m) return null;
-  const slug = decodeURIComponent(m[1]).toLowerCase();
+  let slug: string;
+  try {
+    slug = decodeURIComponent(m[1]).toLowerCase();
+  } catch {
+    slug = m[1].toLowerCase(); // malformed %-escape (e.g. "bad%profile"): keep it raw, never throw
+  }
   if (!slug) return null;
   return `https://www.linkedin.com/in/${slug}`;
 }

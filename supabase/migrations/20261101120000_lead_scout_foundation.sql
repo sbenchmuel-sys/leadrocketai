@@ -234,6 +234,11 @@ BEGIN
       NEW.scout_enabled := false;
       NEW.scout_weekly_cap := 50;
     ELSE
+      -- Moving the row would carry an enabled switch / raised cap to another
+      -- workspace the admin also runs (Codex P2 on #169).
+      IF NEW.workspace_id IS DISTINCT FROM OLD.workspace_id THEN
+        RAISE EXCEPTION 'workspace_id of automation settings cannot be changed';
+      END IF;
       NEW.scout_enabled := OLD.scout_enabled;
       NEW.scout_weekly_cap := OLD.scout_weekly_cap;
     END IF;
