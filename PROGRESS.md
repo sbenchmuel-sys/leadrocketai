@@ -9,6 +9,17 @@ Working state of major in-flight features.
 When a phase fully ships, move it to a `## Completed` section at the bottom of the file or remove it entirely. Don't let ✅ checklists pile up forever — `CLAUDE.md` covers durable knowledge; this file is just the working board.
 
 
+## Lead Scout — DrivePilot finds new leads weekly (PRs #169–#172, 2026-11-02)
+
+Plan: `LEAD_SCOUT_PLAN.md` (local). All four units merged to `main`; **feature is OFF** until a workspace gets `scout_enabled=true` (founder SQL) + an active profile, and `APOLLO_API_KEY` (and `LUSHA_API_KEY`) are set — without the key every Scout function logs "scout: no provider key, skipping".
+
+- ✅ Unit 1 foundation (#169) · Unit 2 setup panel + samples (#170) · Unit 3 weekly run + batch review + enrich on approve (#171) · Unit 4 Queue nudge, Start outreach (review-mode only), learning loop, Pilot-page usage table + `SCOUT_MONTHLY_CREDIT_CEILING` (#172).
+- ✅ Staging: all schema applied (Units 1, 3, 4; Unit 2 had none). Cron `cron_scout_weekly_run` NOT added on staging yet.
+- ⬜ **Staging functions:** deploy `scout-build-profile`, `scout-sample`, `scout-refine`, `scout-weekly-run`, `scout-enrich`, `cron-dispatcher`, `ai_task` with `--project-ref <staging>` — blocked on `supabase login`. Then add the staging cron job.
+- ⬜ **Production (held until founder OK after Nov 4):** Lovable — apply migrations `20261101120000_lead_scout_foundation.sql`, `20261101130000_lead_scout_weekly_run.sql`, `20261102120000_lead_scout_learned_note.sql`; redeploy the functions above.
+- ⬜ Founder: Apollo/Lusha embed contract + keys (staging first), then a 10/week smoke test on Paythings staging before prod.
+- ⬜ Before cold auto-send is on anywhere with Scout leads: executor guard never auto-sends `ai_scout` leads (KNOWN_ISSUES, option b). Rep delivery email deferred.
+
 ## Outreach Sprint 3 — scale (branch `fix/outreach-sprint-3`, 2026-09-06)
 
 From the outreach audit (project doc `claude/outreach-audit-2026-09-02.md`), Sprint 3 + leftovers. All on one PR.
