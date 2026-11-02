@@ -327,7 +327,7 @@ export default function PendingLeadsTab({
       return;
     }
     setCandidates((data ?? []) as Candidate[]);
-    setScoutRows(scoutEnabled ? await loadScoutRows(workspaceId) : []);
+    setScoutRows(scoutEnabled ? await loadScoutRows(workspaceId, scoutBatchId) : []);
     setIsLoading(false);
   };
 
@@ -347,7 +347,7 @@ export default function PendingLeadsTab({
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, scoutEnabled]);
+  }, [workspaceId, scoutEnabled, scoutBatchId]);
 
   // Drop stale selections when list changes
   useEffect(() => {
@@ -800,18 +800,26 @@ export default function PendingLeadsTab({
 
 // ponytail: scout columns aren't in the generated types.ts yet — untyped read
 // until Lovable regenerates. Any error (e.g. a DB without the Scout migration) = no rows.
-async function loadScoutRows(workspaceId: string): Promise<ScoutCandidate[]> {
+// The linked batch (Queue nudge) is fetched on its own so the 500-row cap on the
+// newest rows can never hide it.
+async function loadScoutRows(workspaceId: string, batchId: string | null): Promise<ScoutCandidate[]> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
-      .from("lead_candidates")
-      .select(SCOUT_CANDIDATE_COLS)
-      .eq("workspace_id", workspaceId)
-      .eq("source", "ai_scout")
-      .eq("status", "pending")
-      .order("created_at", { ascending: false })
-      .limit(500);
-    return error ? [] : ((data ?? []) as ScoutCandidate[]);
+    const base = () =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from("lead_candidates")
+        .select(SCOUT_CANDIDATE_COLS)
+        .eq("workspace_id", workspaceId)
+        .eq("source", "ai_scout")
+        .eq("status", "pending");
+    const [recent, batch] = await Promise.all([
+      base().order("created_at", { ascending: false }).limit(500),
+      batchId ? base().eq("scout_batch_id", batchId).order("created_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (recent.error || batch.error) return [];
+    const byId = new Map<string, ScoutCandidate>();
+    for (const r of [...(batch.data ?? []), ...(recent.data ?? [])] as ScoutCandidate[]) byId.set(r.id, r);
+    return [...byId.values()];
   } catch {
     return [];
   }
