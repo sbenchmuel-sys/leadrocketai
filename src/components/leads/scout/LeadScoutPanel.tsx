@@ -19,6 +19,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { toast } from "sonner";
 import { ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DEFAULT_TZ } from "@shared/scoutWeekly";
 import {
   clampProfile,
   DOWNVOTE_REASONS,
@@ -98,7 +99,8 @@ export function useLeadScout() {
     setOpen,
     reload,
     workspaceId,
-    timezone: workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    // Must match scout-weekly-run's fallback, or batches land at the wrong hour.
+    timezone: workspaceTimezone || DEFAULT_TZ,
   };
 }
 export type LeadScoutState = ReturnType<typeof useLeadScout>;

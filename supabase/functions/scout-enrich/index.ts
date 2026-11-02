@@ -16,7 +16,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { apolloEnrichPerson, lushaPhone } from "../_shared/prospectProviders.ts";
 import {
-  type BatchInfo, type EnrichIO, normalizeEnrichIds, runEnrich, type ScoutCandidateRow,
+  type BatchInfo, countResolvedBatches, type EnrichIO, normalizeEnrichIds, runEnrich, type ScoutCandidateRow,
 } from "../_shared/scoutEnrich.ts";
 import {
   type AdminClient, loadEnrichFilterContext, openScoutRequest, readScoutSettings, scoutCors, scoutJson,
@@ -143,31 +143,6 @@ Deno.serve(async (req) => {
     return scoutJson({ ok: false, error: "Internal error" }, 500);
   }
 });
-
-/**
- * A batch with no pending candidates left counts once toward its profile's
- * approved_batches (the UI offers auto-approve after 2). The conditional
- * resolved_at UPDATE makes the count exactly-once under concurrency.
- */
-async function countResolvedBatches(admin: AdminClient, workspaceId: string, batchIds: string[]) {
-  for (const batchId of batchIds) {
-    try {
-      const { count } = await admin.from("lead_candidates").select("id", { count: "exact", head: true })
-        .eq("scout_batch_id", batchId).eq("workspace_id", workspaceId).eq("status", "pending");
-      if (count !== 0) continue;
-      const { data: won } = await admin.from("scout_runs").update({ resolved_at: new Date().toISOString() })
-        .eq("id", batchId).eq("workspace_id", workspaceId).is("resolved_at", null).select("profile_id");
-      const profileId = won?.[0]?.profile_id;
-      if (!profileId) continue;
-      const { data: prof } = await admin.from("scout_profiles").select("approved_batches").eq("id", profileId).maybeSingle();
-      if (prof) {
-        await admin.from("scout_profiles").update({ approved_batches: (prof.approved_batches ?? 0) + 1 }).eq("id", profileId);
-      }
-    } catch (e) {
-      console.warn("[scout-enrich] batch count failed", e instanceof Error ? e.message : e);
-    }
-  }
-}
 
 function recompute(leadId: string) {
   return fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/recompute-lead-intelligence`, {

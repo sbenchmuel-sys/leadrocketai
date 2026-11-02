@@ -27,6 +27,7 @@ import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import { apolloSearchPeople, type ProspectStub } from "../_shared/prospectProviders.ts";
 import { EU_UK_EEA_COUNTRIES, filterScoutCandidates } from "../_shared/scoutFilters.ts";
 import { type AdminClient, callScoutAi, loadPreFilterContext } from "../_shared/scoutGate.ts";
+import { countResolvedBatches } from "../_shared/scoutEnrich.ts";
 import { clampProfile, toApolloFilters } from "../_shared/scoutProfile.ts";
 import {
   allocate, canAttempt, failedSlotKey, isSlotReached, localClock, MAX_SEARCH_PAGES, parseRankPicks,
@@ -94,6 +95,17 @@ Deno.serve(async (req) => {
     .is("resolved_lead_id", null).is("dismiss_reason", null)
     .lt("resolved_at", new Date(now.getTime() - STALE_CLAIM_MS).toISOString());
 
+  // A batch whose last card was dismissed by hand never passes through
+  // scout-enrich, so count finished batches here too (exactly-once per batch).
+  // ponytail: newest 50 unresolved batches per hour; a very old batch the rep
+  // never finishes can be starved, which only delays the auto-approve offer.
+  const { data: openBatches } = await admin.from("scout_runs").select("id, workspace_id")
+    .in("workspace_id", wsIds).eq("kind", "weekly").is("resolved_at", null).gt("candidates_kept", 0)
+    .order("started_at", { ascending: false }).limit(50);
+  for (const b of (openBatches ?? []) as Array<{ id: string; workspace_id: string }>) {
+    await countResolvedBatches(admin, b.workspace_id, [b.id]);
+  }
+
   const [{ data: profiles, error: pErr }, { data: workspaces }] = await Promise.all([
     admin.from("scout_profiles")
       .select("id, workspace_id, owner_user_id, profile_json, weekly_target, delivery_dow, delivery_hour, auto_approve")
@@ -155,8 +167,8 @@ async function runProfile(
   const finish = (patch: Record<string, unknown>) =>
     admin.from("scout_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", batchId);
 
-  let inserted = 0;
   let found = 0;
+  const ids: string[] = []; // outside try: a mid-insert failure must not release the claim
   try {
     // 2. Workspace cap across all reps.
     const { count, error: cErr } = await admin
@@ -234,7 +246,6 @@ async function runProfile(
       provider_person_id: stub.provider_person_id,
       scout_batch_id: batchId,
     }));
-    const ids: string[] = [];
     const bulk = rows.length ? await admin.from("lead_candidates").insert(rows).select("id") : { data: [], error: null };
     if (!bulk.error) {
       ids.push(...((bulk.data ?? []) as Array<{ id: string }>).map((r) => r.id));
@@ -249,20 +260,19 @@ async function runProfile(
     } else {
       throw new Error(`insert: ${bulk.error.message}`);
     }
-    inserted = ids.length;
-    await finish({ candidates_found: found, candidates_kept: inserted });
+    await finish({ candidates_found: found, candidates_kept: ids.length });
 
     // 6. Auto-approve: enrichment runs as its own invocation (it can take minutes).
     if (p.auto_approve && ids.length) autoApprove(p.workspace_id, ids);
-    return { attempted: true, kept: inserted, batch_id: batchId };
+    return { attempted: true, kept: ids.length, batch_id: batchId };
   } catch (e) {
     const msg = (e instanceof Error ? e.message : "failed").slice(0, 300);
     // Nothing delivered → free the week's key so a later hour can retry (≤3/week).
     await finish({
       error: msg,
       candidates_found: found,
-      candidates_kept: inserted,
-      ...(inserted === 0 ? { slot_key: failedSlotKey(week, batchId) } : {}),
+      candidates_kept: ids.length,
+      ...(ids.length === 0 ? { slot_key: failedSlotKey(week, batchId) } : {}),
     });
     throw e;
   }

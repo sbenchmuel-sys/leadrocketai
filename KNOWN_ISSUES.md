@@ -604,3 +604,9 @@ work. Logged here so they don't drop.
   `CampaignSettingsPanel` meeting-CTA checkbox overlaps the new per-step
   meeting-CTA control. Future cleanup: dedupe or deprecate the legacy
   checkbox so there's a single source of truth.
+
+## Lead Scout weekly run + enrichment — accepted edges (PR #171, 2026-11-02)
+
+- **Retry can pay Apollo/Lusha twice.** If the lead insert fails for a non-duplicate reason after enrichment (or the candidate update after a successful insert fails), the row reverts to pending; approving again re-enriches and may re-charge. Chosen over silently losing the approval. Upgrade: cache the enriched payload on the candidate row and skip providers on retry. (`_shared/scoutEnrich.ts`, `runEnrich`.)
+- **Workspace weekly cap can overshoot on overlapping runs.** The cap is count-then-insert with no lock; one hourly invocation handles profiles sequentially, so only a manual/overlapping dispatch can exceed it, by at most one profile's target. Upgrade: an advisory lock or a DB-side count in the insert.
+- **Profile of a removed rep keeps running.** scout-weekly-run does not re-check that the profile owner is still a workspace member; candidates/leads would be owned by the ex-member. Pause or reassign the profile when removing a rep. Upgrade: join `workspace_members` in the profile query.

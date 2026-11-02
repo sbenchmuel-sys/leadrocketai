@@ -7,7 +7,8 @@
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import type { ScoutFilterContext } from "./scoutFilters.ts";
 import {
-  type EnrichDeps, type EnrichIO, enrichCandidate, normalizeEnrichIds, runEnrich, type ScoutCandidateRow,
+  countResolvedBatches, type EnrichDeps, type EnrichIO, enrichCandidate, normalizeEnrichIds, runEnrich,
+  type ScoutCandidateRow,
 } from "./scoutEnrich.ts";
 
 const ID1 = "aaaaaaaa-0000-0000-0000-000000000001";
@@ -239,4 +240,38 @@ Deno.test("runEnrich: a provider outage reverts every claimed row", async () => 
   const m = memoryIO([cand(), cand({ id: ID2, provider_person_id: "p2" })]);
   const s = await runEnrich([ID1, ID2], m.io, deps({ apolloError: "apollo enrich: HTTP 503" }).d);
   assertEquals([s.retry, m.status.get(ID1), m.status.get(ID2)], [2, "pending", "pending"]);
+});
+
+// approved_batches: counted once per batch, only once nothing is pending —
+// whether it finished via scout-enrich or the weekly-run sweep (manual dismiss).
+Deno.test("countResolvedBatches: once per fully-resolved batch, never while rows are pending", async () => {
+  const st = { pending: 1, resolved: false, approved: 0 };
+  // Minimal chainable stand-in for the three queries countResolvedBatches makes.
+  const admin = {
+    from(table: string) {
+      let op = "select";
+      const b: Record<string, unknown> = {};
+      const result = () => {
+        if (table === "lead_candidates") return { count: st.pending };
+        if (table === "scout_runs") {
+          if (st.resolved) return { data: [] };
+          st.resolved = true;
+          return { data: [{ profile_id: "prof1" }] };
+        }
+        if (op === "update") return { data: null, error: null, _: st.approved++ };
+        return { data: { approved_batches: st.approved } };
+      };
+      for (const m of ["select", "eq", "is"]) b[m] = () => b;
+      b.update = () => ((op = "update"), b);
+      b.maybeSingle = () => Promise.resolve(result());
+      b.then = (res: (v: unknown) => unknown) => Promise.resolve(result()).then(res);
+      return b;
+    },
+  };
+  await countResolvedBatches(admin, "ws1", ["run1"]);
+  assertEquals(st.approved, 0); // a card is still pending
+  st.pending = 0;
+  await countResolvedBatches(admin, "ws1", ["run1"]);
+  await countResolvedBatches(admin, "ws1", ["run1"]); // sweep + enrich both see it
+  assertEquals(st.approved, 1);
 });
