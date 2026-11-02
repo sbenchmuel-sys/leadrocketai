@@ -151,6 +151,79 @@ export default function Pilot() {
           </Table>
         </CardContent>
       </Card>
+
+      <ScoutUsage />
     </div>
+  );
+}
+
+interface ScoutUsageRow { id: string; workspace: string; delivered: number; approved: number; replied: number; apollo: number; lusha: number }
+
+/**
+ * Lead Scout this month, one row per workspace the founder can see (RLS):
+ * delivered (weekly batch rows), approved (leads created by scout-enrich),
+ * replied (Scout leads with an inbound this month), Apollo + Lusha credits.
+ * Hidden when nothing ran or the tables aren't there yet (prod before the migration).
+ * ponytail: sums client-side over ≤1000 runs / ≤1000 replied leads; move to an RPC if pilots outgrow that.
+ */
+function ScoutUsage() {
+  const [rows, setRows] = useState<ScoutUsageRow[]>([]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const now = new Date();
+      const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+      const [{ data: runs, error }, { data: replied }] = await Promise.all([
+        db.from("scout_runs").select("workspace_id, kind, candidates_kept, apollo_credits, lusha_credits").gte("started_at", month).limit(1000),
+        db.from("leads").select("workspace_id").eq("source_type", "ai_scout").gte("last_inbound_at", month).limit(1000),
+      ]);
+      if (!live || error || !runs?.length) return;
+      const by = new Map<string, ScoutUsageRow>();
+      const row = (ws: string) => by.get(ws) ?? by.set(ws, { id: ws, workspace: ws, delivered: 0, approved: 0, replied: 0, apollo: 0, lusha: 0 }).get(ws)!;
+      for (const r of runs as Array<{ workspace_id: string; kind: string; candidates_kept: number | null; apollo_credits: number | null; lusha_credits: number | null }>) {
+        const t = row(r.workspace_id);
+        if (r.kind === "weekly") t.delivered += r.candidates_kept ?? 0;
+        if (r.kind === "enrich") t.approved += r.candidates_kept ?? 0;
+        t.apollo += r.apollo_credits ?? 0;
+        t.lusha += r.lusha_credits ?? 0;
+      }
+      for (const l of (replied ?? []) as Array<{ workspace_id: string }>) if (by.has(l.workspace_id)) row(l.workspace_id).replied++;
+      const { data: names } = await db.from("workspaces").select("id, name").in("id", [...by.keys()]);
+      const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string | null }>).map((w) => [w.id, w.name]));
+      if (live) setRows([...by.values()].map((r) => ({ ...r, workspace: nameOf.get(r.workspace) || r.workspace.slice(0, 8) })));
+    })();
+    return () => { live = false; };
+  }, []);
+  if (!rows.length) return null;
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-lg">Lead Scout this month</CardTitle></CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Workspace</TableHead>
+              <TableHead className="text-right">Delivered</TableHead>
+              <TableHead className="text-right">Approved</TableHead>
+              <TableHead className="text-right">Replied</TableHead>
+              <TableHead className="text-right">Apollo credits</TableHead>
+              <TableHead className="text-right">Lusha credits</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.id}>
+                <TableCell>{r.workspace}</TableCell>
+                <TableCell className="text-right">{r.delivered}</TableCell>
+                <TableCell className="text-right">{r.approved}</TableCell>
+                <TableCell className="text-right">{r.replied}</TableCell>
+                <TableCell className="text-right">{r.apollo}</TableCell>
+                <TableCell className="text-right">{r.lusha}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
