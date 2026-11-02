@@ -3,7 +3,8 @@
 // cap shared across reps, AI ranking validation.
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import {
-  ABANDONED_CLAIM_MS, allocate, canAttempt, failedSlotKey, isSlotReached, localClock, parseRankPicks, weekClaimState, weekKey,
+  ABANDONED_CLAIM_MS, allocate, applyLearning, buildLearningInput, creditCeilingReached, type LearnCandidate, monthStartIso,
+  parseCreditCeiling, canAttempt, failedSlotKey, isSlotReached, localClock, parseRankPicks, weekClaimState, weekKey,
   weekStartIso,
 } from "./scoutWeekly.ts";
 
@@ -108,4 +109,75 @@ Deno.test("weekClaimState: finished = done; unfinished recent = running; unfinis
   assertEquals(weekClaimState({ started_at: ago(ABANDONED_CLAIM_MS - 1), finished_at: null }, now), "running");
   assertEquals(weekClaimState({ started_at: ago(ABANDONED_CLAIM_MS + 1), finished_at: null }, now), "abandoned");
   assertEquals(weekClaimState({ started_at: null, finished_at: null }, now), "abandoned");
+});
+
+// ── Unit 4: learning bounds + credit ceiling ────────────────────────────────
+
+const BASE = {
+  titles: ["VP Sales"], seniorities: ["vp"], industries: ["fintech"], employee_ranges: ["51,200"],
+  locations: ["United States"], keywords: [], exclusions: [], anchor_lead_ids: ["11111111-1111-1111-1111-111111111111"],
+};
+
+Deno.test("buildLearningInput: dismiss reasons + engaged leads; null when nothing to learn", () => {
+  const row = (o: Partial<LearnCandidate>): LearnCandidate => ({
+    status: "approved", dismiss_reason: null, job_title: "CFO", company_size: "51-200", location: "Austin", resolved_lead_id: null, ...o,
+  });
+  const input = buildLearningInput([
+    row({ status: "dismissed", dismiss_reason: "too small" }),
+    row({ status: "dismissed" }), // no reason → ignored
+    row({ resolved_lead_id: "L1" }),
+    row({ resolved_lead_id: "L2" }),
+    row({ resolved_lead_id: "L3" }),
+  ], ["L1"], ["L2"]);
+  assertEquals(input?.dismissed.map((d) => d.reason), ["too small"]);
+  assertEquals(input?.engaged.map((e) => [e.replied, e.meeting]), [[true, false], [false, true]]);
+  assertEquals(input?.approved_without_reply, 1);
+  assertEquals(buildLearningInput([row({ resolved_lead_id: "L9" })], [], []), null);
+  assertEquals(buildLearningInput([], ["L1"], []), null);
+});
+
+Deno.test("applyLearning: only learnable fields change, re-clamped, never emptied", () => {
+  const { profile, note } = applyLearning(BASE, {
+    profile: {
+      titles: ["Head of Revenue", "VP Sales"],
+      seniorities: ["vice president", "bogus"],
+      industries: [], // empty → keep the rep's
+      employee_ranges: ["11-50", "not a range"],
+      locations: ["Germany"], // locked
+      anchor_lead_ids: ["22222222-2222-2222-2222-222222222222"], // locked
+      exclusions: ["banks"],
+      hacked: ["x"],
+    },
+    note: "  Leaning toward smaller\ncompanies.  ",
+  });
+  assertEquals(profile.titles, ["Head of Revenue", "VP Sales"]);
+  assertEquals(profile.seniorities, ["vp"]);
+  assertEquals(profile.industries, ["fintech"]);
+  assertEquals(profile.employee_ranges, ["11,50"]);
+  assertEquals(profile.locations, ["United States"]);
+  assertEquals(profile.anchor_lead_ids, BASE.anchor_lead_ids);
+  assertEquals(profile.exclusions, ["banks"]);
+  assertEquals("hacked" in profile, false);
+  assertEquals(note, "Leaning toward smaller companies.");
+});
+
+Deno.test("applyLearning: malformed AI output → unchanged profile, no note (fail open)", () => {
+  for (const raw of [null, {}, { profile: "x" }, { note: "hi" }, "junk"]) {
+    assertEquals(applyLearning(BASE, raw), { profile: BASE, note: "" });
+  }
+});
+
+Deno.test("credit ceiling: unset = no limit; reached at ≥; unknown usage pauses; typo fails closed", () => {
+  assertEquals(parseCreditCeiling(undefined), null);
+  assertEquals(parseCreditCeiling("  "), null);
+  assertEquals(parseCreditCeiling("500"), 500);
+  assertEquals(parseCreditCeiling("lots"), 0);
+  assertEquals(parseCreditCeiling("-5"), 0);
+  assertEquals(creditCeilingReached(null, 1_000_000), false);
+  assertEquals(creditCeilingReached(null, null), false);
+  assertEquals(creditCeilingReached(500, 499), false);
+  assertEquals(creditCeilingReached(500, 500), true);
+  assertEquals(creditCeilingReached(500, null), true);
+  assertEquals(creditCeilingReached(0, 0), true);
+  assertEquals(monthStartIso(new Date("2026-11-30T23:59:00Z")), "2026-11-01T00:00:00.000Z");
 });

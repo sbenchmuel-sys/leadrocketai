@@ -9,7 +9,11 @@
 //      a unique violation and skips. Its id is the batch id.
 //   2. N = min(weekly_target, workspace scout_weekly_cap − scout candidates
 //      already created this week across ALL reps).
-//   3. re-clamp profile_json (the browser wrote it), page Apollo People Search
+//   3. re-clamp profile_json (the browser wrote it), learning step (last 4
+//      weeks of dismiss reasons + replies/meetings → ai_task scout_learn, bounded
+//      by applyLearning; fails open to the unchanged profile; the adjusted
+//      profile is used for THIS batch only and its note lands on
+//      scout_runs.learned_note), page Apollo People Search
 //      (free) until N×3 kept stubs or 5 pages, EU/UK/EEA excluded unless allowed,
 //      pre-enrichment scoutFilters.
 //   4. ai_task scout_rank_batch → reason + fit_label + anchor_lead_id (anchors
@@ -23,15 +27,16 @@
 // a claim left unfinished > 2h (process died) is recovered the same way.
 // Nothing here emails, texts or enrolls anyone.
 // No APOLLO_API_KEY → "scout: no provider key, skipping" (200).
+// SCOUT_MONTHLY_CREDIT_CEILING reached → no provider calls + a volume_alert.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireScheduledCaller } from "../_shared/scheduledAuth.ts";
 import { apolloSearchPeople, type ProspectStub } from "../_shared/prospectProviders.ts";
 import { EU_UK_EEA_COUNTRIES, filterScoutCandidates } from "../_shared/scoutFilters.ts";
-import { type AdminClient, callScoutAi, loadPreFilterContext } from "../_shared/scoutGate.ts";
+import { type AdminClient, callScoutAi, loadPreFilterContext, scoutCreditCeilingHit } from "../_shared/scoutGate.ts";
 import { countResolvedBatches } from "../_shared/scoutEnrich.ts";
-import { clampProfile, toApolloFilters } from "../_shared/scoutProfile.ts";
+import { clampProfile, type ScoutProfile, toApolloFilters } from "../_shared/scoutProfile.ts";
 import {
-  allocate, canAttempt, failedSlotKey, isSlotReached, localClock, MAX_SEARCH_PAGES, parseRankPicks,
+  allocate, applyLearning, buildLearningInput, canAttempt, LEARN_WINDOW_DAYS, type LearnCandidate, failedSlotKey, isSlotReached, localClock, MAX_SEARCH_PAGES, parseRankPicks,
   searchGoal, weekClaimState, weekKey, weekStartIso,
 } from "../_shared/scoutWeekly.ts";
 
@@ -106,6 +111,9 @@ Deno.serve(async (req) => {
   for (const b of (openBatches ?? []) as Array<{ id: string; workspace_id: string }>) {
     await countResolvedBatches(admin, b.workspace_id, [b.id]);
   }
+
+  // Monthly credit ceiling (all workspaces): no provider calls at all this run.
+  if (await scoutCreditCeilingHit(admin, "scout-weekly-run")) return json({ ok: true, skipped: "credit_ceiling" });
 
   const [{ data: profiles, error: pErr }, { data: workspaces }] = await Promise.all([
     admin.from("scout_profiles")
@@ -191,6 +199,7 @@ async function runProfile(
     admin.from("scout_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", batchId);
 
   let found = 0;
+  let learnedNote = "";
   const ids: string[] = []; // outside try: a mid-insert failure must not release the claim
   try {
     // 2. Workspace cap across all reps.
@@ -208,12 +217,16 @@ async function runProfile(
     // 3. Re-clamp, verify anchors are the rep's real leads, search + pre-filter.
     // deno-lint-ignore no-explicit-any
     const rawAnchors = (p.profile_json as any)?.anchor_lead_ids;
-    const profile = clampProfile(p.profile_json, Array.isArray(rawAnchors) ? rawAnchors.filter((x) => typeof x === "string") : []);
+    let profile = clampProfile(p.profile_json, Array.isArray(rawAnchors) ? rawAnchors.filter((x) => typeof x === "string") : []);
     const { data: anchorRows } = profile.anchor_lead_ids.length
       ? await admin.from("leads").select("id, name, company, job_title")
         .in("id", profile.anchor_lead_ids).eq("workspace_id", p.workspace_id).eq("owner_user_id", p.owner_user_id)
       : { data: [] };
     const anchors = (anchorRows ?? []) as Array<{ id: string; name: string; company: string; job_title: string | null }>;
+
+    const learned = await learnFromHistory(admin, p, profile, now);
+    if (learned.note) learnedNote = learned.note;
+    profile = learned.profile;
 
     const filters = toApolloFilters(profile, s.scout_allow_eu ? [] : EU_UK_EEA_COUNTRIES, PER_PAGE);
     const raw: ProspectStub[] = [];
@@ -284,6 +297,8 @@ async function runProfile(
       throw new Error(`insert: ${bulk.error.message}`);
     }
     await finish({ candidates_found: found, candidates_kept: ids.length });
+    // Separate write so a DB without the learned_note column still finishes the batch.
+    if (learnedNote) await admin.from("scout_runs").update({ learned_note: learnedNote }).eq("id", batchId);
 
     // 6. Auto-approve: enrichment runs as its own invocation (it can take minutes).
     if (p.auto_approve && ids.length) autoApprove(p.workspace_id, ids);
@@ -298,6 +313,55 @@ async function runProfile(
       ...(ids.length === 0 ? { slot_key: failedSlotKey(week, batchId) } : {}),
     });
     throw e;
+  }
+}
+
+/**
+ * The learning step. Any failure → the unchanged profile (never blocks the batch).
+ * ponytail: the adjusted profile is used for this week's search only; the rep's
+ * saved profile (and sentence) never drift. Upgrade: persist + regenerate the
+ * sentence once reps can see/undo what was learned.
+ */
+async function learnFromHistory(
+  admin: AdminClient,
+  p: Profile,
+  base: ScoutProfile,
+  now: Date,
+): Promise<{ profile: ScoutProfile; note: string }> {
+  const unchanged = { profile: base, note: "" };
+  try {
+    const since = new Date(now.getTime() - LEARN_WINDOW_DAYS * 86_400_000).toISOString();
+    const { data: runs, error: rErr } = await admin.from("scout_runs").select("id")
+      .eq("profile_id", p.id).eq("kind", "weekly").gte("started_at", since).limit(10);
+    if (rErr || !runs?.length) return unchanged;
+    const { data: rows, error: cErr } = await admin.from("lead_candidates")
+      .select("status, dismiss_reason, job_title, company_size, location, resolved_lead_id")
+      .eq("workspace_id", p.workspace_id).eq("source", "ai_scout").neq("status", "pending")
+      .in("scout_batch_id", (runs as Array<{ id: string }>).map((r) => r.id)).limit(500);
+    if (cErr || !rows?.length) return unchanged;
+    const cands = rows as LearnCandidate[];
+    const leadIds = [...new Set(cands.map((c) => c.resolved_lead_id).filter((x): x is string => !!x))];
+    let replied: string[] = [];
+    let met: string[] = [];
+    if (leadIds.length) {
+      // Replies + meetings from the canonical ledger (never the legacy interactions table).
+      const [tl, ld] = await Promise.all([
+        admin.from("lead_timeline_items").select("lead_id, direction, event_type")
+          .eq("workspace_id", p.workspace_id).in("lead_id", leadIds)
+          .or("direction.eq.inbound,event_type.eq.meeting").limit(1000),
+        admin.from("leads").select("id").eq("workspace_id", p.workspace_id).in("id", leadIds)
+          .or("has_future_meeting.eq.true,stage.eq.closed_won"),
+      ]);
+      const items = (tl.data ?? []) as Array<{ lead_id: string; direction: string | null; event_type: string | null }>;
+      replied = items.filter((t) => t.direction === "inbound").map((t) => t.lead_id);
+      met = [...items.filter((t) => t.event_type === "meeting").map((t) => t.lead_id), ...((ld.data ?? []) as Array<{ id: string }>).map((l) => l.id)];
+    }
+    const input = buildLearningInput(cands, replied, met);
+    if (!input) return unchanged;
+    return applyLearning(base, await callScoutAi("scout_learn", { profile: base, ...input }));
+  } catch (e) {
+    console.warn(`[scout-weekly-run] learning skipped for ${p.id}:`, e instanceof Error ? e.message : e);
+    return unchanged;
   }
 }
 

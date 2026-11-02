@@ -44,6 +44,13 @@ For each pick write one short, plain-English reason a sales rep would understand
 "fit_label": "high" only for a clear match on role AND company; otherwise "good".
 "anchor_lead_id": the id of the anchor lead this person most resembles, ONLY from the "anchors" list given to you, or null.
 Use only candidate ids exactly as given. Return JSON: { "picks": [ { "id": string, "reason": string, "fit_label": "high" | "good", "anchor_lead_id": string | null } ] } with at most "max" picks, best first.`,
+
+  scout_learn: `Adjust this week's target profile from the last 4 weeks of results.
+"dismissed": people the rep rejected, with the reason (wrong role, wrong industry, too small, too big, wrong region, competitor).
+"engaged": approved people who replied or booked a meeting — lean toward people like them.
+"approved_without_reply": how many approved people haven't replied yet (weak signal, don't over-react).
+Change only titles, seniorities, industries, employee_ranges, keywords and exclusions, and only where the results clearly support it; keep everything else exactly as given. Small steps, never a new direction.
+Return JSON: { "profile": ${PROFILE_SCHEMA}, "note": string }  // note = one short plain sentence for the rep, e.g. "Leaning toward 50–200 person companies: they reply more." Empty string if nothing changed.`,
 } as const;
 
 export type ScoutTask = keyof typeof SCOUT_PROMPTS;
