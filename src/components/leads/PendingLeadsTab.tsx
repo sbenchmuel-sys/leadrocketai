@@ -288,10 +288,13 @@ async function createLeadFromCandidate(c: Candidate, ownerFallback: string, extr
 export default function PendingLeadsTab({
   onApproved,
   scoutEnabled = false,
+  scoutBatchId = null,
 }: {
   onApproved?: () => void;
   /** Lead Scout master switch (useLeadScout().enabled). Off = scout rows never shown. */
   scoutEnabled?: boolean;
+  /** Queue nudge deep link: focus this scout batch. */
+  scoutBatchId?: string | null;
 }) {
   const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -631,6 +634,7 @@ export default function PendingLeadsTab({
     <ScoutBatches
       rows={scoutRows}
       workspaceId={workspaceId}
+      onlyBatchId={scoutBatchId}
       onChanged={(approved) => {
         void load();
         if (approved) onApproved?.();

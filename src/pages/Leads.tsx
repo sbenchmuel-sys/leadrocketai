@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
 import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
 import { fetchWorkspaceCampaigns } from "@/lib/campaignQueries";
@@ -95,7 +95,9 @@ export default function Leads() {
   const scout = useLeadScout();
 
   const [view, setView] = useState<ViewMode>("all");
-  const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
+  // ?tab=pending&batch=<id> comes from the Queue's Lead Scout nudge.
+  const [searchParams] = useSearchParams();
+  const [subTab, setSubTab] = useState<"leads" | "pending">(searchParams.get("tab") === "pending" ? "pending" : "leads");
 
   const [leads, setLeads] = useState<EnrichedLead[]>([]);
   // campaign_id → campaign name, for the small cadence tag under the lead row.
@@ -732,7 +734,7 @@ export default function Leads() {
           </TabsContent>
 
           <TabsContent value="pending">
-            <PendingLeadsTab onApproved={loadLeads} scoutEnabled={scout.enabled} />
+            <PendingLeadsTab onApproved={loadLeads} scoutEnabled={scout.enabled} scoutBatchId={searchParams.get("batch")} />
           </TabsContent>
         </Tabs>
       )}
