@@ -242,6 +242,15 @@ Deno.test("runEnrich: a provider outage reverts every claimed row", async () => 
   assertEquals([s.retry, m.status.get(ID1), m.status.get(ID2)], [2, "pending", "pending"]);
 });
 
+Deno.test("runEnrich: filter lookup throws after Apollo → retry, Apollo credit still counted, no Lusha", async () => {
+  const { d, calls } = deps();
+  d.loadFilterContext = () => Promise.reject(new Error("scout filter: opt-out lookup failed"));
+  const m = memoryIO([cand()]);
+  const s = await runEnrich([ID1], m.io, d);
+  assertEquals([s.retry, s.apollo_credits, s.lusha_credits, calls.lusha], [1, 1, 0, 0]);
+  assertEquals(m.status.get(ID1), "pending");
+});
+
 // approved_batches: counted once per batch, only once nothing is pending —
 // whether it finished via scout-enrich or the weekly-run sweep (manual dismiss).
 Deno.test("countResolvedBatches: once per fully-resolved batch, never while rows are pending", async () => {

@@ -127,11 +127,17 @@ export async function enrichCandidate(
   const name = [clean(p.first_name), clean(p.last_name)].filter(Boolean).join(" ") || clean(c.contact_name);
   const linkedin = p.linkedin_url ?? c.linkedin_url;
   const emailDomain = email.split("@")[1];
-  const ctx = await deps.loadFilterContext({
-    email,
-    linkedin_url: linkedin,
-    domains: [...new Set([c.company_domain, emailDomain].filter((d): d is string => !!d))],
-  });
+  let ctx: ScoutFilterContext;
+  try {
+    ctx = await deps.loadFilterContext({
+      email,
+      linkedin_url: linkedin,
+      domains: [...new Set([c.company_domain, emailDomain].filter((d): d is string => !!d))],
+    });
+  } catch (e) {
+    // Lists unreadable → retry, but the Apollo credit is already spent: report it.
+    return { kind: "retry", error: e instanceof Error ? e.message : "filter lookup failed", apollo, lusha: 0 };
+  }
   const stub = {
     provider: c.provider ?? "apollo",
     provider_person_id: c.provider_person_id,

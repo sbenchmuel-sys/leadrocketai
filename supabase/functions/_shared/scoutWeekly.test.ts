@@ -3,7 +3,8 @@
 // cap shared across reps, AI ranking validation.
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import {
-  allocate, canAttempt, failedSlotKey, isSlotReached, localClock, parseRankPicks, weekKey, weekStartIso,
+  ABANDONED_CLAIM_MS, allocate, canAttempt, failedSlotKey, isSlotReached, localClock, parseRankPicks, weekClaimState, weekKey,
+  weekStartIso,
 } from "./scoutWeekly.ts";
 
 const MON_7AM = { delivery_dow: 1, delivery_hour: 7 };
@@ -96,4 +97,15 @@ Deno.test("parseRankPicks: malformed output → null (fail closed); empty picks 
   assertEquals(parseRankPicks(null, stubs, 5, []), null);
   assertEquals(parseRankPicks({ picks: "a" }, stubs, 5, []), null);
   assertEquals(parseRankPicks({ picks: [] }, stubs, 5, []), []);
+});
+
+Deno.test("weekClaimState: finished = done; unfinished recent = running; unfinished stale = abandoned", () => {
+  const now = new Date("2026-11-02T12:00:00Z");
+  const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
+  assertEquals(weekClaimState(undefined, now), "free");
+  assertEquals(weekClaimState({ started_at: ago(5 * 3600_000), finished_at: ago(5 * 3600_000 - 30_000) }, now), "done");
+  assertEquals(weekClaimState({ started_at: ago(60_000), finished_at: null }, now), "running");
+  assertEquals(weekClaimState({ started_at: ago(ABANDONED_CLAIM_MS - 1), finished_at: null }, now), "running");
+  assertEquals(weekClaimState({ started_at: ago(ABANDONED_CLAIM_MS + 1), finished_at: null }, now), "abandoned");
+  assertEquals(weekClaimState({ started_at: null, finished_at: null }, now), "abandoned");
 });

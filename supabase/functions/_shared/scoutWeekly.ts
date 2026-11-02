@@ -96,6 +96,32 @@ export function canAttempt(failedThisWeek: number): boolean {
 export const failedSlotKey = (week: string, runId: string) => `${week}:failed:${runId}`;
 
 /**
+ * An unfinished claim older than this was abandoned (the process died between
+ * claim and finish). ponytail: fixed 2h, far above the dispatcher's 55s budget;
+ * if runs ever go async/long, store a heartbeat instead of trusting started_at.
+ */
+export const ABANDONED_CLAIM_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The week's claim row (slot_key = weekKey) → what the run should do:
+ *   free       no claim yet — claim and run
+ *   done       finished (delivered, empty, or cap reached) — nothing this week
+ *   running    unfinished but recent — another invocation owns it
+ *   abandoned  unfinished and stale — the caller counts its inserted
+ *              candidates: any → treat as delivered; none → release as failed
+ */
+export function weekClaimState(
+  claim: { started_at: string | null; finished_at: string | null } | undefined,
+  now: Date,
+): "free" | "done" | "running" | "abandoned" {
+  if (!claim) return "free";
+  if (claim.finished_at) return "done";
+  const started = claim.started_at ? Date.parse(claim.started_at) : NaN;
+  // Unknown start → treat as stale rather than blocking the profile all week.
+  return now.getTime() - started < ABANDONED_CLAIM_MS ? "running" : "abandoned";
+}
+
+/**
  * How many leads this profile may get: min(weekly_target, cap − already created
  * this week across ALL reps in the workspace). Never negative.
  */

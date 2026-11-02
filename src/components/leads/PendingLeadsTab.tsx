@@ -625,7 +625,9 @@ export default function PendingLeadsTab({
     </div>
   );
 
-  const scoutSection = scoutEnabled && scoutRows.length > 0 && workspaceId && (
+  // Mounted whenever Scout is on (it renders nothing when empty), so the last
+  // dismissal's optional reason chips survive the reload that empties scoutRows.
+  const scoutSection = scoutEnabled && workspaceId && (
     <ScoutBatches
       rows={scoutRows}
       workspaceId={workspaceId}
@@ -636,19 +638,24 @@ export default function PendingLeadsTab({
     />
   );
 
-  if (candidates.length === 0 && !scoutSection) {
+  if (candidates.length === 0 && scoutRows.length === 0) {
+    // Same <><div>{scoutSection} shape as the main return, so React keeps
+    // ScoutBatches (and its dismissed-row state) mounted across the switch.
     return (
-      <div className="space-y-4">
-        {headerBar}
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <Inbox className="h-10 w-10 text-muted-foreground mb-3" />
-          <p className="text-foreground font-medium">Nothing pending</p>
-          <p className="text-muted-foreground text-sm mt-1">
-            New prospects you email will show up here.
-          </p>
+      <>
+        <div className="space-y-4">
+          {scoutSection}
+          {headerBar}
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Inbox className="h-10 w-10 text-muted-foreground mb-3" />
+            <p className="text-foreground font-medium">Nothing pending</p>
+            <p className="text-muted-foreground text-sm mt-1">
+              New prospects you email will show up here.
+            </p>
+          </div>
         </div>
         <DismissedListsDialog open={showDismissedLists} onOpenChange={setShowDismissedLists} />
-      </div>
+      </>
     );
   }
 

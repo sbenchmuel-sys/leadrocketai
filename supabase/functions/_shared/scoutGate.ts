@@ -9,6 +9,7 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertWorkspaceMembership, resolveUser } from "./authz.ts";
+import { normalizeEmail } from "./leadCandidateDetection.ts";
 import { normalizeDomain } from "./prospectProviders.ts";
 import type { ScoutFilterContext } from "./scoutFilters.ts";
 
@@ -130,6 +131,16 @@ export async function loadPreFilterContext(
 const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /**
+ * PostgREST or() matching every address with the same normalizeEmail identity
+ * as `email` (case-insensitive bare address + any "+tag" alias of it), so the
+ * fetch sees every row filterScoutCandidates would treat as the same person.
+ */
+export function emailIdentityOr(col: string, email: string): string {
+  const [local, domain = ""] = normalizeEmail(email).split("@").map((s) => likeEscape(s).replace(/[,()*]/g, ""));
+  return `${col}.ilike.${local}@${domain},${col}.ilike.${local}+*@${domain}`;
+}
+
+/**
  * The FULL filter context for one enriched person: leads matching the email,
  * the LinkedIn profile or the company/email domain (for the name+domain rule),
  * unsubscribed among them, suppression + dismiss lists for that email/domain.
@@ -145,7 +156,7 @@ export async function loadEnrichFilterContext(
   const none = Promise.resolve({ data: [] });
   const leadSel = "email, linkedin_url, name, unsubscribed";
   const [byEmail, byLinkedin, byDomain, sup, disEmail, disDomain, internal] = await Promise.all([
-    admin.from("leads").select(leadSel).eq("workspace_id", workspaceId).ilike("email", likeEscape(q.email)),
+    admin.from("leads").select(leadSel).eq("workspace_id", workspaceId).or(emailIdentityOr("email", q.email)),
     slug
       ? admin.from("leads").select(leadSel).eq("workspace_id", workspaceId).ilike("linkedin_url", `%/in/${likeEscape(slug)}%`)
       : none,
@@ -154,8 +165,8 @@ export async function loadEnrichFilterContext(
       .or(q.domains.map((d) => `email.ilike.*@${d.replace(/[,()*]/g, "")}`).join(",") || "email.is.null")
       .limit(1000),
     admin.from("campaign_suppression_list").select("kind, value").eq("workspace_id", workspaceId)
-      .or([`value.ilike.${likeEscape(q.email).replace(/[,()]/g, "")}`, domainsIlike("value", domains)].filter(Boolean).join(",")),
-    admin.from("workspace_dismissed_emails").select("email").eq("workspace_id", workspaceId).ilike("email", likeEscape(q.email)),
+      .or([emailIdentityOr("value", q.email), domainsIlike("value", domains)].filter(Boolean).join(",")),
+    admin.from("workspace_dismissed_emails").select("email").eq("workspace_id", workspaceId).or(emailIdentityOr("email", q.email)),
     domains.length
       ? admin.from("workspace_dismissed_domains").select("domain").eq("workspace_id", workspaceId).or(domainsIlike("domain", domains))
       : none,

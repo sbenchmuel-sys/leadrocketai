@@ -19,7 +19,8 @@
 //   6. profile.auto_approve → hand the batch to scout-enrich (service role).
 // Also returns scout rows stuck mid-enrichment (claimed > 30 min, no lead) to pending.
 // Fail closed per profile: one bad profile never blocks the others. A failed
-// attempt with nothing inserted releases the week's claim (max 3 tries/week).
+// attempt with nothing inserted releases the week's claim (max 3 tries/week);
+// a claim left unfinished > 2h (process died) is recovered the same way.
 // Nothing here emails, texts or enrolls anyone.
 // No APOLLO_API_KEY → "scout: no provider key, skipping" (200).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -31,7 +32,7 @@ import { countResolvedBatches } from "../_shared/scoutEnrich.ts";
 import { clampProfile, toApolloFilters } from "../_shared/scoutProfile.ts";
 import {
   allocate, canAttempt, failedSlotKey, isSlotReached, localClock, MAX_SEARCH_PAGES, parseRankPicks,
-  searchGoal, weekKey, weekStartIso,
+  searchGoal, weekClaimState, weekKey, weekStartIso,
 } from "../_shared/scoutWeekly.ts";
 
 const cors = {
@@ -147,11 +148,33 @@ async function runProfile(
 ): Promise<Record<string, unknown> & { attempted: boolean }> {
   const week = weekKey(clock);
   const { data: prior, error: priorErr } = await admin
-    .from("scout_runs").select("slot_key")
+    .from("scout_runs").select("id, slot_key, started_at, finished_at")
     .eq("profile_id", p.id).eq("kind", "weekly").like("slot_key", `${week}%`);
   if (priorErr) throw new Error(`prior runs: ${priorErr.message}`);
-  const keys = ((prior ?? []) as Array<{ slot_key: string }>).map((r) => r.slot_key);
-  if (keys.includes(week)) return { attempted: false, skipped: "done_this_week" };
+  const priorRows = (prior ?? []) as Array<{ id: string; slot_key: string; started_at: string; finished_at: string | null }>;
+  const keys = priorRows.map((r) => r.slot_key);
+  const claim = priorRows.find((r) => r.slot_key === week);
+  const state = weekClaimState(claim, now);
+  if (state === "done") return { attempted: false, skipped: "done_this_week" };
+  if (state === "running") return { attempted: false, skipped: "claimed_elsewhere" };
+  if (claim && state === "abandoned") {
+    // The process died after claiming. Candidates already inserted = delivered.
+    // ponytail: such a batch skips auto-approve; the rep reviews it by hand.
+    const { count, error: kErr } = await admin.from("lead_candidates").select("id", { count: "exact", head: true })
+      .eq("scout_batch_id", claim.id).eq("workspace_id", p.workspace_id);
+    if (kErr) throw new Error(`abandoned claim count: ${kErr.message}`);
+    // Conditional on still-unfinished week key: only one concurrent invocation wins.
+    const { data: won, error: rErr } = await admin.from("scout_runs")
+      .update({
+        finished_at: new Date().toISOString(),
+        error: "abandoned",
+        ...(count ? { candidates_kept: count } : { slot_key: failedSlotKey(week, claim.id) }),
+      })
+      .eq("id", claim.id).eq("slot_key", week).is("finished_at", null).select("id");
+    if (rErr) throw new Error(`abandoned claim release: ${rErr.message}`);
+    if (count || !won?.length) return { attempted: false, skipped: count ? "done_this_week" : "claimed_elsewhere" };
+    keys.push(failedSlotKey(week, claim.id));
+  }
   if (!canAttempt(keys.filter((k) => k.startsWith(`${week}:failed:`)).length)) {
     return { attempted: false, skipped: "attempts_exhausted" };
   }
