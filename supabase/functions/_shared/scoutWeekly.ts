@@ -249,6 +249,8 @@ export function applyLearning(base: ScoutProfile, raw: unknown): { profile: Scou
   const learned = clampProfile(r.profile, base.anchor_lead_ids);
   const profile: ScoutProfile = { ...base };
   for (const f of LEARNABLE_FIELDS) if (learned[f].length) profile[f] = learned[f];
+  // Exclusions only grow: dropping one the rep set would widen the search. Rep's first, re-clamped to the cap.
+  profile.exclusions = clampProfile({ ...profile, exclusions: [...new Set([...base.exclusions, ...learned.exclusions])] }, base.anchor_lead_ids).exclusions;
   const note = typeof r.note === "string" ? r.note.replace(/\s+/g, " ").trim().slice(0, 160) : "";
   return { profile, note };
 }

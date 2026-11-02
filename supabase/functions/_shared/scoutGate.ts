@@ -268,7 +268,11 @@ export async function scoutCreditCeilingHit(admin: AdminClient, source: string):
   const used = await monthCreditsUsed(admin, new Date());
   if (!creditCeilingReached(ceiling, used)) return false;
   console.warn(`scout: monthly credit ceiling reached (${used ?? "unknown"}/${ceiling}), pausing ${source}`);
-  // ponytail: one alert per blocked invocation (hourly cron + each approve click while paused).
+  // At most one alert per source per 24h, so the hourly cron doesn't log 24 a day while paused.
+  const { data: recent } = await admin.from("cron_run_log").select("id").eq("job_name", "volume_alert")
+    .eq("metadata->>scope", "scout_credit_ceiling").eq("metadata->>source", source)
+    .gte("completed_at", new Date(Date.now() - 86_400_000).toISOString()).limit(1);
+  if (recent?.length) return true;
   const { error } = await admin.from("cron_run_log").insert({
     job_name: "volume_alert",
     request_id: crypto.randomUUID(),

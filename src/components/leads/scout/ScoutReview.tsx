@@ -110,11 +110,12 @@ export function scoutNudges<T extends { scout_batch_id: string | null; created_a
     .map(([batchId, items]) => ({ batchId, count: items.length }));
 }
 
-async function enrich(workspaceId: string, ids: string[]): Promise<EnrichResult | null> {
+async function enrich(workspaceId: string, ids: string[]): Promise<EnrichResult | "limit" | null> {
   try {
     const { data, error } = await supabase.functions.invoke("scout-enrich", {
       body: { workspace_id: workspaceId, candidate_ids: ids },
     });
+    if (data?.reason === "credit_ceiling") return "limit";
     return error || !data?.ok ? null : (data as EnrichResult);
   } catch {
     return null;
@@ -183,6 +184,10 @@ export function ScoutBatches({
     mark(ids, true);
     const res = await enrich(workspaceId, ids);
     mark(ids, false);
+    if (res === "limit") {
+      toast.error("Lead Scout has reached this month's limit. Adding leads resumes next month.");
+      return;
+    }
     if (!res) {
       toast.error("Couldn't add those leads. Please try again.");
       return;

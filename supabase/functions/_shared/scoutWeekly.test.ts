@@ -161,6 +161,12 @@ Deno.test("applyLearning: only learnable fields change, re-clamped, never emptie
   assertEquals(note, "Leaning toward smaller companies.");
 });
 
+Deno.test("applyLearning: the rep's exclusions are never dropped, only added to", () => {
+  const base = { ...BASE, exclusions: ["competitors", "banks"] };
+  assertEquals(applyLearning(base, { profile: { exclusions: ["agencies", "banks"] } }).profile.exclusions, ["competitors", "banks", "agencies"]);
+  assertEquals(applyLearning(base, { profile: { exclusions: [] } }).profile.exclusions, ["competitors", "banks"]);
+});
+
 Deno.test("applyLearning: malformed AI output → unchanged profile, no note (fail open)", () => {
   for (const raw of [null, {}, { profile: "x" }, { note: "hi" }, "junk"]) {
     assertEquals(applyLearning(BASE, raw), { profile: BASE, note: "" });
