@@ -40,10 +40,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
+    // User whose profile is loaded (or loading). supabase-js re-emits SIGNED_IN
+    // every time the tab becomes visible again (_recoverAndRefresh) — treating
+    // that as a new sign-in flipped isLoading, which unmounted the whole app to a
+    // spinner, refetched everything, and after 10s showed AuthStalledCard.
+    let loadedUserId: string | null = null;
+
     const loadProfileForUser = async () => {
       try {
-        await createProfileIfMissing();
-        const prof = await getCurrentProfile();
+        // Read first; only create when missing (saves a getUser + select per load).
+        const prof = await getCurrentProfile().catch(async (err) => {
+          if ((err as { code?: string })?.code !== "PGRST116") throw err; // PGRST116 = no row
+          await createProfileIfMissing();
+          return getCurrentProfile();
+        });
         if (isMounted) setProfile({ onboarding_done: prof.onboarding_done, role: prof.role });
       } catch (err) {
         console.error("[AuthContext] Failed to load profile:", err);
@@ -60,9 +70,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ?? null);
 
       if (!session?.user) {
+        loadedUserId = null;
         setProfile(null);
         setIsLoading(false);
-      } else if (event === "SIGNED_IN") {
+      } else if (event === "SIGNED_IN" && session.user.id !== loadedUserId) {
+        loadedUserId = session.user.id;
         // New sign-in: set loading and fetch profile via setTimeout to avoid
         // Supabase client deadlock (auth state change callback must return first)
         setIsLoading(true);
@@ -83,6 +95,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(session);
         setUser(session?.user ?? null);
         if (session?.user) {
+          if (session.user.id === loadedUserId) return; // SIGNED_IN already loading it
+          loadedUserId = session.user.id;
           await loadProfileForUser();
         } else {
           setProfile(null);
