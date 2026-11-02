@@ -7,6 +7,8 @@
 //   canAttempt        at most MAX_WEEKLY_ATTEMPTS failed tries per week
 //   allocate          workspace scout_weekly_cap shared across reps
 //   parseRankPicks    validate the AI ranking (ids, fit_label, anchors)
+//   buildLearningInput / applyLearning   the bounded weekly learning step
+//   parseCreditCeiling / creditCeilingReached   SCOUT_MONTHLY_CREDIT_CEILING
 //
 // delivery_dow (0=Sunday) / delivery_hour are stored in the WORKSPACE timezone
 // (workspaces.timezone; Unit 2 shows them in the same tz). The week starts
@@ -14,6 +16,8 @@
 // enforced by the unique (profile_id, slot_key) index on scout_runs.
 // Pure: no Deno, no clients. Tested in scoutWeekly.test.ts.
 // ============================================================
+
+import { clampProfile, type ScoutProfile } from "./scoutProfile.ts";
 
 /** Same fallback pilot-reports uses when workspaces.timezone is NULL/invalid. */
 export const DEFAULT_TZ = "America/New_York";
@@ -181,4 +185,96 @@ export function parseRankPicks<T extends { provider_person_id: string }>(
     });
   }
   return out;
+}
+
+// ── Learning loop (Unit 4) ──────────────────────────────────────────────────
+//
+// Before a batch, the last LEARN_WINDOW_DAYS of this profile's resolved scout
+// rows (dismiss reasons + which approved leads replied or met) go to ai_task
+// scout_learn. Its suggested profile is re-clamped and only LEARNABLE_FIELDS
+// may change — region (locations) and anchor leads stay exactly as the rep set
+// them, and a field is never emptied (that would widen the search to anyone).
+
+export const LEARN_WINDOW_DAYS = 28;
+export const LEARNABLE_FIELDS = ["titles", "seniorities", "industries", "employee_ranges", "keywords", "exclusions"] as const;
+const LEARN_LIST_MAX = 40;
+
+export interface LearnCandidate {
+  status: string;
+  dismiss_reason: string | null;
+  job_title: string | null;
+  company_size: string | null;
+  location: string | null;
+  resolved_lead_id: string | null;
+}
+
+export interface LearningInput {
+  dismissed: Array<{ reason: string; title: string | null; company_size: string | null; location: string | null }>;
+  engaged: Array<{ title: string | null; company_size: string | null; location: string | null; replied: boolean; meeting: boolean }>;
+  approved_without_reply: number;
+}
+
+/** Resolved rows + engaged lead ids → the AI input, or null when there's nothing to learn from. */
+export function buildLearningInput(
+  rows: LearnCandidate[],
+  repliedLeadIds: Iterable<string>,
+  meetingLeadIds: Iterable<string>,
+): LearningInput | null {
+  const replied = new Set(repliedLeadIds);
+  const met = new Set(meetingLeadIds);
+  const out: LearningInput = { dismissed: [], engaged: [], approved_without_reply: 0 };
+  for (const r of rows) {
+    const who = { title: r.job_title, company_size: r.company_size, location: r.location };
+    if (r.status === "dismissed" && r.dismiss_reason) {
+      if (out.dismissed.length < LEARN_LIST_MAX) out.dismissed.push({ reason: r.dismiss_reason, ...who });
+    } else if (r.resolved_lead_id && (replied.has(r.resolved_lead_id) || met.has(r.resolved_lead_id))) {
+      if (out.engaged.length < LEARN_LIST_MAX) {
+        out.engaged.push({ ...who, replied: replied.has(r.resolved_lead_id), meeting: met.has(r.resolved_lead_id) });
+      }
+    } else if (r.resolved_lead_id) {
+      out.approved_without_reply++;
+    }
+  }
+  return out.dismissed.length || out.engaged.length ? out : null;
+}
+
+/**
+ * AI `{ profile, note }` → the profile to search with this week + a one-line
+ * "What I learned". Anything malformed → the base profile unchanged, no note.
+ */
+export function applyLearning(base: ScoutProfile, raw: unknown): { profile: ScoutProfile; note: string } {
+  // deno-lint-ignore no-explicit-any
+  const r = raw as any;
+  if (!r || typeof r !== "object" || !r.profile || typeof r.profile !== "object") return { profile: base, note: "" };
+  const learned = clampProfile(r.profile, base.anchor_lead_ids);
+  const profile: ScoutProfile = { ...base };
+  for (const f of LEARNABLE_FIELDS) if (learned[f].length) profile[f] = learned[f];
+  // Exclusions only grow: dropping one the rep set would widen the search. Rep's first, re-clamped to the cap.
+  profile.exclusions = clampProfile({ ...profile, exclusions: [...new Set([...base.exclusions, ...learned.exclusions])] }, base.anchor_lead_ids).exclusions;
+  const note = typeof r.note === "string" ? r.note.replace(/\s+/g, " ").trim().slice(0, 160) : "";
+  return { profile, note };
+}
+
+// ── Monthly credit ceiling (Unit 4) ─────────────────────────────────────────
+
+/**
+ * SCOUT_MONTHLY_CREDIT_CEILING → number, or null = no limit (unset/blank).
+ * A set-but-unparseable value counts as 0 (pause): this guards real money, so a
+ * typo fails closed and shows up as a volume_alert instead of draining credits.
+ */
+export function parseCreditCeiling(env: string | null | undefined): number | null {
+  if (env === undefined || env === null || env.trim() === "") return null;
+  const n = Number(env.trim());
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** Pause when this month's credits (all workspaces) ≥ ceiling. Unknown usage (read failed) = pause. */
+export function creditCeilingReached(ceiling: number | null, usedThisMonth: number | null): boolean {
+  if (ceiling === null) return false;
+  return usedThisMonth === null || usedThisMonth >= ceiling;
+}
+
+/** First instant of the current UTC month. */
+export function monthStartIso(now: Date): string {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }

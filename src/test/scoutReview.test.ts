@@ -1,10 +1,11 @@
-// Lead Scout batch review helpers (pure): toast copy, "Week of" header, batch grouping.
+// Lead Scout batch review helpers (pure): toast copy, "Week of" header, batch grouping, Queue nudge.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({ supabase: {} }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: null }) }));
+vi.mock("@/contexts/WorkspaceContext", () => ({ useWorkspace: () => ({ workspaceId: null }) }));
 
-import { groupScoutBatches, scoutToastText, weekOfLabel } from "@/components/leads/scout/ScoutReview";
+import { groupScoutBatches, scoutNudges, scoutToastText, weekOfLabel } from "@/components/leads/scout/ScoutReview";
 
 describe("scoutToastText", () => {
   it("matches the UX copy", () => {
@@ -35,5 +36,28 @@ describe("groupScoutBatches", () => {
     ];
     const g = groupScoutBatches(rows);
     expect(g.map(([k, items]) => [k, items.map((r) => r.id)])).toEqual([["B", ["b1"]], ["A", ["a1", "a2"]]]);
+  });
+});
+
+describe("scoutNudges (Queue item per pending batch)", () => {
+  const rows = [
+    { scout_batch_id: "old", created_at: "2026-11-02T12:00:00Z" },
+    { scout_batch_id: "old", created_at: "2026-11-02T12:00:01Z" },
+    { scout_batch_id: "new", created_at: "2026-11-09T12:00:00Z" },
+    { scout_batch_id: null, created_at: "2026-11-09T12:00:00Z" },
+  ];
+  const now = Date.parse("2026-11-09T13:00:00Z");
+  it("one item per batch, newest first, with the batch's count; unbatched rows ignored", () => {
+    expect(scoutNudges(true, rows, {}, now)).toEqual([{ batchId: "new", count: 1 }, { batchId: "old", count: 2 }]);
+  });
+  it("hidden entirely when Scout is off", () => {
+    expect(scoutNudges(false, rows, {}, now)).toEqual([]);
+  });
+  it("a snoozed batch hides until the snooze ends", () => {
+    expect(scoutNudges(true, rows, { old: now + 1 }, now)).toEqual([{ batchId: "new", count: 1 }]);
+    expect(scoutNudges(true, rows, { old: now - 1 }, now)).toHaveLength(2);
+  });
+  it("resolved batch (no pending rows) = no item", () => {
+    expect(scoutNudges(true, [], {}, now)).toEqual([]);
   });
 });

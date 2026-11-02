@@ -59,6 +59,7 @@ import { QueueCard } from "@/components/queue/QueueCard";
 import { OutreachToday } from "@/components/queue/OutreachToday";
 import { OutreachDigest } from "@/components/queue/OutreachDigest";
 import { UpcomingTouchesStrip } from "@/components/queue/UpcomingTouchesStrip";
+import { ScoutQueueNudge } from "@/components/leads/scout/ScoutReview";
 import {
   fetchOutreachQueue,
   reconcileCompleted,
@@ -455,6 +456,9 @@ export default function Queue() {
           </p>
         </div>
       </div>
+
+      {/* Lead Scout: one item per pending batch (renders nothing when Scout is off). */}
+      <ScoutQueueNudge />
 
       {/* Tab strip (Replied / Follow up / Outreach) */}
       <QueueChips active={tab} counts={tabCounts} onSelect={setTab} />

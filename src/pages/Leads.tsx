@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createLead, deleteLead, type CreateLeadInput } from "@/lib/supabaseQueries";
 import { getDashboardMetrics } from "@/lib/dashboardMetricsService";
 import { fetchWorkspaceCampaigns } from "@/lib/campaignQueries";
@@ -72,6 +72,7 @@ import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useMailSync } from "@/hooks/useMailSync";
 import { LeadScoutEntryCard, LeadScoutSheet, useLeadScout } from "@/components/leads/scout/LeadScoutPanel";
+import { StartOutreachButton } from "@/components/leads/scout/StartOutreach";
 
 type ViewMode = "todo" | "all";
 type Chip = "all" | "new" | "automation" | "scout";
@@ -95,7 +96,9 @@ export default function Leads() {
   const scout = useLeadScout();
 
   const [view, setView] = useState<ViewMode>("all");
-  const [subTab, setSubTab] = useState<"leads" | "pending">("leads");
+  // ?tab=pending&batch=<id> comes from the Queue's Lead Scout nudge.
+  const [searchParams] = useSearchParams();
+  const [subTab, setSubTab] = useState<"leads" | "pending">(searchParams.get("tab") === "pending" ? "pending" : "leads");
 
   const [leads, setLeads] = useState<EnrichedLead[]>([]);
   // campaign_id → campaign name, for the small cadence tag under the lead row.
@@ -604,6 +607,10 @@ export default function Leads() {
                   {selectedIds.size} selected
                 </span>
                 <div className="flex items-center gap-2">
+                  {/* Lead Scout: an all-Scout selection also gets the suggested review-mode outreach. */}
+                  {leads.some((l) => selectedIds.has(l.id)) && leads.every((l) => !selectedIds.has(l.id) || isScoutLead(l)) && (
+                    <StartOutreachButton leadIds={Array.from(selectedIds)} onEnrolled={() => { setSelectedIds(new Set()); void loadLeads(); }} />
+                  )}
                   <Button size="sm" disabled={bulkBusy} onClick={() => setAddToAutomationOpen(true)}>
                     Add to outreach
                   </Button>
@@ -732,7 +739,7 @@ export default function Leads() {
           </TabsContent>
 
           <TabsContent value="pending">
-            <PendingLeadsTab onApproved={loadLeads} scoutEnabled={scout.enabled} />
+            <PendingLeadsTab onApproved={loadLeads} scoutEnabled={scout.enabled} scoutBatchId={searchParams.get("batch")} />
           </TabsContent>
         </Tabs>
       )}

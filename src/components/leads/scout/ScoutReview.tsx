@@ -7,7 +7,8 @@
 // must run the opt-out filters again once the email is known.
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { format, parseISO } from "date-fns";
-import { Check, Linkedin, X } from "lucide-react";
+import { Check, Linkedin, MoreVertical, Target, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,6 +20,10 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DOWNVOTE_REASONS } from "@shared/scoutProfile";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useLeadScout } from "./LeadScoutPanel";
 
 // ponytail: scout columns/tables aren't in the generated types.ts yet (prod
 // hasn't applied the Lead Scout migrations). Untyped client + narrow row types
@@ -45,6 +50,8 @@ export const SCOUT_CANDIDATE_COLS =
 interface BatchMeta {
   slot_key: string | null;
   profile_id: string | null;
+  /** Unit 4 learning step's one line; absent on DBs without the column. */
+  learned_note?: string | null;
 }
 interface ProfileMeta {
   id: string;
@@ -87,11 +94,28 @@ export function groupScoutBatches<T extends { scout_batch_id: string | null; cre
   return [...map.entries()].sort((a, b) => b[1][0].created_at.localeCompare(a[1][0].created_at));
 }
 
-async function enrich(workspaceId: string, ids: string[]): Promise<EnrichResult | null> {
+/**
+ * Queue nudge items: one per pending batch (newest first), none when Scout is
+ * off, minus batches snoozed until after `nowMs`.
+ */
+export function scoutNudges<T extends { scout_batch_id: string | null; created_at: string }>(
+  enabled: boolean,
+  rows: T[],
+  snoozedUntil: Record<string, number>,
+  nowMs: number,
+): Array<{ batchId: string; count: number }> {
+  if (!enabled) return [];
+  return groupScoutBatches(rows)
+    .filter(([id]) => id !== "none" && !((snoozedUntil[id] ?? 0) > nowMs))
+    .map(([batchId, items]) => ({ batchId, count: items.length }));
+}
+
+async function enrich(workspaceId: string, ids: string[]): Promise<EnrichResult | "limit" | null> {
   try {
     const { data, error } = await supabase.functions.invoke("scout-enrich", {
       body: { workspace_id: workspaceId, candidate_ids: ids },
     });
+    if (data?.reason === "credit_ceiling") return "limit";
     return error || !data?.ok ? null : (data as EnrichResult);
   } catch {
     return null;
@@ -101,12 +125,15 @@ async function enrich(workspaceId: string, ids: string[]): Promise<EnrichResult 
 const offerKey = (profileId: string) => `scoutAutoOfferHidden:${profileId}`;
 
 export function ScoutBatches({
-  rows,
+  rows: allRows,
   workspaceId,
   onChanged,
+  onlyBatchId,
 }: {
   rows: ScoutCandidate[];
   workspaceId: string;
+  /** From the Queue nudge (?batch=): show just that batch while it still has rows. */
+  onlyBatchId?: string | null;
   /** Rows were approved/dismissed: reload the list (and the lead list). */
   onChanged: (approved: boolean) => void;
 }) {
@@ -119,13 +146,20 @@ export function ScoutBatches({
   const [dismissed, setDismissed] = useState<Array<ScoutCandidate & { reason: string | null }>>([]);
   const [offerHidden, setOfferHidden] = useState<Set<string>>(new Set());
 
+  const rows = useMemo(
+    () => (onlyBatchId && allRows.some((r) => r.scout_batch_id === onlyBatchId)
+      ? allRows.filter((r) => r.scout_batch_id === onlyBatchId)
+      : allRows),
+    [allRows, onlyBatchId],
+  );
   const grouped = useMemo(() => groupScoutBatches(rows), [rows]);
   const batchIds = useMemo(() => grouped.map(([id]) => id).filter((id) => id !== "none"), [grouped]);
 
   const loadMeta = useCallback(async () => {
     if (!batchIds.length) return;
     try {
-      const { data: runs } = await db.from("scout_runs").select("id, slot_key, profile_id").in("id", batchIds);
+      // "*" so a DB without the newer learned_note column still loads the header.
+      const { data: runs } = await db.from("scout_runs").select("*").in("id", batchIds);
       const meta = Object.fromEntries(((runs ?? []) as Array<BatchMeta & { id: string }>).map((r) => [r.id, r]));
       setBatches(meta);
       const pids = [...new Set(Object.values(meta).map((m) => m.profile_id).filter((x): x is string => !!x))];
@@ -150,6 +184,10 @@ export function ScoutBatches({
     mark(ids, true);
     const res = await enrich(workspaceId, ids);
     mark(ids, false);
+    if (res === "limit") {
+      toast.error("Lead Scout has reached this month's limit. Adding leads resumes next month.");
+      return;
+    }
     if (!res) {
       toast.error("Couldn't add those leads. Please try again.");
       return;
@@ -219,6 +257,9 @@ export function ScoutBatches({
                 </div>
                 {profile?.profile_sentence && (
                   <p className="truncate text-sm text-muted-foreground">{profile.profile_sentence}</p>
+                )}
+                {meta?.learned_note && (
+                  <p className="text-sm text-muted-foreground">What I learned: {meta.learned_note}</p>
                 )}
               </div>
               <Button disabled={anyBusy} onClick={() => setConfirm({ batchId, ids })}>
@@ -373,5 +414,79 @@ export function ScoutWhyCard({ leadId, sourceType }: { leadId: string; sourceTyp
         <p className="line-clamp-1 text-muted-foreground">Found by DrivePilot{found}{why.profile_sentence ? ` · ${why.profile_sentence}` : ""}</p>
       </CardContent>
     </Card>
+  );
+}
+
+// ── Queue: "N new leads ready for you" ──────────────────────────────────────
+
+const SNOOZE_KEY = "scoutNudgeSnoozes";
+// ponytail: the Queue's lead snooze writes leads.action_dismissed_at, which a
+// batch doesn't have, so a batch snooze is remembered per browser. Upgrade: a
+// snoozed_until column on scout_runs if reps ask for it to follow them.
+function readSnoozes(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}") ?? {}; } catch { return {}; }
+}
+
+/** One Queue item per pending Scout batch owned by this rep. Hidden when Scout is off. */
+export function ScoutQueueNudge() {
+  const { user } = useAuth();
+  const scout = useLeadScout();
+  const [rows, setRows] = useState<Array<{ scout_batch_id: string | null; created_at: string }>>([]);
+  const [snoozed, setSnoozed] = useState<Record<string, number>>(readSnoozes);
+
+  useEffect(() => {
+    setRows([]);
+    if (!scout.enabled || !scout.workspaceId || !user) return;
+    let live = true;
+    void (async () => {
+      try {
+        const { data, error } = await db.from("lead_candidates").select("scout_batch_id, created_at")
+          .eq("workspace_id", scout.workspaceId).eq("source", "ai_scout").eq("status", "pending")
+          .eq("owner_user_id", user.id).order("created_at", { ascending: true }).limit(500);
+        if (live && !error) setRows(data ?? []);
+      } catch { /* any error = no nudge */ }
+    })();
+    return () => { live = false; };
+  }, [scout.enabled, scout.workspaceId, user]);
+
+  const snooze = (batchId: string, days: 3 | 5 | 7) => {
+    const next = { ...snoozed, [batchId]: Date.now() + days * 86_400_000 };
+    setSnoozed(next);
+    try { localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); } catch { /* this visit only */ }
+    toast.success(`Snoozed for ${days} days`);
+  };
+
+  const nudges = scoutNudges(scout.enabled, rows, snoozed, Date.now());
+  if (!nudges.length) return null;
+  return (
+    <div className="space-y-2">
+      {nudges.map((n) => (
+        <Card key={n.batchId}>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Target className="h-4 w-4 text-primary" aria-hidden />
+              {n.count} new lead{n.count === 1 ? "" : "s"} ready for you — 2 min to review
+            </div>
+            <div className="flex items-center gap-2">
+              <Button asChild size="sm">
+                <Link to={`/app/leads?tab=pending&batch=${encodeURIComponent(n.batchId)}`}>Review leads</Link>
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" size="sm" variant="outline" className="h-8 text-xs">
+                    Snooze <MoreVertical className="ml-1 h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => snooze(n.batchId, 3)}>Snooze 3 days</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => snooze(n.batchId, 5)}>Snooze 5 days</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => snooze(n.batchId, 7)}>Snooze 7 days</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }

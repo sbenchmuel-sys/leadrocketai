@@ -12,6 +12,7 @@ import { assertWorkspaceMembership, resolveUser } from "./authz.ts";
 import { normalizeEmail } from "./leadCandidateDetection.ts";
 import { normalizeDomain } from "./prospectProviders.ts";
 import type { ScoutFilterContext } from "./scoutFilters.ts";
+import { creditCeilingReached, monthStartIso, parseCreditCeiling } from "./scoutWeekly.ts";
 
 // deno-lint-ignore no-explicit-any
 export type AdminClient = any; // ponytail: no generated Database type in _shared; scout tables aren't in types.ts yet.
@@ -236,4 +237,51 @@ export async function callScoutAi(task: string, payload: unknown): Promise<Recor
     console.error(`[scout] ${task} call failed:`, e instanceof Error ? e.message : e);
     return null;
   }
+}
+
+/** Apollo + Lusha credits logged in scout_runs this UTC month, all workspaces. null = unreadable. */
+async function monthCreditsUsed(admin: AdminClient, now: Date): Promise<number | null> {
+  // ponytail: sums client-side, 1000 rows a page, only rows that spent credits
+  // (enrich runs). Stops at 20 pages and reports "unknown" (= pause) beyond that;
+  // upgrade to a SQL sum RPC if a month ever has >20k paid runs.
+  let total = 0;
+  for (let page = 0; page < 20; page++) {
+    const { data, error } = await admin.from("scout_runs").select("apollo_credits, lusha_credits")
+      .gte("started_at", monthStartIso(now)).or("apollo_credits.gt.0,lusha_credits.gt.0")
+      .order("id").range(page * 1000, page * 1000 + 999);
+    if (error) return null;
+    const rows = (data ?? []) as Array<{ apollo_credits: number | null; lusha_credits: number | null }>;
+    for (const r of rows) total += (r.apollo_credits ?? 0) + (r.lusha_credits ?? 0);
+    if (rows.length < 1000) return total;
+  }
+  return null;
+}
+
+/**
+ * SCOUT_MONTHLY_CREDIT_CEILING gate for anything that calls Apollo/Lusha.
+ * Reached → true and one volume_alert row in cron_run_log (same shape as the
+ * automation-executor tripwire). Unset = no limit (never reads the DB).
+ */
+export async function scoutCreditCeilingHit(admin: AdminClient, source: string): Promise<boolean> {
+  const ceiling = parseCreditCeiling(Deno.env.get("SCOUT_MONTHLY_CREDIT_CEILING"));
+  if (ceiling === null) return false;
+  const used = await monthCreditsUsed(admin, new Date());
+  if (!creditCeilingReached(ceiling, used)) return false;
+  console.warn(`scout: monthly credit ceiling reached (${used ?? "unknown"}/${ceiling}), pausing ${source}`);
+  // At most one alert per source per 24h, so the hourly cron doesn't log 24 a day while paused.
+  const { data: recent } = await admin.from("cron_run_log").select("id").eq("job_name", "volume_alert")
+    .eq("metadata->>scope", "scout_credit_ceiling").eq("metadata->>source", source)
+    .gte("completed_at", new Date(Date.now() - 86_400_000).toISOString()).limit(1);
+  if (recent?.length) return true;
+  const { error } = await admin.from("cron_run_log").insert({
+    job_name: "volume_alert",
+    request_id: crypto.randomUUID(),
+    status: "ok",
+    status_code: 200,
+    completed_at: new Date().toISOString(),
+    duration_ms: 0,
+    metadata: { scope: "scout_credit_ceiling", source, credits_this_month: used, ceiling },
+  });
+  if (error) console.warn("[scout] volume_alert log failed:", error.message);
+  return true;
 }

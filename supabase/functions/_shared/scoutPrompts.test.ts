@@ -4,8 +4,8 @@
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import { isScoutTask, parseJsonObject, runScoutTask } from "./scoutPrompts.ts";
 
-Deno.test("isScoutTask: only the four scout tasks", () => {
-  assertEquals(["scout_build_profile", "scout_pick_samples", "scout_refine_profile", "scout_rank_batch"].every(isScoutTask), true);
+Deno.test("isScoutTask: only the scout tasks", () => {
+  assertEquals(["scout_build_profile", "scout_pick_samples", "scout_refine_profile", "scout_rank_batch", "scout_learn"].every(isScoutTask), true);
   assertEquals(isScoutTask("toString"), false);
   assertEquals(isScoutTask("reply_to_thread"), false);
 });

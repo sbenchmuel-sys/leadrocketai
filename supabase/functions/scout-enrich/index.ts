@@ -9,7 +9,8 @@
 // touched, and each is claimed first with a conditional UPDATE (pending →
 // approved … RETURNING) so double clicks / concurrent Approve-alls never
 // enrich (= pay for) the same person twice. Order + credit rules live in
-// _shared/scoutEnrich.ts. One scout_runs row (kind='enrich') per call with the
+// _shared/scoutEnrich.ts. SCOUT_MONTHLY_CREDIT_CEILING reached → no provider
+// calls ({ ok:false, reason:"credit_ceiling" }). One scout_runs row (kind='enrich') per call with the
 // credits spent. Leads are created with the service role; nothing is sent
 // and nobody is enrolled in a cadence.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -19,7 +20,7 @@ import {
   type BatchInfo, countResolvedBatches, type EnrichIO, normalizeEnrichIds, runEnrich, type ScoutCandidateRow,
 } from "../_shared/scoutEnrich.ts";
 import {
-  type AdminClient, loadEnrichFilterContext, openScoutRequest, readScoutSettings, scoutCors, scoutJson,
+  type AdminClient, loadEnrichFilterContext, openScoutRequest, readScoutSettings, scoutCors, scoutCreditCeilingHit, scoutJson,
 } from "../_shared/scoutGate.ts";
 
 const CANDIDATE_COLS =
@@ -60,6 +61,7 @@ Deno.serve(async (req) => {
     console.log("scout: no provider key, skipping");
     return scoutJson({ ok: false, reason: "no_provider_key" });
   }
+  if (await scoutCreditCeilingHit(admin, "scout-enrich")) return scoutJson({ ok: false, reason: "credit_ceiling" });
   const lushaKey = Deno.env.get("LUSHA_API_KEY");
 
   const startedAt = new Date().toISOString();

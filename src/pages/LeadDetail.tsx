@@ -23,6 +23,7 @@ import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceC
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ScoutWhyCard } from "@/components/leads/scout/ScoutReview";
+import { ScoutStartOutreach } from "@/components/leads/scout/StartOutreach";
 
 /** One section of the "More about this deal" sheet. */
 function DealSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -232,6 +233,7 @@ export default function LeadDetail() {
 
       {/* Lead Scout: why DrivePilot suggested this person (main column, so phones see it too). */}
       <ScoutWhyCard leadId={lead.id} sourceType={(lead as { source_type?: string | null }).source_type} />
+      <ScoutStartOutreach lead={lead} onEnrolled={loadLead} />
 
       {/* HISTORY */}
       <div className="space-y-2">
