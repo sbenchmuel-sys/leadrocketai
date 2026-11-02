@@ -23,7 +23,7 @@ export const STAGE_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_me
 // SOURCE TYPE & MOTION
 // ============================================
 
-export type SourceType = "outbound_prospecting" | "contact_form" | "gmail_inbound" | "event_lead" | "referral" | "csv_import" | "manual_entry";
+export type SourceType = "outbound_prospecting" | "contact_form" | "gmail_inbound" | "event_lead" | "referral" | "csv_import" | "manual_entry" | "ai_scout";
 
 export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
   outbound_prospecting: "Outbound Prospect",
@@ -33,6 +33,7 @@ export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
   referral: "Referral",
   csv_import: "Outbound – CSV",
   manual_entry: "Manual",
+  ai_scout: "Found by DrivePilot",
 };
 
 export const SOURCE_TYPE_COLORS: Record<SourceType, { dot: string; bg: string; text: string; bar: string }> = {
@@ -43,6 +44,7 @@ export const SOURCE_TYPE_COLORS: Record<SourceType, { dot: string; bg: string; t
   referral:             { dot: "bg-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950/40", text: "text-yellow-700 dark:text-yellow-300", bar: "bg-yellow-500" },
   csv_import:           { dot: "bg-blue-500", bg: "bg-blue-50 dark:bg-blue-950/40", text: "text-blue-700 dark:text-blue-300", bar: "bg-blue-500" },
   manual_entry:         { dot: "bg-muted-foreground", bg: "bg-muted/50", text: "text-muted-foreground", bar: "bg-muted-foreground/50" },
+  ai_scout:             { dot: "bg-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-950/40", text: "text-indigo-700 dark:text-indigo-300", bar: "bg-indigo-500" },
 };
 
 export type Motion = "outbound_prospecting" | "inbound_response" | "pre_meeting" | "post_meeting" | "closing" | "nurture" | "re_engagement" | "closed";

@@ -9,6 +9,9 @@
 // The regex mirrors the practical shape Zod's .email() accepts (already used in
 // EditLeadDialog) — deliberately not full RFC 5322 (that admits addresses no
 // real inbox uses); we want "would a mail server accept this" plus junk filters.
+//
+// Lives in _shared (pure, cross-runtime): the frontend imports it via
+// @shared/emailValidation and scout-enrich (Deno) uses the same rules.
 // ============================================================================
 
 // One @, non-empty local + domain, a dot in the domain, no whitespace.

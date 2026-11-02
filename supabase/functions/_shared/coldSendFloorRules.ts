@@ -12,7 +12,7 @@
 // Nothing here touches the network, the database, Deno, or supabase-js.
 // ============================================================================
 
-// Mirrors src/lib/emailValidation.ts isValidEmail — the validator the import +
+// Mirrors _shared/emailValidation.ts isValidEmail — the validator the import +
 // enrollment use to admit a lead. Deno can't import the frontend module, so this is
 // the established frontend/_shared duplication; KEEP IN SYNC. The floor is the LAST
 // guard before an automatic or review cold send, so it must be no weaker than the

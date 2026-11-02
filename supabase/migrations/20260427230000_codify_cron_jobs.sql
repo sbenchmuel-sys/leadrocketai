@@ -48,7 +48,8 @@ BEGIN
       'dispatch-message-cleanup',
       'dispatch-reply-suggestions',
       'dispatch-manager-analytics',
-      'dispatch-calendar-sync'
+      'dispatch-calendar-sync',
+      'cron_scout_weekly_run'
     ])
   LOOP
     PERFORM cron.unschedule(jid);
@@ -188,6 +189,22 @@ SELECT cron.schedule(
     url := 'https://ntzeiflqqluwgdfmatjh.supabase.co/functions/v1/cron-dispatcher',
     headers := '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50emVpZmxxcWx1d2dkZm1hdGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3NDE5ODgsImV4cCI6MjA4NjMxNzk4OH0.3uw7Tx3wv2EX8m82VtnY-M33K2ey4Yzhci6XnwZFPko"}'::jsonb,
     body := '{"target": "calendar-sync"}'::jsonb
+  ) AS request_id;
+  $cron$
+);
+
+-- Lead Scout weekly batches (Unit 3, 20261101130000_lead_scout_weekly_run.sql).
+-- Hourly at :05; the function picks profiles whose workspace-local delivery
+-- day/hour has arrived and no-ops unless scout_enabled + APOLLO_API_KEY.
+-- Carries X-Internal-Secret like every dispatcher job since 20260623000000.
+SELECT cron.schedule(
+  'cron_scout_weekly_run',
+  '5 * * * *',
+  $cron$
+  SELECT net.http_post(
+    url := 'https://ntzeiflqqluwgdfmatjh.supabase.co/functions/v1/cron-dispatcher',
+    headers := ('{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50emVpZmxxcWx1d2dkZm1hdGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3NDE5ODgsImV4cCI6MjA4NjMxNzk4OH0.3uw7Tx3wv2EX8m82VtnY-M33K2ey4Yzhci6XnwZFPko"}'::jsonb || jsonb_build_object('X-Internal-Secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'internal_api_secret'))),
+    body := '{"target": "scout-weekly-run"}'::jsonb
   ) AS request_id;
   $cron$
 );

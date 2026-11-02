@@ -9,6 +9,9 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertWorkspaceMembership, resolveUser } from "./authz.ts";
+import { normalizeEmail } from "./leadCandidateDetection.ts";
+import { normalizeDomain } from "./prospectProviders.ts";
+import type { ScoutFilterContext } from "./scoutFilters.ts";
 
 // deno-lint-ignore no-explicit-any
 export type AdminClient = any; // ponytail: no generated Database type in _shared; scout tables aren't in types.ts yet.
@@ -44,19 +47,152 @@ export async function openScoutRequest(req: Request): Promise<ScoutRequest | Res
   const member = await assertWorkspaceMembership(admin, body.workspace_id, user.userId);
   if (!member.ok) return scoutJson({ ok: false, error: member.error }, member.status ?? 403);
 
+  const settings = await readScoutSettings(admin, body.workspace_id);
+  if (!settings) return scoutJson({ ok: false, reason: "not_enabled" });
+
+  return { admin, userId: user.userId, workspaceId: body.workspace_id, body, settings };
+}
+
+/** Scout settings when the master switch is ON; null when off, missing, or unreadable. */
+export async function readScoutSettings(
+  admin: AdminClient,
+  workspaceId: string,
+): Promise<ScoutRequest["settings"] | null> {
   const { data, error } = await admin
     .from("workspace_automation_settings")
     .select("scout_enabled, scout_weekly_cap, scout_allow_eu")
-    .eq("workspace_id", body.workspace_id)
+    .eq("workspace_id", workspaceId)
     .maybeSingle();
-  if (error || data?.scout_enabled !== true) return scoutJson({ ok: false, reason: "not_enabled" });
+  if (error || data?.scout_enabled !== true) return null;
+  return { scout_weekly_cap: data.scout_weekly_cap ?? 0, scout_allow_eu: data.scout_allow_eu === true };
+}
 
+/** "eu.acme.com" → ["eu.acme.com", "acme.com"] (filters match parent domains too). */
+function withParents(domains: Array<string | null | undefined>): string[] {
+  const out = new Set<string>();
+  for (const d of domains) {
+    const parts = normalizeDomain(d)?.split(".") ?? [];
+    for (let i = 0; i < parts.length - 1; i++) out.add(parts.slice(i).join("."));
+  }
+  return [...out];
+}
+
+/** PostgREST or() of case-insensitive equality on domains (opt-out lists aren't guaranteed lowercase). */
+const domainsIlike = (col: string, domains: string[]) =>
+  domains.map((d) => `${col}.ilike.${d.replace(/[^a-z0-9.-]/gi, "")}`).join(",");
+
+const values = (rows: unknown, key: string): string[] =>
+  ((rows as Array<Record<string, unknown>> | null) ?? []).map((r) => r[key]).filter((v): v is string => typeof v === "string");
+
+/**
+ * Lists that can bite BEFORE enrichment (search stubs have no email, LinkedIn
+ * or real surname): suppressed / dismissed / internal domains and existing
+ * scout rows for these provider people. Targeted queries, so no 1000-row cap.
+ */
+export async function loadPreFilterContext(
+  admin: AdminClient,
+  workspaceId: string,
+  allowEu: boolean,
+  stubs: Array<{ provider: string; provider_person_id: string; company_domain: string | null }>,
+): Promise<ScoutFilterContext> {
+  const domains = withParents(stubs.map((s) => s.company_domain));
+  const ids = [...new Set(stubs.map((s) => s.provider_person_id))];
+  const none = Promise.resolve({ data: [] });
+  const [sup, dis, internal, existing] = await Promise.all([
+    domains.length
+      ? admin.from("campaign_suppression_list").select("value").eq("workspace_id", workspaceId).eq("kind", "domain")
+        .or(domainsIlike("value", domains))
+      : none,
+    domains.length
+      ? admin.from("workspace_dismissed_domains").select("domain").eq("workspace_id", workspaceId).or(domainsIlike("domain", domains))
+      : none,
+    admin.from("workspace_internal_domains").select("domain").eq("workspace_id", workspaceId),
+    ids.length
+      ? admin.from("lead_candidates").select("provider, provider_person_id").eq("workspace_id", workspaceId)
+        .eq("source", "ai_scout").in("provider_person_id", ids)
+      : none,
+  ]);
+  for (const r of [sup, dis, internal, existing]) {
+    if ((r as { error?: unknown }).error) throw new Error("scout filter: pre-filter lookup failed");
+  }
   return {
-    admin,
-    userId: user.userId,
-    workspaceId: body.workspace_id,
-    body,
-    settings: { scout_weekly_cap: data.scout_weekly_cap ?? 0, scout_allow_eu: data.scout_allow_eu === true },
+    leads: [],
+    unsubscribedEmails: [],
+    suppressedEmails: [],
+    suppressedDomains: values(sup.data, "value"),
+    dismissedEmails: [],
+    dismissedDomains: values(dis.data, "domain"),
+    internalDomains: values(internal.data, "domain"),
+    existingScoutCandidates: existing.data ?? [],
+    allowEu,
+  };
+}
+
+const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * PostgREST or() matching every address with the same normalizeEmail identity
+ * as `email` (case-insensitive bare address + any "+tag" alias of it), so the
+ * fetch sees every row filterScoutCandidates would treat as the same person.
+ */
+export function emailIdentityOr(col: string, email: string): string {
+  const [local, domain = ""] = normalizeEmail(email).split("@").map((s) => likeEscape(s).replace(/[,()*]/g, ""));
+  return `${col}.ilike.${local}@${domain},${col}.ilike.${local}+*@${domain}`;
+}
+
+/**
+ * The FULL filter context for one enriched person: leads matching the email,
+ * the LinkedIn profile or the company/email domain (for the name+domain rule),
+ * unsubscribed among them, suppression + dismiss lists for that email/domain.
+ */
+export async function loadEnrichFilterContext(
+  admin: AdminClient,
+  workspaceId: string,
+  allowEu: boolean,
+  q: { email: string; linkedin_url: string | null; domains: string[] },
+): Promise<ScoutFilterContext> {
+  const domains = withParents(q.domains);
+  const slug = q.linkedin_url?.split("/in/")[1];
+  const none = Promise.resolve({ data: [] });
+  const leadSel = "email, linkedin_url, name, unsubscribed";
+  const [byEmail, byLinkedin, byDomain, sup, disEmail, disDomain, internal] = await Promise.all([
+    admin.from("leads").select(leadSel).eq("workspace_id", workspaceId).or(emailIdentityOr("email", q.email)),
+    slug
+      ? admin.from("leads").select(leadSel).eq("workspace_id", workspaceId).ilike("linkedin_url", `%/in/${likeEscape(slug)}%`)
+      : none,
+    // ponytail: name+domain rule only sees the first 1000 leads at a domain; exact email + LinkedIn are separate queries.
+    admin.from("leads").select(leadSel).eq("workspace_id", workspaceId)
+      .or(q.domains.map((d) => `email.ilike.*@${d.replace(/[,()*]/g, "")}`).join(",") || "email.is.null")
+      .limit(1000),
+    admin.from("campaign_suppression_list").select("kind, value").eq("workspace_id", workspaceId)
+      .or([emailIdentityOr("value", q.email), domainsIlike("value", domains)].filter(Boolean).join(",")),
+    admin.from("workspace_dismissed_emails").select("email").eq("workspace_id", workspaceId).or(emailIdentityOr("email", q.email)),
+    domains.length
+      ? admin.from("workspace_dismissed_domains").select("domain").eq("workspace_id", workspaceId).or(domainsIlike("domain", domains))
+      : none,
+    admin.from("workspace_internal_domains").select("domain").eq("workspace_id", workspaceId),
+  ]);
+  // Fail closed: an unreadable opt-out list must never let a person through.
+  for (const r of [sup, disEmail, disDomain, internal]) {
+    if ((r as { error?: unknown }).error) throw new Error("scout filter: opt-out lookup failed");
+  }
+  for (const r of [byEmail, byLinkedin, byDomain]) {
+    if ((r as { error?: unknown }).error) throw new Error("scout filter: leads lookup failed");
+  }
+  const leads = [...(byEmail.data ?? []), ...(byLinkedin.data ?? []), ...(byDomain.data ?? [])] as Array<
+    { email: string | null; linkedin_url: string | null; name: string | null; unsubscribed: boolean | null }
+  >;
+  const supRows = (sup.data ?? []) as Array<{ kind: string; value: string }>;
+  return {
+    leads,
+    unsubscribedEmails: leads.filter((l) => l.unsubscribed && l.email).map((l) => l.email!),
+    suppressedEmails: supRows.filter((r) => r.kind === "email").map((r) => r.value),
+    suppressedDomains: supRows.filter((r) => r.kind === "domain").map((r) => r.value),
+    dismissedEmails: values(disEmail.data, "email"),
+    dismissedDomains: values(disDomain.data, "domain"),
+    internalDomains: values(internal.data, "domain"),
+    existingScoutCandidates: [],
+    allowEu,
   };
 }
 

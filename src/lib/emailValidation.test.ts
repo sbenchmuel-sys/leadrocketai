@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidEmail, isSuspiciousEmail, classifyEmail, summarizeEmailQuality } from "./emailValidation";
+import { isValidEmail, isSuspiciousEmail, classifyEmail, summarizeEmailQuality } from "@shared/emailValidation";
 
 describe("isValidEmail", () => {
   it("accepts normal addresses", () => {

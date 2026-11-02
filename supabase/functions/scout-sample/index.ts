@@ -8,7 +8,9 @@
 // No-op unless workspace_automation_settings.scout_enabled.
 import { apolloSearchPeople } from "../_shared/prospectProviders.ts";
 import { EU_UK_EEA_COUNTRIES, filterScoutCandidates } from "../_shared/scoutFilters.ts";
-import { callScoutAi, openScoutRequest, ownedProfileId, scoutJson, type ScoutRequest } from "../_shared/scoutGate.ts";
+import {
+  callScoutAi, loadPreFilterContext, openScoutRequest, ownedProfileId, scoutJson, type ScoutRequest,
+} from "../_shared/scoutGate.ts";
 import { clampProfile, parseSamplePicks, sampleRateLimit, toApolloFilters } from "../_shared/scoutProfile.ts";
 
 /** This rep's kind='sample' runs in the last hour, across all their profiles. */
@@ -23,32 +25,6 @@ async function recentSampleRuns(r: ScoutRequest): Promise<number> {
     .or("error.is.null,error.neq.rate_limited") // refused attempts don't extend the lockout
     .gte("started_at", new Date(Date.now() - 60 * 60 * 1000).toISOString());
   return count ?? 0;
-}
-
-/**
- * Drop lists that can bite BEFORE enrichment. ponytail: search stubs have no
- * email, LinkedIn or real surname, so the lead/unsubscribe/suppressed-email
- * rules can't match yet — Unit 3 re-runs the full filter after enrichment.
- */
-async function filterContext(r: ScoutRequest) {
-  const ws = r.workspaceId;
-  const [sup, dis, internal, existing] = await Promise.all([
-    r.admin.from("campaign_suppression_list").select("kind, value").eq("workspace_id", ws).eq("kind", "domain"),
-    r.admin.from("workspace_dismissed_domains").select("domain").eq("workspace_id", ws),
-    r.admin.from("workspace_internal_domains").select("domain").eq("workspace_id", ws),
-    r.admin.from("lead_candidates").select("provider, provider_person_id").eq("workspace_id", ws).eq("source", "ai_scout"),
-  ]);
-  return {
-    leads: [],
-    unsubscribedEmails: [],
-    suppressedEmails: [],
-    suppressedDomains: (sup.data ?? []).map((x: { value: string }) => x.value),
-    dismissedEmails: [],
-    dismissedDomains: (dis.data ?? []).map((x: { domain: string }) => x.domain),
-    internalDomains: (internal.data ?? []).map((x: { domain: string }) => x.domain),
-    existingScoutCandidates: existing.data ?? [],
-    allowEu: r.settings.scout_allow_eu,
-  };
 }
 
 Deno.serve(async (req) => {
@@ -92,7 +68,10 @@ Deno.serve(async (req) => {
       return scoutJson({ ok: false, reason: "provider_error" });
     }
 
-    const { kept } = filterScoutCandidates(search.data, await filterContext(r));
+    const { kept } = filterScoutCandidates(
+      search.data,
+      await loadPreFilterContext(r.admin, r.workspaceId, r.settings.scout_allow_eu, search.data),
+    );
     const pool = kept.slice(0, 25);
     const ai = pool.length
       ? await callScoutAi("scout_pick_samples", {

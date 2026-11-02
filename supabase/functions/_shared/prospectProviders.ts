@@ -83,6 +83,9 @@ export interface EnrichedEmail {
   first_name: string | null;
   last_name: string | null;
   location: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
 }
 
 export interface PhoneResult {
@@ -252,6 +255,9 @@ export async function apolloEnrichPerson(
       first_name: str(p.first_name),
       last_name: str(p.last_name),
       location: joinLocation(p.city, p.state, p.country),
+      city: str(p.city),
+      state: str(p.state),
+      country: str(p.country),
     },
     credits,
     error: null,

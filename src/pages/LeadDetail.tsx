@@ -22,6 +22,7 @@ import { getAutomationToggleState } from "@/lib/leadAutomationActions";
 import { UnifiedIntelligenceCard } from "@/components/leads/UnifiedIntelligenceCard";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { ScoutWhyCard } from "@/components/leads/scout/ScoutReview";
 
 /** One section of the "More about this deal" sheet. */
 function DealSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -228,6 +229,9 @@ export default function LeadDetail() {
       {/* Post-meeting recap pending / sent — the one hint that used to live in
           the desktop-only right rail. Renders nothing when there's no meeting. */}
       <PostMeetingRecapHint leadId={lead.id} />
+
+      {/* Lead Scout: why DrivePilot suggested this person (main column, so phones see it too). */}
+      <ScoutWhyCard leadId={lead.id} sourceType={(lead as { source_type?: string | null }).source_type} />
 
       {/* HISTORY */}
       <div className="space-y-2">

@@ -74,7 +74,9 @@ import { useMailSync } from "@/hooks/useMailSync";
 import { LeadScoutEntryCard, LeadScoutSheet, useLeadScout } from "@/components/leads/scout/LeadScoutPanel";
 
 type ViewMode = "todo" | "all";
-type Chip = "all" | "new" | "automation";
+type Chip = "all" | "new" | "automation" | "scout";
+
+const isScoutLead = (lead: EnrichedLead) => lead.source_type === "ai_scout";
 
 const LEADS_PAGE_SIZE = 25;
 
@@ -175,6 +177,7 @@ export default function Leads() {
     return leads.filter((lead) => {
       if (chip === "new" && !isNewLead(lead)) return false;
       if (chip === "automation" && !isInAutomation(lead)) return false;
+      if (chip === "scout" && !isScoutLead(lead)) return false;
       if (!q) return true;
       return (
         lead.name.toLowerCase().includes(q) ||
@@ -190,6 +193,7 @@ export default function Leads() {
       all: leads.length,
       new: leads.filter(isNewLead).length,
       automation: leads.filter(isInAutomation).length,
+      scout: leads.filter(isScoutLead).length,
     }),
     [leads],
   );
@@ -571,7 +575,7 @@ export default function Leads() {
             </div>
 
             {/* Filter chips */}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button type="button" onClick={() => setChip("new")} className={chipClass(chip === "new")}>
                 New · {chipCounts.new}
               </button>
@@ -585,6 +589,12 @@ export default function Leads() {
               <button type="button" onClick={() => setChip("all")} className={chipClass(chip === "all")}>
                 All · {chipCounts.all}
               </button>
+              {/* Lead Scout: one more option in the same filter row, only once there are any. */}
+              {chipCounts.scout > 0 && (
+                <button type="button" onClick={() => setChip("scout")} className={chipClass(chip === "scout")}>
+                  Found by DrivePilot · {chipCounts.scout}
+                </button>
+              )}
             </div>
 
             {/* Selection bar */}
@@ -676,7 +686,10 @@ export default function Leads() {
                             >
                               {lead.name}
                             </Link>
-                            <div className="text-xs text-muted-foreground">{lead.company}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {lead.company}
+                              {isScoutLead(lead) && <span className="ml-2 text-indigo-600 dark:text-indigo-400">Found by DrivePilot</span>}
+                            </div>
                             {lead.campaign_id && campaignNames[lead.campaign_id] && (
                               <div className="text-xs text-muted-foreground/80 truncate">
                                 ↳ {campaignNames[lead.campaign_id]}
@@ -719,7 +732,7 @@ export default function Leads() {
           </TabsContent>
 
           <TabsContent value="pending">
-            <PendingLeadsTab onApproved={loadLeads} />
+            <PendingLeadsTab onApproved={loadLeads} scoutEnabled={scout.enabled} />
           </TabsContent>
         </Tabs>
       )}
