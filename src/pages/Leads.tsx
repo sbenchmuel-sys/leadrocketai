@@ -72,6 +72,7 @@ import { TodoView } from "@/components/leads/TodoView";
 import { EmailActionDialog } from "@/components/dashboard/EmailActionDialog";
 import { useMailSync } from "@/hooks/useMailSync";
 import { LeadScoutEntryCard, LeadScoutSheet, useLeadScout } from "@/components/leads/scout/LeadScoutPanel";
+import { StartOutreachButton } from "@/components/leads/scout/StartOutreach";
 
 type ViewMode = "todo" | "all";
 type Chip = "all" | "new" | "automation" | "scout";
@@ -606,6 +607,10 @@ export default function Leads() {
                   {selectedIds.size} selected
                 </span>
                 <div className="flex items-center gap-2">
+                  {/* Lead Scout: an all-Scout selection also gets the suggested review-mode outreach. */}
+                  {leads.some((l) => selectedIds.has(l.id)) && leads.every((l) => !selectedIds.has(l.id) || isScoutLead(l)) && (
+                    <StartOutreachButton leadIds={Array.from(selectedIds)} onEnrolled={() => { setSelectedIds(new Set()); void loadLeads(); }} />
+                  )}
                   <Button size="sm" disabled={bulkBusy} onClick={() => setAddToAutomationOpen(true)}>
                     Add to outreach
                   </Button>
