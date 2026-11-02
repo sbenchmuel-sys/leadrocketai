@@ -191,7 +191,7 @@ function ScoutUsage() {
       const { data: names } = await db.from("workspaces").select("id, name").in("id", [...by.keys()]);
       const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string | null }>).map((w) => [w.id, w.name]));
       if (live) setRows([...by.values()].map((r) => ({ ...r, workspace: nameOf.get(r.workspace) || r.workspace.slice(0, 8) })));
-    })();
+    })().catch(() => {}); // any failure = table stays hidden
     return () => { live = false; };
   }, []);
   if (!rows.length) return null;
