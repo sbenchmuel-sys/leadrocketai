@@ -52,9 +52,9 @@ vi.mock("@/lib/generateCampaignContent", () => ({
   ingestCampaignKnowledge: (...args: any[]) => ingestCampaignKnowledge(...args),
 }));
 
-const getLeadsList = vi.fn(async (..._args: any[]): Promise<any[]> => []);
+const searchLeadsForPicker = vi.fn(async (..._args: any[]): Promise<any[]> => []);
 vi.mock("@/lib/supabaseQueries", () => ({
-  getLeadsList: (...args: any[]) => getLeadsList(...args),
+  searchLeadsForPicker: (...args: any[]) => searchLeadsForPicker(...args),
 }));
 
 import NewCampaign, { filterLeads } from "./NewCampaign";
@@ -96,6 +96,7 @@ function makeFlyer(): File {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  searchLeadsForPicker.mockResolvedValue([]);
 });
 
 describe("NewCampaign — flyer upload", () => {
@@ -185,7 +186,7 @@ describe("NewCampaign — recipient search & select all", () => {
   ];
 
   async function reachRecipients() {
-    getLeadsList.mockResolvedValue(sampleLeads);
+    searchLeadsForPicker.mockImplementation(async (search: string) => filterLeads(sampleLeads, search));
     renderWizard();
     fireEvent.change(screen.getByLabelText(/What's this outreach called/i), {
       target: { value: "Outreach" },
@@ -205,7 +206,8 @@ describe("NewCampaign — recipient search & select all", () => {
       target: { value: "grace" },
     });
 
-    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    await waitFor(() => expect(searchLeadsForPicker).toHaveBeenLastCalledWith("grace"));
+    expect(await screen.findByText("Grace Hopper")).toBeInTheDocument();
     expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
     expect(screen.queryByText("Alan Turing")).not.toBeInTheDocument();
   });
@@ -217,6 +219,7 @@ describe("NewCampaign — recipient search & select all", () => {
     fireEvent.change(screen.getByPlaceholderText("Search people"), {
       target: { value: "grace" },
     });
+    await screen.findByText("Grace Hopper");
     fireEvent.click(screen.getByRole("button", { name: /Select all/i }));
 
     // Only the one filtered lead is selected — the summary reflects 1 person.
@@ -229,10 +232,41 @@ describe("NewCampaign — recipient search & select all", () => {
     fireEvent.change(screen.getByPlaceholderText("Search people"), {
       target: { value: "" },
     });
-    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Select all/i })).toBeInTheDocument();
     // Still just the one selection — hidden leads were never touched.
     expect(screen.getByText(/to 1 person/i)).toBeInTheDocument();
+  });
+
+  it("finds people outside the initial results and retains off-screen selections", async () => {
+    await reachRecipients();
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    const olderLead = { id: "600", name: "Older Person", company: "Archive", email: "older@example.com" };
+    searchLeadsForPicker.mockImplementation(async (search: string) =>
+      search ? [olderLead] : sampleLeads,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Search people"), {
+      target: { value: "Older" },
+    });
+    await screen.findByText("Older Person");
+    expect(searchLeadsForPicker).toHaveBeenLastCalledWith("Older");
+    expect(screen.getByText(/to 1 person/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Select all/i }));
+    expect(screen.getByText(/to 2 people/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Clear$/i }));
+    expect(screen.getByText(/to 1 person/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Search people"), { target: { value: "" } });
+    await screen.findByText("Ada Lovelace");
+    expect(screen.getAllByRole("checkbox")[0]).toBeChecked();
+  });
+
+  it("keeps search available after a server search returns no results", async () => {
+    await reachRecipients();
+    fireEvent.change(screen.getByPlaceholderText("Search people"), { target: { value: "missing" } });
+    await waitFor(() => expect(searchLeadsForPicker).toHaveBeenLastCalledWith("missing"));
+    await screen.findByText('No one matches "missing".');
+    fireEvent.change(screen.getByPlaceholderText("Search people"), { target: { value: "ada" } });
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
   });
 });
 
