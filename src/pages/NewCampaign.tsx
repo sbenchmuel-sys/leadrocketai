@@ -56,7 +56,7 @@ import {
 } from "@/lib/starterCadences";
 import { CampaignScript } from "@/components/automations/CampaignScript";
 import { StarterCadencePicker } from "@/components/automations/StarterCadencePicker";
-import { getLeadsList, type LeadListItem } from "@/lib/supabaseQueries";
+import { searchLeadsForPicker, type LeadListItem } from "@/lib/supabaseQueries";
 import { Checkbox } from "@/components/ui/checkbox";
 
 type Step = 1 | 2 | 3;
@@ -74,7 +74,7 @@ const OPTIONAL_CHANNELS: OptionalChannel[] = [
 ];
 
 
-// Client-side filter over the already-loaded lead list — no new query. Matches
+// Hide stale rows while the server-side search is debouncing. Matches
 // the typed text against name, company, and email (case-insensitive, trimmed).
 // An empty/whitespace query returns the list unchanged.
 export function filterLeads(leads: LeadListItem[], query: string): LeadListItem[] {
@@ -219,14 +219,30 @@ export default function NewCampaign() {
       return;
     }
     setStep(3);
-    if (leads.length === 0) {
-      setLeadsLoading(true);
-      getLeadsList()
-        .then(setLeads)
-        .catch(() => toast.error("Couldn't load your people"))
-        .finally(() => setLeadsLoading(false));
-    }
   };
+
+  useEffect(() => {
+    if (step !== 3) return;
+    let active = true;
+    setLeadsLoading(true);
+    const load = () => {
+      searchLeadsForPicker(leadSearch)
+        .then((rows) => { if (active) setLeads(rows); })
+        .catch(() => {
+          if (active) {
+            setLeads([]);
+            toast.error("Couldn't load your people");
+          }
+        })
+        .finally(() => { if (active) setLeadsLoading(false); });
+    };
+    const timer = leadSearch ? setTimeout(load, 300) : undefined;
+    if (!leadSearch) load();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [step, leadSearch]);
 
   const toggleLead = (id: string) => {
     const next = new Set(selectedLeads);
@@ -623,8 +639,7 @@ export default function NewCampaign() {
             </p>
           </div>
 
-          {!leadsLoading && leads.length > 0 && (
-            <div className="space-y-2">
+          <div className="space-y-2">
               <Input
                 placeholder="Search people"
                 value={leadSearch}
@@ -637,14 +652,13 @@ export default function NewCampaign() {
                 <button
                   type="button"
                   onClick={toggleSelectAllVisible}
-                  disabled={visibleLeads.length === 0}
+                  disabled={leadsLoading || visibleLeads.length === 0}
                   className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
                 >
                   {allVisibleSelected ? "Clear" : "Select all"}
                 </button>
               </div>
-            </div>
-          )}
+          </div>
 
           <Card>
             <CardContent className="max-h-72 overflow-y-auto p-2">
@@ -652,7 +666,7 @@ export default function NewCampaign() {
                 <div className="flex items-center justify-center py-10">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
-              ) : leads.length === 0 ? (
+              ) : leads.length === 0 && !leadSearch.trim() ? (
                 <div className="flex flex-col items-center gap-1 py-10 text-center">
                   <Users className="h-5 w-5 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
@@ -690,6 +704,12 @@ export default function NewCampaign() {
               )}
             </CardContent>
           </Card>
+
+          {!leadsLoading && leads.length === 500 && (
+            <p className="text-xs text-muted-foreground">
+              Showing the first 500 — search to narrow it down.
+            </p>
+          )}
 
           <div className="rounded-lg bg-muted p-3">
             <p className="text-sm text-foreground">{summary}</p>

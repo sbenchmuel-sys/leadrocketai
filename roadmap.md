@@ -2,3 +2,5 @@
 - [x] Apply and verify three classifier indexes; representative fetches use indexes and are faster.
 - [x] Flag both Gmail connection stores on invalid_grant and skip flagged connections; four regression checks pass.
 - [x] Deploy detect-lead-candidates and verify handler/auth guard; record all monitoring outcomes. No instance or cron schedule changes.
+- [ ] Add server-side outreach picker search without changing getLeadsList or enrollment.
+- [ ] Preserve selections, debounce both pickers, show the 500-result notice, and verify regressions.

@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Search, Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { getLeadsList, type LeadListItem } from "@/lib/supabaseQueries";
+import { searchLeadsForPicker, type LeadListItem } from "@/lib/supabaseQueries";
 import {
   previewEnrollment,
   enrollLeadsInCampaign,
@@ -53,12 +53,30 @@ export function AddLeadsDialog({
     setSearch("");
     setPhase("pick");
     setPreview(null);
-    setLoading(true);
-    getLeadsList()
-      .then(setLeads)
-      .catch(() => toast.error("Couldn't load your people"))
-      .finally(() => setLoading(false));
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setLoading(true);
+    const load = () => {
+      searchLeadsForPicker(search)
+        .then((rows) => { if (active) setLeads(rows); })
+        .catch(() => {
+          if (active) {
+            setLeads([]);
+            toast.error("Couldn't load your people");
+          }
+        })
+        .finally(() => { if (active) setLoading(false); });
+    };
+    const timer = search ? setTimeout(load, 300) : undefined;
+    if (!search) load();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [open, search]);
 
   const excluded = useMemo(() => new Set(excludeIds), [excludeIds]);
 
@@ -160,10 +178,10 @@ export function AddLeadsDialog({
                 </div>
               ) : available.length === 0 ? (
                 <p className="py-10 text-center text-sm text-muted-foreground">
-                  {leads.length === 0
-                    ? "You don't have any people yet. Add leads first."
-                    : search
-                      ? "No matches."
+                  {search
+                    ? "No matches."
+                    : leads.length === 0
+                      ? "You don't have any people yet. Add leads first."
                       : "Everyone is already in this outreach."}
                 </p>
               ) : (
@@ -189,6 +207,12 @@ export function AddLeadsDialog({
                 </ul>
               )}
             </div>
+
+            {!loading && leads.length === 500 && (
+              <p className="text-xs text-muted-foreground">
+                Showing the first 500 — search to narrow it down.
+              </p>
+            )}
 
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">

@@ -130,6 +130,39 @@ export async function getLeadsList(): Promise<LeadListItem[]> {
   return data ?? [];
 }
 
+export async function searchLeadsForPicker(search: string): Promise<LeadListItem[]> {
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  if (!user) throw new Error('Not logged in');
+
+  const { data: profile, error: profErr } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('user_id', user.id)
+    .single();
+  if (profErr) throw profErr;
+
+  let query = supabase
+    .from('leads')
+    .select('id, company, name, email, status, owner_user_id, created_at, last_activity_at, next_step, deal_outlook, country, motion, source_type')
+    .order('last_activity_at', { ascending: false })
+    .limit(500);
+
+  if (profile?.role !== 'admin') {
+    query = query.eq('owner_user_id', user.id);
+  }
+  const term = search.trim();
+  if (term) {
+    // Quote the filter value for commas/parentheses; escape LIKE wildcards separately.
+    const pattern = JSON.stringify(`%${term.replace(/[\\%_]/g, '\\$&')}%`);
+    query = query.or(`name.ilike.${pattern},company.ilike.${pattern},email.ilike.${pattern}`);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
 export type LeadDetail = Pick<Lead,
   'id' | 'company' | 'name' | 'email' | 'strategy' | 'status' | 'stage' | 'owner_user_id' |
   'created_at' | 'last_activity_at' | 'meeting_link' | 'personal_notes' |
