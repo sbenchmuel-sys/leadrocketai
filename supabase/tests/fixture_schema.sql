@@ -282,3 +282,22 @@ CREATE POLICY "Workspace admins can manage mail accounts" ON public.mail_account
 GRANT SELECT, UPDATE ON public.mail_accounts TO authenticated;
 GRANT USAGE ON SCHEMA public, auth TO authenticated;
 GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;
+
+-- Added for lead_candidates_owner_scope.test.sql: production's pre-fix policies
+-- (membership only) + the column-limited UPDATE grant from 20260511000000.
+CREATE TABLE IF NOT EXISTS public.lead_candidates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  owner_user_id uuid,
+  contact_email text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  resolved_at timestamptz
+);
+ALTER TABLE public.lead_candidates ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Workspace members can view lead candidates" ON public.lead_candidates
+  FOR SELECT TO authenticated USING (public.is_workspace_member(workspace_id, auth.uid()));
+CREATE POLICY "Workspace members can update lead candidate status" ON public.lead_candidates
+  FOR UPDATE TO authenticated USING (public.is_workspace_member(workspace_id, auth.uid()))
+  WITH CHECK (public.is_workspace_member(workspace_id, auth.uid()));
+GRANT SELECT ON public.lead_candidates TO authenticated;
+GRANT UPDATE (status, resolved_at) ON public.lead_candidates TO authenticated;

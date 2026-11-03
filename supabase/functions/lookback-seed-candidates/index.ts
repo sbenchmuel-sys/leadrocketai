@@ -347,7 +347,7 @@ async function scanGmailLookback(
 // deno-lint-ignore no-explicit-any
 async function scanOutlookLookback(
   serviceSupabase: any,
-  account: { id: string; workspace_id: string; email_address: string },
+  account: { id: string; workspace_id: string; email_address: string; user_id: string | null },
   accessToken: string,
   ctx: WorkspaceFilterContext,
   windowDays: number,
@@ -403,7 +403,7 @@ async function scanOutlookLookback(
               : null;
           const action = await upsertLookbackCandidate(serviceSupabase, {
             workspaceId: account.workspace_id,
-            ownerUserId: null,
+            ownerUserId: account.user_id, // mailbox owner (see detect-lead-candidates)
             contactEmail: recipEmail,
             contactName: recipName,
             companyDomain: emailDomain(recipEmail) || null,
@@ -510,7 +510,7 @@ serve(async (req) => {
   if (processedCount < MAX_ACCOUNTS_PER_RUN) {
     const { data: pendingOutlook } = await serviceSupabase
       .from("mail_accounts")
-      .select("id, workspace_id, email_address")
+      .select("id, workspace_id, email_address, user_id")
       .eq("provider", "outlook")
       .eq("status", "connected")
       .is("lookback_seed_completed_at", null)
