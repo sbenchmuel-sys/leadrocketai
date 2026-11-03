@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Users, BookOpen, LayoutDashboard, LogOut, Settings, Inbox, BarChart3, RotateCcw, FlaskConical, ListChecks, Megaphone } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demoMode";
 import { supabase } from "@/integrations/supabase/client";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
@@ -215,7 +215,9 @@ export default function DashboardLayout() {
       <main className="flex-1 md:overflow-auto">
         <div className="md:p-6 p-4 pt-20 md:pt-6">
           <MailConnectionBanner />
-          <Outlet />
+          <Suspense fallback={<div className="flex justify-center py-16"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" /></div>}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
 

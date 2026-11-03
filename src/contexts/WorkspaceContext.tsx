@@ -65,6 +65,10 @@ const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefin
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const { user, isLoading: authLoading } = useAuth();
+  // Keyed on id/email, not the user object: supabase-js hands out a new object on
+  // every token refresh / tab return, which re-ran the whole workspace lookup.
+  const userId = user?.id;
+  const userEmail = user?.email;
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceRole, setWorkspaceRole] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
@@ -83,7 +87,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [workspaces]);
 
   const resolveWorkspace = useCallback(async () => {
-    if (!user) {
+    if (!userId) {
       setWorkspaceId(null);
       setWorkspaceRole(null);
       setWorkspaceName(null);
@@ -101,12 +105,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const fetchMemberships = () => supabase
         .from("workspace_members")
         .select("workspace_id, role")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         // Oldest membership first, so the `allWs[0]` fallback below is deterministic.
         .order("created_at", { ascending: true });
       let { data: memberships } = await fetchMemberships();
       const justJoined = await acceptPendingInvitations(
-        user.email, (memberships ?? []).map(m => m.workspace_id),
+        userEmail, (memberships ?? []).map(m => m.workspace_id),
       );
       if (justJoined.length > 0) ({ data: memberships } = await fetchMemberships());
 
@@ -156,7 +160,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         const { data: newMembership } = await supabase
           .from("workspace_members")
           .select("workspace_id, role")
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .limit(1)
           .maybeSingle();
 
@@ -181,7 +185,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, [userId, userEmail]);
 
   useEffect(() => {
     if (!authLoading) {

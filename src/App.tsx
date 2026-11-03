@@ -14,26 +14,46 @@ import ProtectedOnboardingRoute from "@/components/ProtectedOnboardingRoute";
 import DashboardLayout from "@/components/DashboardLayout";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
-import Queue from "./pages/Queue";
-import Inbox from "./pages/Inbox";
-import Leads from "./pages/Leads";
-import Automations from "./pages/Automations";
-import NewCampaign from "./pages/NewCampaign";
-import CampaignDetail from "./pages/CampaignDetail";
-import LeadDetail from "./pages/LeadDetail";
-import ContactDetail from "./pages/ContactDetail";
-import Knowledge from "./pages/Knowledge";
-import Settings from "./pages/Settings";
-import Onboarding from "./pages/Onboarding";
-import ManagerAnalytics from "./pages/ManagerAnalytics";
-import Pilot from "./pages/Pilot";
-import CallDetail from "./pages/CallDetail";
 import NotFound from "./pages/NotFound";
-import Privacy from "./pages/Privacy";
-import Terms from "./pages/Terms";
-import ResetPassword from "./pages/ResetPassword";
 import { flags } from "@/lib/featureFlags";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ComponentType } from "react";
+
+// Each page downloads on first visit instead of one ~2 MB bundle up front.
+// After a deploy, an open tab may ask for a chunk that no longer exists
+// ("Failed to fetch dynamically imported module") — reload once to pick up the
+// new build instead of showing the error screen. The flag stops a reload loop.
+const CHUNK_RELOAD_FLAG = "chunk-reload-attempted";
+const page = (load: () => Promise<{ default: ComponentType }>) =>
+  lazy(() =>
+    load().then(
+      (m) => { try { sessionStorage.removeItem(CHUNK_RELOAD_FLAG); } catch { /* ignore */ } return m; },
+      (err) => {
+        let tried = true;
+        try { tried = !!sessionStorage.getItem(CHUNK_RELOAD_FLAG); sessionStorage.setItem(CHUNK_RELOAD_FLAG, "1"); } catch { /* ignore */ }
+        if (tried) throw err;
+        window.location.reload();
+        return new Promise<never>(() => {});
+      },
+    ),
+  );
+
+const Queue = page(() => import("./pages/Queue"));
+const Inbox = page(() => import("./pages/Inbox"));
+const Leads = page(() => import("./pages/Leads"));
+const Automations = page(() => import("./pages/Automations"));
+const NewCampaign = page(() => import("./pages/NewCampaign"));
+const CampaignDetail = page(() => import("./pages/CampaignDetail"));
+const LeadDetail = page(() => import("./pages/LeadDetail"));
+const ContactDetail = page(() => import("./pages/ContactDetail"));
+const Knowledge = page(() => import("./pages/Knowledge"));
+const Settings = page(() => import("./pages/Settings"));
+const Onboarding = page(() => import("./pages/Onboarding"));
+const ManagerAnalytics = page(() => import("./pages/ManagerAnalytics"));
+const Pilot = page(() => import("./pages/Pilot"));
+const CallDetail = page(() => import("./pages/CallDetail"));
+const Privacy = page(() => import("./pages/Privacy"));
+const Terms = page(() => import("./pages/Terms"));
+const ResetPassword = page(() => import("./pages/ResetPassword"));
 
 const DevSmokeTests = lazy(() => import("./pages/DevSmokeTests"));
 
@@ -57,6 +77,7 @@ const App = () => (
             <WorkspaceProvider>
             <BrowserCallProvider>
             <ActiveCallBar />
+            <Suspense fallback={null}>
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Auth />} />
@@ -104,6 +125,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </Suspense>
             </BrowserCallProvider>
             </WorkspaceProvider>
             </AuthProvider>
