@@ -528,7 +528,7 @@ async function scanOutlook(
           const domain = emailDomain(recipEmail);
           const action = await upsertCandidate(serviceSupabase, {
             workspaceId: account.workspace_id,
-            ownerUserId: account.user_id, // the mailbox owner; RLS shows candidates to their owner (+ admins)
+            ownerUserId: account.user_id, // the mailbox owner; RLS shows candidates to their owner only
             contactEmail: recipEmail,
             contactName: recipName,
             companyDomain: domain || null,

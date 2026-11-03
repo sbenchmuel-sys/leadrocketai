@@ -1,7 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════
 -- Checks for 20261103210000_lead_candidates_owner_scope.sql under real RLS:
 -- the ownerless Outlook candidate is backfilled to the mailbox owner, a rep sees
--- and resolves only their own pending leads, the admin sees all of the workspace.
+-- and resolves only their own pending leads, and so does the admin (no see-all).
 -- (Rows are inserted by the test after the migration ran, so the backfill is
 -- re-run here on a fresh NULL row.)
 -- ═══════════════════════════════════════════════════════════════════
@@ -45,11 +45,12 @@ END $$;
 UPDATE public.lead_candidates SET status = 'dismissed' WHERE contact_email = 'cliffs@x.example';
 UPDATE public.lead_candidates SET status = 'dismissed' WHERE contact_email = 'reps@x.example';
 
--- 3. The admin sees all three.
+-- 3. The admin sees only their own two — not the rep's.
 SELECT set_config('test.uid', '00000000-0000-0000-0000-000000000e01', false);
 DO $$ BEGIN
-  IF (SELECT count(*) FROM public.lead_candidates) <> 3 THEN
-    RAISE EXCEPTION 'admin sees % candidates', (SELECT count(*) FROM public.lead_candidates);
+  IF (SELECT array_agg(contact_email ORDER BY contact_email) FROM public.lead_candidates)
+     IS DISTINCT FROM ARRAY['cliffs@x.example','from-cliffs-outlook@x.example'] THEN
+    RAISE EXCEPTION 'admin sees %', (SELECT array_agg(contact_email) FROM public.lead_candidates);
   END IF;
 END $$;
 
