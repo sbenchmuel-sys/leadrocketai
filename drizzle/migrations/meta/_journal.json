@@ -43,6 +43,13 @@
       "when": 1793740097583,
       "tag": "0005_vacuum_pg_net_responses",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793774353337,
+      "tag": "0006_lead_candidates_owner_scope",
+      "breakpoints": true
     }
   ]
 }
