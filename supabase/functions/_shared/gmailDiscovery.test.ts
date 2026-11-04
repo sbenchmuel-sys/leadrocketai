@@ -36,6 +36,7 @@ const expect = (actual: any) => ({
 });
 import {
   gmailDirectDiscoveryQuery,
+  leadsInMessages,
   selectThreadsToExpand,
 } from "./gmailDiscovery.ts";
 
@@ -164,9 +165,14 @@ describe("gmailDirectDiscoveryQuery", () => {
 });
 
 describe("selectThreadsToExpand", () => {
-  it("puts never-synced threads first, keeps caller order within each group", () => {
+  it("expands ONLY never-synced threads, in caller order (known threads are covered by the newest-page pass)", () => {
     const synced = new Set(["k1", "k2"]);
-    expect(selectThreadsToExpand(["k1", "n1", "k2", "n2"], synced, 10)).toEqual(["n1", "n2", "k1", "k2"]);
+    expect(selectThreadsToExpand(["k1", "n1", "k2", "n2"], synced, 10)).toEqual(["n1", "n2"]);
+  });
+
+  it("re-expands a KNOWN thread only when the caller flags it for recheck (unseen mail / DSN)", () => {
+    const synced = new Set(["k1", "k2"]);
+    expect(selectThreadsToExpand(["k1", "n1", "k2"], synced, 10, new Set(["k2"]))).toEqual(["n1", "k2"]);
   });
 
   it("respects the cap", () => {
@@ -189,5 +195,28 @@ describe("selectThreadsToExpand", () => {
     const ids = ["b", "a"];
     selectThreadsToExpand(ids, new Set(["b"]), 5);
     expect(ids).toEqual(["b", "a"]);
+  });
+});
+
+describe("leadsInMessages (bulk-sync incremental pass)", () => {
+  const leads = [
+    { id: "L1", email: "Manu@Acme.com" },
+    { id: "L2", email: "jo@beta.io" },
+    { id: "L3", email: null },
+    { id: "L4", email: REP }, // a lead row carrying the rep's own address
+  ];
+
+  it("matches From or To, case-insensitively, newest message order, each lead once", () => {
+    const msgs = [
+      { from: ["jo@beta.io"], to: [REP] },
+      { from: [REP], to: ["manu@acme.com"] },
+      { from: ["JO@beta.io"], to: [REP] },
+    ];
+    expect(leadsInMessages(msgs, leads, REP).map((l) => l.id)).toEqual(["L2", "L1"]);
+  });
+
+  it("ignores mail that names no lead, and never matches the rep's own address", () => {
+    const msgs = [{ from: ["news@vendor.com"], to: [REP] }, { from: [REP], to: ["someone@else.com"] }];
+    expect(leadsInMessages(msgs, leads, REP)).toEqual([]);
   });
 });
