@@ -29,7 +29,8 @@ describe("AI gateway single source", () => {
   it('"lovable.dev" appears in no file under supabase/functions/ except _shared/aiGateway.ts', () => {
     const offenders = collect(FUNCTIONS_ROOT)
       .filter((f) => !ALLOWED.has(path.relative(FUNCTIONS_ROOT, f).split(path.sep).join("/")))
-      .filter((f) => readFileSync(f, "utf8").includes("lovable.dev"))
+      // `@lovable.dev/...` npm package imports are not gateway calls.
+      .filter((f) => /(?<!@)lovable\.dev/.test(readFileSync(f, "utf8")))
       .map((f) => path.relative(FUNCTIONS_ROOT, f));
     expect(offenders).toEqual([]);
   });

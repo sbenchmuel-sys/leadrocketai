@@ -32,11 +32,12 @@ function offenders(dirs: string[], re: RegExp, allowed: (rel: string) => boolean
 
 describe("single-source guards (enable per unit)", () => {
   // [E-S1a] — live: every edge function calls the Lovable gateway through
-  // _shared/aiGateway.ts.
+  // _shared/aiGateway.ts. `@lovable.dev/...` npm package imports (e.g. the
+  // auth-email-hook's email-js) are not gateway calls and are ignored.
   it('"lovable.dev" appears only in _shared/aiGateway.ts [E-S1a]', () => {
     const bad = offenders(
       ["supabase/functions"],
-      /lovable\.dev/,
+      /(?<!@)lovable\.dev/,
       (rel) => rel === "supabase/functions/_shared/aiGateway.ts",
     );
     expect(bad).toEqual([]);
