@@ -6,3 +6,4 @@
 20261031120000_pilot_report.sql
 20261101100000_mail_accounts_own_rows.sql
 20261103210000_lead_candidates_owner_scope.sql
+20261104120000_codify_cron_jobs_stagger.sql

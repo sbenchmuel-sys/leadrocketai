@@ -301,3 +301,25 @@ CREATE POLICY "Workspace members can update lead candidate status" ON public.lea
   WITH CHECK (public.is_workspace_member(workspace_id, auth.uid()));
 GRANT SELECT ON public.lead_candidates TO authenticated;
 GRANT UPDATE (status, resolved_at) ON public.lead_candidates TO authenticated;
+
+-- pg_cron stub (CI's postgres:16 has no pg_cron): just the columns and the
+-- cron.alter_job() signature the cron migrations under test use, plus the log
+-- tables prune_job_logs() deletes from.
+CREATE SCHEMA IF NOT EXISTS cron;
+CREATE TABLE cron.job (
+  jobid bigserial PRIMARY KEY,
+  jobname text,
+  schedule text NOT NULL,
+  command text NOT NULL,
+  active boolean NOT NULL DEFAULT true
+);
+CREATE OR REPLACE FUNCTION cron.alter_job(job_id bigint, schedule text DEFAULT NULL, command text DEFAULT NULL,
+  database text DEFAULT NULL, username text DEFAULT NULL, active boolean DEFAULT NULL)
+RETURNS void LANGUAGE sql AS $$
+  UPDATE cron.job j SET schedule = COALESCE(alter_job.schedule, j.schedule),
+                        command  = COALESCE(alter_job.command,  j.command),
+                        active   = COALESCE(alter_job.active,   j.active)
+   WHERE j.jobid = job_id;
+$$;
+CREATE TABLE cron.job_run_details (runid bigserial PRIMARY KEY, end_time timestamptz);
+CREATE TABLE public.cron_run_log (id bigserial PRIMARY KEY, started_at timestamptz NOT NULL DEFAULT now());
