@@ -14,6 +14,10 @@ import path from "node:path";
 
 const FUNCTIONS_ROOT = path.resolve(__dirname, "../../supabase/functions");
 const ALLOWED = new Set(["_shared/aiGateway.ts"]);
+// ponytail: `@lovable.dev/` is Lovable's npm scope (auth-email-hook imports
+// npm:@lovable.dev/email-js), not the AI gateway, so the lookbehind skips it.
+// Ceiling: a gateway URL written right after an "@" would slip past.
+const GATEWAY_RE = /(?<!@)lovable\.dev/;
 
 function collect(dir: string): string[] {
   const out: string[] = [];
@@ -29,7 +33,7 @@ describe("AI gateway single source", () => {
   it('"lovable.dev" appears in no file under supabase/functions/ except _shared/aiGateway.ts', () => {
     const offenders = collect(FUNCTIONS_ROOT)
       .filter((f) => !ALLOWED.has(path.relative(FUNCTIONS_ROOT, f).split(path.sep).join("/")))
-      .filter((f) => readFileSync(f, "utf8").includes("lovable.dev"))
+      .filter((f) => GATEWAY_RE.test(readFileSync(f, "utf8")))
       .map((f) => path.relative(FUNCTIONS_ROOT, f));
     expect(offenders).toEqual([]);
   });
