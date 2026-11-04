@@ -1,220 +1,121 @@
 project_id = "ntzeiflqqluwgdfmatjh"
 
-[functions.extract-lead-profile]
-verify_jwt = true
-
-[functions.outlook-auth]
-verify_jwt = false
-
-[functions.outlook-callback]
-verify_jwt = false
-
-[functions.whatsapp-webhook]
-verify_jwt = false
-
-[functions.whatsapp-events-processor]
-verify_jwt = false
-
-[functions.outlook-webhook]
-verify_jwt = false
-
-[functions.outlook-subscription-check]
-verify_jwt = false
-
-[functions.outlook-send]
-verify_jwt = false
-
-[functions.outlook-health]
-verify_jwt = false
-
-[functions.whatsapp-connect]
-verify_jwt = false
-
-[functions.whatsapp-health]
-verify_jwt = false
-
-[functions.whatsapp-send]
-verify_jwt = false
-
-[functions.conversation-analyze]
-verify_jwt = false
-
-[functions.automation-executor]
-verify_jwt = false
-
-[functions.nurture-pre-generate]
-verify_jwt = false
-
-[functions.reset-demo]
-verify_jwt = false
-
-[functions.automation-check]
-verify_jwt = false
-
-[functions.outlook-sync]
-verify_jwt = false
-
-[functions.outlook-bulk-sync]
-verify_jwt = false
-
-[functions.whatsapp-webhook-twilio]
-verify_jwt = false
-
-[functions.whatsapp-connect-twilio]
-verify_jwt = false
-
-[functions.twilio-voice-webhook]
-verify_jwt = false
-
-[functions.call-ingest-recording]
-verify_jwt = false
-
-[functions.call-transcribe]
-verify_jwt = false
-
-[functions.call-analyze]
-verify_jwt = false
-
-[functions.call-api]
-verify_jwt = false
-
-[functions.twilio-voice-inbound]
-verify_jwt = false
-
-[functions.twilio-voice-token]
-verify_jwt = false
-
-[functions.enrich-company-search]
-verify_jwt = false
-
-[functions.enrich-lead-linkedin]
-verify_jwt = true
-
-[functions.generate-personalized-suggestions]
-verify_jwt = false
-
-[functions.ingest-website-signals]
-verify_jwt = false
-
-[functions.ingest-crm-signals]
-verify_jwt = false
-
-[functions.cron-dispatcher]
-verify_jwt = false
-
-# Per-meeting transcript fetchers invoked by transcript-poller with the
-# X-Internal-Secret header (no user JWT). Gateway must skip JWT verification
-# or the cron-dispatched call is rejected before requirePrivilegedCaller runs.
-[functions.meet-transcript-fetch]
-verify_jwt = false
-
-[functions.teams-transcript-fetch]
-verify_jwt = false
-
-# Phase 1 backfill that populates lead_timeline_items.intent from
-# heuristic detectors. Invoked manually with X-Internal-Secret or
-# service-role token; no user JWT. Registration was missed in PR #38
-# and added here in Phase 1.5 — see KNOWN_ISSUES.md "Edge function
-# config.toml registration".
-[functions.classify-timeline-intent-backfill]
-verify_jwt = false
-
-# Read-only Phase 1 spot-check helper for lead_timeline_items.intent.
-# Invoked manually with X-Internal-Secret or service-role token; no
-# user JWT is sent, so the gateway must skip verification.
-[functions.classify-timeline-intent-sample]
-verify_jwt = false
-
-# Phase 2a AI classifier cron. Invoked every 60 seconds by
-# cron-dispatcher (target=classify-inbound). Authenticates via
-# X-Internal-Secret / service-role through requireScheduledCaller;
-# no user JWT is sent so the gateway must skip verification.
-[functions.classify-inbound]
-verify_jwt = false
-
-# Twilio posts SMS delivery-status callbacks here. No user JWT,
-# signature is verified in code via X-Twilio-Signature.
-[functions.sms-status-webhook]
-verify_jwt = false
-
-# Cold outreach cadence brain (Outreach Unit C). Invoked every minute by
-# cron-dispatcher (target=campaign-touch-scheduler) via X-Internal-Secret /
-# service-role through requireScheduledCaller; no user JWT, so the gateway must
-# skip verification.
-[functions.campaign-touch-scheduler]
-verify_jwt = false
-
-# PUBLIC one-click unsubscribe for cold outreach (CAN-SPAM). Email clients open
-# this UNAUTHENTICATED — verify_jwt MUST be false. Security is the signed HMAC
-# token only (UNSUBSCRIBE_TOKEN_SECRET); a missing secret fails closed.
-[functions.outreach-unsubscribe]
-verify_jwt = false
-
-# Rep actions on cold Outreach touches (review "Send" / manual "Sent it" / skip /
-# call outcome). USER-authenticated: verify_jwt stays true and the function also
-# enforces workspace membership in code (requireAuth + assertWorkspaceMembership).
-[functions.outreach-touch-action]
-verify_jwt = true
-
-# gmail-bulk-sync is DUAL-MODE: cron-dispatcher (X-Internal-Secret, no Bearer) AND
-# the UI "Sync now" / per-lead sync (user JWT). It gates the scheduled branch in
-# code via isInternalCaller/isServiceRoleToken and authenticates the user branch
-# via getUser(), so verify_jwt MUST be false — true would 401 the dispatcher's
-# forward before the in-code gate runs (the cron path had been silently failing).
-[functions.gmail-bulk-sync]
-verify_jwt = false
-
-# ── Dispatchable cron targets (auth-gated in code) ──────────────────────────────
-# These are reached ONLY via cron-dispatcher, which forwards with X-Internal-Secret
-# and NO Bearer token. Each self-authenticates in code (requireScheduledCaller /
-# requirePrivilegedCaller — internal-secret OR service-role), so verify_jwt MUST be
-# false: otherwise the Supabase gateway 401s the dispatcher's forward before the
-# in-code gate runs and the cron silently never executes. Safe to expose at the
-# gateway only because cron-dispatcher itself is now auth-gated (Codex P1 PR #109):
-# an unauthenticated caller can no longer reach these through the dispatcher.
-[functions.promote-winning-interactions]
-verify_jwt = false
-
-[functions.message-cleanup]
-verify_jwt = false
-
-[functions.generate-reply-suggestions]
-verify_jwt = false
-
-[functions.compute-manager-analytics]
-verify_jwt = false
-
-[functions.detect-lead-candidates]
-verify_jwt = false
-
-[functions.score-lead-candidate]
-verify_jwt = false
-
-[functions.lookback-seed-candidates]
-verify_jwt = false
-
-[functions.calendar-sync]
-verify_jwt = false
-
-[functions.transcript-poller]
-verify_jwt = false
-
-[functions.classify-outbound]
-verify_jwt = false
-
-[functions.intelligence-queue-drain]
-verify_jwt = false
-
-[functions.request-login-code]
-verify_jwt = false
-
-# Client pilot reports (Monday recap + hot-reply alerts). Reached only via
-# cron-dispatcher (X-Internal-Secret / service-role through requireScheduledCaller).
-[functions.pilot-reports]
-verify_jwt = false
-
-# Lead Scout weekly batch. Reached only via cron-dispatcher (X-Internal-Secret
-# through requireScheduledCaller); scout-enrich keeps verify_jwt (user JWT or
-# the service-role key).
-[functions.scout-weekly-run]
-verify_jwt = false
+[functions]
+  [functions.auth-email-hook]
+    verify_jwt = false
+  [functions.automation-check]
+    verify_jwt = false
+  [functions.automation-executor]
+    verify_jwt = false
+  [functions.calendar-sync]
+    verify_jwt = false
+  [functions.call-analyze]
+    verify_jwt = false
+  [functions.call-api]
+    verify_jwt = false
+  [functions.call-ingest-recording]
+    verify_jwt = false
+  [functions.call-transcribe]
+    verify_jwt = false
+  [functions.campaign-touch-scheduler]
+    verify_jwt = false
+  [functions.classify-inbound]
+    verify_jwt = false
+  [functions.classify-outbound]
+    verify_jwt = false
+  [functions.classify-timeline-intent-backfill]
+    verify_jwt = false
+  [functions.classify-timeline-intent-sample]
+    verify_jwt = false
+  [functions.compute-manager-analytics]
+    verify_jwt = false
+  [functions.conversation-analyze]
+    verify_jwt = false
+  [functions.cron-dispatcher]
+    verify_jwt = false
+  [functions.detect-lead-candidates]
+    verify_jwt = false
+  [functions.enrich-company-search]
+    verify_jwt = false
+  [functions.enrich-lead-linkedin]
+    verify_jwt = true
+  [functions.extract-lead-profile]
+    verify_jwt = true
+  [functions.generate-personalized-suggestions]
+    verify_jwt = false
+  [functions.generate-reply-suggestions]
+    verify_jwt = false
+  [functions.gmail-bulk-sync]
+    verify_jwt = false
+  [functions.ingest-crm-signals]
+    verify_jwt = false
+  [functions.ingest-website-signals]
+    verify_jwt = false
+  [functions.intelligence-queue-drain]
+    verify_jwt = false
+  [functions.lookback-seed-candidates]
+    verify_jwt = false
+  [functions.meet-transcript-fetch]
+    verify_jwt = false
+  [functions.message-cleanup]
+    verify_jwt = false
+  [functions.nurture-pre-generate]
+    verify_jwt = false
+  [functions.outlook-auth]
+    verify_jwt = false
+  [functions.outlook-bulk-sync]
+    verify_jwt = false
+  [functions.outlook-callback]
+    verify_jwt = false
+  [functions.outlook-health]
+    verify_jwt = false
+  [functions.outlook-send]
+    verify_jwt = false
+  [functions.outlook-subscription-check]
+    verify_jwt = false
+  [functions.outlook-sync]
+    verify_jwt = false
+  [functions.outlook-webhook]
+    verify_jwt = false
+  [functions.outreach-touch-action]
+    verify_jwt = true
+  [functions.outreach-unsubscribe]
+    verify_jwt = false
+  [functions.pilot-reports]
+    verify_jwt = false
+  [functions.promote-winning-interactions]
+    verify_jwt = false
+  [functions.request-login-code]
+    verify_jwt = false
+  [functions.reset-demo]
+    verify_jwt = false
+  [functions.score-lead-candidate]
+    verify_jwt = false
+  [functions.scout-weekly-run]
+    verify_jwt = false
+  [functions.sms-status-webhook]
+    verify_jwt = false
+  [functions.teams-transcript-fetch]
+    verify_jwt = false
+  [functions.transcript-poller]
+    verify_jwt = false
+  [functions.twilio-voice-inbound]
+    verify_jwt = false
+  [functions.twilio-voice-token]
+    verify_jwt = false
+  [functions.twilio-voice-webhook]
+    verify_jwt = false
+  [functions.whatsapp-connect]
+    verify_jwt = false
+  [functions.whatsapp-connect-twilio]
+    verify_jwt = false
+  [functions.whatsapp-events-processor]
+    verify_jwt = false
+  [functions.whatsapp-health]
+    verify_jwt = false
+  [functions.whatsapp-send]
+    verify_jwt = false
+  [functions.whatsapp-webhook]
+    verify_jwt = false
+  [functions.whatsapp-webhook-twilio]
+    verify_jwt = false
