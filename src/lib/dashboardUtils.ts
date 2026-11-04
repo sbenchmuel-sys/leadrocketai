@@ -19,6 +19,17 @@ export const STAGE_LABELS: Record<DealStage, string> = {
 // Only show these stages in the flow bar (exclude closed states)
 export const STAGE_ORDER: DealStage[] = ["new", "contacted", "engaged", "post_meeting", "closing"];
 
+/**
+ * Move a lead forward to at least `min`, never backwards. Stages outside the
+ * flow (closed_won / closed_lost / anything unknown) are left untouched.
+ */
+export function raiseStage(current: string | null | undefined, min: DealStage): string {
+  if (!current) return min;
+  const at = STAGE_ORDER.indexOf(current as DealStage);
+  if (at === -1) return current;
+  return at < STAGE_ORDER.indexOf(min) ? min : current;
+}
+
 // ============================================
 // SOURCE TYPE & MOTION
 // ============================================

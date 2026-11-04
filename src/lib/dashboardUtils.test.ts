@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyRevenueState, type EnrichedLead } from "./dashboardUtils";
+import { classifyRevenueState, raiseStage, type EnrichedLead } from "./dashboardUtils";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -159,5 +159,15 @@ describe("classifyRevenueState — intent hide-list (PR C)", () => {
     });
     const hidden = new Set([lead.id]);
     expect(classifyRevenueState(lead, new Set(), new Set(), hidden)).toBe("automation");
+  });
+});
+
+describe("raiseStage", () => {
+  it("moves forward, never back, and leaves closed stages alone", () => {
+    expect(raiseStage("new", "engaged")).toBe("engaged");
+    expect(raiseStage("closing", "post_meeting")).toBe("closing"); // the old meeting bug
+    expect(raiseStage("engaged", "post_meeting")).toBe("post_meeting");
+    expect(raiseStage("closed_won", "engaged")).toBe("closed_won");
+    expect(raiseStage(null, "contacted")).toBe("contacted");
   });
 });
