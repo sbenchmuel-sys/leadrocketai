@@ -1271,6 +1271,10 @@ const CRON_MAX_RESULTS = 10;
 const INCREMENTAL_LIST_MAX = 100;
 const INCREMENTAL_METADATA_MAX = 50;
 const INCREMENTAL_FETCH_BATCH = 10;
+// Discovery gets at most this much of the run budget, so syncing always has time
+// left. Checked between metadata batches (the list call and the two lookups run
+// before it, ~0.5 s).
+const INCREMENTAL_DISCOVERY_MS = 3_000;
 
 type ScheduledLead = { id: string; email: string; stage: string; strategy: string; workspace_id: string | null };
 
@@ -1297,6 +1301,7 @@ async function findLeadsWithNewMail(
   workspaceIds: string[],
   repEmail: string,
 ): Promise<Array<{ lead: ScheduledLead; recheck: Set<string> }>> {
+  const deadline = Date.now() + INCREMENTAL_DISCOVERY_MS;
   const auth = { headers: { Authorization: `Bearer ${accessToken}` } };
   const listRes = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(INCREMENTAL_QUERY)}&maxResults=${INCREMENTAL_LIST_MAX}`,
@@ -1334,6 +1339,9 @@ async function findLeadsWithNewMail(
   const unknownThread = fresh.filter((m) => !threadLeads.has(m.threadId)).slice(0, INCREMENTAL_METADATA_MAX);
   const heads: Array<{ from: string[]; to: string[] }> = [];
   for (let i = 0; i < unknownThread.length; i += INCREMENTAL_FETCH_BATCH) {
+    // ponytail: past the deadline the rest of the unknown mail waits for next run
+    // (it is still unstored, so it is listed again).
+    if (Date.now() > deadline) break;
     const batch = await Promise.all(unknownThread.slice(i, i + INCREMENTAL_FETCH_BATCH).map(async ({ id }) => {
       const r = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To`,
@@ -1586,7 +1594,9 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
       console.warn(`[gmail-bulk-sync] cron: user=${conn.user_id} incremental pass failed:`, err instanceof Error ? err.message : err);
     }
     for (let i = 0; i < newMailLeads.length; i++) {
-      if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      // The first new-mail lead always syncs, even past the budget, so a slow
+      // discovery can never make a run that syncs nothing and repeats next tick.
+      if (i > 0 && Date.now() - startedAt > RUN_BUDGET_MS) {
         budgetExhausted = true;
         leadsDeferred += newMailLeads.length - i;
         break;
